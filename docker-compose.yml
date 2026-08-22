@@ -1,0 +1,50 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: land_valuation_db
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+    volumes:
+      # 保存 PostgreSQL 資料
+      - postgres_data:/var/lib/postgresql/data
+
+      # 第一次建立資料庫時，自動執行此資料夾內的 SQL
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+# services:
+#   db:
+#     image: pgvector/pgvector:pg16
+#     container_name: land_valuation_db
+
+#     environment:
+#       POSTGRES_DB: land_valuation
+#       POSTGRES_USER: app_user
+#       POSTGRES_PASSWORD: change_me_123
+
+#     ports:
+#       - "5432:5432"
+
+#     volumes:
+#       - postgres_data:/var/lib/postgresql/data
+#       - ./database/init:/docker-entrypoint-initdb.d:ro
+
+# volumes:
+#   postgres_data:

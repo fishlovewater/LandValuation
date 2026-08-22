@@ -1,0 +1,29 @@
+# 預設文字檔統一使用 LF
+* text=auto eol=lf
+
+# Windows 批次檔保留 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 程式碼與設定檔統一 LF
+*.sql text eol=lf
+*.py text eol=lf
+*.js text eol=lf
+*.ts text eol=lf
+*.vue text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.ini text eol=lf
+
+# 二進位檔案禁止換行轉換
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.pptx binary
+*.xlsx binary

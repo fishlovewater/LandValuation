@@ -1,0 +1,23 @@
+# 環境變數與機密資料
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# 暫存檔
+*.log
+.DS_Store
+Thumbs.db
+
+# 資料庫備份
+*.backup
+*.dump
