@@ -1,0 +1,13 @@
+Alembic migrations for the land valuation PostgreSQL database.
+
+The initial revision applies the immutable SQL schema files under database/init.
+Run migrations from the project root so those files can be resolved.
+
+New database:
+    alembic upgrade head
+
+Existing database already created from database/init SQL:
+    alembic stamp head
+
+Inspect current revision:
+    alembic current

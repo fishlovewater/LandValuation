@@ -91,7 +91,8 @@ CREATE TABLE documents (
     document_type varchar(50) NOT NULL,
     original_filename varchar(255) NOT NULL,
     mime_type varchar(100),
-    storage_key varchar(1000) NOT NULL,
+    bucket_name varchar(63) NOT NULL DEFAULT 'cases',
+    object_key varchar(1024) NOT NULL,
     checksum_sha256 char(64) NOT NULL,
     file_size_bytes bigint,
     version_no integer NOT NULL DEFAULT 1,
@@ -101,11 +102,15 @@ CREATE TABLE documents (
     CONSTRAINT fk_documents_case
         FOREIGN KEY (case_id) REFERENCES cases(case_id)
         ON UPDATE RESTRICT ON DELETE RESTRICT,
-    CONSTRAINT uq_documents_storage_key UNIQUE (storage_key),
+    CONSTRAINT uq_documents_object UNIQUE (bucket_name, object_key),
     CONSTRAINT uq_documents_case_document UNIQUE (case_id, document_id),
     CONSTRAINT uq_documents_case_checksum UNIQUE (case_id, checksum_sha256),
     CONSTRAINT ck_documents_version_positive CHECK (version_no > 0),
     CONSTRAINT ck_documents_size_nonnegative CHECK (file_size_bytes IS NULL OR file_size_bytes >= 0),
+    CONSTRAINT ck_documents_bucket CHECK (bucket_name = 'cases'),
+    CONSTRAINT ck_documents_object_key CHECK (
+        object_key !~ '^(https?://|/)' AND position('..' in object_key) = 0
+    ),
     CONSTRAINT ck_documents_sha256 CHECK (checksum_sha256 ~ '^[0-9a-fA-F]{64}$')
 );
 

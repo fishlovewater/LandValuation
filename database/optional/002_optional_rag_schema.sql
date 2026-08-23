@@ -76,7 +76,8 @@ CREATE TABLE knowledge_documents (
     version_no integer NOT NULL DEFAULT 1,
     effective_from date,
     effective_to date,
-    storage_key varchar(1000) NOT NULL,
+    bucket_name varchar(63) NOT NULL DEFAULT 'knowledge',
+    object_key varchar(1024) NOT NULL,
     checksum_sha256 char(64) NOT NULL,
     mime_type varchar(100),
     language_code varchar(20) NOT NULL DEFAULT 'zh-TW',
@@ -88,9 +89,13 @@ CREATE TABLE knowledge_documents (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT uq_knowledge_documents_code_version UNIQUE (document_code, version_no),
-    CONSTRAINT uq_knowledge_documents_storage_key UNIQUE (storage_key),
+    CONSTRAINT uq_knowledge_documents_object UNIQUE (bucket_name, object_key),
     CONSTRAINT uq_knowledge_documents_checksum UNIQUE (checksum_sha256),
     CONSTRAINT ck_knowledge_documents_version CHECK (version_no > 0),
+    CONSTRAINT ck_knowledge_documents_bucket CHECK (bucket_name = 'knowledge'),
+    CONSTRAINT ck_knowledge_documents_object_key CHECK (
+        object_key !~ '^(https?://|/)' AND position('..' in object_key) = 0
+    ),
     CONSTRAINT ck_knowledge_documents_dates CHECK (
         effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from
     ),

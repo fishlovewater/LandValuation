@@ -1,6 +1,59 @@
-1. 開啟Docker Desktop
-2. docker compose up -d
-3. docker compose exec db psql -U 你的帳號 -d land_valuation
-4. ALTER ROLE fish IN DATABASE land_valuation
-5. SET search_path TO valuation, public;
-6. \dt 可查詢database
+# 土地估價書輔助與智慧審查系統
+
+本專案預定包含估價書輔助製作、查估書智慧審查、案件履歷與分析、法規知識助手，以及登入與角色權限。
+
+## 目前階段
+
+- PostgreSQL 資料表。
+- MinIO 檔案儲存。
+- PostgreSQL 與 MinIO 的檔案對應規則。
+
+目前不建置 Vue 或 FastAPI；資料庫結構更新由 Alembic 管理。
+
+## 儲存邊界
+
+- PostgreSQL：案件、估價資料、審查結果、案件履歷、使用者權限、法規文字與向量。
+- MinIO：估價書、地籍圖、土地登記資料、勘查照片、附件、檢核報告與原始法規 PDF。
+- PostgreSQL 不保存大型 PDF 或圖片本體。
+- 文件紀錄使用 `bucket_name` 與 `object_key` 定位 MinIO 物件，不保存固定 localhost URL。
+
+## 啟動
+
+1. 安裝並啟動 Docker Desktop。
+2. 將 `.env.example` 複製為 `.env`，並更換預設密碼。
+3. 執行 `docker compose up -d --build`。
+4. 執行 `docker compose ps` 確認 PostgreSQL 與 MinIO 狀態。
+
+Compose 會透過一次性 `migrate` service 自動執行 `alembic upgrade head`。查看 migration 結果：
+
+```powershell
+docker compose logs migrate
+```
+
+若現有 PostgreSQL volume 已由舊版 `database/init` SQL 建好相同結構，不可再執行初始 migration；請先備份並核對 schema，然後執行：
+
+```powershell
+docker compose run --rm migrate alembic stamp head
+```
+
+## 更新資料庫
+
+取得新的 migration 後，先備份資料庫，再重建 migration image 並套用到最新版本：
+
+```powershell
+docker compose build migrate
+docker compose run --rm migrate alembic current
+docker compose run --rm migrate alembic upgrade head
+docker compose run --rm migrate alembic current
+```
+
+如需開發新的資料庫變更，請在本機安裝依賴後建立新 revision：
+
+```powershell
+python -m pip install -r requirements.txt
+alembic revision -m "describe change"
+```
+
+編輯新 revision 的 `upgrade()` 與 `downgrade()`，測試後一併提交。不可修改已在任何共用環境套用過的舊 revision，也不要用 `stamp` 取代正常 upgrade。
+
+資料庫 schema、Alembic、MinIO bucket/object key 與驗證方式詳見 [database/README.md](database/README.md)。變更紀錄詳見 [UPDATE.md](UPDATE.md)。
