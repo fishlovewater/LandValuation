@@ -13,9 +13,9 @@
 ## 儲存邊界
 
 - PostgreSQL：案件、估價資料、審查結果、案件履歷、使用者權限、法規文字與向量。
-- MinIO：估價書、地籍圖、土地登記資料、勘查照片、附件、檢核報告與原始法規 PDF。
+- MinIO：估價書、地籍圖、土地登記資料、勘查照片、附件、檢核報告與原始法規 PDF，統一存於 `land-valuation` bucket。
 - PostgreSQL 不保存大型 PDF 或圖片本體。
-- 文件紀錄使用 `bucket_name` 與 `object_key` 定位 MinIO 物件，不保存固定 localhost URL。
+- 文件紀錄的 `bucket_name` 固定為 `land-valuation`，`object_key` 使用 `cases/` 或 `knowledge/` 前綴，不保存固定 localhost URL。
 
 ## 啟動
 

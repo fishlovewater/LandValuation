@@ -133,18 +133,33 @@ alembic downgrade <revision>    # 回退到指定版
 
 `database/optional/002_optional_rag_schema.sql` 保留為舊版選配 RAG 設計，不會自動執行。新開發以 `knowledge` schema 為準。
 
+## 比賽角色與權限
+
+- `APPRAISER`（估價人員）：建立與編輯案件、估價資料與案件文件。
+- `REVIEWER`（審查人員）：執行智慧審查、查看疑點並作成審查決定。
+- `INSPECTOR`（稽查人員）：唯讀查看案件、估價、審查結果與稽核履歷。
+
+角色與權限由 Alembic seed 管理。實際使用者與密碼不寫入 migration，等登入流程建立時再以安全方式建立三個示範帳號。
+
+## 修改履歷分工
+
+- `valuation.change_logs`：估價業務欄位級變更，保存估價表、計算與宗地欄位的修改前後值。
+- `history.change_logs`：跨模組系統稽核，保存案件、審查、文件、權限與知識資料變更。
+
+同一次操作如果需同時寫入兩表，應共用同一個 `operation_id` UUID，便於稽核時對應。
+
 ## MinIO
 
 - API：`http://localhost:<MINIO_API_PORT>`
 - Console：`http://localhost:<MINIO_CONSOLE_PORT>`
-- `minio-init` 會冪等建立 `cases` 與 `knowledge` buckets。
+- `minio-init` 會冪等建立單一 `land-valuation` bucket。
 
 ### Object key
 
 案件文件：
 
 ```text
-cases / {case_id}/{category}/{document_id}/v{version_no}/{stored_filename}
+land-valuation / cases/{case_id}/{category}/{document_id}/v{version_no}/{stored_filename}
 ```
 
 `category` 為 `original`、`cadastral-map`、`land-register`、`photos`、`attachments` 或 `generated`。
@@ -152,12 +167,12 @@ cases / {case_id}/{category}/{document_id}/v{version_no}/{stored_filename}
 知識文件：
 
 ```text
-knowledge / {category}/{document_id}/v{version_no}/{stored_filename}
+land-valuation / knowledge/{category}/{document_id}/v{version_no}/{stored_filename}
 ```
 
 `category` 為 `regulations`、`standards` 或 `manuals`。
 
-PostgreSQL 僅保存 `bucket_name` 與 `object_key`，不保存 `localhost` URL、endpoint 或 presigned URL。PDF、圖片與附件本體只存 MinIO。
+PostgreSQL 僅保存 `bucket_name = 'land-valuation'` 與以 `cases/` 或 `knowledge/` 開頭的 `object_key`，不保存 `localhost` URL、endpoint 或 presigned URL。PDF、圖片與附件本體只存 MinIO。
 
 ## 基本驗證
 
