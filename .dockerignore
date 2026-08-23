@@ -1,0 +1,14 @@
+.git
+.env
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+需要放入MINIO的東西
+*.pdf
+*.pptx
+*.backup
+*.dump

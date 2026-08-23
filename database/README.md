@@ -41,7 +41,7 @@ alembic revision -m "describe change"
 alembic upgrade head
 ```
 
-目前沒有 SQLAlchemy ORM metadata，因此不使用 `--autogenerate`；需在 revision 中明確寫入 schema 變更。
+目前 SQLAlchemy ORM metadata 只包含 FastAPI 登入所需的 `auth` 部分，並非完整資料庫模型，因此不使用 `--autogenerate`；需在 revision 中明確寫入 schema 變更。
 
 ## 如需更新資料庫
 

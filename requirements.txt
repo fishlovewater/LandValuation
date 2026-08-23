@@ -2,3 +2,13 @@ alembic==1.16.5
 SQLAlchemy==2.0.43
 psycopg[binary]==3.2.10
 sqlparse==0.5.3
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.34,<1.0
+pydantic-settings>=2.8,<3.0
+minio>=7.2,<8.0
+PyJWT>=2.10,<3.0
+pwdlib[argon2]>=0.2,<1.0
+python-multipart>=0.0.20,<1.0
+httpx>=0.28,<1.0
+pytest>=8.3,<10.0
+pytest-asyncio>=0.25,<2.0

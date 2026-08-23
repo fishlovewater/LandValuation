@@ -1,5 +1,19 @@
 # UPDATE
 
+## 2026-08-23 - FastAPI 共用後端骨架
+
+- 新增 `app/` 模組化 FastAPI 後端，統一啟動、API router、lifespan 與 request ID。
+- 新增 SQLAlchemy 2.x async engine/session，每個 request 自動 commit，例外時 rollback。
+- 新增 MinIO client 與共用儲存服務，提供 bucket 檢查、上傳、下載、刪除、SHA-256 與短效下載網址。
+- 新增 Argon2 密碼雜湊、JWT access token、`/auth/login`、`/auth/me` 與動態 RBAC dependencies。
+- 新增統一 API 錯誤格式與 validation、authentication、permission、database、storage 錯誤處理。
+- 新增 `/health/live` 與 `/health/ready`，ready 會檢查 PostgreSQL 與 `land-valuation` bucket。
+- 新增 `Dockerfile.api`、`.dockerignore` 與 Compose `api` service；API 等待 migration 與 MinIO 初始化完成後啟動。
+- 新增 health、錯誤格式、登入保護、RBAC 與 object key 驗證測試。
+- FastAPI 不執行 `create_all()` 或自動 migration；資料庫 schema 仍只由 Alembic 管理。
+- 容器測試已通過 12 項單元/API 測試；MinIO 整合測試也已完成上傳、下載內容比對與刪除，測試物件已清理。
+- 實際 API 驗證：`/health/live` 與 `/health/ready` 回傳 200，PostgreSQL/MinIO 均為 `ok`，登入失敗與未授權存取均回傳統一 401 錯誤格式。
+
 ## 2026-08-23 - 使用者完整性、比賽角色與履歷分工
 
 - 新增 Alembic revision `20260823_0003`，將核心估價表的 8 個使用者 UUID 欄位補上 `auth.users` 外鍵。

@@ -1,0 +1,1 @@
+"""Land valuation FastAPI backend."""
