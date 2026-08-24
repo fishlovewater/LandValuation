@@ -148,6 +148,50 @@ alembic downgrade <revision>    # 回退到指定版
 
 同一次操作如果需同時寫入兩表，應共用同一個 `operation_id` UUID，便於稽核時對應。
 
+## 文件版本與儲存完整性
+
+`valuation.documents` 將邏輯文件與實體版本分開：
+
+- `document_group_id`：同一份業務文件的穩定 UUID。
+- `document_id`：單一實體檔案版本的 UUID。
+- `version_no`：該邏輯文件的版本號。
+
+`(case_id, document_group_id, version_no)` 不得重複。已上傳文件的 `mime_type` 與 `file_size_bytes` 不得為 NULL。`storage_etag` 用於快速核對 MinIO，SHA-256 仍為內容完整性的權威值。
+
+## 智慧審查資料權威來源
+
+- `valuation.validation_runs`：保存 `rule_version_id` 或非空 `ruleset_snapshot`，讓每次檢核可重現。
+- `valuation.validation_findings`：只保存不可變的機器檢核證據。
+- `review.findings.status`：人工處理狀態的權威來源。
+- `review.decisions`：人工決策、理由、決策人與時間的權威來源。
+
+`review.decisions.finding_id` 採 `ON DELETE RESTRICT`，不允許刪除 finding 時連帶清除稽核決策。
+
+## 知識文件發布
+
+`extraction_status` 與 `publication_status` 彼此獨立：
+
+- `extraction_status`：`PENDING` / `PROCESSING` / `COMPLETED` / `FAILED`。
+- `publication_status`：`DRAFT` / `PUBLISHED` / `DISABLED` / `ARCHIVED`。
+
+只有同時符合以下條件的文件才可用於法規知識檢索：
+
+```text
+extraction_status = COMPLETED
+publication_status = PUBLISHED
+```
+
+`PUBLISHED` 文件必須保存 `approved_by_user_id` 與 `approved_at`。
+
+## 黑客鬆估價結果來源
+
+`valuation.valuations` 暫時保留但不讀寫：
+
+- F03 以 `valuation.benchmark_valuations` 為權威來源。
+- F04 以 `valuation.parcel_valuations` 與 `valuation.parcel_valuation_items` 為權威來源。
+
+未來若需對外統一摘要，應先為 `valuation.valuations` 增加可追溯的來源實體設計。
+
 ## MinIO
 
 - API：`http://localhost:<MINIO_API_PORT>`

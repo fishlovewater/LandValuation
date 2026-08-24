@@ -48,8 +48,10 @@ async def get_item(item_id: UUID, session: DbSession):
 ## MinIO 寫入
 
 1. API 先產生 `document_id` 與 object key。
+   - 新邏輯文件產生新 `document_group_id`。
+   - 上傳新版本時沿用原 `document_group_id`，改用新 `document_id` 與遞增的 `version_no`。
 2. 使用 `StorageService.upload()` 上傳檔案到 `land-valuation`。
-3. Storage service 回傳 `bucket_name`、`object_key`、SHA-256、檔案大小與 ETag。
+3. Storage service 回傳 `bucket_name`、`object_key`、SHA-256、檔案大小與 ETag；API 應完整寫入 `mime_type`、`file_size_bytes` 與 `storage_etag`。
 4. API 將 metadata 寫入 `valuation.documents` 或 `knowledge.documents`。
 5. 若 PostgreSQL 寫入失敗，API 應呼叫 `StorageService.delete()` 清除剛上傳的孤兒物件。
 

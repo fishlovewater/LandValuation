@@ -1,5 +1,25 @@
 # UPDATE
 
+## 2026-08-24 - 文件、審查與知識治理完整性
+
+- 新增 Alembic revision `20260824_0004`。
+- `valuation.documents` 新增 `document_group_id`、`storage_etag`、邏輯文件版本唯一約束，並將 `mime_type` / `file_size_bytes` 改為 NOT NULL。
+- `valuation.rule_versions` 新增 `source_document_id` 外鍵，可追溯至 `knowledge.documents`。
+- `valuation.validation_runs` 新增 `rule_version_id` 與 `ruleset_snapshot`，並要求至少其一可重現檢核規則。
+- `valuation.validation_findings` 移除人工狀態與決策欄位，改為只保存機器檢核證據。
+- `review.decisions.finding_id` 改為 `ON DELETE RESTRICT`；`review.missing_items` 新增 `resolved_by_user_id` 與補正稽核約束。
+- `history.access_logs` 新增 `request_id` 與 `result` (`SUCCESS` / `DENIED` / `FAILED`)。
+- `knowledge.documents` 新增發布狀態、核准人與核准時間；`knowledge.message_sources` 新增 `model_version`。
+- 為融資利率與資金占比欄位新增明確 COMMENT，不改名以避免破壞既有估價結構。
+- `valuation.valuations` 明確標示為黑客鬆階段暫不讀寫的保留摘要表。
+- Migration 對舊文件 metadata 與舊人工決策設有保護檢查；如果會造成資料遺失會中止，不會靜默移除。
+- 套用前已確認案件文件、validation runs、人工 finding 狀態與已補正缺件均無舊資料需搬移。
+- 已實際套用 Alembic `20260824_0004`；所有新外鍵與 CHECK constraints 均已驗證，未驗證約束數為 0。
+- 12 份現有知識文件已安全保留，`publication_status` 初始為 `DRAFT`，未自動發布。
+- `storage_etag`、`source_document_id`、`request_id`、`model_version` 等欄位為相容既有資料而允許 `NULL`；後續 API 建立新紀錄時應盡量填入，以維持物件核對、來源追溯、API log 串接與回答重現能力。
+- `database/init` 僅保留為歷史基線，內容可能仍包含舊結構；目前 Docker Compose 不會將它掛載為 PostgreSQL 初始化來源，正式資料庫結構一律以 Alembic migration 為權威來源。
+- 0004 後 FastAPI 回歸測試為 12 passed / 1 integration skipped，PostgreSQL、MinIO 與 API 均為 healthy，migration service exit 0。
+
 ## 2026-08-23 - FastAPI 共用後端骨架
 
 - 新增 `app/` 模組化 FastAPI 後端，統一啟動、API router、lifespan 與 request ID。
