@@ -223,3 +223,46 @@ class RiskSummaryRead(BaseModel):
     missing_item_count: int
     risk_reasons: list
     generated_at: datetime
+
+
+FindingDecisionValue = Literal[
+    "ACCEPTED",
+    "PARTIALLY_ACCEPTED",
+    "REJECTED",
+    "REQUIRES_SUPPLEMENT",
+    "EXPERT_REVIEW",
+]
+CaseDecisionValue = Literal[
+    "RETURNED_FOR_REVISION",
+    "SUPPLEMENT_REQUIRED",
+    "EXPERT_REVIEW",
+    "APPROVED",
+]
+
+
+class FindingDecisionRequest(BaseModel):
+    review_id: UUID
+    decision: FindingDecisionValue
+    reason: str
+    after_value: dict | None = None
+
+
+class CaseDecisionRequest(BaseModel):
+    decision: CaseDecisionValue
+    reason: str
+    override_reason: str | None = None
+
+
+class DecisionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    decision_id: UUID
+    review_id: UUID
+    finding_id: UUID | None
+    decision: str
+    reason: str | None
+    decided_by_user_id: UUID | None
+    decided_at: datetime
+    request_id: UUID | None
+    before_value: dict | None
+    after_value: dict | None

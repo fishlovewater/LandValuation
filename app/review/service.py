@@ -7,6 +7,13 @@ from app.review.schemas import ReviewCreate, ReviewListQuery, ReviewUpdate
 from app.review.completeness import evaluate_completeness
 from app.review.recalculation import recalculate_adjustment_rate
 from app.review.risks import FindingRisk, risk_level_for_findings
+from app.review.decisions import (
+    CaseDecisionCommand,
+    FindingDecisionCommand,
+    ReviewGateSummary,
+    validate_case_decision,
+    validate_finding_decision,
+)
 
 
 ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -121,7 +128,9 @@ class ReviewService:
             raise AppError("INVALID_DUE_AT", "補件期限必須晚於目前時間", 422)
         return await self.repository.request_supplement(review_id, due_at)
 
-    async def create_run(self, review_id, payload, actor_id):
+    async def create_run(
+        self, review_id, payload, actor_id, supersedes_by_code=None
+    ):
         review = await self.repository.get(review_id, for_update=True)
         if review is None:
             raise ResourceNotFoundError("審查案件")
@@ -175,6 +184,9 @@ class ReviewService:
                 },
                 recommended_action={"action": "VERIFY_ADJUSTMENT_BASIS"},
                 ai_status="AI_EXPLANATION_UNAVAILABLE",
+                supersedes_finding_id=(supersedes_by_code or {}).get(
+                    check.finding_code
+                ),
                 rule_version_id=payload.rule_version_id,
             )
             findings.append(finding)
@@ -237,3 +249,89 @@ class ReviewService:
         if summary is None:
             raise ResourceNotFoundError("風險摘要")
         return summary
+
+    async def decide_finding(
+        self, finding_id, payload, actor_id, request_id
+    ):
+        finding = await self.repository.get_finding_for_review(
+            finding_id, payload.review_id, for_update=True
+        )
+        if finding is None:
+            raise ResourceNotFoundError("審查疑點")
+        resulting_status = validate_finding_decision(
+            FindingDecisionCommand(
+                payload.decision, payload.reason, payload.after_value
+            )
+        )
+        before = {
+            "status": finding.status,
+            "recommended_action": finding.recommended_action,
+        }
+        finding.status = resulting_status
+        decision = await self.repository.create_decision(
+            review_id=finding.review_id,
+            finding_id=finding.finding_id,
+            decision=payload.decision,
+            reason=payload.reason.strip(),
+            decided_by_user_id=actor_id,
+            request_id=request_id,
+            before_value=before,
+            after_value=payload.after_value or {"status": resulting_status},
+        )
+        return decision
+
+    async def decide_case(
+        self,
+        review_id,
+        payload,
+        actor_id,
+        request_id,
+        has_override_permission=False,
+    ):
+        review = await self.repository.get(review_id, for_update=True)
+        if review is None:
+            raise ResourceNotFoundError("審查案件")
+        unresolved = await self.repository.unresolved_high_count(review_id)
+        resulting_status = validate_case_decision(
+            CaseDecisionCommand(
+                decision=payload.decision,
+                reason=payload.reason,
+                has_override_permission=has_override_permission,
+                override_reason=payload.override_reason,
+            ),
+            ReviewGateSummary(unresolved),
+        )
+        before_status = review.review_status
+        review.review_status = ensure_transition(before_status, resulting_status)
+        reason = payload.reason.strip()
+        if payload.override_reason and payload.override_reason.strip():
+            reason = f"{reason}\n覆核理由：{payload.override_reason.strip()}"
+        return await self.repository.create_decision(
+            review_id=review_id,
+            finding_id=None,
+            decision=payload.decision,
+            reason=reason,
+            decided_by_user_id=actor_id,
+            request_id=request_id,
+            before_value={"review_status": before_status},
+            after_value={"review_status": resulting_status},
+        )
+
+    async def list_decisions(self, review_id):
+        await self.get(review_id)
+        return await self.repository.list_decisions(review_id)
+
+    async def rerun(self, review_id, payload, actor_id):
+        review = await self.repository.get(review_id)
+        if review is None:
+            raise ResourceNotFoundError("審查案件")
+        previous = []
+        if review.latest_validation_run_id:
+            previous = await self.repository.list_findings(
+                review.latest_validation_run_id
+            )
+        supersedes = {item.finding_code: item.finding_id for item in previous}
+        run, summary = await self.create_run(
+            review_id, payload, actor_id, supersedes
+        )
+        return run, summary

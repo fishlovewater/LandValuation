@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.review.completeness import CaseInputSnapshot, DocumentSnapshot, MissingRequirement
 from app.review.models import (
+    Decision,
     Finding,
     MissingItem,
     Review,
@@ -304,4 +305,42 @@ class ReviewRepository:
             select(RiskSummary).where(
                 RiskSummary.validation_run_id == validation_run_id
             )
+        )
+
+    async def get_finding_for_review(
+        self, finding_id: UUID, review_id: UUID, for_update: bool = False
+    ) -> Finding | None:
+        statement = select(Finding).where(
+            Finding.finding_id == finding_id,
+            Finding.review_id == review_id,
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        return await self.session.scalar(statement)
+
+    async def create_decision(self, **values) -> Decision:
+        decision = Decision(**values)
+        self.session.add(decision)
+        await self.session.flush()
+        await self.session.refresh(decision)
+        return decision
+
+    async def list_decisions(self, review_id: UUID) -> list[Decision]:
+        statement = (
+            select(Decision)
+            .where(Decision.review_id == review_id)
+            .order_by(Decision.decided_at, Decision.decision_id)
+        )
+        return list((await self.session.scalars(statement)).all())
+
+    async def unresolved_high_count(self, review_id: UUID) -> int:
+        return int(
+            await self.session.scalar(
+                select(func.count()).select_from(Finding).where(
+                    Finding.review_id == review_id,
+                    Finding.severity.in_(["HIGH", "CRITICAL"]),
+                    Finding.status.in_(["OPEN", "REQUIRES_SUPPLEMENT", "EXPERT_REVIEW"]),
+                )
+            )
+            or 0
         )

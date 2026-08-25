@@ -1,8 +1,9 @@
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 
 from app.auth.dependencies import DbSession, require_permissions
+from app.auth.service import permission_codes
 from app.review.repository import ReviewRepository
 from app.review.schemas import (
     ReviewAssign,
@@ -10,7 +11,10 @@ from app.review.schemas import (
     ReviewList,
     ReviewListQuery,
     CompletenessResponse,
+    CaseDecisionRequest,
+    DecisionRead,
     FindingRead,
+    FindingDecisionRequest,
     MissingItemRead,
     ReviewPriority,
     ReviewRead,
@@ -29,6 +33,13 @@ router = APIRouter(prefix="/review", tags=["review"])
 
 def service_for(session: DbSession) -> ReviewService:
     return ReviewService(ReviewRepository(session))
+
+
+def audit_request_id(request: Request) -> UUID:
+    try:
+        return UUID(request.state.request_id)
+    except (AttributeError, TypeError, ValueError):
+        return uuid4()
 
 
 @router.post("/cases", response_model=ReviewRead, status_code=status.HTTP_201_CREATED)
@@ -205,3 +216,70 @@ async def get_run_risk_summary(
     user=Depends(require_permissions("review.execute")),
 ) -> RiskSummaryRead:
     return await service_for(session).get_risk_summary(validation_run_id)
+
+
+@router.post(
+    "/findings/{finding_id}/decisions",
+    response_model=DecisionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def decide_review_finding(
+    finding_id: UUID,
+    payload: FindingDecisionRequest,
+    request: Request,
+    session: DbSession,
+    user=Depends(require_permissions("review.decide")),
+) -> DecisionRead:
+    return await service_for(session).decide_finding(
+        finding_id,
+        payload,
+        user.user_id,
+        audit_request_id(request),
+    )
+
+
+@router.post(
+    "/cases/{review_id}/decision",
+    response_model=DecisionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def decide_review_case(
+    review_id: UUID,
+    payload: CaseDecisionRequest,
+    request: Request,
+    session: DbSession,
+    user=Depends(require_permissions("review.decide")),
+) -> DecisionRead:
+    return await service_for(session).decide_case(
+        review_id,
+        payload,
+        user.user_id,
+        audit_request_id(request),
+        "review.override_high_risk" in permission_codes(user),
+    )
+
+
+@router.get("/cases/{review_id}/decisions", response_model=list[DecisionRead])
+async def list_review_decisions(
+    review_id: UUID,
+    session: DbSession,
+    user=Depends(require_permissions("review.decide")),
+) -> list[DecisionRead]:
+    return await service_for(session).list_decisions(review_id)
+
+
+@router.post(
+    "/cases/{review_id}/rerun",
+    response_model=ValidationRunRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def rerun_review_case(
+    review_id: UUID,
+    payload: RunCreate,
+    session: DbSession,
+    user=Depends(require_permissions("review.execute")),
+) -> ValidationRunRead:
+    run, _summary = await service_for(session).rerun(
+        review_id, payload, user.user_id
+    )
+    return run

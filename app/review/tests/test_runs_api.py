@@ -69,6 +69,7 @@ def runnable_review(postgres_connection):
         validation_rule_id=validation_rule_id,
     )
     with postgres_connection.cursor() as cursor:
+        cursor.execute("DELETE FROM review.decisions WHERE review_id = %s", (review_id,))
         cursor.execute("DELETE FROM review.risk_summaries WHERE review_id = %s", (review_id,))
         cursor.execute("DELETE FROM review.findings WHERE review_id = %s", (review_id,))
         cursor.execute(
@@ -87,8 +88,11 @@ def runnable_review(postgres_connection):
 
 @pytest.fixture
 def authorized_client(runnable_review):
-    permission = SimpleNamespace(permission_code="review.execute")
-    role = SimpleNamespace(role_code="APPRAISER", is_active=True, permissions=[permission])
+    permissions = [
+        SimpleNamespace(permission_code="review.execute"),
+        SimpleNamespace(permission_code="review.decide"),
+    ]
+    role = SimpleNamespace(role_code="APPRAISER", is_active=True, permissions=permissions)
     user = SimpleNamespace(user_id=runnable_review.user_id, roles=[role])
     app.dependency_overrides[get_current_user] = lambda: user
     try:

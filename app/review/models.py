@@ -180,3 +180,21 @@ class RiskSummary(Base):
     low_count: Mapped[int] = mapped_column(Integer, server_default="0")
     missing_item_count: Mapped[int] = mapped_column(Integer, server_default="0")
     risk_reasons: Mapped[list] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+
+
+class Decision(Base):
+    __tablename__ = "decisions"
+    __table_args__ = {"schema": "review"}
+
+    decision_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    review_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    finding_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    decision: Mapped[str] = mapped_column(String(30), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text)
+    decided_by_user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    request_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    before_value: Mapped[dict | None] = mapped_column(JSONB)
+    after_value: Mapped[dict | None] = mapped_column(JSONB)
