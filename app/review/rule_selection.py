@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import AbstractSet
 from datetime import date
 
 from app.core.exceptions import AppError
@@ -27,7 +28,7 @@ def select_effective_rule(
     valuation_base_date: date,
     case_type: str,
     district_code: str,
-    form_codes: frozenset[str],
+    form_codes: AbstractSet[str],
 ) -> RuleSelection:
     def matches(candidate: RuleCandidate) -> bool:
         return (

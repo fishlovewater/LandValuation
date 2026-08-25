@@ -33,7 +33,17 @@ class TrustedInputProblem:
 
 
 def trusted_fields_by_code(fields):
-    return {item.field_code: item for item in fields if item.is_official}
+    official_counts = {}
+    official_fields = {}
+    for item in fields:
+        if item.is_official:
+            official_counts[item.field_code] = official_counts.get(item.field_code, 0) + 1
+            official_fields[item.field_code] = item
+    return {
+        code: item
+        for code, item in official_fields.items()
+        if official_counts[code] == 1
+    }
 
 
 def required_field_problems(required_codes, fields):
@@ -46,5 +56,7 @@ def required_field_problems(required_codes, fields):
             code in HIGH_IMPACT_FIELD_CODES
             and item.verification_status != "VERIFIED"
         ):
+            problems.append(TrustedInputProblem("TRUSTED_INPUT_UNVERIFIED", code))
+        elif item.verification_status not in {"AUTO_EXTRACTED", "VERIFIED"}:
             problems.append(TrustedInputProblem("TRUSTED_INPUT_UNVERIFIED", code))
     return tuple(problems)
