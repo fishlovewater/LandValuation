@@ -27,7 +27,7 @@ def select_effective_rule(
     valuation_base_date: date,
     case_type: str,
     district_code: str,
-    form_code: str,
+    form_codes: frozenset[str],
 ) -> RuleSelection:
     def matches(candidate: RuleCandidate) -> bool:
         return (
@@ -39,7 +39,7 @@ def select_effective_rule(
             )
             and candidate.case_type in (None, case_type)
             and candidate.district_code in (None, district_code)
-            and candidate.form_code in (None, form_code)
+            and (candidate.form_code is None or candidate.form_code in form_codes)
         )
 
     eligible = [candidate for candidate in candidates if matches(candidate)]

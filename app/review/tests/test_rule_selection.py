@@ -25,7 +25,7 @@ def rule(rule_id="rule-1", **overrides):
 
 
 def select(candidates):
-    return select_effective_rule(candidates, BASE_DATE, "LAND", "F01", "F01")
+    return select_effective_rule(candidates, BASE_DATE, "LAND", "F01", {"F01"})
 
 
 def test_selects_only_published_effective_matching_rule():
@@ -55,3 +55,16 @@ def test_no_match_requires_expert_judgment():
 
     assert result.status == "REQUIRES_EXPERT_JUDGMENT"
     assert result.rule is None
+
+
+def test_selects_candidate_matching_any_form_code_in_set():
+    result = select_effective_rule(
+        [rule("f02", form_code="F02"), rule("f03", form_code="F03")],
+        BASE_DATE,
+        "LAND",
+        "F01",
+        {"F01", "F03"},
+    )
+
+    assert result.status == "SELECTED"
+    assert result.rule.rule_version_id == "f03"
