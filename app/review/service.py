@@ -1,12 +1,18 @@
 import json
 from datetime import UTC, datetime
 from decimal import Decimal
+from uuid import UUID
 
 from app.core.exceptions import AppError
 from app.core.exceptions import ResourceNotFoundError
 from app.review.repository import ReviewRepository
 from app.review.schemas import ReviewCreate, ReviewListQuery, ReviewUpdate
-from app.review.completeness import evaluate_completeness
+from app.review.completeness import (
+    CompletenessResult,
+    evaluate_completeness,
+    trusted_context_missing_requirement,
+    trusted_problem_to_missing,
+)
 from app.review.recalculation import recalculate_adjustment_rate
 from app.review.risks import FindingRisk, risk_level_for_findings
 from app.review.decisions import (
@@ -25,6 +31,12 @@ from app.review.reports import (
     build_review_report,
 )
 from app.review.schemas import FindingRead
+from app.review.rule_selection import RuleCandidate, select_effective_rule
+from app.review.trusted_inputs import (
+    TrustedField,
+    required_field_problems,
+    trusted_fields_by_code,
+)
 
 
 ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -130,6 +142,23 @@ class ReviewService:
 
         snapshot = await self.repository.load_case_snapshot(review.case_id)
         result = evaluate_completeness(snapshot)
+        if result.ready:
+            trusted_items = await self._trusted_completeness_missing_items(
+                review.case_id
+            )
+            if trusted_items:
+                result = CompletenessResult(
+                    ready=False,
+                    items=result.items + trusted_items,
+                    blocked_rule_codes=(
+                        result.blocked_rule_codes
+                        | frozenset(
+                            code
+                            for item in trusted_items
+                            for code in item.blocked_rule_codes
+                        )
+                    ),
+                )
         items = await self.repository.sync_missing_items(
             review_id, result.items, actor_id
         )
@@ -140,6 +169,74 @@ class ReviewService:
         )
         await self.repository.session.flush()
         return result, review, items
+
+    async def _trusted_completeness_missing_items(self, case_id):
+        document = await self.repository.get_latest_original_document(case_id)
+        if document is None:
+            return (trusted_context_missing_requirement(),)
+
+        extraction = await self.repository.get_latest_completed_extraction(
+            document["document_id"], document["version_no"]
+        )
+        if extraction is None:
+            return (trusted_context_missing_requirement(),)
+
+        field_rows = await self.repository.list_official_extracted_fields(
+            extraction["extraction_run_id"]
+        )
+        fields = trusted_fields_by_code(
+            TrustedField(
+                extracted_field_id=str(row["extracted_field_id"]),
+                field_code=row["field_code"],
+                field_path=row["field_path"],
+                raw_text=row["raw_text"],
+                normalized_value=row["normalized_value"],
+                value_type=row["value_type"],
+                page_number=row["page_number"],
+                verification_status=row["verification_status"],
+                is_official=row["is_official"],
+            )
+            for row in field_rows
+        )
+        case_context = await self.repository.get_case_rule_context(case_id)
+        if case_context is None:
+            return (trusted_context_missing_requirement(),)
+        candidates = await self.repository.list_rule_candidates()
+        selection = select_effective_rule(
+            (
+                RuleCandidate(
+                    rule_version_id=str(candidate["rule_version_id"]),
+                    status=candidate["status"],
+                    effective_from=candidate["effective_from"],
+                    effective_to=candidate["effective_to"],
+                    case_type=candidate["applicable_case_type"],
+                    district_code=candidate["applicable_district_code"],
+                    priority=candidate["selection_priority"],
+                )
+                for candidate in candidates
+            ),
+            case_context["valuation_base_date"],
+            case_context["case_type"],
+            case_context["district_code"],
+            case_context["form_codes"],
+        )
+        if selection.rule is None:
+            return (trusted_context_missing_requirement(),)
+
+        active_rules = await self.repository.list_active_rules(
+            UUID(selection.rule.rule_version_id), case_context["form_codes"]
+        )
+        if not active_rules:
+            return (trusted_context_missing_requirement(),)
+        required_codes = {
+            rule["target_field_code"]
+            for rule in active_rules
+            if rule["target_field_code"]
+        }
+        return tuple(
+            trusted_problem_to_missing(problem)
+            for problem in required_field_problems(required_codes, fields)
+        )
 
     async def list_missing_items(self, review_id):
         await self.get(review_id)

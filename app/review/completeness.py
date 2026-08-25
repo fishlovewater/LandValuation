@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Any, Literal, Sequence
 
+from app.review.trusted_inputs import TrustedInputProblem
+
 
 @dataclass(frozen=True)
 class DocumentSnapshot:
@@ -134,3 +136,26 @@ def evaluate_completeness(
         code for item in missing for code in item.blocked_rule_codes
     )
     return CompletenessResult(not missing, tuple(missing), blocked)
+
+
+def trusted_problem_to_missing(
+    problem: TrustedInputProblem,
+) -> MissingRequirement:
+    suffix = problem.field_code.upper()
+    return MissingRequirement(
+        item_code=f"{problem.code}_{suffix}",
+        item_name=f"正式檢核欄位：{problem.field_code}",
+        document_category="original",
+        field_path=problem.field_code,
+        blocked_rule_codes=frozenset({"TRUSTED_INPUT_REQUIRED"}),
+    )
+
+
+def trusted_context_missing_requirement() -> MissingRequirement:
+    return MissingRequirement(
+        item_code="TRUSTED_INPUT_MISSING",
+        item_name="正式檢核資料尚未完成",
+        document_category="original",
+        field_path=None,
+        blocked_rule_codes=frozenset({"TRUSTED_INPUT_REQUIRED"}),
+    )
