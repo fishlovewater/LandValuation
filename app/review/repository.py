@@ -145,6 +145,167 @@ class ReviewRepository:
             normalized_fields=dict(case_row),
         )
 
+    async def get_latest_original_document(self, case_id: UUID):
+        row = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT document_id, case_id, document_type, version_no,
+                           document_group_id, object_key, checksum_sha256
+                    FROM valuation.documents
+                    WHERE case_id = :case_id
+                      AND document_type = 'original'
+                      AND is_active = true
+                    ORDER BY version_no DESC, uploaded_at DESC, document_id DESC
+                    LIMIT 1
+                    """
+                ),
+                {"case_id": case_id},
+            )
+        ).mappings().one_or_none()
+        return dict(row) if row else None
+
+    async def get_latest_completed_extraction(
+        self, document_id: UUID, document_version: int
+    ):
+        row = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT extraction_run_id, case_id, document_id,
+                           document_version, run_no, status, extractor_name,
+                           extractor_version, started_at, completed_at
+                    FROM valuation.extraction_runs
+                    WHERE document_id = :document_id
+                      AND document_version = :document_version
+                      AND status = 'COMPLETED'
+                    ORDER BY run_no DESC, completed_at DESC, extraction_run_id DESC
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "document_id": document_id,
+                    "document_version": document_version,
+                },
+            )
+        ).mappings().one_or_none()
+        return dict(row) if row else None
+
+    async def list_official_extracted_fields(self, extraction_run_id: UUID):
+        rows = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT extracted_field_id, extraction_run_id, field_code,
+                           field_path, value_type, raw_text, normalized_value,
+                           page_number, bounding_box, confidence,
+                           verification_status, verified_by_user_id, verified_at,
+                           is_official
+                    FROM valuation.extracted_fields
+                    WHERE extraction_run_id = :extraction_run_id
+                      AND is_official = true
+                    ORDER BY field_code, field_path, extracted_field_id
+                    """
+                ),
+                {"extraction_run_id": extraction_run_id},
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+    async def get_case_rule_context(self, case_id: UUID):
+        row = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT c.case_type, c.district_code, c.valuation_base_date,
+                           coalesce(
+                               array_agg(DISTINCT fi.form_code)
+                                   FILTER (
+                                       WHERE fi.form_code IS NOT NULL
+                                         AND fi.form_status <> 'VOID'
+                                   ),
+                               ARRAY[]::varchar[]
+                           ) AS form_codes
+                    FROM valuation.cases c
+                    LEFT JOIN valuation.form_instances fi ON fi.case_id = c.case_id
+                    WHERE c.case_id = :case_id
+                    GROUP BY c.case_id
+                    """
+                ),
+                {"case_id": case_id},
+            )
+        ).mappings().one_or_none()
+        if row is None:
+            return None
+        context = dict(row)
+        context["form_codes"] = frozenset(context["form_codes"] or ())
+        return context
+
+    async def list_rule_candidates(self):
+        rows = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT rule_version_id, status, effective_from, effective_to,
+                           applicable_case_type, applicable_district_code,
+                           selection_priority, source_document_id
+                    FROM valuation.rule_versions
+                    ORDER BY selection_priority DESC, rule_version_id
+                    """
+                )
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+    async def list_active_rules(
+        self, rule_version_id: UUID, form_codes: frozenset[str]
+    ):
+        rows = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT validation_rule_id, rule_version_id, rule_code,
+                           rule_name, target_form_code, target_table,
+                           target_field_code, severity, rule_expression,
+                           message_template, is_active
+                    FROM valuation.validation_rules
+                    WHERE rule_version_id = :rule_version_id
+                      AND is_active = true
+                      AND (
+                          target_form_code IS NULL
+                          OR target_form_code = ANY(
+                              CAST(:form_codes AS varchar[])
+                          )
+                      )
+                    ORDER BY rule_code, validation_rule_id
+                    """
+                ),
+                {
+                    "rule_version_id": rule_version_id,
+                    "form_codes": sorted(form_codes),
+                },
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+    async def get_rule_source(self, document_id: UUID):
+        row = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT document_id, checksum_sha256, version_no,
+                           effective_from, effective_to
+                    FROM knowledge.documents
+                    WHERE document_id = :document_id
+                      AND extraction_status = 'COMPLETED'
+                      AND publication_status = 'PUBLISHED'
+                    """
+                ),
+                {"document_id": document_id},
+            )
+        ).mappings().one_or_none()
+        return dict(row) if row else None
+
     async def sync_missing_items(
         self,
         review_id: UUID,
