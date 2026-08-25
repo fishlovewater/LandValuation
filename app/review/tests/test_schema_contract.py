@@ -29,3 +29,19 @@ def test_review_schema_contains_mvp_contract(postgres_connection):
         actual = set(cursor.fetchall())
 
     assert EXPECTED_COLUMNS <= actual
+
+
+def test_review_status_column_accepts_all_workflow_statuses(postgres_connection):
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT character_maximum_length
+            FROM information_schema.columns
+            WHERE table_schema = 'review'
+              AND table_name = 'reviews'
+              AND column_name = 'review_status'
+            """
+        )
+        maximum_length = cursor.fetchone()[0]
+
+    assert maximum_length is None or maximum_length >= len("RETURNED_FOR_REVISION")
