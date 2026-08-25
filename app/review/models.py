@@ -1,7 +1,9 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, Integer, String, Text, text
+from decimal import Decimal
+
+from sqlalchemy import DateTime, Integer, Numeric, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -71,3 +73,110 @@ class MissingItem(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=text("now()")
     )
+
+
+class ValidationRun(Base):
+    __tablename__ = "validation_runs"
+    __table_args__ = {"schema": "valuation"}
+
+    validation_run_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    case_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    form_instance_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    run_status: Mapped[str] = mapped_column(String(20), server_default="RUNNING")
+    passed_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    warning_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    failed_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    triggered_by_user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    rule_version_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    ruleset_snapshot: Mapped[dict | None] = mapped_column(JSONB)
+    review_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    run_no: Mapped[int | None] = mapped_column(Integer)
+    input_snapshot: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    model_id: Mapped[str | None] = mapped_column(String(200))
+    prompt_version: Mapped[str | None] = mapped_column(String(100))
+    error_code: Mapped[str | None] = mapped_column(String(100))
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+
+class ValidationFinding(Base):
+    __tablename__ = "validation_findings"
+    __table_args__ = {"schema": "valuation"}
+
+    finding_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    validation_run_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    validation_rule_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    entity_type: Mapped[str | None] = mapped_column(String(100))
+    entity_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    field_code: Mapped[str | None] = mapped_column(String(100))
+    severity: Mapped[str] = mapped_column(String(20), nullable=False)
+    actual_value: Mapped[dict | None] = mapped_column(JSONB)
+    expected_value: Mapped[dict | None] = mapped_column(JSONB)
+    finding_message: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class Finding(Base):
+    __tablename__ = "findings"
+    __table_args__ = {"schema": "review"}
+
+    finding_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    review_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    source_validation_finding_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    finding_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    finding_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_type: Mapped[str | None] = mapped_column(String(100))
+    entity_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    status: Mapped[str] = mapped_column(String(20), server_default="OPEN")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    validation_run_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    document_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    document_version: Mapped[int | None] = mapped_column(Integer)
+    page_number: Mapped[int | None] = mapped_column(Integer)
+    field_path: Mapped[str | None] = mapped_column(Text)
+    bounding_box: Mapped[dict | None] = mapped_column(JSONB)
+    source_evidence: Mapped[list] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    reported_text: Mapped[str | None] = mapped_column(Text)
+    reported_value: Mapped[str | None] = mapped_column(Text)
+    legal_basis: Mapped[list] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    reported_grade: Mapped[str | None] = mapped_column(String(100))
+    system_grade: Mapped[str | None] = mapped_column(String(100))
+    reported_adjustment_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
+    system_adjustment_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 6))
+    comparison_result: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    recommended_action: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    ai_reasoning_summary: Mapped[str | None] = mapped_column(Text)
+    ai_confidence: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
+    ai_status: Mapped[str] = mapped_column(String(40), server_default="NOT_REQUESTED")
+    supersedes_finding_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    rule_version_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+
+
+class RiskSummary(Base):
+    __tablename__ = "risk_summaries"
+    __table_args__ = {"schema": "review"}
+
+    risk_summary_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    review_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    overall_risk_level: Mapped[str] = mapped_column(String(20), nullable=False)
+    risk_score: Mapped[Decimal | None] = mapped_column(Numeric(6, 3))
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    category_scores: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+    validation_run_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    high_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    medium_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    low_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    missing_item_count: Mapped[int] = mapped_column(Integer, server_default="0")
+    risk_reasons: Mapped[list] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))

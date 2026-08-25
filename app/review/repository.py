@@ -7,8 +7,15 @@ from sqlalchemy import case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.review.completeness import CaseInputSnapshot, DocumentSnapshot, MissingRequirement
-from app.review.models import MissingItem, Review
-from app.review.schemas import ReviewCreate, ReviewListQuery
+from app.review.models import (
+    Finding,
+    MissingItem,
+    Review,
+    RiskSummary,
+    ValidationFinding,
+    ValidationRun,
+)
+from app.review.schemas import ReviewCreate, ReviewListQuery, RunCreate
 
 
 class ReviewRepository:
@@ -201,3 +208,100 @@ class ReviewRepository:
             item.notification_status = "PENDING"
         await self.session.flush()
         return items
+
+    async def active_run_exists(self, review_id: UUID) -> bool:
+        return bool(
+            await self.session.scalar(
+                select(func.count()).select_from(ValidationRun).where(
+                    ValidationRun.review_id == review_id,
+                    ValidationRun.run_status == "RUNNING",
+                )
+            )
+        )
+
+    async def create_run(
+        self, review: Review, payload: RunCreate, actor_id: UUID
+    ) -> ValidationRun:
+        run_no = (
+            await self.session.scalar(
+                select(func.coalesce(func.max(ValidationRun.run_no), 0)).where(
+                    ValidationRun.review_id == review.review_id
+                )
+            )
+        ) + 1
+        run = ValidationRun(
+            case_id=review.case_id,
+            review_id=review.review_id,
+            run_no=run_no,
+            run_status="RUNNING",
+            triggered_by_user_id=actor_id,
+            rule_version_id=payload.rule_version_id,
+            ruleset_snapshot={"rule_version_id": str(payload.rule_version_id)},
+            input_snapshot={
+                **payload.input_snapshot,
+                "adjustment_checks": [
+                    check.model_dump(mode="json")
+                    for check in payload.adjustment_checks
+                ],
+            },
+        )
+        self.session.add(run)
+        await self.session.flush()
+        await self.session.refresh(run)
+        return run
+
+    async def create_validation_finding(self, **values) -> ValidationFinding:
+        finding = ValidationFinding(**values)
+        self.session.add(finding)
+        await self.session.flush()
+        await self.session.refresh(finding)
+        return finding
+
+    async def create_finding(self, **values) -> Finding:
+        finding = Finding(**values)
+        self.session.add(finding)
+        await self.session.flush()
+        await self.session.refresh(finding)
+        return finding
+
+    async def create_risk_summary(self, **values) -> RiskSummary:
+        summary = RiskSummary(**values)
+        self.session.add(summary)
+        await self.session.flush()
+        await self.session.refresh(summary)
+        return summary
+
+    async def list_runs(self, review_id: UUID) -> list[ValidationRun]:
+        statement = (
+            select(ValidationRun)
+            .where(ValidationRun.review_id == review_id)
+            .order_by(ValidationRun.run_no, ValidationRun.validation_run_id)
+        )
+        return list((await self.session.scalars(statement)).all())
+
+    async def get_run(self, validation_run_id: UUID) -> ValidationRun | None:
+        return await self.session.scalar(
+            select(ValidationRun).where(
+                ValidationRun.validation_run_id == validation_run_id
+            )
+        )
+
+    async def list_findings(self, validation_run_id: UUID) -> list[Finding]:
+        statement = (
+            select(Finding)
+            .where(Finding.validation_run_id == validation_run_id)
+            .order_by(Finding.created_at, Finding.finding_id)
+        )
+        return list((await self.session.scalars(statement)).all())
+
+    async def get_finding(self, finding_id: UUID) -> Finding | None:
+        return await self.session.scalar(
+            select(Finding).where(Finding.finding_id == finding_id)
+        )
+
+    async def get_risk_summary(self, validation_run_id: UUID) -> RiskSummary | None:
+        return await self.session.scalar(
+            select(RiskSummary).where(
+                RiskSummary.validation_run_id == validation_run_id
+            )
+        )
