@@ -1,7 +1,10 @@
+from datetime import datetime
+
 from app.core.exceptions import AppError
 from app.core.exceptions import ResourceNotFoundError
 from app.review.repository import ReviewRepository
 from app.review.schemas import ReviewCreate, ReviewListQuery, ReviewUpdate
+from app.review.completeness import evaluate_completeness
 
 
 ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -76,3 +79,42 @@ class ReviewService:
             )
         except LookupError as exc:
             raise ResourceNotFoundError("審查案件") from exc
+
+    async def check_completeness(self, review_id, actor_id):
+        review = await self.repository.get(review_id, for_update=True)
+        if review is None:
+            raise ResourceNotFoundError("審查案件")
+        if review.review_status in {"RECEIVED", "PENDING_MATERIALS"}:
+            review.review_status = ensure_transition(
+                review.review_status, "PREPROCESSING"
+            )
+        if review.review_status != "PREPROCESSING":
+            raise AppError(
+                "REVIEW_STATE_CONFLICT",
+                "目前狀態不可執行文件完整性檢查",
+                409,
+                {"current": review.review_status},
+            )
+
+        snapshot = await self.repository.load_case_snapshot(review.case_id)
+        result = evaluate_completeness(snapshot)
+        items = await self.repository.sync_missing_items(
+            review_id, result.items, actor_id
+        )
+        review.missing_item_count = len(items)
+        review.review_status = ensure_transition(
+            "PREPROCESSING",
+            "READY_FOR_REVIEW" if result.ready else "PENDING_MATERIALS",
+        )
+        await self.repository.session.flush()
+        return result, review, items
+
+    async def list_missing_items(self, review_id):
+        await self.get(review_id)
+        return await self.repository.list_missing_items(review_id)
+
+    async def request_supplement(self, review_id, due_at):
+        await self.get(review_id)
+        if due_at <= datetime.now(due_at.tzinfo):
+            raise AppError("INVALID_DUE_AT", "補件期限必須晚於目前時間", 422)
+        return await self.repository.request_supplement(review_id, due_at)

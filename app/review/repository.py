@@ -1,10 +1,13 @@
+from __future__ import annotations
+
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.review.models import Review
+from app.review.completeness import CaseInputSnapshot, DocumentSnapshot, MissingRequirement
+from app.review.models import MissingItem, Review
 from app.review.schemas import ReviewCreate, ReviewListQuery
 
 
@@ -93,3 +96,108 @@ class ReviewRepository:
         review.manual_priority_reason = reason
         await self.session.flush()
         return review
+
+    async def load_case_snapshot(self, case_id: UUID) -> CaseInputSnapshot:
+        case_row = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT c.case_no, c.valuation_base_date, c.district_code,
+                           (SELECT sum(p.area_sqm) FROM valuation.parcels p
+                            WHERE p.case_id = c.case_id) AS parcel_area
+                    FROM valuation.cases c
+                    WHERE c.case_id = :case_id
+                    """
+                ),
+                {"case_id": case_id},
+            )
+        ).mappings().one()
+        document_rows = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT document_type, version_no, is_active
+                    FROM valuation.documents
+                    WHERE case_id = :case_id
+                    """
+                ),
+                {"case_id": case_id},
+            )
+        ).mappings()
+        return CaseInputSnapshot(
+            documents=tuple(
+                DocumentSnapshot(
+                    category=row["document_type"],
+                    version=row["version_no"],
+                    is_active=row["is_active"],
+                )
+                for row in document_rows
+            ),
+            normalized_fields=dict(case_row),
+        )
+
+    async def sync_missing_items(
+        self,
+        review_id: UUID,
+        requirements: tuple[MissingRequirement, ...],
+        actor_id: UUID,
+    ) -> list[MissingItem]:
+        open_items = list(
+            (
+                await self.session.scalars(
+                    select(MissingItem).where(
+                        MissingItem.review_id == review_id,
+                        MissingItem.status == "OPEN",
+                    )
+                )
+            ).all()
+        )
+        by_code = {item.item_code: item for item in open_items}
+        current_codes = {item.item_code for item in requirements}
+        resolved_at = datetime.now(UTC)
+        for item in open_items:
+            if item.item_code not in current_codes:
+                item.status = "RESOLVED"
+                item.resolved_by_user_id = actor_id
+                item.resolved_at = resolved_at
+
+        current: list[MissingItem] = []
+        for requirement in requirements:
+            item = by_code.get(requirement.item_code)
+            if item is None:
+                item = MissingItem(
+                    review_id=review_id,
+                    item_code=requirement.item_code,
+                    item_name=requirement.item_name,
+                    document_type=requirement.document_category,
+                    field_path=requirement.field_path,
+                    reason="必要文件或欄位尚未提供",
+                    affected_rule_codes=sorted(requirement.blocked_rule_codes),
+                    severity="HIGH" if requirement.blocked_rule_codes else "MEDIUM",
+                    status="OPEN",
+                )
+                self.session.add(item)
+            current.append(item)
+        await self.session.flush()
+        for item in current:
+            await self.session.refresh(item)
+        return current
+
+    async def list_missing_items(
+        self, review_id: UUID, open_only: bool = True
+    ) -> list[MissingItem]:
+        statement = select(MissingItem).where(MissingItem.review_id == review_id)
+        if open_only:
+            statement = statement.where(MissingItem.status == "OPEN")
+        statement = statement.order_by(MissingItem.created_at, MissingItem.missing_item_id)
+        return list((await self.session.scalars(statement)).all())
+
+    async def request_supplement(
+        self, review_id: UUID, due_at: datetime
+    ) -> list[MissingItem]:
+        items = await self.list_missing_items(review_id, open_only=True)
+        for item in items:
+            item.due_at = due_at
+            item.notification_status = "PENDING"
+        await self.session.flush()
+        return items

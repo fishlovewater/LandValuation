@@ -18,6 +18,7 @@ ReviewStatus = Literal[
     "APPROVED",
     "REVIEW_COMPLETED",
 ]
+RiskLevel = Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
 
 
 class ReviewCreate(BaseModel):
@@ -56,7 +57,7 @@ class ReviewPriority(BaseModel):
 class ReviewListQuery(BaseModel):
     status: ReviewStatus | None = None
     assigned_reviewer_id: UUID | None = None
-    risk_level: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"] | None = None
+    risk_level: RiskLevel | None = None
     limit: int = Field(default=50, ge=1, le=100)
     offset: int = Field(default=0, ge=0)
 
@@ -89,3 +90,41 @@ class ReviewList(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class MissingItemRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    missing_item_id: UUID
+    review_id: UUID
+    item_code: str
+    item_name: str
+    document_type: str | None
+    severity: str
+    status: str
+    field_path: str | None
+    reason: str | None
+    affected_rule_codes: list[str]
+    due_at: datetime | None
+    notified_at: datetime | None
+    notification_status: str | None
+    created_at: datetime
+
+
+class CompletenessResponse(BaseModel):
+    ready: bool
+    review_status: str
+    missing_item_count: int
+    blocked_rule_codes: list[str]
+    items: list[MissingItemRead]
+
+
+class SupplementRequest(BaseModel):
+    due_at: datetime
+
+    @field_validator("due_at")
+    @classmethod
+    def due_at_must_be_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("due_at 必須包含時區")
+        return value
