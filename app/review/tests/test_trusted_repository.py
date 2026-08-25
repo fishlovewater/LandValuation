@@ -17,12 +17,16 @@ def trusted_repository_data(postgres_connection):
         document_group_id=uuid4(),
         original_v1_id=uuid4(),
         original_v2_id=uuid4(),
+        inactive_original_v99_id=uuid4(),
         other_document_id=uuid4(),
         extraction_v1_id=uuid4(),
         extraction_v2_id=uuid4(),
         other_extraction_id=uuid4(),
+        wrong_version_extraction_id=uuid4(),
+        pending_extraction_id=uuid4(),
         source_document_id=uuid4(),
-        unavailable_source_document_id=uuid4(),
+        completed_draft_source_document_id=uuid4(),
+        pending_published_source_document_id=uuid4(),
         published_rule_version_id=uuid4(),
         draft_rule_version_id=uuid4(),
         global_rule_id=uuid4(),
@@ -55,7 +59,7 @@ def trusted_repository_data(postgres_connection):
                 """,
                 (case_id, case_no),
             )
-        for document_id, case_id, filename, checksum, version_no, group_id in (
+        for document_id, case_id, filename, checksum, version_no, group_id, is_active in (
             (
                 ids.original_v1_id,
                 ids.case_id,
@@ -63,6 +67,7 @@ def trusted_repository_data(postgres_connection):
                 "1" * 64,
                 1,
                 ids.document_group_id,
+                True,
             ),
             (
                 ids.original_v2_id,
@@ -71,6 +76,16 @@ def trusted_repository_data(postgres_connection):
                 "2" * 64,
                 2,
                 ids.document_group_id,
+                True,
+            ),
+            (
+                ids.inactive_original_v99_id,
+                ids.case_id,
+                "original-inactive-v99.pdf",
+                "9" * 64,
+                99,
+                ids.document_group_id,
+                False,
             ),
             (
                 ids.other_document_id,
@@ -79,6 +94,7 @@ def trusted_repository_data(postgres_connection):
                 "3" * 64,
                 9,
                 uuid4(),
+                True,
             ),
         ):
             cursor.execute(
@@ -87,8 +103,8 @@ def trusted_repository_data(postgres_connection):
                     document_id, case_id, document_type, original_filename,
                     mime_type, bucket_name, object_key, checksum_sha256,
                     file_size_bytes, version_no, is_active, document_group_id
-                ) VALUES (%s, %s, 'original', %s, 'application/pdf',
-                          'land-valuation', %s, %s, 100, %s, true, %s)
+                    ) VALUES (%s, %s, 'original', %s, 'application/pdf',
+                              'land-valuation', %s, %s, 100, %s, %s, %s)
                 """,
                 (
                     document_id,
@@ -97,6 +113,7 @@ def trusted_repository_data(postgres_connection):
                     f"cases/{case_id}/{filename}",
                     checksum,
                     version_no,
+                    is_active,
                     group_id,
                 ),
             )
@@ -109,24 +126,28 @@ def trusted_repository_data(postgres_connection):
             """,
             (uuid4(), ids.case_id, uuid4(), ids.case_id),
         )
-        for extraction_id, case_id, document_id, version_no, run_no in (
-            (ids.extraction_v1_id, ids.case_id, ids.original_v1_id, 1, 1),
-            (ids.extraction_v2_id, ids.case_id, ids.original_v2_id, 2, 2),
-            (ids.other_extraction_id, ids.other_case_id, ids.other_document_id, 9, 99),
+        for extraction_id, case_id, document_id, version_no, run_no, status in (
+            (ids.extraction_v1_id, ids.case_id, ids.original_v1_id, 1, 1, "COMPLETED"),
+            (ids.extraction_v2_id, ids.case_id, ids.original_v2_id, 2, 2, "COMPLETED"),
+            (ids.other_extraction_id, ids.other_case_id, ids.other_document_id, 9, 99, "COMPLETED"),
+            (ids.wrong_version_extraction_id, ids.case_id, ids.original_v2_id, 1, 100, "COMPLETED"),
+            (ids.pending_extraction_id, ids.case_id, ids.original_v2_id, 2, 99, "PENDING"),
         ):
             cursor.execute(
                 """
                 INSERT INTO valuation.extraction_runs (
                     extraction_run_id, case_id, document_id, document_version,
                     run_no, status, extractor_name, started_at, completed_at
-                ) VALUES (%s, %s, %s, %s, %s, 'COMPLETED', 'fixture',
-                          now() - interval '1 minute', now())
+                ) VALUES (%s, %s, %s, %s, %s, %s, 'fixture',
+                          now() - interval '1 minute',
+                          CASE WHEN %s = 'COMPLETED' THEN now() ELSE NULL END)
                 """,
-                (extraction_id, case_id, document_id, version_no, run_no),
+                (extraction_id, case_id, document_id, version_no, run_no, status, status),
             )
-        for field_code, value_type, raw_text, normalized_value in (
-            ("adjustment_rate", "DECIMAL", "-5%", '"-5"'),
-            ("expert_grade", "TEXT", "A 級", '"A"'),
+        for field_code, value_type, raw_text, normalized_value, is_official in (
+            ("adjustment_rate", "DECIMAL", "-5%", '"-5"', True),
+            ("expert_grade", "TEXT", "A 級", '"A"', True),
+            ("nonofficial_only", "TEXT", "草稿欄位", '"draft"', False),
         ):
             cursor.execute(
                 """
@@ -134,8 +155,8 @@ def trusted_repository_data(postgres_connection):
                     extracted_field_id, extraction_run_id, field_code, field_path,
                     value_type, raw_text, normalized_value, page_number,
                     verification_status, is_official
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, 1,
-                          'AUTO_EXTRACTED', true)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, 1,
+                              'AUTO_EXTRACTED', %s)
                 """,
                 (
                     uuid4(),
@@ -145,6 +166,7 @@ def trusted_repository_data(postgres_connection):
                     value_type,
                     raw_text,
                     normalized_value,
+                    is_official,
                 ),
             )
         for document_id, document_code, filename, checksum, extraction_status, publication_status in (
@@ -157,12 +179,20 @@ def trusted_repository_data(postgres_connection):
                 "PUBLISHED",
             ),
             (
-                ids.unavailable_source_document_id,
-                f"UNAVAILABLE-SOURCE-{str(ids.unavailable_source_document_id)[:8]}",
-                "unavailable-source.pdf",
+                ids.completed_draft_source_document_id,
+                f"COMPLETED-DRAFT-{str(ids.completed_draft_source_document_id)[:8]}",
+                "completed-draft-source.pdf",
                 "b" * 64,
-                "PENDING",
+                "COMPLETED",
                 "DRAFT",
+            ),
+            (
+                ids.pending_published_source_document_id,
+                f"PENDING-PUBLISHED-{str(ids.pending_published_source_document_id)[:8]}",
+                "pending-published-source.pdf",
+                "c" * 64,
+                "PENDING",
+                "PUBLISHED",
             ),
         ):
             approved_by_user_id = (
@@ -241,12 +271,24 @@ def trusted_repository_data(postgres_connection):
     yield ids
     with postgres_connection.cursor() as cursor:
         cursor.execute(
-            "DELETE FROM valuation.extracted_fields WHERE extraction_run_id IN (%s, %s, %s)",
-            (ids.extraction_v1_id, ids.extraction_v2_id, ids.other_extraction_id),
+            "DELETE FROM valuation.extracted_fields WHERE extraction_run_id IN (%s, %s, %s, %s, %s)",
+            (
+                ids.extraction_v1_id,
+                ids.extraction_v2_id,
+                ids.other_extraction_id,
+                ids.wrong_version_extraction_id,
+                ids.pending_extraction_id,
+            ),
         )
         cursor.execute(
-            "DELETE FROM valuation.extraction_runs WHERE extraction_run_id IN (%s, %s, %s)",
-            (ids.extraction_v1_id, ids.extraction_v2_id, ids.other_extraction_id),
+            "DELETE FROM valuation.extraction_runs WHERE extraction_run_id IN (%s, %s, %s, %s, %s)",
+            (
+                ids.extraction_v1_id,
+                ids.extraction_v2_id,
+                ids.other_extraction_id,
+                ids.wrong_version_extraction_id,
+                ids.pending_extraction_id,
+            ),
         )
         cursor.execute(
             "DELETE FROM valuation.validation_rules WHERE rule_version_id IN (%s, %s)",
@@ -257,8 +299,12 @@ def trusted_repository_data(postgres_connection):
             (ids.published_rule_version_id, ids.draft_rule_version_id),
         )
         cursor.execute(
-            "DELETE FROM knowledge.documents WHERE document_id IN (%s, %s)",
-            (ids.source_document_id, ids.unavailable_source_document_id),
+            "DELETE FROM knowledge.documents WHERE document_id IN (%s, %s, %s)",
+            (
+                ids.source_document_id,
+                ids.completed_draft_source_document_id,
+                ids.pending_published_source_document_id,
+            ),
         )
         cursor.execute("DELETE FROM valuation.form_instances WHERE case_id = %s", (ids.case_id,))
         cursor.execute(
@@ -312,6 +358,9 @@ async def test_loads_only_server_owned_trusted_context(trusted_repository_data):
         )
         assert published["applicable_case_type"] == "LAND"
         assert published["applicable_district_code"] == "F01"
+        assert published["status"] == "PUBLISHED"
+        assert published["effective_from"] == date(2026, 1, 1)
+        assert published["effective_to"] is None
         assert published["selection_priority"] == 10
         assert published["source_document_id"] == trusted_repository_data.source_document_id
         assert {
@@ -341,5 +390,8 @@ async def test_loads_only_server_owned_trusted_context(trusted_repository_data):
             "effective_to": date(2026, 12, 31),
         }
         assert await repository.get_rule_source(
-            trusted_repository_data.unavailable_source_document_id
+            trusted_repository_data.completed_draft_source_document_id
+        ) is None
+        assert await repository.get_rule_source(
+            trusted_repository_data.pending_published_source_document_id
         ) is None
