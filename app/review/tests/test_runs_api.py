@@ -12,6 +12,7 @@ from app.main import app
 def runnable_review(postgres_connection):
     user_id, case_id, review_id = uuid4(), uuid4(), uuid4()
     rule_version_id, validation_rule_id = uuid4(), uuid4()
+    document_id = uuid4()
     with postgres_connection.cursor() as cursor:
         cursor.execute(
             """
@@ -42,6 +43,23 @@ def runnable_review(postgres_connection):
         )
         cursor.execute(
             """
+            INSERT INTO valuation.documents (
+                document_id, case_id, document_type, original_filename,
+                mime_type, bucket_name, object_key, checksum_sha256,
+                file_size_bytes, version_no, is_active
+            ) VALUES (%s, %s, 'original', 'run-source.pdf',
+                      'application/pdf', 'land-valuation', %s, %s,
+                      100, 1, true)
+            """,
+            (
+                document_id,
+                case_id,
+                f"cases/{case_id}/run-source.pdf",
+                "e" * 64,
+            ),
+        )
+        cursor.execute(
+            """
             INSERT INTO valuation.rule_versions (
                 rule_version_id, rule_set_code, version_no, version_name,
                 effective_from, status
@@ -56,9 +74,13 @@ def runnable_review(postgres_connection):
                 target_table, target_field_code, severity, rule_expression,
                 message_template
             ) VALUES (%s, %s, 'ADJUSTMENT_RATE', '調整率檢核',
-                      'comparison', 'adjustment_rate', 'HIGH', '{}', '調整率不一致')
+                      'comparison', 'adjustment_rate', 'HIGH', %s, '調整率不一致')
             """,
-            (validation_rule_id, rule_version_id),
+            (
+                validation_rule_id,
+                rule_version_id,
+                '{"system_rate":"-5","tolerance":"0"}',
+            ),
         )
     postgres_connection.commit()
     yield SimpleNamespace(
@@ -67,6 +89,7 @@ def runnable_review(postgres_connection):
         review_id=review_id,
         rule_version_id=rule_version_id,
         validation_rule_id=validation_rule_id,
+        document_id=document_id,
     )
     with postgres_connection.cursor() as cursor:
         cursor.execute("DELETE FROM review.decisions WHERE review_id = %s", (review_id,))
@@ -106,22 +129,16 @@ def authorized_client(runnable_review):
 def run_payload(data):
     return {
         "rule_version_id": str(data.rule_version_id),
-        "input_snapshot": {"document_versions": [1], "case_id": str(data.case_id)},
         "adjustment_checks": [
             {
                 "validation_rule_id": str(data.validation_rule_id),
                 "finding_code": "RATE-COMP-001",
                 "reported_rate": "-12",
-                "system_rate": "-5",
-                "tolerance": "0",
                 "reported_text": "報告記載調整率 -12%",
                 "field_path": "comparables[0].adjustment_rate",
-                "source_evidence": [
-                    {"source_id": "report-p3", "page": 3, "excerpt": "調整率 -12%"}
-                ],
-                "legal_basis": [
-                    {"source_id": "law-a10", "article": "第10條"}
-                ],
+                "document_id": str(data.document_id),
+                "document_version": 1,
+                "page_number": 3,
             }
         ],
     }
@@ -139,7 +156,7 @@ def test_run_creates_machine_evidence_finding_and_risk_summary(
     run = response.json()
     assert run["run_status"] == "COMPLETED"
     assert run["failed_count"] == 1
-    assert run["input_snapshot"]["adjustment_checks"][0]["reported_rate"] == "-12"
+    assert run["input_snapshot"]["checks"][0]["reported_value"] == "-12"
 
     runs = authorized_client.get(
         f"/api/v1/review/cases/{runnable_review.review_id}/runs"
@@ -155,7 +172,9 @@ def test_run_creates_machine_evidence_finding_and_risk_summary(
     )
     assert findings.status_code == 200
     finding = findings.json()[0]
-    assert finding["source_evidence"][0]["source_id"] == "report-p3"
+    assert finding["source_evidence"][0]["document_id"] == str(
+        runnable_review.document_id
+    )
     assert finding["reported_adjustment_rate"] == "-12.000000"
     assert finding["system_adjustment_rate"] == "-5.000000"
     assert finding["comparison_result"]["difference"] == "-7.00"
@@ -200,3 +219,83 @@ def test_second_running_run_returns_conflict(
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "RUN_ALREADY_ACTIVE"
+
+
+def test_run_rejects_client_supplied_authoritative_values(
+    authorized_client, runnable_review
+):
+    payload = run_payload(runnable_review)
+    payload["input_snapshot"] = {"forged": True}
+    payload["adjustment_checks"][0]["system_rate"] = "999"
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
+        json=payload,
+    )
+
+    assert response.status_code == 422
+
+
+def test_run_rejects_empty_check_selection(authorized_client, runnable_review):
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
+        json={
+            "rule_version_id": str(runnable_review.rule_version_id),
+            "adjustment_checks": [],
+            "expert_checks": [],
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_run_snapshot_preserves_zero_reported_value(
+    authorized_client, runnable_review
+):
+    payload = run_payload(runnable_review)
+    payload["adjustment_checks"][0]["reported_rate"] = "0"
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
+        json=payload,
+    )
+
+    assert response.status_code == 202
+    assert response.json()["input_snapshot"]["checks"][0]["reported_value"] == "0"
+
+
+def test_run_rejects_document_outside_case_without_changing_state(
+    authorized_client, runnable_review
+):
+    payload = run_payload(runnable_review)
+    payload["adjustment_checks"][0]["document_id"] = str(uuid4())
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
+        json=payload,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "EVIDENCE_SCOPE_CONFLICT"
+    review = authorized_client.get(
+        f"/api/v1/review/cases/{runnable_review.review_id}"
+    ).json()
+    assert review["review_status"] == "READY_FOR_REVIEW"
+    assert authorized_client.get(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs"
+    ).json() == []
+
+
+def test_run_rejects_rule_not_in_published_ruleset(
+    authorized_client, runnable_review
+):
+    payload = run_payload(runnable_review)
+    payload["adjustment_checks"][0]["validation_rule_id"] = str(uuid4())
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
+        json=payload,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "RULE_SELECTION_CONFLICT"

@@ -17,6 +17,8 @@ def workflow_data(postgres_connection):
         high_rule_id=uuid4(),
         medium_rule_id=uuid4(),
         original_group_id=uuid4(),
+        current_document_id=None,
+        current_document_version=None,
     )
     with postgres_connection.cursor() as cursor:
         cursor.execute(
@@ -41,17 +43,36 @@ def workflow_data(postgres_connection):
                VALUES (%s, %s, 1, 'E2E Rules', CURRENT_DATE, 'PUBLISHED')""",
             (ids.rule_version_id, f"E2E_{str(ids.rule_version_id)[:8]}"),
         )
-        for rule_id, code, severity in (
-            (ids.high_rule_id, "ADJUSTMENT_RATE", "HIGH"),
-            (ids.medium_rule_id, "EXPERT_GRADE", "MEDIUM"),
+        for rule_id, code, severity, expression in (
+            (
+                ids.high_rule_id,
+                "ADJUSTMENT_RATE",
+                "HIGH",
+                '{"system_rate":"-5","tolerance":"0"}',
+            ),
+            (
+                ids.medium_rule_id,
+                "EXPERT_GRADE",
+                "MEDIUM",
+                '{"system_grade":"A"}',
+            ),
         ):
             cursor.execute(
                 """INSERT INTO valuation.validation_rules
                    (validation_rule_id, rule_version_id, rule_code, rule_name,
                     target_table, target_field_code, severity, rule_expression,
                     message_template)
-                   VALUES (%s, %s, %s, %s, 'comparison', %s, %s, '{}', %s)""",
-                (rule_id, ids.rule_version_id, code, code, code.lower(), severity, code),
+                   VALUES (%s, %s, %s, %s, 'comparison', %s, %s, %s, %s)""",
+                (
+                    rule_id,
+                    ids.rule_version_id,
+                    code,
+                    code,
+                    code.lower(),
+                    severity,
+                    expression,
+                    code,
+                ),
             )
     postgres_connection.commit()
     yield ids
@@ -91,14 +112,18 @@ def add_complete_inputs(connection, data, version=1):
         if version == 1:
             for index, document_type in enumerate(("original", "land-register", "cadastral-map"), 1):
                 group_id = data.original_group_id if document_type == "original" else uuid4()
+                document_id = uuid4()
+                if document_type == "original":
+                    data.current_document_id = document_id
+                    data.current_document_version = 1
                 cursor.execute(
                     """INSERT INTO valuation.documents
-                       (case_id, document_type, original_filename, mime_type,
+                       (document_id, case_id, document_type, original_filename, mime_type,
                         bucket_name, object_key, checksum_sha256, file_size_bytes,
                         version_no, is_active, document_group_id)
-                       VALUES (%s, %s, %s, 'application/pdf', 'land-valuation',
+                       VALUES (%s, %s, %s, %s, 'application/pdf', 'land-valuation',
                                %s, %s, 100, 1, true, %s)""",
-                    (data.case_id, document_type, f"{document_type}.pdf",
+                    (document_id, data.case_id, document_type, f"{document_type}.pdf",
                      f"cases/{data.case_id}/{document_type}.pdf", str(index) * 64, group_id),
                 )
             cursor.execute(
@@ -108,14 +133,22 @@ def add_complete_inputs(connection, data, version=1):
                 (data.case_id,),
             )
         else:
+            data.current_document_id = uuid4()
+            data.current_document_version = 2
             cursor.execute(
                 """INSERT INTO valuation.documents
-                   (case_id, document_type, original_filename, mime_type,
+                   (document_id, case_id, document_type, original_filename, mime_type,
                     bucket_name, object_key, checksum_sha256, file_size_bytes,
                     version_no, is_active, document_group_id)
-                   VALUES (%s, 'original', 'original-v2.pdf', 'application/pdf',
+                   VALUES (%s, %s, 'original', 'original-v2.pdf', 'application/pdf',
                            'land-valuation', %s, %s, 120, 2, true, %s)""",
-                (data.case_id, f"cases/{data.case_id}/original-v2.pdf", "d" * 64, data.original_group_id),
+                (
+                    data.current_document_id,
+                    data.case_id,
+                    f"cases/{data.case_id}/original-v2.pdf",
+                    "d" * 64,
+                    data.original_group_id,
+                ),
             )
     connection.commit()
 
@@ -123,17 +156,15 @@ def add_complete_inputs(connection, data, version=1):
 def analysis_payload(data, reported="-12", include_medium=True):
     payload = {
         "rule_version_id": str(data.rule_version_id),
-        "input_snapshot": {"case_id": str(data.case_id)},
         "adjustment_checks": [{
             "validation_rule_id": str(data.high_rule_id),
             "finding_code": "HIGH-RATE",
             "reported_rate": reported,
-            "system_rate": "-5",
-            "tolerance": "0",
             "reported_text": f"調整率 {reported}%",
             "field_path": "comparables[0].adjustment_rate",
-            "source_evidence": [{"source_id": "report-p3", "page": 3}],
-            "legal_basis": [{"source_id": "law-a10", "article": "第10條"}],
+            "document_id": str(data.current_document_id),
+            "document_version": data.current_document_version,
+            "page_number": 3,
         }],
         "expert_checks": [],
     }
@@ -142,11 +173,11 @@ def analysis_payload(data, reported="-12", include_medium=True):
             "validation_rule_id": str(data.medium_rule_id),
             "finding_code": "MEDIUM-GRADE",
             "reported_grade": "B",
-            "system_grade": "A",
             "reported_text": "報告評定 B 級",
             "field_path": "comparables[0].grade",
-            "source_evidence": [{"source_id": "report-p4", "page": 4}],
-            "legal_basis": [],
+            "document_id": str(data.current_document_id),
+            "document_version": data.current_document_version,
+            "page_number": 4,
         }]
     return payload
 

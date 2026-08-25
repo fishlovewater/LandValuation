@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import case, func, select, text
+from sqlalchemy import case, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.review.completeness import CaseInputSnapshot, DocumentSnapshot, MissingRequirement
@@ -17,6 +17,7 @@ from app.review.models import (
     ValidationRun,
 )
 from app.review.schemas import ReviewCreate, ReviewListQuery, RunCreate
+from app.review.risks import EXPERT_MINIMUM_MEDIUM_TYPE, HIGH_RISK_FINDING_TYPES
 
 
 class ReviewRepository:
@@ -221,7 +222,11 @@ class ReviewRepository:
         )
 
     async def create_run(
-        self, review: Review, payload: RunCreate, actor_id: UUID
+        self,
+        review: Review,
+        payload: RunCreate,
+        actor_id: UUID,
+        input_snapshot: dict,
     ) -> ValidationRun:
         run_no = (
             await self.session.scalar(
@@ -238,21 +243,73 @@ class ReviewRepository:
             triggered_by_user_id=actor_id,
             rule_version_id=payload.rule_version_id,
             ruleset_snapshot={"rule_version_id": str(payload.rule_version_id)},
-            input_snapshot={
-                **payload.input_snapshot,
-                "adjustment_checks": [
-                    check.model_dump(mode="json")
-                    for check in payload.adjustment_checks
-                ],
-                "expert_checks": [
-                    check.model_dump(mode="json") for check in payload.expert_checks
-                ],
-            },
+            input_snapshot=input_snapshot,
         )
         self.session.add(run)
         await self.session.flush()
         await self.session.refresh(run)
         return run
+
+    async def get_effective_rule(
+        self,
+        case_id: UUID,
+        rule_version_id: UUID,
+        validation_rule_id: UUID,
+    ):
+        row = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT vr.validation_rule_id, vr.rule_code, vr.severity,
+                           vr.rule_expression, rv.rule_version_id,
+                           rv.source_reference
+                    FROM valuation.cases c
+                    JOIN valuation.rule_versions rv
+                      ON rv.rule_version_id = :rule_version_id
+                     AND rv.status = 'PUBLISHED'
+                     AND rv.effective_from <= c.valuation_base_date
+                     AND (rv.effective_to IS NULL
+                          OR rv.effective_to >= c.valuation_base_date)
+                    JOIN valuation.validation_rules vr
+                      ON vr.rule_version_id = rv.rule_version_id
+                     AND vr.validation_rule_id = :validation_rule_id
+                     AND vr.is_active = true
+                    WHERE c.case_id = :case_id
+                    """
+                ),
+                {
+                    "case_id": case_id,
+                    "rule_version_id": rule_version_id,
+                    "validation_rule_id": validation_rule_id,
+                },
+            )
+        ).mappings().one_or_none()
+        return dict(row) if row else None
+
+    async def get_case_document(
+        self, case_id: UUID, document_id: UUID, version_no: int
+    ):
+        row = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT document_id, case_id, document_type, version_no,
+                           object_key, checksum_sha256
+                    FROM valuation.documents
+                    WHERE case_id = :case_id
+                      AND document_id = :document_id
+                      AND version_no = :version_no
+                      AND is_active = true
+                    """
+                ),
+                {
+                    "case_id": case_id,
+                    "document_id": document_id,
+                    "version_no": version_no,
+                },
+            )
+        ).mappings().one_or_none()
+        return dict(row) if row else None
 
     async def create_validation_finding(self, **values) -> ValidationFinding:
         finding = ValidationFinding(**values)
@@ -337,16 +394,74 @@ class ReviewRepository:
         return list((await self.session.scalars(statement)).all())
 
     async def unresolved_high_count(self, review_id: UUID) -> int:
+        latest_run_id = select(Review.latest_validation_run_id).where(
+            Review.review_id == review_id
+        ).scalar_subquery()
         return int(
             await self.session.scalar(
                 select(func.count()).select_from(Finding).where(
                     Finding.review_id == review_id,
-                    Finding.severity.in_(["HIGH", "CRITICAL"]),
-                    Finding.status.in_(["OPEN", "REQUIRES_SUPPLEMENT", "EXPERT_REVIEW"]),
+                    Finding.validation_run_id == latest_run_id,
+                    or_(
+                        Finding.severity.in_(["HIGH", "CRITICAL"]),
+                        Finding.finding_type.in_(HIGH_RISK_FINDING_TYPES),
+                    ),
+                    Finding.status.in_(
+                        [
+                            "OPEN",
+                            "PARTIALLY_ACCEPTED",
+                            "REQUIRES_SUPPLEMENT",
+                            "EXPERT_REVIEW",
+                        ]
+                    ),
                 )
             )
             or 0
         )
+
+    async def current_risk_counts(self, review_id: UUID) -> dict[str, int]:
+        latest_run_id = select(Review.latest_validation_run_id).where(
+            Review.review_id == review_id
+        ).scalar_subquery()
+        normalized_severity = case(
+            (
+                Finding.finding_type.in_(HIGH_RISK_FINDING_TYPES)
+                & Finding.severity.not_in(["HIGH", "CRITICAL"]),
+                "HIGH",
+            ),
+            (
+                (Finding.finding_type == EXPERT_MINIMUM_MEDIUM_TYPE)
+                & (Finding.severity == "LOW"),
+                "MEDIUM",
+            ),
+            else_=Finding.severity,
+        )
+        rows = (
+            await self.session.execute(
+                select(normalized_severity, func.count())
+                .where(
+                    Finding.review_id == review_id,
+                    Finding.validation_run_id == latest_run_id,
+                    Finding.status.in_(
+                        [
+                            "OPEN",
+                            "PARTIALLY_ACCEPTED",
+                            "REQUIRES_SUPPLEMENT",
+                            "EXPERT_REVIEW",
+                        ]
+                    ),
+                )
+                .group_by(normalized_severity)
+            )
+        ).all()
+        by_severity = {severity: int(count) for severity, count in rows}
+        return {
+            "high": by_severity.get("HIGH", 0)
+            + by_severity.get("CRITICAL", 0),
+            "medium": by_severity.get("MEDIUM", 0),
+            "low": by_severity.get("LOW", 0),
+            "critical": by_severity.get("CRITICAL", 0),
+        }
 
     async def get_case_report_data(self, case_id: UUID):
         return (

@@ -39,6 +39,12 @@ def recalculate_adjustment_rate(
 
 def recalculate_weighted_price(items) -> WeightedPriceResult:
     items = tuple(items)
+    if any(weight < 0 for _, weight in items):
+        raise AppError(
+            "INVALID_WEIGHT",
+            "比較標的權重不得為負值",
+            422,
+        )
     total_weight = sum((weight for _, weight in items), Decimal("0"))
     if abs(total_weight - WEIGHT_TOTAL) > WEIGHT_TOLERANCE:
         raise AppError(

@@ -1,6 +1,18 @@
 from dataclasses import dataclass
 
 
+HIGH_RISK_FINDING_TYPES = frozenset(
+    {
+        "WRONG_LEGAL_BASIS",
+        "OPPOSITE_DIRECTION",
+        "RATE_OUT_OF_RANGE",
+        "PRICE_FORMULA_MISMATCH",
+        "CRITICAL_SOURCE_CONTRADICTION",
+    }
+)
+EXPERT_MINIMUM_MEDIUM_TYPE = "EXPERT_GRADE_JUDGMENT"
+
+
 @dataclass(frozen=True)
 class FindingRisk:
     finding_type: str
@@ -20,23 +32,19 @@ def risk_level_for_findings(findings, missing_data: bool = False) -> RiskResult:
     if missing_data:
         return RiskResult("MISSING_DATA", 0, 0, 0)
 
-    high_types = {
-        "WRONG_LEGAL_BASIS",
-        "OPPOSITE_DIRECTION",
-        "RATE_OUT_OF_RANGE",
-        "PRICE_FORMULA_MISMATCH",
-        "CRITICAL_SOURCE_CONTRADICTION",
-    }
     severity_rank = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
     normalized: list[str] = []
     for finding in findings:
         if finding.resolved:
             continue
         severity = finding.severity
-        if finding.finding_type in high_types and severity_rank.get(severity, 0) < 3:
+        if (
+            finding.finding_type in HIGH_RISK_FINDING_TYPES
+            and severity_rank.get(severity, 0) < 3
+        ):
             severity = "HIGH"
         if (
-            finding.finding_type == "EXPERT_GRADE_JUDGMENT"
+            finding.finding_type == EXPERT_MINIMUM_MEDIUM_TYPE
             and severity_rank.get(severity, 0) < 2
         ):
             severity = "MEDIUM"

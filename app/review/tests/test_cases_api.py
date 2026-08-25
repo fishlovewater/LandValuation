@@ -112,7 +112,7 @@ def test_update_rejects_illegal_status_transition(authorized_client, queue_case)
     )
 
     assert response.status_code == 409
-    assert response.json()["error"]["code"] == "REVIEW_STATE_CONFLICT"
+    assert response.json()["error"]["code"] == "REVIEW_DECISION_INVALID"
 
 
 def test_get_unknown_review_returns_404(authorized_client):

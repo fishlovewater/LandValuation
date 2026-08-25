@@ -27,6 +27,7 @@ class CaseDecisionCommand:
         "SUPPLEMENT_REQUIRED",
         "EXPERT_REVIEW",
         "APPROVED",
+        "REVIEW_COMPLETED",
     ]
     reason: str
     has_override_permission: bool = False

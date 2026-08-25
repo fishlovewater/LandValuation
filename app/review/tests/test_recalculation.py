@@ -39,6 +39,18 @@ def test_weighted_price_rejects_invalid_weight_sum():
     assert error.value.code == "INVALID_WEIGHT_SUM"
 
 
+def test_weighted_price_rejects_negative_weight_even_when_sum_is_one():
+    with pytest.raises(AppError) as error:
+        recalculate_weighted_price(
+            (
+                (Decimal("100"), Decimal("1.2")),
+                (Decimal("200"), Decimal("-0.2")),
+            )
+        )
+
+    assert error.value.code == "INVALID_WEIGHT"
+
+
 def test_grade_for_value_uses_inclusive_decimal_bands():
     bands = (("A", Decimal("0"), Decimal("10")), ("B", Decimal("10.01"), None))
 
