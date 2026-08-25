@@ -14,6 +14,8 @@ def trusted_case(request, postgres_connection):
     options = getattr(request, "param", {})
     with_extraction = options.get("with_extraction", True)
     adjustment_status = options.get("adjustment_status", "VERIFIED")
+    source_extraction_status = options.get("source_extraction_status", "COMPLETED")
+    source_publication_status = options.get("source_publication_status", "PUBLISHED")
     ids = SimpleNamespace(
         user_id=uuid4(),
         case_id=uuid4(),
@@ -102,14 +104,19 @@ def trusted_case(request, postgres_connection):
                 approved_at
             ) VALUES (%s, %s, 'Trusted Source', 'REGULATION', 'source.pdf',
                       'application/pdf', 'land-valuation', %s, %s, 100, 1,
-                      CURRENT_DATE, 'COMPLETED', 'PUBLISHED', %s, now())
+                      CURRENT_DATE, %s, %s, %s, %s)
             """,
             (
                 ids.source_document_id,
                 f"COMPLETE-SOURCE-{str(ids.source_document_id)[:8]}",
                 f"knowledge/{ids.source_document_id}/source.pdf",
                 "a" * 64,
-                ids.user_id,
+                source_extraction_status,
+                source_publication_status,
+                ids.user_id if source_publication_status == "PUBLISHED" else None,
+                datetime.now(UTC)
+                if source_publication_status == "PUBLISHED"
+                else None,
             ),
         )
         cursor.execute(
@@ -269,6 +276,52 @@ def test_completeness_blocks_auto_extracted_high_impact_field(
     assert "TRUSTED_INPUT_UNVERIFIED_ADJUSTMENT_RATE" in {
         item["item_code"] for item in response.json()["items"]
     }
+
+
+@pytest.mark.parametrize(
+    "trusted_case", [{"source_publication_status": "DRAFT"}], indirect=True
+)
+def test_completeness_blocks_draft_rule_source(
+    authorized_client, trusted_case, postgres_connection
+):
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{trusted_case.review_id}/completeness-check"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["review_status"] == "PENDING_MATERIALS"
+    assert "TRUSTED_INPUT_MISSING" in {
+        item["item_code"] for item in response.json()["items"]
+    }
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT count(*) FROM valuation.validation_runs WHERE review_id = %s",
+            (trusted_case.review_id,),
+        )
+        assert cursor.fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    "trusted_case", [{"source_extraction_status": "PENDING"}], indirect=True
+)
+def test_completeness_blocks_unextracted_published_rule_source(
+    authorized_client, trusted_case, postgres_connection
+):
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{trusted_case.review_id}/completeness-check"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["review_status"] == "PENDING_MATERIALS"
+    assert "TRUSTED_INPUT_MISSING" in {
+        item["item_code"] for item in response.json()["items"]
+    }
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT count(*) FROM valuation.validation_runs WHERE review_id = %s",
+            (trusted_case.review_id,),
+        )
+        assert cursor.fetchone()[0] == 0
 
 
 @pytest.mark.parametrize("trusted_case", [{}], indirect=True)

@@ -202,6 +202,9 @@ class ReviewService:
         if case_context is None:
             return (trusted_context_missing_requirement(),)
         candidates = await self.repository.list_rule_candidates()
+        candidates_by_id = {
+            str(candidate["rule_version_id"]): candidate for candidate in candidates
+        }
         selection = select_effective_rule(
             (
                 RuleCandidate(
@@ -221,6 +224,13 @@ class ReviewService:
             case_context["form_codes"],
         )
         if selection.rule is None:
+            return (trusted_context_missing_requirement(),)
+
+        selected_candidate = candidates_by_id[selection.rule.rule_version_id]
+        source_document_id = selected_candidate["source_document_id"]
+        if source_document_id is None or await self.repository.get_rule_source(
+            UUID(str(source_document_id))
+        ) is None:
             return (trusted_context_missing_requirement(),)
 
         active_rules = await self.repository.list_active_rules(
