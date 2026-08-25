@@ -16,7 +16,7 @@ from app.review.models import (
     ValidationFinding,
     ValidationRun,
 )
-from app.review.schemas import ReviewCreate, ReviewListQuery, RunCreate
+from app.review.schemas import ReviewCreate, ReviewListQuery
 from app.review.risks import EXPERT_MINIMUM_MEDIUM_TYPE, HIGH_RISK_FINDING_TYPES
 
 
@@ -385,8 +385,8 @@ class ReviewRepository:
     async def create_run(
         self,
         review: Review,
-        payload: RunCreate,
         actor_id: UUID,
+        rule_version_id: UUID,
         input_snapshot: dict,
     ) -> ValidationRun:
         run_no = (
@@ -402,8 +402,11 @@ class ReviewRepository:
             run_no=run_no,
             run_status="RUNNING",
             triggered_by_user_id=actor_id,
-            rule_version_id=payload.rule_version_id,
-            ruleset_snapshot={"rule_version_id": str(payload.rule_version_id)},
+            rule_version_id=rule_version_id,
+            ruleset_snapshot={
+                "rule_version_id": str(rule_version_id),
+                "validation_rule_ids": input_snapshot["validation_rule_ids"],
+            },
             input_snapshot=input_snapshot,
         )
         self.session.add(run)

@@ -36,6 +36,7 @@ from app.review.trusted_inputs import (
     TrustedField,
     required_field_problems,
     trusted_fields_by_code,
+    TrustedRunContext,
 )
 
 
@@ -258,225 +259,355 @@ class ReviewService:
             raise AppError("INVALID_DUE_AT", "補件期限必須晚於目前時間", 422)
         return await self.repository.request_supplement(review_id, due_at)
 
+    async def _resolve_trusted_run_context(self, review) -> TrustedRunContext:
+        document = await self.repository.get_latest_original_document(review.case_id)
+        if document is None:
+            raise AppError(
+                "TRUSTED_INPUT_MISSING",
+                "案件沒有可用的正式原始估價報告",
+                409,
+            )
+
+        extraction_run = await self.repository.get_latest_completed_extraction(
+            document["document_id"], document["version_no"]
+        )
+        if extraction_run is None:
+            raise AppError(
+                "TRUSTED_INPUT_MISSING",
+                "正式原始估價報告尚無完成的欄位抽取結果",
+                409,
+            )
+
+        field_rows = await self.repository.list_official_extracted_fields(
+            extraction_run["extraction_run_id"]
+        )
+        fields = trusted_fields_by_code(
+            TrustedField(
+                extracted_field_id=str(row["extracted_field_id"]),
+                field_code=row["field_code"],
+                field_path=row["field_path"],
+                raw_text=row["raw_text"],
+                normalized_value=row["normalized_value"],
+                value_type=row["value_type"],
+                page_number=row["page_number"],
+                verification_status=row["verification_status"],
+                is_official=row["is_official"],
+            )
+            for row in field_rows
+        )
+
+        case_context = await self.repository.get_case_rule_context(review.case_id)
+        if case_context is None:
+            raise AppError(
+                "RULE_SELECTION_CONFLICT",
+                "案件不存在，無法選擇適用規則",
+                409,
+            )
+        candidates = await self.repository.list_rule_candidates()
+        candidates_by_id = {
+            str(candidate["rule_version_id"]): candidate for candidate in candidates
+        }
+        selection = select_effective_rule(
+            (
+                RuleCandidate(
+                    rule_version_id=str(candidate["rule_version_id"]),
+                    status=candidate["status"],
+                    effective_from=candidate["effective_from"],
+                    effective_to=candidate["effective_to"],
+                    case_type=candidate["applicable_case_type"],
+                    district_code=candidate["applicable_district_code"],
+                    priority=candidate["selection_priority"],
+                )
+                for candidate in candidates
+            ),
+            case_context["valuation_base_date"],
+            case_context["case_type"],
+            case_context["district_code"],
+            case_context["form_codes"],
+        )
+        if selection.rule is None:
+            raise AppError(
+                "RULE_SELECTION_CONFLICT",
+                "案件條件找不到可用的正式規則版本",
+                409,
+            )
+        rule_version = candidates_by_id[selection.rule.rule_version_id]
+
+        source_document_id = rule_version["source_document_id"]
+        rule_source = (
+            await self.repository.get_rule_source(UUID(str(source_document_id)))
+            if source_document_id is not None
+            else None
+        )
+        if rule_source is None:
+            raise AppError(
+                "RULE_SOURCE_UNAVAILABLE",
+                "正式規則版本缺少已發布且已抽取的法規來源",
+                409,
+            )
+
+        validation_rules = tuple(
+            await self.repository.list_active_rules(
+                UUID(selection.rule.rule_version_id), case_context["form_codes"]
+            )
+        )
+        if not validation_rules:
+            raise AppError(
+                "RULE_SELECTION_CONFLICT",
+                "正式規則版本沒有適用的啟用檢核規則",
+                409,
+            )
+
+        required_codes = {
+            rule["target_field_code"]
+            for rule in validation_rules
+            if rule["target_field_code"]
+        }
+        problems = required_field_problems(required_codes, fields)
+        if problems:
+            problem = problems[0]
+            raise AppError(
+                problem.code,
+                f"正式抽取欄位不可用：{problem.field_code}",
+                409,
+                {"field_code": problem.field_code},
+            )
+
+        return TrustedRunContext(
+            document=document,
+            extraction_run=extraction_run,
+            fields=fields,
+            rule_version=rule_version,
+            validation_rules=validation_rules,
+            rule_source=rule_source,
+        )
+
+    def _validated_rule_configurations(self, context: TrustedRunContext) -> dict[str, dict]:
+        configurations: dict[str, dict] = {}
+        for rule in context.validation_rules:
+            try:
+                configuration = json.loads(rule["rule_expression"])
+            except (TypeError, ValueError) as exc:
+                raise AppError(
+                    "RULE_CONFIGURATION_INVALID",
+                    "正式規則設定不是有效 JSON",
+                    409,
+                ) from exc
+            if rule["rule_code"] == "ADJUSTMENT_RATE":
+                try:
+                    Decimal(str(configuration["system_rate"]))
+                    Decimal(str(configuration["tolerance"]))
+                except (KeyError, ArithmeticError, ValueError) as exc:
+                    raise AppError(
+                        "RULE_CONFIGURATION_INVALID",
+                        "調整率規則缺少有效的 system_rate 或 tolerance",
+                        409,
+                    ) from exc
+            elif rule["rule_code"] == "EXPERT_GRADE":
+                system_grade = configuration.get("system_grade")
+                if not isinstance(system_grade, str) or not system_grade.strip():
+                    raise AppError(
+                        "RULE_CONFIGURATION_INVALID",
+                        "級距規則缺少有效的 system_grade",
+                        409,
+                    )
+            else:
+                raise AppError(
+                    "RULE_CONFIGURATION_INVALID",
+                    f"尚未支援規則：{rule['rule_code']}",
+                    409,
+                )
+            configurations[str(rule["validation_rule_id"])] = configuration
+        return configurations
+
+    @staticmethod
+    def _source_evidence(document: dict, field: TrustedField):
+        return [
+            {
+                "source_id": field.extracted_field_id,
+                "extracted_field_id": field.extracted_field_id,
+                "document_id": str(document["document_id"]),
+                "document_version": document["version_no"],
+                "page": field.page_number,
+                "field_path": field.field_path,
+                "excerpt": field.raw_text,
+            }
+        ]
+
+    @staticmethod
+    def _legal_basis(context: TrustedRunContext, rule: dict):
+        return [
+            {
+                "rule_version_id": str(context.rule_version["rule_version_id"]),
+                "rule_code": rule["rule_code"],
+                "document_id": str(context.rule_source["document_id"]),
+                "document_version": context.rule_source["version_no"],
+                "checksum_sha256": context.rule_source["checksum_sha256"],
+            }
+        ]
+
+    @staticmethod
+    def _input_snapshot(
+        review, context: TrustedRunContext, configurations: dict[str, dict]
+    ) -> dict:
+        checks = []
+        for rule in context.validation_rules:
+            field = context.fields[rule["target_field_code"]]
+            checks.append(
+                {
+                    "finding_code": f"{rule['rule_code']}:{field.extracted_field_id}",
+                    "validation_rule_id": str(rule["validation_rule_id"]),
+                    "rule_code": rule["rule_code"],
+                    "extracted_field_id": field.extracted_field_id,
+                    "document_id": str(context.document["document_id"]),
+                    "document_version": context.document["version_no"],
+                    "document_checksum": context.document["checksum_sha256"],
+                    "page_number": field.page_number,
+                    "field_path": field.field_path,
+                    "reported_value": str(field.normalized_value),
+                    "rule_configuration": configurations[
+                        str(rule["validation_rule_id"])
+                    ],
+                }
+            )
+        return {
+            "case_id": str(review.case_id),
+            "rule_version_id": str(context.rule_version["rule_version_id"]),
+            "document": {
+                "document_id": str(context.document["document_id"]),
+                "version_no": context.document["version_no"],
+                "checksum_sha256": context.document["checksum_sha256"],
+            },
+            "extraction_run": {
+                "extraction_run_id": str(context.extraction_run["extraction_run_id"]),
+                "run_no": context.extraction_run["run_no"],
+            },
+            "validation_rule_ids": [
+                str(rule["validation_rule_id"]) for rule in context.validation_rules
+            ],
+            "checks": checks,
+        }
+
     async def create_run(
         self, review_id, payload, actor_id, supersedes_by_code=None
     ):
+        del payload
         review = await self.repository.get(review_id, for_update=True)
         if review is None:
             raise ResourceNotFoundError("審查案件")
         if await self.repository.active_run_exists(review_id):
             raise AppError("RUN_ALREADY_ACTIVE", "此案件已有執行中的檢核", 409)
-        resolved: dict = {}
-        snapshot_checks = []
-        for expected_code, checks in (
-            ("ADJUSTMENT_RATE", payload.adjustment_checks),
-            ("EXPERT_GRADE", payload.expert_checks),
-        ):
-            for check in checks:
-                rule = await self.repository.get_effective_rule(
-                    review.case_id,
-                    payload.rule_version_id,
-                    check.validation_rule_id,
-                )
-                document = await self.repository.get_case_document(
-                    review.case_id, check.document_id, check.document_version
-                )
-                if rule is None or rule["rule_code"] != expected_code:
-                    raise AppError(
-                        "RULE_SELECTION_CONFLICT",
-                        "檢核規則未發布、已失效或不屬於指定規則版本",
-                        409,
-                        {"validation_rule_id": str(check.validation_rule_id)},
-                    )
-                if document is None:
-                    raise AppError(
-                        "EVIDENCE_SCOPE_CONFLICT",
-                        "證據文件不屬於此案件或版本不符",
-                        409,
-                        {"document_id": str(check.document_id)},
-                    )
-                try:
-                    configuration = json.loads(rule["rule_expression"])
-                except (TypeError, ValueError) as exc:
-                    raise AppError(
-                        "RULE_CONFIGURATION_INVALID",
-                        "正式規則設定不是有效 JSON",
-                        409,
-                    ) from exc
-                resolved[check.validation_rule_id] = (rule, document, configuration)
-                snapshot_checks.append(
-                    {
-                        "finding_code": check.finding_code,
-                        "validation_rule_id": str(check.validation_rule_id),
-                        "document_id": str(check.document_id),
-                        "document_version": check.document_version,
-                        "document_checksum": document["checksum_sha256"],
-                        "page_number": check.page_number,
-                        "field_path": check.field_path,
-                        "reported_value": str(
-                            check.reported_rate
-                            if expected_code == "ADJUSTMENT_RATE"
-                            else check.reported_grade
-                        ),
-                        "rule_configuration": configuration,
-                    }
-                )
-        review.review_status = ensure_transition(
-            review.review_status, "ANALYZING"
-        )
+
+        context = await self._resolve_trusted_run_context(review)
+        configurations = self._validated_rule_configurations(context)
+        input_snapshot = self._input_snapshot(review, context, configurations)
+
+        review.review_status = ensure_transition(review.review_status, "ANALYZING")
         run = await self.repository.create_run(
             review,
-            payload,
             actor_id,
-            {
-                "case_id": str(review.case_id),
-                "rule_version_id": str(payload.rule_version_id),
-                "checks": snapshot_checks,
-            },
+            UUID(str(context.rule_version["rule_version_id"])),
+            input_snapshot,
         )
         findings = []
-        for check in payload.adjustment_checks:
-            rule, document, configuration = resolved[check.validation_rule_id]
-            try:
+        for rule in context.validation_rules:
+            field = context.fields[rule["target_field_code"]]
+            configuration = configurations[str(rule["validation_rule_id"])]
+            finding_code = f"{rule['rule_code']}:{field.extracted_field_id}"
+            if rule["rule_code"] == "ADJUSTMENT_RATE":
+                reported_rate = Decimal(str(field.normalized_value))
                 system_rate = Decimal(str(configuration["system_rate"]))
                 tolerance = Decimal(str(configuration["tolerance"]))
-            except (KeyError, ArithmeticError, ValueError) as exc:
-                raise AppError(
-                    "RULE_CONFIGURATION_INVALID",
-                    "調整率規則缺少有效的 system_rate 或 tolerance",
-                    409,
-                ) from exc
-            result = recalculate_adjustment_rate(
-                check.reported_rate, system_rate, tolerance
-            )
-            if result.within_tolerance:
-                run.passed_count += 1
-                continue
-            machine_finding = await self.repository.create_validation_finding(
-                validation_run_id=run.validation_run_id,
-                validation_rule_id=check.validation_rule_id,
-                field_code=check.field_path,
-                severity=rule["severity"],
-                actual_value={"reported_rate": str(result.reported_rate)},
-                expected_value={"system_rate": str(result.system_rate)},
-                finding_message="報告調整率與規則計算結果不一致",
-            )
-            finding = await self.repository.create_finding(
-                review_id=review.review_id,
-                source_validation_finding_id=machine_finding.finding_id,
-                validation_run_id=run.validation_run_id,
-                finding_code=check.finding_code,
-                finding_type="RATE_OUT_OF_RANGE",
-                severity=rule["severity"],
-                title="調整率超出允許差異",
-                description="報告調整率與確定性重算結果不一致，需人工核對。",
-                status="OPEN",
-                document_id=check.document_id,
-                document_version=check.document_version,
-                page_number=check.page_number,
-                field_path=check.field_path,
-                source_evidence=[
-                    {
-                        "source_id": str(document["document_id"]),
-                        "document_id": str(document["document_id"]),
-                        "document_version": document["version_no"],
-                        "page": check.page_number,
-                        "field_path": check.field_path,
-                        "excerpt": check.reported_text,
-                    }
-                ],
-                reported_text=check.reported_text,
-                reported_value=str(result.reported_rate),
-                legal_basis=[
-                    {
-                        "rule_version_id": str(rule["rule_version_id"]),
-                        "rule_code": rule["rule_code"],
-                        "source_reference": rule["source_reference"],
-                    }
-                ],
-                reported_adjustment_rate=result.reported_rate,
-                system_adjustment_rate=result.system_rate,
-                comparison_result={
-                    "difference": str(result.difference),
-                    "tolerance": str(tolerance),
-                    "within_tolerance": False,
-                },
-                recommended_action={"action": "VERIFY_ADJUSTMENT_BASIS"},
-                ai_status="AI_EXPLANATION_UNAVAILABLE",
-                supersedes_finding_id=(supersedes_by_code or {}).get(
-                    check.finding_code
-                ),
-                rule_version_id=payload.rule_version_id,
-            )
-            findings.append(finding)
-            run.failed_count += 1
-
-        for check in payload.expert_checks:
-            rule, document, configuration = resolved[check.validation_rule_id]
-            system_grade = configuration.get("system_grade")
-            if not isinstance(system_grade, str) or not system_grade.strip():
-                raise AppError(
-                    "RULE_CONFIGURATION_INVALID",
-                    "級距規則缺少有效的 system_grade",
-                    409,
+                result = recalculate_adjustment_rate(
+                    reported_rate, system_rate, tolerance
                 )
-            if check.reported_grade == system_grade:
-                run.passed_count += 1
-                continue
-            machine_finding = await self.repository.create_validation_finding(
-                validation_run_id=run.validation_run_id,
-                validation_rule_id=check.validation_rule_id,
-                field_code=check.field_path,
-                severity="MEDIUM",
-                actual_value={"reported_grade": check.reported_grade},
-                expected_value={"system_grade": system_grade},
-                finding_message="報告級距與規則建議級距不同，需專業判斷",
-            )
-            finding = await self.repository.create_finding(
-                review_id=review.review_id,
-                source_validation_finding_id=machine_finding.finding_id,
-                validation_run_id=run.validation_run_id,
-                finding_code=check.finding_code,
-                finding_type="EXPERT_GRADE_JUDGMENT",
-                severity="MEDIUM",
-                title="級距判定需專業覆核",
-                description="報告級距與規則建議不同，系統不自行取代估價專業判斷。",
-                status="OPEN",
-                document_id=check.document_id,
-                document_version=check.document_version,
-                page_number=check.page_number,
-                field_path=check.field_path,
-                source_evidence=[
-                    {
-                        "source_id": str(document["document_id"]),
-                        "document_id": str(document["document_id"]),
-                        "document_version": document["version_no"],
-                        "page": check.page_number,
-                        "field_path": check.field_path,
-                        "excerpt": check.reported_text,
-                    }
-                ],
-                reported_text=check.reported_text,
-                reported_value=check.reported_grade,
-                legal_basis=[
-                    {
-                        "rule_version_id": str(rule["rule_version_id"]),
-                        "rule_code": rule["rule_code"],
-                        "source_reference": rule["source_reference"],
-                    }
-                ],
-                reported_grade=check.reported_grade,
-                system_grade=system_grade,
-                comparison_result={"same_grade": False},
-                recommended_action={"action": "EXPERT_REVIEW"},
-                ai_status="AI_EXPLANATION_UNAVAILABLE",
-                supersedes_finding_id=(supersedes_by_code or {}).get(
-                    check.finding_code
-                ),
-                rule_version_id=payload.rule_version_id,
-            )
-            findings.append(finding)
-            run.warning_count += 1
+                if result.within_tolerance:
+                    run.passed_count += 1
+                    continue
+                machine_finding = await self.repository.create_validation_finding(
+                    validation_run_id=run.validation_run_id,
+                    validation_rule_id=rule["validation_rule_id"],
+                    field_code=field.field_path,
+                    severity=rule["severity"],
+                    actual_value={"reported_rate": str(result.reported_rate)},
+                    expected_value={"system_rate": str(result.system_rate)},
+                    finding_message="報告調整率與規則計算結果不一致",
+                )
+                finding = await self.repository.create_finding(
+                    review_id=review.review_id,
+                    source_validation_finding_id=machine_finding.finding_id,
+                    validation_run_id=run.validation_run_id,
+                    finding_code=finding_code,
+                    finding_type="RATE_OUT_OF_RANGE",
+                    severity=rule["severity"],
+                    title="調整率超出允許差異",
+                    description="報告調整率與確定性重算結果不一致，需人工核對。",
+                    status="OPEN",
+                    document_id=context.document["document_id"],
+                    document_version=context.document["version_no"],
+                    page_number=field.page_number,
+                    field_path=field.field_path,
+                    source_evidence=self._source_evidence(context.document, field),
+                    reported_text=field.raw_text,
+                    reported_value=str(result.reported_rate),
+                    legal_basis=self._legal_basis(context, rule),
+                    reported_adjustment_rate=result.reported_rate,
+                    system_adjustment_rate=result.system_rate,
+                    comparison_result={
+                        "difference": str(result.difference),
+                        "tolerance": str(tolerance),
+                        "within_tolerance": False,
+                    },
+                    recommended_action={"action": "VERIFY_ADJUSTMENT_BASIS"},
+                    ai_status="AI_EXPLANATION_UNAVAILABLE",
+                    supersedes_finding_id=(supersedes_by_code or {}).get(finding_code),
+                    rule_version_id=context.rule_version["rule_version_id"],
+                )
+                findings.append(finding)
+                run.failed_count += 1
+            elif rule["rule_code"] == "EXPERT_GRADE":
+                reported_grade = str(field.normalized_value)
+                system_grade = configuration["system_grade"]
+                if reported_grade == system_grade:
+                    run.passed_count += 1
+                    continue
+                machine_finding = await self.repository.create_validation_finding(
+                    validation_run_id=run.validation_run_id,
+                    validation_rule_id=rule["validation_rule_id"],
+                    field_code=field.field_path,
+                    severity="MEDIUM",
+                    actual_value={"reported_grade": reported_grade},
+                    expected_value={"system_grade": system_grade},
+                    finding_message="報告級距與規則建議級距不同，需專業判斷",
+                )
+                finding = await self.repository.create_finding(
+                    review_id=review.review_id,
+                    source_validation_finding_id=machine_finding.finding_id,
+                    validation_run_id=run.validation_run_id,
+                    finding_code=finding_code,
+                    finding_type="EXPERT_GRADE_JUDGMENT",
+                    severity="MEDIUM",
+                    title="級距判定需專業覆核",
+                    description="報告級距與規則建議級距不同，系統不自行取代估價專業判斷。",
+                    status="OPEN",
+                    document_id=context.document["document_id"],
+                    document_version=context.document["version_no"],
+                    page_number=field.page_number,
+                    field_path=field.field_path,
+                    source_evidence=self._source_evidence(context.document, field),
+                    reported_text=field.raw_text,
+                    reported_value=reported_grade,
+                    legal_basis=self._legal_basis(context, rule),
+                    reported_grade=reported_grade,
+                    system_grade=system_grade,
+                    comparison_result={"same_grade": False},
+                    recommended_action={"action": "EXPERT_REVIEW"},
+                    ai_status="AI_EXPLANATION_UNAVAILABLE",
+                    supersedes_finding_id=(supersedes_by_code or {}).get(finding_code),
+                    rule_version_id=context.rule_version["rule_version_id"],
+                )
+                findings.append(finding)
+                run.warning_count += 1
 
         risk = risk_level_for_findings(
             [FindingRisk(item.finding_type, item.severity) for item in findings]

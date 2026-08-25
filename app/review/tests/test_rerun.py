@@ -104,11 +104,8 @@ def test_rerun_preserves_old_finding_and_links_replacement(
             (runnable_review.review_id,),
         )
     postgres_connection.commit()
-    payload = run_payload(runnable_review)
-    payload["adjustment_checks"][0]["reported_rate"] = "-10"
-
     rerun = authorized_client.post(
-        f"/api/v1/review/cases/{runnable_review.review_id}/rerun", json=payload
+        f"/api/v1/review/cases/{runnable_review.review_id}/rerun", json={}
     )
 
     assert rerun.status_code == 202
@@ -169,12 +166,20 @@ def test_superseded_run_high_finding_does_not_block_current_clean_run(
             (runnable_review.review_id,),
         )
     postgres_connection.commit()
-    payload = run_payload(runnable_review)
-    payload["adjustment_checks"][0]["reported_rate"] = "-5"
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE valuation.extracted_fields
+            SET normalized_value = '"-5"'::jsonb, raw_text = '調整率 -5%%'
+            WHERE extraction_run_id = %s AND field_code = 'adjustment_rate'
+            """,
+            (runnable_review.extraction_run_id,),
+        )
+    postgres_connection.commit()
 
     rerun = authorized_client.post(
         f"/api/v1/review/cases/{runnable_review.review_id}/rerun",
-        json=payload,
+        json={},
     )
 
     assert rerun.status_code == 202
@@ -186,6 +191,17 @@ def test_superseded_run_high_finding_does_not_block_current_clean_run(
         json={"decision": "APPROVED", "reason": "目前批次已無高風險疑點"},
     )
     assert approved.status_code == 201
+
+
+def test_rerun_rejects_caller_owned_authoritative_values(
+    authorized_client, runnable_review
+):
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/rerun",
+        json={"rule_version_id": str(uuid4())},
+    )
+
+    assert response.status_code == 422
 
 
 def test_rate_finding_remains_high_gate_when_rule_severity_is_too_low(

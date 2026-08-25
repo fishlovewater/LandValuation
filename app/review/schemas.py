@@ -131,44 +131,8 @@ class SupplementRequest(BaseModel):
         return value
 
 
-class AdjustmentRateCheck(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    validation_rule_id: UUID
-    finding_code: str = Field(min_length=1, max_length=100)
-    reported_rate: Decimal
-    reported_text: str
-    field_path: str
-    document_id: UUID
-    document_version: int = Field(ge=1)
-    page_number: int = Field(ge=1)
-
-
-class ExpertGradeCheck(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    validation_rule_id: UUID
-    finding_code: str = Field(min_length=1, max_length=100)
-    reported_grade: str
-    reported_text: str
-    field_path: str
-    document_id: UUID
-    document_version: int = Field(ge=1)
-    page_number: int = Field(ge=1)
-
-
 class RunCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-    rule_version_id: UUID
-    adjustment_checks: list[AdjustmentRateCheck] = Field(default_factory=list)
-    expert_checks: list[ExpertGradeCheck] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def require_at_least_one_check(self):
-        if not self.adjustment_checks and not self.expert_checks:
-            raise ValueError("至少必須執行一項檢核")
-        return self
 
 
 class ValidationRunRead(BaseModel):

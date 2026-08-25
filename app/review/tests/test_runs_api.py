@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -9,10 +10,29 @@ from app.main import app
 
 
 @pytest.fixture
-def runnable_review(postgres_connection):
-    user_id, case_id, review_id = uuid4(), uuid4(), uuid4()
-    rule_version_id, validation_rule_id = uuid4(), uuid4()
-    document_id = uuid4()
+def runnable_review(request, postgres_connection):
+    options = getattr(request, "param", {})
+    with_extraction = options.get("with_extraction", True)
+    adjustment_status = options.get("adjustment_status", "VERIFIED")
+    source_publication_status = options.get("source_publication_status", "PUBLISHED")
+    source_extraction_status = options.get("source_extraction_status", "COMPLETED")
+    tied_rule_versions = options.get("tied_rule_versions", False)
+    unsupported_rule = options.get("unsupported_rule", False)
+    ids = SimpleNamespace(
+        user_id=uuid4(),
+        case_id=uuid4(),
+        review_id=uuid4(),
+        original_document_id=uuid4(),
+        source_document_id=uuid4(),
+        rule_version_id=uuid4(),
+        tied_rule_version_id=uuid4(),
+        adjustment_rule_id=uuid4(),
+        validation_rule_id=None,
+        expert_rule_id=uuid4(),
+        unsupported_rule_id=uuid4(),
+        extraction_run_id=uuid4(),
+    )
+    ids.validation_rule_id = ids.adjustment_rule_id
     with postgres_connection.cursor() as cursor:
         cursor.execute(
             """
@@ -21,7 +41,7 @@ def runnable_review(postgres_connection):
                 is_active, created_at, updated_at
             ) VALUES (%s, %s, %s, 'not-used', 'Run Tester', true, now(), now())
             """,
-            (user_id, f"run-{user_id}", f"{user_id}@example.test"),
+            (ids.user_id, f"run-{ids.user_id}", f"{ids.user_id}@example.test"),
         )
         cursor.execute(
             """
@@ -31,7 +51,7 @@ def runnable_review(postgres_connection):
             ) VALUES (%s, %s, 'Run API Case', 'LAND', CURRENT_DATE,
                       'F', 'F01', 'DRAFT')
             """,
-            (case_id, f"RUN-{str(case_id)[:8]}"),
+            (ids.case_id, f"RUN-{str(ids.case_id)[:8]}"),
         )
         cursor.execute(
             """
@@ -39,7 +59,7 @@ def runnable_review(postgres_connection):
                 review_id, case_id, review_status, started_by_user_id
             ) VALUES (%s, %s, 'READY_FOR_REVIEW', %s)
             """,
-            (review_id, case_id, user_id),
+            (ids.review_id, ids.case_id, ids.user_id),
         )
         cursor.execute(
             """
@@ -52,61 +72,210 @@ def runnable_review(postgres_connection):
                       100, 1, true)
             """,
             (
-                document_id,
-                case_id,
-                f"cases/{case_id}/run-source.pdf",
+                ids.original_document_id,
+                ids.case_id,
+                f"cases/{ids.case_id}/run-source.pdf",
                 "e" * 64,
             ),
         )
         cursor.execute(
             """
-            INSERT INTO valuation.rule_versions (
-                rule_version_id, rule_set_code, version_no, version_name,
-                effective_from, status
-            ) VALUES (%s, %s, 1, 'Run Test Rules', CURRENT_DATE, 'PUBLISHED')
+            INSERT INTO valuation.form_instances (
+                form_instance_id, case_id, form_code, version_no, form_status
+            ) VALUES (%s, %s, 'F01', 1, 'READY')
             """,
-            (rule_version_id, f"RUN_TEST_{str(rule_version_id)[:8]}"),
+            (uuid4(), ids.case_id),
         )
+        approved = source_publication_status == "PUBLISHED"
         cursor.execute(
             """
-            INSERT INTO valuation.validation_rules (
-                validation_rule_id, rule_version_id, rule_code, rule_name,
-                target_table, target_field_code, severity, rule_expression,
-                message_template
-            ) VALUES (%s, %s, 'ADJUSTMENT_RATE', '調整率檢核',
-                      'comparison', 'adjustment_rate', 'HIGH', %s, '調整率不一致')
+            INSERT INTO knowledge.documents (
+                document_id, document_code, title, document_type,
+                original_filename, mime_type, bucket_name, object_key,
+                checksum_sha256, file_size_bytes, version_no, effective_from,
+                extraction_status, publication_status, approved_by_user_id,
+                approved_at
+            ) VALUES (%s, %s, 'Run Source', 'REGULATION', 'run-source.pdf',
+                      'application/pdf', 'land-valuation', %s, %s, 100, 1,
+                      CURRENT_DATE, %s, %s, %s, %s)
             """,
             (
-                validation_rule_id,
-                rule_version_id,
-                '{"system_rate":"-5","tolerance":"0"}',
+                ids.source_document_id,
+                f"RUN-SOURCE-{str(ids.source_document_id)[:8]}",
+                f"knowledge/{ids.source_document_id}/run-source.pdf",
+                "a" * 64,
+                source_extraction_status,
+                source_publication_status,
+                ids.user_id if approved else None,
+                datetime.now(UTC) if approved else None,
             ),
         )
+        rule_versions = [
+            (ids.rule_version_id, f"RUN_RULES_{str(ids.rule_version_id)[:8]}")
+        ]
+        if tied_rule_versions:
+            rule_versions.append(
+                (ids.tied_rule_version_id, f"RUN_TIED_{str(ids.tied_rule_version_id)[:8]}")
+            )
+        for rule_version_id, rule_set_code in rule_versions:
+            cursor.execute(
+                """
+                INSERT INTO valuation.rule_versions (
+                    rule_version_id, rule_set_code, version_no, version_name,
+                    effective_from, status, applicable_case_type,
+                    applicable_district_code, selection_priority, source_document_id
+                ) VALUES (%s, %s, 1, 'Run Test Rules', CURRENT_DATE,
+                          'PUBLISHED', 'LAND', 'F01', 10, %s)
+                """,
+                (rule_version_id, rule_set_code, ids.source_document_id),
+            )
+        for rule_id, rule_code, target_field_code, severity, expression in (
+            (
+                ids.adjustment_rule_id,
+                "ADJUSTMENT_RATE",
+                "adjustment_rate",
+                "HIGH",
+                '{"system_rate":"-5","tolerance":"0"}',
+            ),
+            (
+                ids.expert_rule_id,
+                "EXPERT_GRADE",
+                "expert_grade",
+                "MEDIUM",
+                '{"system_grade":"A"}',
+            ),
+        ):
+            cursor.execute(
+                """
+                INSERT INTO valuation.validation_rules (
+                    validation_rule_id, rule_version_id, rule_code, rule_name,
+                    target_table, target_field_code, severity, rule_expression,
+                    message_template, is_active
+                ) VALUES (%s, %s, %s, %s, 'comparison', %s, %s, %s, %s, true)
+                """,
+                (
+                    rule_id,
+                    ids.rule_version_id,
+                    rule_code,
+                    rule_code,
+                    target_field_code,
+                    severity,
+                    expression,
+                    rule_code,
+                ),
+            )
+        if unsupported_rule:
+            cursor.execute(
+                """
+                INSERT INTO valuation.validation_rules (
+                    validation_rule_id, rule_version_id, rule_code, rule_name,
+                    target_table, target_field_code, severity, rule_expression,
+                    message_template, is_active
+                ) VALUES (%s, %s, 'UNSUPPORTED_RULE', 'Unsupported Rule',
+                          'comparison', 'adjustment_rate', 'HIGH', '{}',
+                          'Unsupported', true)
+                """,
+                (ids.unsupported_rule_id, ids.rule_version_id),
+            )
+        if with_extraction:
+            cursor.execute(
+                """
+                INSERT INTO valuation.extraction_runs (
+                    extraction_run_id, case_id, document_id, document_version,
+                    run_no, status, extractor_name, started_at, completed_at
+                ) VALUES (%s, %s, %s, 1, 1, 'COMPLETED', 'fixture',
+                          now() - interval '1 minute', now())
+                """,
+                (ids.extraction_run_id, ids.case_id, ids.original_document_id),
+            )
+            for field_code, value_type, raw_text, normalized_value, status in (
+                (
+                    "adjustment_rate",
+                    "DECIMAL",
+                    "報告記載調整率 -12%",
+                    '"-12"',
+                    adjustment_status,
+                ),
+                ("expert_grade", "TEXT", "報告評定 A 級", '"A"', "VERIFIED"),
+            ):
+                verified = status == "VERIFIED"
+                cursor.execute(
+                    """
+                    INSERT INTO valuation.extracted_fields (
+                        extracted_field_id, extraction_run_id, field_code, field_path,
+                        value_type, raw_text, normalized_value, page_number,
+                        verification_status, verified_by_user_id, verified_at,
+                        is_official
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, 3, %s, %s, %s, true)
+                    """,
+                    (
+                        uuid4(),
+                        ids.extraction_run_id,
+                        field_code,
+                        f"report.{field_code}",
+                        value_type,
+                        raw_text,
+                        normalized_value,
+                        status,
+                        ids.user_id if verified else None,
+                        datetime.now(UTC) if verified else None,
+                    ),
+                )
     postgres_connection.commit()
-    yield SimpleNamespace(
-        user_id=user_id,
-        case_id=case_id,
-        review_id=review_id,
-        rule_version_id=rule_version_id,
-        validation_rule_id=validation_rule_id,
-        document_id=document_id,
-    )
+    yield ids
     with postgres_connection.cursor() as cursor:
-        cursor.execute("DELETE FROM review.decisions WHERE review_id = %s", (review_id,))
-        cursor.execute("DELETE FROM review.risk_summaries WHERE review_id = %s", (review_id,))
-        cursor.execute("DELETE FROM review.findings WHERE review_id = %s", (review_id,))
         cursor.execute(
-            "DELETE FROM valuation.validation_findings WHERE validation_run_id IN (SELECT validation_run_id FROM valuation.validation_runs WHERE review_id = %s)",
-            (review_id,),
+            "DELETE FROM review.decisions WHERE review_id = %s", (ids.review_id,)
         )
-        cursor.execute("UPDATE review.reviews SET latest_validation_run_id = NULL WHERE review_id = %s", (review_id,))
-        cursor.execute("DELETE FROM valuation.validation_runs WHERE review_id = %s", (review_id,))
-        cursor.execute("DELETE FROM review.reviews WHERE review_id = %s", (review_id,))
-        cursor.execute("DELETE FROM valuation.documents WHERE case_id = %s", (case_id,))
-        cursor.execute("DELETE FROM valuation.validation_rules WHERE validation_rule_id = %s", (validation_rule_id,))
-        cursor.execute("DELETE FROM valuation.rule_versions WHERE rule_version_id = %s", (rule_version_id,))
-        cursor.execute("DELETE FROM valuation.cases WHERE case_id = %s", (case_id,))
-        cursor.execute("DELETE FROM auth.users WHERE user_id = %s", (user_id,))
+        cursor.execute(
+            "DELETE FROM review.risk_summaries WHERE review_id = %s", (ids.review_id,)
+        )
+        cursor.execute("DELETE FROM review.findings WHERE review_id = %s", (ids.review_id,))
+        cursor.execute(
+            """
+            DELETE FROM valuation.validation_findings
+            WHERE validation_run_id IN (
+                SELECT validation_run_id FROM valuation.validation_runs WHERE review_id = %s
+            )
+            """,
+            (ids.review_id,),
+        )
+        cursor.execute(
+            "UPDATE review.reviews SET latest_validation_run_id = NULL WHERE review_id = %s",
+            (ids.review_id,),
+        )
+        cursor.execute(
+            "DELETE FROM valuation.validation_runs WHERE review_id = %s", (ids.review_id,)
+        )
+        cursor.execute("DELETE FROM review.reviews WHERE review_id = %s", (ids.review_id,))
+        cursor.execute(
+            "DELETE FROM valuation.extracted_fields WHERE extraction_run_id = %s",
+            (ids.extraction_run_id,),
+        )
+        cursor.execute(
+            "DELETE FROM valuation.extraction_runs WHERE extraction_run_id = %s",
+            (ids.extraction_run_id,),
+        )
+        cursor.execute(
+            "DELETE FROM valuation.validation_rules WHERE rule_version_id IN (%s, %s)",
+            (ids.rule_version_id, ids.tied_rule_version_id),
+        )
+        cursor.execute(
+            "DELETE FROM valuation.rule_versions WHERE rule_version_id IN (%s, %s)",
+            (ids.rule_version_id, ids.tied_rule_version_id),
+        )
+        cursor.execute(
+            "DELETE FROM knowledge.documents WHERE document_id = %s",
+            (ids.source_document_id,),
+        )
+        cursor.execute(
+            "DELETE FROM valuation.form_instances WHERE case_id = %s", (ids.case_id,)
+        )
+        cursor.execute(
+            "DELETE FROM valuation.documents WHERE case_id = %s", (ids.case_id,)
+        )
+        cursor.execute("DELETE FROM valuation.cases WHERE case_id = %s", (ids.case_id,))
+        cursor.execute("DELETE FROM auth.users WHERE user_id = %s", (ids.user_id,))
     postgres_connection.commit()
 
 
@@ -126,46 +295,49 @@ def authorized_client(runnable_review):
         app.dependency_overrides.clear()
 
 
-def run_payload(data):
-    return {
-        "rule_version_id": str(data.rule_version_id),
-        "adjustment_checks": [
-            {
-                "validation_rule_id": str(data.validation_rule_id),
-                "finding_code": "RATE-COMP-001",
-                "reported_rate": "-12",
-                "reported_text": "報告記載調整率 -12%",
-                "field_path": "comparables[0].adjustment_rate",
-                "document_id": str(data.document_id),
-                "document_version": 1,
-                "page_number": 3,
-            }
-        ],
-    }
+def run_payload(_data=None):
+    return {}
 
 
-def test_run_creates_machine_evidence_finding_and_risk_summary(
-    authorized_client, runnable_review
+def run_count(connection, review_id):
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT count(*) FROM valuation.validation_runs WHERE review_id = %s",
+            (review_id,),
+        )
+        return cursor.fetchone()[0]
+
+
+def test_run_executes_every_server_selected_rule_and_preserves_server_evidence(
+    authorized_client, runnable_review, postgres_connection
 ):
     response = authorized_client.post(
-        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
-        json=run_payload(runnable_review),
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json=run_payload()
     )
 
     assert response.status_code == 202
     run = response.json()
     assert run["run_status"] == "COMPLETED"
     assert run["failed_count"] == 1
-    assert run["input_snapshot"]["checks"][0]["reported_value"] == "-12"
-
-    runs = authorized_client.get(
-        f"/api/v1/review/cases/{runnable_review.review_id}/runs"
-    )
-    assert runs.status_code == 200
-    assert len(runs.json()) == 1
-
-    fetched = authorized_client.get(f"/api/v1/review/runs/{run['validation_run_id']}")
-    assert fetched.status_code == 200
+    assert run["passed_count"] == 1
+    assert run["rule_version_id"] == str(runnable_review.rule_version_id)
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT ruleset_snapshot FROM valuation.validation_runs
+            WHERE validation_run_id = %s
+            """,
+            (run["validation_run_id"],),
+        )
+        ruleset_snapshot = cursor.fetchone()[0]
+    assert set(ruleset_snapshot["validation_rule_ids"]) == {
+        str(runnable_review.adjustment_rule_id),
+        str(runnable_review.expert_rule_id),
+    }
+    assert {check["reported_value"] for check in run["input_snapshot"]["checks"]} == {
+        "-12",
+        "A",
+    }
 
     findings = authorized_client.get(
         f"/api/v1/review/runs/{run['validation_run_id']}/findings"
@@ -173,17 +345,13 @@ def test_run_creates_machine_evidence_finding_and_risk_summary(
     assert findings.status_code == 200
     finding = findings.json()[0]
     assert finding["source_evidence"][0]["document_id"] == str(
-        runnable_review.document_id
+        runnable_review.original_document_id
     )
     assert finding["reported_adjustment_rate"] == "-12.000000"
     assert finding["system_adjustment_rate"] == "-5.000000"
-    assert finding["comparison_result"]["difference"] == "-7.00"
-    assert finding["ai_status"] == "AI_EXPLANATION_UNAVAILABLE"
-
-    one_finding = authorized_client.get(
-        f"/api/v1/review/findings/{finding['finding_id']}"
+    assert finding["legal_basis"][0]["document_id"] == str(
+        runnable_review.source_document_id
     )
-    assert one_finding.status_code == 200
 
     risk = authorized_client.get(
         f"/api/v1/review/runs/{run['validation_run_id']}/risk-summary"
@@ -213,89 +381,88 @@ def test_second_running_run_returns_conflict(
     postgres_connection.commit()
 
     response = authorized_client.post(
-        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
-        json=run_payload(runnable_review),
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
     )
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "RUN_ALREADY_ACTIVE"
 
 
-def test_run_rejects_client_supplied_authoritative_values(
-    authorized_client, runnable_review
+@pytest.mark.parametrize(
+    "forged",
+    [
+        {"rule_version_id": str(uuid4())},
+        {"validation_rule_id": str(uuid4())},
+        {"reported_rate": "-5"},
+        {"reported_text": "偽造原文"},
+        {"page_number": 3},
+        {"document_id": str(uuid4())},
+        {"source_evidence": []},
+        {"legal_basis": []},
+        {"adjustment_checks": []},
+        {"expert_checks": []},
+    ],
+)
+def test_run_rejects_caller_owned_authoritative_fields(
+    authorized_client, runnable_review, forged
 ):
-    payload = run_payload(runnable_review)
-    payload["input_snapshot"] = {"forged": True}
-    payload["adjustment_checks"][0]["system_rate"] = "999"
-
     response = authorized_client.post(
-        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
-        json=payload,
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json=forged
     )
 
     assert response.status_code == 422
 
 
-def test_run_rejects_empty_check_selection(authorized_client, runnable_review):
-    response = authorized_client.post(
-        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
-        json={
-            "rule_version_id": str(runnable_review.rule_version_id),
-            "adjustment_checks": [],
-            "expert_checks": [],
-        },
-    )
-
-    assert response.status_code == 422
-
-
-def test_run_snapshot_preserves_zero_reported_value(
-    authorized_client, runnable_review
+@pytest.mark.parametrize(
+    "runnable_review, expected_code",
+    [
+        ({"with_extraction": False}, "TRUSTED_INPUT_MISSING"),
+        ({"adjustment_status": "AUTO_EXTRACTED"}, "TRUSTED_INPUT_UNVERIFIED"),
+        ({"source_publication_status": "DRAFT"}, "RULE_SOURCE_UNAVAILABLE"),
+        ({"source_extraction_status": "PENDING"}, "RULE_SOURCE_UNAVAILABLE"),
+        ({"tied_rule_versions": True}, "RULE_SELECTION_CONFLICT"),
+        ({"unsupported_rule": True}, "RULE_CONFIGURATION_INVALID"),
+    ],
+    indirect=["runnable_review"],
+)
+def test_run_preflight_fails_closed_without_creating_a_run(
+    authorized_client, runnable_review, postgres_connection, expected_code
 ):
-    payload = run_payload(runnable_review)
-    payload["adjustment_checks"][0]["reported_rate"] = "0"
-
     response = authorized_client.post(
-        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
-        json=payload,
-    )
-
-    assert response.status_code == 202
-    assert response.json()["input_snapshot"]["checks"][0]["reported_value"] == "0"
-
-
-def test_run_rejects_document_outside_case_without_changing_state(
-    authorized_client, runnable_review
-):
-    payload = run_payload(runnable_review)
-    payload["adjustment_checks"][0]["document_id"] = str(uuid4())
-
-    response = authorized_client.post(
-        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
-        json=payload,
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
     )
 
     assert response.status_code == 409
-    assert response.json()["error"]["code"] == "EVIDENCE_SCOPE_CONFLICT"
+    assert response.json()["error"]["code"] == expected_code
+    assert run_count(postgres_connection, runnable_review.review_id) == 0
     review = authorized_client.get(
         f"/api/v1/review/cases/{runnable_review.review_id}"
     ).json()
     assert review["review_status"] == "READY_FOR_REVIEW"
-    assert authorized_client.get(
-        f"/api/v1/review/cases/{runnable_review.review_id}/runs"
-    ).json() == []
 
 
-def test_run_rejects_rule_not_in_published_ruleset(
-    authorized_client, runnable_review
+def test_run_snapshot_preserves_zero_server_extracted_value(
+    authorized_client, runnable_review, postgres_connection
 ):
-    payload = run_payload(runnable_review)
-    payload["adjustment_checks"][0]["validation_rule_id"] = str(uuid4())
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE valuation.extracted_fields
+            SET normalized_value = '"0"'::jsonb, raw_text = '調整率 0%%'
+            WHERE extraction_run_id = %s AND field_code = 'adjustment_rate'
+            """,
+            (runnable_review.extraction_run_id,),
+        )
+    postgres_connection.commit()
 
     response = authorized_client.post(
-        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
-        json=payload,
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
     )
 
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "RULE_SELECTION_CONFLICT"
+    assert response.status_code == 202
+    adjustment_check = next(
+        check
+        for check in response.json()["input_snapshot"]["checks"]
+        if check["rule_code"] == "ADJUSTMENT_RATE"
+    )
+    assert adjustment_check["reported_value"] == "0"

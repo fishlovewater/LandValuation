@@ -32,6 +32,16 @@ class TrustedInputProblem:
     field_code: str
 
 
+@dataclass(frozen=True)
+class TrustedRunContext:
+    document: dict
+    extraction_run: dict
+    fields: dict[str, TrustedField]
+    rule_version: dict
+    validation_rules: tuple[dict, ...]
+    rule_source: dict
+
+
 def trusted_fields_by_code(fields):
     official_counts = {}
     official_fields = {}
