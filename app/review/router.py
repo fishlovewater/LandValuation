@@ -1,6 +1,8 @@
+from io import BytesIO
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi.concurrency import run_in_threadpool
 
 from app.auth.dependencies import DbSession, require_permissions
 from app.auth.service import permission_codes
@@ -17,6 +19,7 @@ from app.review.schemas import (
     FindingDecisionRequest,
     MissingItemRead,
     ReviewPriority,
+    ReportDocumentRead,
     ReviewRead,
     ReviewStatus,
     ReviewUpdate,
@@ -27,6 +30,9 @@ from app.review.schemas import (
     ValidationRunRead,
 )
 from app.review.service import ReviewService
+from app.review.pdf_reports import build_review_pdf
+from app.review.reports import ReviewReport
+from app.storage.dependencies import Storage
 
 router = APIRouter(prefix="/review", tags=["review"])
 
@@ -283,3 +289,88 @@ async def rerun_review_case(
         review_id, payload, user.user_id
     )
     return run
+
+
+@router.get("/runs/{validation_run_id}/report", response_model=ReviewReport)
+async def get_structured_review_report(
+    validation_run_id: UUID,
+    session: DbSession,
+    user=Depends(require_permissions("review.execute")),
+) -> ReviewReport:
+    return await service_for(session).build_report(validation_run_id)
+
+
+@router.post(
+    "/runs/{validation_run_id}/report/pdf",
+    response_model=ReportDocumentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def generate_review_report_pdf(
+    validation_run_id: UUID,
+    session: DbSession,
+    storage: Storage,
+    user=Depends(require_permissions("review.execute")),
+) -> ReportDocumentRead:
+    service = service_for(session)
+    run = await service.get_run(validation_run_id)
+    report = await service.build_report(validation_run_id)
+    content = build_review_pdf(report)
+    document_id = uuid4()
+    version = await service.repository.next_report_version(run.case_id)
+    object_key = (
+        f"cases/{run.case_id}/generated/{document_id}/v{version}/review-report.pdf"
+    )
+    uploaded = await storage.upload(
+        object_key,
+        BytesIO(content),
+        len(content),
+        content_type="application/pdf",
+    )
+    try:
+        metadata = await service.repository.save_report_document(
+            document_id=document_id,
+            case_id=run.case_id,
+            original_filename=f"review-report-{validation_run_id}.pdf",
+            bucket_name=uploaded["bucket_name"],
+            object_key=uploaded["object_key"],
+            checksum_sha256=uploaded["checksum_sha256"],
+            file_size_bytes=uploaded["file_size_bytes"],
+            version_no=version,
+            uploaded_by_user_id=user.user_id,
+            storage_etag=uploaded.get("etag"),
+        )
+    except Exception:
+        await storage.delete(object_key)
+        raise
+    return ReportDocumentRead(**metadata)
+
+
+@router.get("/runs/{validation_run_id}/report/pdf/download")
+async def download_review_report_pdf(
+    validation_run_id: UUID,
+    session: DbSession,
+    storage: Storage,
+    user=Depends(require_permissions("review.execute")),
+) -> Response:
+    service = service_for(session)
+    await service.get_run(validation_run_id)
+    metadata = await service.repository.get_report_document(validation_run_id)
+    if metadata is None:
+        from app.core.exceptions import ResourceNotFoundError
+
+        raise ResourceNotFoundError("審查報告 PDF")
+    downloaded = await storage.download(metadata["object_key"])
+    try:
+        content = await run_in_threadpool(downloaded.read)
+    finally:
+        await run_in_threadpool(downloaded.close)
+        await run_in_threadpool(downloaded.release_conn)
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{metadata["original_filename"]}"'
+            )
+        },
+    )

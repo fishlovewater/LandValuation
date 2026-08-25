@@ -14,6 +14,15 @@ from app.review.decisions import (
     validate_case_decision,
     validate_finding_decision,
 )
+from app.review.reports import (
+    ReportCase,
+    ReportDecision,
+    ReportRiskSummary,
+    ReportRun,
+    ReviewReportInput,
+    build_review_report,
+)
+from app.review.schemas import FindingRead
 
 
 ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -192,6 +201,50 @@ class ReviewService:
             findings.append(finding)
             run.failed_count += 1
 
+        for check in payload.expert_checks:
+            if check.reported_grade == check.system_grade:
+                run.passed_count += 1
+                continue
+            machine_finding = await self.repository.create_validation_finding(
+                validation_run_id=run.validation_run_id,
+                validation_rule_id=check.validation_rule_id,
+                field_code=check.field_path,
+                severity="MEDIUM",
+                actual_value={"reported_grade": check.reported_grade},
+                expected_value={"system_grade": check.system_grade},
+                finding_message="報告級距與規則建議級距不同，需專業判斷",
+            )
+            finding = await self.repository.create_finding(
+                review_id=review.review_id,
+                source_validation_finding_id=machine_finding.finding_id,
+                validation_run_id=run.validation_run_id,
+                finding_code=check.finding_code,
+                finding_type="EXPERT_GRADE_JUDGMENT",
+                severity="MEDIUM",
+                title="級距判定需專業覆核",
+                description="報告級距與規則建議不同，系統不自行取代估價專業判斷。",
+                status="OPEN",
+                document_id=check.document_id,
+                document_version=check.document_version,
+                page_number=check.page_number,
+                field_path=check.field_path,
+                source_evidence=check.source_evidence,
+                reported_text=check.reported_text,
+                reported_value=check.reported_grade,
+                legal_basis=check.legal_basis,
+                reported_grade=check.reported_grade,
+                system_grade=check.system_grade,
+                comparison_result={"same_grade": False},
+                recommended_action={"action": "EXPERT_REVIEW"},
+                ai_status="AI_EXPLANATION_UNAVAILABLE",
+                supersedes_finding_id=(supersedes_by_code or {}).get(
+                    check.finding_code
+                ),
+                rule_version_id=payload.rule_version_id,
+            )
+            findings.append(finding)
+            run.warning_count += 1
+
         risk = risk_level_for_findings(
             [FindingRisk(item.finding_type, item.severity) for item in findings]
         )
@@ -335,3 +388,52 @@ class ReviewService:
             review_id, payload, actor_id, supersedes
         )
         return run, summary
+
+    async def build_report(self, validation_run_id):
+        run = await self.get_run(validation_run_id)
+        review = await self.get(run.review_id)
+        case = await self.repository.get_case_report_data(run.case_id)
+        findings = await self.repository.list_findings(validation_run_id)
+        risk = await self.get_risk_summary(validation_run_id)
+        decisions = await self.repository.list_decisions(review.review_id)
+        data = ReviewReportInput(
+            case=ReportCase(**case),
+            run=ReportRun(
+                validation_run_id=run.validation_run_id,
+                run_no=run.run_no,
+                run_status=run.run_status,
+                rule_version_id=run.rule_version_id,
+                model_id=run.model_id,
+                prompt_version=run.prompt_version,
+                started_at=run.started_at,
+                completed_at=run.completed_at,
+            ),
+            review_status=review.review_status,
+            missing_item_count=review.missing_item_count,
+            findings=[
+                FindingRead.model_validate(item).model_dump(mode="json")
+                for item in findings
+            ],
+            risk_summary=ReportRiskSummary(
+                overall_risk_level=risk.overall_risk_level,
+                high_count=risk.high_count,
+                medium_count=risk.medium_count,
+                low_count=risk.low_count,
+                missing_item_count=risk.missing_item_count,
+                risk_reasons=risk.risk_reasons,
+            ),
+            decisions=[
+                ReportDecision(
+                    decision_id=item.decision_id,
+                    finding_id=item.finding_id,
+                    decision=item.decision,
+                    reason=item.reason or "",
+                    decided_by_user_id=item.decided_by_user_id,
+                    decided_at=item.decided_at,
+                    before_value=item.before_value,
+                    after_value=item.after_value,
+                )
+                for item in decisions
+            ],
+        )
+        return build_review_report(data)

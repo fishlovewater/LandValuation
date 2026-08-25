@@ -146,10 +146,25 @@ class AdjustmentRateCheck(BaseModel):
     page_number: int | None = Field(default=None, ge=1)
 
 
+class ExpertGradeCheck(BaseModel):
+    validation_rule_id: UUID
+    finding_code: str = Field(min_length=1, max_length=100)
+    reported_grade: str
+    system_grade: str
+    reported_text: str
+    field_path: str
+    source_evidence: list[dict]
+    legal_basis: list[dict]
+    document_id: UUID | None = None
+    document_version: int | None = Field(default=None, ge=1)
+    page_number: int | None = Field(default=None, ge=1)
+
+
 class RunCreate(BaseModel):
     rule_version_id: UUID
     input_snapshot: dict
     adjustment_checks: list[AdjustmentRateCheck] = Field(default_factory=list)
+    expert_checks: list[ExpertGradeCheck] = Field(default_factory=list)
 
 
 class ValidationRunRead(BaseModel):
@@ -266,3 +281,16 @@ class DecisionRead(BaseModel):
     request_id: UUID | None
     before_value: dict | None
     after_value: dict | None
+
+
+class ReportDocumentRead(BaseModel):
+    document_id: UUID
+    case_id: UUID
+    document_type: str
+    original_filename: str
+    mime_type: str
+    bucket_name: str
+    object_key: str
+    checksum_sha256: str
+    file_size_bytes: int
+    version_no: int

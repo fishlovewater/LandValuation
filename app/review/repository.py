@@ -244,6 +244,9 @@ class ReviewRepository:
                     check.model_dump(mode="json")
                     for check in payload.adjustment_checks
                 ],
+                "expert_checks": [
+                    check.model_dump(mode="json") for check in payload.expert_checks
+                ],
             },
         )
         self.session.add(run)
@@ -344,3 +347,86 @@ class ReviewRepository:
             )
             or 0
         )
+
+    async def get_case_report_data(self, case_id: UUID):
+        return (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT case_id, case_no, case_title,
+                           valuation_base_date::text AS valuation_base_date,
+                           district_code
+                    FROM valuation.cases
+                    WHERE case_id = :case_id
+                    """
+                ),
+                {"case_id": case_id},
+            )
+        ).mappings().one()
+
+    async def next_report_version(self, case_id: UUID) -> int:
+        value = await self.session.scalar(
+            text(
+                """
+                SELECT coalesce(max(version_no), 0) + 1
+                FROM valuation.documents
+                WHERE case_id = :case_id AND document_type = 'review-report'
+                """
+            ),
+            {"case_id": case_id},
+        )
+        return int(value)
+
+    async def save_report_document(self, **values):
+        row = (
+            await self.session.execute(
+                text(
+                    """
+                    INSERT INTO valuation.documents (
+                        document_id, case_id, document_type, original_filename,
+                        mime_type, bucket_name, object_key, checksum_sha256,
+                        file_size_bytes, version_no, uploaded_by_user_id,
+                        storage_etag
+                    ) VALUES (
+                        :document_id, :case_id, 'review-report', :original_filename,
+                        'application/pdf', :bucket_name, :object_key,
+                        :checksum_sha256, :file_size_bytes, :version_no,
+                        :uploaded_by_user_id, :storage_etag
+                    )
+                    RETURNING document_id, case_id, document_type,
+                              original_filename, mime_type, bucket_name,
+                              object_key, checksum_sha256, file_size_bytes,
+                              version_no
+                    """
+                ),
+                values,
+            )
+        ).mappings().one()
+        return dict(row)
+
+    async def get_report_document(self, validation_run_id: UUID):
+        row = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT d.document_id, d.case_id, d.document_type,
+                           d.original_filename, d.mime_type, d.bucket_name,
+                           d.object_key, d.checksum_sha256, d.file_size_bytes,
+                           d.version_no
+                    FROM valuation.validation_runs r
+                    JOIN valuation.documents d ON d.case_id = r.case_id
+                    WHERE r.validation_run_id = :validation_run_id
+                      AND d.document_type = 'review-report'
+                      AND d.original_filename = :original_filename
+                      AND d.is_active = true
+                    ORDER BY d.version_no DESC, d.uploaded_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {
+                    "validation_run_id": validation_run_id,
+                    "original_filename": f"review-report-{validation_run_id}.pdf",
+                },
+            )
+        ).mappings().one_or_none()
+        return dict(row) if row else None

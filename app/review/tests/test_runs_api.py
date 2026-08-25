@@ -79,6 +79,7 @@ def runnable_review(postgres_connection):
         cursor.execute("UPDATE review.reviews SET latest_validation_run_id = NULL WHERE review_id = %s", (review_id,))
         cursor.execute("DELETE FROM valuation.validation_runs WHERE review_id = %s", (review_id,))
         cursor.execute("DELETE FROM review.reviews WHERE review_id = %s", (review_id,))
+        cursor.execute("DELETE FROM valuation.documents WHERE case_id = %s", (case_id,))
         cursor.execute("DELETE FROM valuation.validation_rules WHERE validation_rule_id = %s", (validation_rule_id,))
         cursor.execute("DELETE FROM valuation.rule_versions WHERE rule_version_id = %s", (rule_version_id,))
         cursor.execute("DELETE FROM valuation.cases WHERE case_id = %s", (case_id,))
