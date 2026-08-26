@@ -4,7 +4,7 @@
 
 **Goal:** Make review runs consume only server-selected, traceable extracted fields and automatically execute every applicable published rule.
 
-**Architecture:** Alembic `0007` adds immutable extraction-run and extracted-field contracts plus rule-version applicability/source columns. `app/review/trusted_inputs.py` owns pure trust and impact policy, the repository loads database-backed source bundles, and the service performs one preflight before creating a run. Run and rerun requests become empty commands; all evidence, values, rules and legal sources are produced by the server.
+**Architecture:** Alembic `0007` adds immutable extraction-run and extracted-field contracts, rule-version applicability/priority columns, and a published-source constraint. It preserves the `source_document_id` ownership, foreign key, and index already added by `0004`. `app/review/trusted_inputs.py` owns pure trust and impact policy, the repository loads database-backed source bundles, and the service performs one preflight before creating a run. Run and rerun requests become empty commands; all evidence, values, rules and legal sources are produced by the server.
 
 **Tech Stack:** Python 3.13, FastAPI, Pydantic v2, SQLAlchemy async, PostgreSQL 16, Alembic, psycopg, pytest, Docker Compose.
 
@@ -75,7 +75,7 @@ Expected: one commit containing no paths outside `app/review/**`.
 
 **Interfaces:**
 - Consumes: Alembic head `20260825_0006`; existing `valuation.documents`, `valuation.rule_versions`, `knowledge.documents` and `auth.users` tables.
-- Produces: `valuation.extraction_runs`, `valuation.extracted_fields`, and rule-version applicability/source columns.
+- Produces: `valuation.extraction_runs`, `valuation.extracted_fields`, rule-version applicability/priority columns, and published-source enforcement. `source_document_id`, its foreign key, and its index already exist from `0004` and are preserved.
 
 - [ ] **Step 1: Write the failing schema contract**
 
@@ -250,13 +250,8 @@ ALTER TABLE valuation.rule_versions
     ADD COLUMN applicable_case_type varchar(50),
     ADD COLUMN applicable_district_code varchar(20),
     ADD COLUMN selection_priority integer NOT NULL DEFAULT 0,
-    ADD COLUMN source_document_id uuid,
     ADD CONSTRAINT ck_rule_versions_selection_priority
         CHECK (selection_priority >= 0),
-    ADD CONSTRAINT fk_rule_versions_source_document
-        FOREIGN KEY (source_document_id)
-        REFERENCES knowledge.documents(document_id)
-        ON UPDATE RESTRICT ON DELETE RESTRICT,
     ADD CONSTRAINT ck_rule_versions_published_source CHECK (
         status <> 'PUBLISHED' OR source_document_id IS NOT NULL
     );
@@ -268,7 +263,7 @@ CREATE INDEX idx_rule_versions_selection
     );
 ```
 
-`downgrade()` must drop `idx_rule_versions_selection`, the four rule-version constraints/columns, both extraction indexes, `valuation.extracted_fields`, then `valuation.extraction_runs`, in dependency-safe order.
+`downgrade()` must drop `idx_rule_versions_selection`, the two `0007` rule-version constraints and three `0007` applicability/priority columns, both extraction indexes, `valuation.extracted_fields`, then `valuation.extraction_runs`, in dependency-safe order. It must preserve the `source_document_id` ownership, foreign key, and index from `0004`.
 
 - [ ] **Step 5: Build and validate migration on an isolated database**
 

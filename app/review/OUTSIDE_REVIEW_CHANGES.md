@@ -64,6 +64,15 @@
 - 實際狀態：已建立並套用；主資料庫目前為 `20260825_0006 (head)`。
 - 驗證：schema contract 已由 RED 轉為 GREEN；隔離資料庫已完成 `upgrade head → downgrade 0005 → upgrade head`，測試資料庫隨後刪除。
 
+### 7. 可信輸入與規則自動選擇資料庫契約
+
+- 檔案：`migrations/versions/20260825_0007_add_trusted_review_inputs.py`
+- 核准狀態：使用者已於 2026-08-25 明確同意此唯一的 `app/review/**` 外變更。
+- 原因：建立可追溯的正式抽取欄位與抽取批次資料契約，並支援依案件條件自動選擇規則。
+- 實際狀態：已建立並套用；主資料庫目前為 `20260825_0007 (head)`。
+- 驗證：隔離資料庫 `land_valuation_migration_test_0007` 已完成 `upgrade head → downgrade 0006 → upgrade head`，三個 Alembic 指令均成功並回到 `20260825_0007`；驗證後已刪除該隔離資料庫。
+- 補充：`source_document_id`、其外鍵與索引原已由 `20260824_0004` 建立，`0007` 僅保留其 ownership 並新增已發布規則的來源約束。
+
 ## 範圍核對
 
-截至目前，branch 起點 `9bcf5a0` 之後的 `app/review/**` 外變更只有上述第 1～6 項；其餘後續程式變更均位於 `app/review/**`。
+截至目前，branch 起點 `9bcf5a0` 之後的 `app/review/**` 外變更只有上述第 1～7 項；除第 7 項已明確核准的 migration 外，其餘後續程式變更均位於 `app/review/**`。

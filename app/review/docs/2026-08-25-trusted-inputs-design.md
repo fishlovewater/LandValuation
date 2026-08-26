@@ -16,7 +16,7 @@
 - 採混合確認模式：高影響欄位必須人工確認；低影響欄位通過抽取與格式驗證後即可使用。
 - 高影響欄位未確認時，案件停在 `PENDING_MATERIALS`，不得建立正式 validation run。
 - 抽取資料由上游文件抽取子系統寫入；`app/review` 只有讀取權責，不提供抽取結果寫入 API。
-- migration `0007` 同時建立可信抽取資料契約，並補齊規則的案件類型、行政區、優先序及正式法規來源關聯。
+- migration `0007` 建立可信抽取資料契約，並新增規則的案件類型、行政區、優先序及已發布規則的正式法規來源約束；正式法規來源的 `source_document_id`、外鍵與索引已由 `0004` 建立，`0007` 保留該 ownership。
 - `valuation.validation_rules.target_form_code` 已能表示 F01 至 F04，不新增重複的表型欄位。
 - 除核准新增的 `0007` 外，程式與文件修改均限制在 `app/review/**`。
 
@@ -105,16 +105,16 @@
 
 ### 4.4 規則版本擴充
 
-`0007` 在 `valuation.rule_versions` 新增：
+`0004` 已在 `valuation.rule_versions` 建立正式法規來源的 `source_document_id`、外鍵與索引；`0007` 保留該 ownership，並新增：
 
 | 欄位 | 型別與限制 | 用途 |
 |---|---|---|
 | `applicable_case_type` | varchar NULL | NULL 表示全部案件類型 |
 | `applicable_district_code` | varchar NULL | NULL 表示全部行政區 |
 | `selection_priority` | integer >= 0 | 多筆候選規則版本的選擇優先序 |
-| `source_document_id` | UUID | 正式法規來源，連到 `knowledge.documents` |
+| `source_document_id` | UUID | 正式法規來源，連到 `knowledge.documents`；由 `0004` 建立，`0007` 僅以約束使用它 |
 
-`PUBLISHED` 規則版本必須具有 `source_document_id`。Migration 套用前若發現現有 `PUBLISHED` 規則版本沒有來源，必須失敗並列出原因，不得自動填入假資料或靜默降級狀態。
+`source_document_id` 的欄位、外鍵與索引由 `0004` 建立；`0007` 新增約束，要求 `PUBLISHED` 規則版本必須具有該來源。Migration 套用前若發現現有 `PUBLISHED` 規則版本沒有來源，必須失敗並列出原因，不得自動填入假資料或靜默降級狀態。
 
 規則來源文件必須同時符合：
 
@@ -212,7 +212,7 @@ Finding 的 `source_evidence` 只由 extracted field 組成，不再從 API payl
 - 新增 `migrations/versions/20260825_0007_add_trusted_review_inputs.py`。
 - `revision = 20260825_0007`，`down_revision = 20260825_0006`。
 - 不修改既有 migration。
-- Upgrade 先執行既有資料 preflight，再建立抽取表、索引、外鍵與規則版本欄位及限制。
+- `0007` Upgrade 先執行既有資料 preflight，再建立抽取表與其索引／外鍵，並新增規則版本的適用條件、優先序及已發布來源約束；`source_document_id` 的欄位、外鍵與索引維持 `0004` 的既有 ownership。
 - Preflight 發現不符合新發布規則契約的資料時直接失敗，不修改業務資料。
 - 先在隔離資料庫驗證 `upgrade head -> downgrade 0006 -> upgrade head`，成功後才套用主資料庫。
 - Downgrade 只供受控回退驗證；正式環境若已產生抽取資料，不應在未備份的情況下降版。
