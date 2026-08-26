@@ -195,6 +195,7 @@ class ReviewService:
                 value_type=row["value_type"],
                 page_number=row["page_number"],
                 bounding_box=row["bounding_box"],
+                confidence=row["confidence"],
                 verification_status=row["verification_status"],
                 verified_by_user_id=(
                     str(row["verified_by_user_id"])
@@ -315,7 +316,7 @@ class ReviewService:
         field_rows = await self.repository.list_official_extracted_fields(
             extraction_run["extraction_run_id"]
         )
-        fields = trusted_fields_by_code(
+        official_fields = tuple(
             TrustedField(
                 extracted_field_id=str(row["extracted_field_id"]),
                 field_code=row["field_code"],
@@ -325,6 +326,7 @@ class ReviewService:
                 value_type=row["value_type"],
                 page_number=row["page_number"],
                 bounding_box=row["bounding_box"],
+                confidence=row["confidence"],
                 verification_status=row["verification_status"],
                 verified_by_user_id=(
                     str(row["verified_by_user_id"])
@@ -336,6 +338,7 @@ class ReviewService:
             )
             for row in field_rows
         )
+        fields = trusted_fields_by_code(official_fields)
 
         case_context = await self.repository.get_case_rule_context(review.case_id)
         if case_context is None:
@@ -413,6 +416,7 @@ class ReviewService:
             document=document,
             extraction_run=extraction_run,
             fields=fields,
+            official_fields=official_fields,
             rule_version=rule_version,
             validation_rules=validation_rules,
             rule_source=rule_source,
@@ -479,6 +483,8 @@ class ReviewService:
             "verified_at": ReviewService._json_value(field.verified_at),
             "page": field.page_number,
             "bounding_box": field.bounding_box,
+            "confidence": field.confidence,
+            "is_official": field.is_official,
             "field_path": field.field_path,
             "excerpt": field.raw_text,
         }
@@ -521,10 +527,9 @@ class ReviewService:
                 "extractor_name": context.extraction_run["extractor_name"],
                 "extractor_version": context.extraction_run["extractor_version"],
             },
-            "field_snapshots": [
-                ReviewService._field_snapshot(prepared_rule.field)
-                for prepared_rule in context.prepared_rules
-            ],
+            "field_snapshots": ReviewService._official_field_snapshots(
+                context.official_fields
+            ),
             "rule_version": {
                 "rule_version_id": str(context.rule_version["rule_version_id"]),
                 "status": context.rule_version["status"],
@@ -569,6 +574,17 @@ class ReviewService:
             ],
             "checks": checks,
         }
+
+    @staticmethod
+    def _official_field_snapshots(fields: tuple[TrustedField, ...]):
+        snapshots = []
+        field_ids = set()
+        for field in fields:
+            if field.extracted_field_id in field_ids:
+                continue
+            field_ids.add(field.extracted_field_id)
+            snapshots.append(ReviewService._field_snapshot(field))
+        return snapshots
 
     async def create_run(
         self, review_id, actor_id, supersedes_by_rule_id=None, locked_review=None

@@ -28,6 +28,7 @@ class TrustedField:
     value_type: str
     page_number: int
     bounding_box: object
+    confidence: object | None
     verification_status: str
     verified_by_user_id: str | None
     verified_at: object | None
@@ -45,6 +46,7 @@ class TrustedRunContext:
     document: dict
     extraction_run: dict
     fields: dict[str, TrustedField]
+    official_fields: tuple[TrustedField, ...]
     rule_version: dict
     validation_rules: tuple[dict, ...]
     rule_source: dict

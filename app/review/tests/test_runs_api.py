@@ -10,6 +10,8 @@ from app.auth.dependencies import get_current_user
 from app.core.exceptions import AppError
 from app.main import app
 from app.review.repository import ReviewRepository
+from app.review.service import ReviewService
+from app.review.trusted_inputs import PreparedRule, TrustedField, TrustedRunContext
 
 
 @pytest.fixture
@@ -34,6 +36,9 @@ def runnable_review(request, postgres_connection):
         expert_rule_id=uuid4(),
         unsupported_rule_id=uuid4(),
         extraction_run_id=uuid4(),
+        adjustment_field_id=uuid4(),
+        expert_grade_field_id=uuid4(),
+        unrelated_field_id=uuid4(),
     )
     ids.validation_rule_id = ids.adjustment_rule_id
     with postgres_connection.cursor() as cursor:
@@ -191,15 +196,31 @@ def runnable_review(request, postgres_connection):
                 """,
                 (ids.extraction_run_id, ids.case_id, ids.original_document_id),
             )
-            for field_code, value_type, raw_text, normalized_value, status in (
+            for field_id, field_code, value_type, raw_text, normalized_value, status in (
                 (
+                    ids.adjustment_field_id,
                     "adjustment_rate",
                     "DECIMAL",
                     "報告記載調整率 -12%",
                     '"-12"',
                     adjustment_status,
                 ),
-                ("expert_grade", "TEXT", "報告評定 A 級", '"A"', "VERIFIED"),
+                (
+                    ids.expert_grade_field_id,
+                    "expert_grade",
+                    "TEXT",
+                    "報告評定 A 級",
+                    '"A"',
+                    "VERIFIED",
+                ),
+                (
+                    ids.unrelated_field_id,
+                    "property_description",
+                    "TEXT",
+                    "土地描述",
+                    '"郊區住宅用地"',
+                    "VERIFIED",
+                ),
             ):
                 verified = status == "VERIFIED"
                 cursor.execute(
@@ -212,7 +233,7 @@ def runnable_review(request, postgres_connection):
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, 3, %s, %s, %s, true)
                     """,
                     (
-                        uuid4(),
+                        field_id,
                         ids.extraction_run_id,
                         field_code,
                         f"report.{field_code}",
@@ -410,6 +431,8 @@ def test_run_snapshot_preserves_complete_trusted_audit_context(
         "verified_at",
         "page",
         "bounding_box",
+        "confidence",
+        "is_official",
         "field_path",
         "excerpt",
     } <= field.keys()
@@ -417,10 +440,164 @@ def test_run_snapshot_preserves_complete_trusted_audit_context(
     assert snapshot["rule_source"]["document_id"] == str(
         runnable_review.source_document_id
     )
+    snapshot_field_ids = [
+        item["extracted_field_id"] for item in snapshot["field_snapshots"]
+    ]
+    assert set(snapshot_field_ids) == {
+        str(runnable_review.adjustment_field_id),
+        str(runnable_review.expert_grade_field_id),
+        str(runnable_review.unrelated_field_id),
+    }
+    assert len(snapshot_field_ids) == len(set(snapshot_field_ids))
+    assert next(
+        item
+        for item in snapshot["field_snapshots"]
+        if item["extracted_field_id"] == str(runnable_review.unrelated_field_id)
+    )["field_code"] == "property_description"
+    assert {
+        item["validation_rule_id"] for item in snapshot["validation_rules"]
+    } == {
+        str(runnable_review.adjustment_rule_id),
+        str(runnable_review.expert_rule_id),
+    }
     assert snapshot["report_context"] == {
         "review_status": "REVIEW_REQUIRED",
         "missing_item_count": 0,
     }
+
+
+def test_snapshot_deduplicates_shared_prepared_field_but_keeps_all_official_fields():
+    adjustment_field = TrustedField(
+        extracted_field_id="field-adjustment",
+        field_code="adjustment_rate",
+        field_path="report.adjustment_rate",
+        raw_text="調整率 -12%",
+        normalized_value="-12",
+        value_type="DECIMAL",
+        page_number=3,
+        bounding_box={"left": 0.1},
+        confidence=0.99,
+        verification_status="VERIFIED",
+        verified_by_user_id="verifier-1",
+        verified_at=datetime(2026, 8, 26, tzinfo=UTC),
+        is_official=True,
+    )
+    grade_field = TrustedField(
+        extracted_field_id="field-grade",
+        field_code="expert_grade",
+        field_path="report.grade",
+        raw_text="A 級",
+        normalized_value="A",
+        value_type="TEXT",
+        page_number=4,
+        bounding_box=None,
+        confidence=0.99,
+        verification_status="VERIFIED",
+        verified_by_user_id="verifier-1",
+        verified_at=datetime(2026, 8, 26, tzinfo=UTC),
+        is_official=True,
+    )
+    unrelated_field = TrustedField(
+        extracted_field_id="field-description",
+        field_code="property_description",
+        field_path="report.description",
+        raw_text="郊區住宅用地",
+        normalized_value="郊區住宅用地",
+        value_type="TEXT",
+        page_number=5,
+        bounding_box=None,
+        confidence=0.99,
+        verification_status="VERIFIED",
+        verified_by_user_id="verifier-1",
+        verified_at=datetime(2026, 8, 26, tzinfo=UTC),
+        is_official=True,
+    )
+    rule_version_id = uuid4()
+    adjustment_rule = {
+        "rule_version_id": rule_version_id,
+        "validation_rule_id": uuid4(),
+        "rule_code": "ADJUSTMENT_RATE",
+        "target_form_code": "F01",
+        "target_table": "comparison",
+        "target_field_code": "adjustment_rate",
+        "severity": "HIGH",
+    }
+    duplicate_adjustment_rule = {
+        **adjustment_rule,
+        "validation_rule_id": uuid4(),
+    }
+    prepared_adjustment = PreparedRule(
+        rule=adjustment_rule,
+        field=adjustment_field,
+        configuration={"system_rate": "-5", "tolerance": "0"},
+        reported_rate=__import__("decimal").Decimal("-12"),
+    )
+    prepared_duplicate = PreparedRule(
+        rule=duplicate_adjustment_rule,
+        field=adjustment_field,
+        configuration={"system_rate": "-5", "tolerance": "0"},
+        reported_rate=__import__("decimal").Decimal("-12"),
+    )
+    context = TrustedRunContext(
+        document={
+            "document_id": uuid4(),
+            "version_no": 1,
+            "document_group_id": uuid4(),
+            "checksum_sha256": "a" * 64,
+        },
+        extraction_run={
+            "extraction_run_id": uuid4(),
+            "run_no": 1,
+            "extractor_name": "fixture",
+            "extractor_version": "1.0",
+        },
+        fields={"adjustment_rate": adjustment_field, "expert_grade": grade_field},
+        official_fields=(adjustment_field, grade_field, unrelated_field),
+        rule_version={
+            "rule_version_id": rule_version_id,
+            "status": "PUBLISHED",
+            "effective_from": None,
+            "effective_to": None,
+            "applicable_case_type": "LAND",
+            "applicable_district_code": "F01",
+            "selection_priority": 10,
+        },
+        validation_rules=(adjustment_rule, duplicate_adjustment_rule),
+        rule_source={
+            "document_id": uuid4(),
+            "version_no": 1,
+            "checksum_sha256": "b" * 64,
+            "effective_from": None,
+            "effective_to": None,
+        },
+        prepared_rules=(prepared_adjustment, prepared_duplicate),
+    )
+
+    snapshot = ReviewService._input_snapshot(
+        SimpleNamespace(),
+        {
+            "case_id": str(uuid4()),
+            "case_no": "SNAPSHOT",
+            "case_title": "Snapshot case",
+            "valuation_base_date": "2026-08-26",
+            "district_code": "F01",
+        },
+        context,
+    )
+
+    assert [item["extracted_field_id"] for item in snapshot["field_snapshots"]] == [
+        "field-adjustment",
+        "field-grade",
+        "field-description",
+    ]
+    assert [item["validation_rule_id"] for item in snapshot["validation_rules"]] == [
+        str(adjustment_rule["validation_rule_id"]),
+        str(duplicate_adjustment_rule["validation_rule_id"]),
+    ]
+    assert [item["extracted_field_id"] for item in snapshot["checks"]] == [
+        "field-adjustment",
+        "field-adjustment",
+    ]
 
 
 @pytest.mark.parametrize(

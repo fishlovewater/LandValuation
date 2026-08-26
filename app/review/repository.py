@@ -204,7 +204,7 @@ class ReviewRepository:
                     FROM valuation.extracted_fields
                     WHERE extraction_run_id = :extraction_run_id
                       AND is_official = true
-                    ORDER BY field_code, field_path, extracted_field_id
+                    ORDER BY field_code, extracted_field_id
                     """
                 ),
                 {"extraction_run_id": extraction_run_id},
