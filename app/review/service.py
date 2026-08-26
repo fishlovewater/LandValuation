@@ -462,8 +462,12 @@ class ReviewService:
             "checks": checks,
         }
 
-    async def create_run(self, review_id, actor_id, supersedes_by_rule_id=None):
-        review = await self.repository.get(review_id, for_update=True)
+    async def create_run(
+        self, review_id, actor_id, supersedes_by_rule_id=None, locked_review=None
+    ):
+        review = locked_review
+        if review is None:
+            review = await self.repository.get(review_id, for_update=True)
         if review is None:
             raise ResourceNotFoundError("審查案件")
         if await self.repository.active_run_exists(review_id):
@@ -734,12 +738,13 @@ class ReviewService:
         return await self.repository.list_decisions(review_id)
 
     async def rerun(self, review_id, actor_id):
-        review = await self.repository.get(review_id)
+        review = await self.repository.get(review_id, for_update=True)
         if review is None:
             raise ResourceNotFoundError("審查案件")
         previous = []
         if review.latest_validation_run_id:
             previous = await self.repository.list_finding_rule_links(
+                review.review_id,
                 review.latest_validation_run_id
             )
         duplicate_rule_ids = set()
@@ -752,7 +757,12 @@ class ReviewService:
                 supersedes[rule_id] = finding_id
         for rule_id in duplicate_rule_ids:
             supersedes.pop(rule_id, None)
-        run, summary = await self.create_run(review_id, actor_id, supersedes)
+        run, summary = await self.create_run(
+            review_id,
+            actor_id,
+            supersedes,
+            locked_review=review,
+        )
         return run, summary
 
     async def build_report(self, validation_run_id):
