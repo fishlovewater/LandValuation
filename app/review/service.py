@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from uuid import UUID
 
 from app.core.exceptions import AppError
@@ -434,7 +435,7 @@ class ReviewService:
                 "document_version": document["version_no"],
                 "page": field.page_number,
                 "field_path": field.field_path,
-                "bounding_box": field.bounding_box,
+                "bounding_box": ReviewService._json_value(field.bounding_box),
                 "excerpt": field.raw_text,
                 "verification_status": field.verification_status,
             }
@@ -468,6 +469,15 @@ class ReviewService:
             return str(value)
         if isinstance(value, (date, datetime)):
             return value.isoformat()
+        if isinstance(value, Decimal):
+            return str(value)
+        if isinstance(value, dict):
+            return {
+                str(key): ReviewService._json_value(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [ReviewService._json_value(item) for item in value]
         return value
 
     @staticmethod
@@ -476,14 +486,14 @@ class ReviewService:
             "extracted_field_id": field.extracted_field_id,
             "field_code": field.field_code,
             "raw_value": field.raw_text,
-            "normalized_value": field.normalized_value,
+            "normalized_value": ReviewService._json_value(field.normalized_value),
             "value_type": field.value_type,
             "verification_status": field.verification_status,
             "verified_by_user_id": field.verified_by_user_id,
             "verified_at": ReviewService._json_value(field.verified_at),
             "page": field.page_number,
-            "bounding_box": field.bounding_box,
-            "confidence": field.confidence,
+            "bounding_box": ReviewService._json_value(field.bounding_box),
+            "confidence": ReviewService._json_value(field.confidence),
             "is_official": field.is_official,
             "field_path": field.field_path,
             "excerpt": field.raw_text,
@@ -506,7 +516,9 @@ class ReviewService:
                         if prepared_rule.reported_rate is not None
                         else prepared_rule.reported_grade
                     ),
-                    "rule_configuration": prepared_rule.configuration,
+                    "rule_configuration": ReviewService._json_value(
+                        prepared_rule.configuration
+                    ),
                 }
             )
         return {
@@ -564,7 +576,9 @@ class ReviewService:
                     "target_table": prepared_rule.rule["target_table"],
                     "target_field_code": prepared_rule.rule["target_field_code"],
                     "severity": prepared_rule.rule["severity"],
-                    "configuration": prepared_rule.configuration,
+                    "configuration": ReviewService._json_value(
+                        prepared_rule.configuration
+                    ),
                     "target": prepared_rule.rule["target_field_code"],
                 }
                 for prepared_rule in context.prepared_rules

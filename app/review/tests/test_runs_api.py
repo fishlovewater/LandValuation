@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime
+from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -776,6 +777,50 @@ def test_run_snapshot_preserves_zero_server_extracted_value(
         if check["rule_code"] == "ADJUSTMENT_RATE"
     )
     assert adjustment_check["reported_value"] == "0"
+
+
+def test_run_snapshot_serializes_database_decimal_confidence_exactly(
+    authorized_client, runnable_review, postgres_connection
+):
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE valuation.extracted_fields
+            SET confidence = %s
+            WHERE extracted_field_id = %s
+            """,
+            (Decimal("0.987654"), runnable_review.adjustment_field_id),
+        )
+    postgres_connection.commit()
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
+    )
+
+    assert response.status_code == 202
+    snapshot = response.json()["input_snapshot"]
+    response_confidence = next(
+        field["confidence"]
+        for field in snapshot["field_snapshots"]
+        if field["extracted_field_id"] == str(runnable_review.adjustment_field_id)
+    )
+    assert response_confidence == "0.987654"
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT input_snapshot
+            FROM valuation.validation_runs
+            WHERE validation_run_id = %s
+            """,
+            (response.json()["validation_run_id"],),
+        )
+        stored_snapshot = cursor.fetchone()[0]
+    stored_confidence = next(
+        field["confidence"]
+        for field in stored_snapshot["field_snapshots"]
+        if field["extracted_field_id"] == str(runnable_review.adjustment_field_id)
+    )
+    assert stored_confidence == "0.987654"
 
 
 @pytest.mark.parametrize(
