@@ -519,6 +519,19 @@ class ReviewRepository:
         )
         return list((await self.session.scalars(statement)).all())
 
+    async def list_finding_rule_links(self, validation_run_id: UUID):
+        rows = await self.session.execute(
+            select(Finding.finding_id, ValidationFinding.validation_rule_id)
+            .join(
+                ValidationFinding,
+                Finding.source_validation_finding_id
+                == ValidationFinding.finding_id,
+            )
+            .where(Finding.validation_run_id == validation_run_id)
+            .order_by(Finding.created_at.desc(), Finding.finding_id.desc())
+        )
+        return list(rows)
+
     async def get_finding(self, finding_id: UUID) -> Finding | None:
         return await self.session.scalar(
             select(Finding).where(Finding.finding_id == finding_id)

@@ -196,6 +196,12 @@ def test_fixed_case_workflow_preserves_trusted_history(workflow_client, workflow
 
     findings2 = workflow_client.get(f"/api/v1/review/runs/{run2['validation_run_id']}/findings").json()
     assert {item["supersedes_finding_id"] for item in findings2} == {item["finding_id"] for item in findings1}
+    saved_run1 = workflow_client.get(f"/api/v1/review/runs/{run1['validation_run_id']}").json()
+    saved_run2 = workflow_client.get(f"/api/v1/review/runs/{run2['validation_run_id']}").json()
+    assert _snapshot_field_ids(saved_run1) == workflow_data.v1_field_ids
+    assert saved_run1["input_snapshot"]["document"]["version_no"] == 1
+    assert _snapshot_field_ids(saved_run2) == workflow_data.v2_field_ids
+    assert saved_run2["input_snapshot"]["document"]["version_no"] == 2
     report1 = workflow_client.get(f"/api/v1/review/runs/{run1['validation_run_id']}/report").json()
     report2 = workflow_client.get(f"/api/v1/review/runs/{run2['validation_run_id']}/report").json()
     assert _evidence_field_ids(report1["findings"]) == workflow_data.v1_field_ids

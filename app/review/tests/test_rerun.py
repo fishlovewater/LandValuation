@@ -124,6 +124,38 @@ def test_rerun_preserves_old_finding_and_links_replacement(
     assert [item["run_no"] for item in runs.json()] == [1, 2]
 
 
+def test_rerun_supersedes_legacy_finding_code_by_validation_rule(
+    authorized_client, runnable_review, postgres_connection
+):
+    first_run = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
+        json=run_payload(runnable_review),
+    ).json()
+    old_finding = authorized_client.get(
+        f"/api/v1/review/runs/{first_run['validation_run_id']}/findings"
+    ).json()[0]
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE review.findings SET finding_code = 'ADJUSTMENT_RATE:legacy-field' WHERE finding_id = %s",
+            (old_finding["finding_id"],),
+        )
+        cursor.execute(
+            "UPDATE review.reviews SET review_status = 'READY_FOR_REVIEW' WHERE review_id = %s",
+            (runnable_review.review_id,),
+        )
+    postgres_connection.commit()
+
+    rerun = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/rerun", json={}
+    )
+
+    assert rerun.status_code == 202
+    new_finding = authorized_client.get(
+        f"/api/v1/review/runs/{rerun.json()['validation_run_id']}/findings"
+    ).json()[0]
+    assert new_finding["supersedes_finding_id"] == old_finding["finding_id"]
+
+
 def test_generic_update_cannot_bypass_decision_gate(
     authorized_client, runnable_review
 ):

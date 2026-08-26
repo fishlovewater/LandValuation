@@ -462,7 +462,7 @@ class ReviewService:
             "checks": checks,
         }
 
-    async def create_run(self, review_id, actor_id, supersedes_by_code=None):
+    async def create_run(self, review_id, actor_id, supersedes_by_rule_id=None):
         review = await self.repository.get(review_id, for_update=True)
         if review is None:
             raise ResourceNotFoundError("審查案件")
@@ -527,7 +527,9 @@ class ReviewService:
                     },
                     recommended_action={"action": "VERIFY_ADJUSTMENT_BASIS"},
                     ai_status="AI_EXPLANATION_UNAVAILABLE",
-                    supersedes_finding_id=(supersedes_by_code or {}).get(finding_code),
+                    supersedes_finding_id=(supersedes_by_rule_id or {}).get(
+                        str(rule["validation_rule_id"])
+                    ),
                     rule_version_id=context.rule_version["rule_version_id"],
                 )
                 findings.append(finding)
@@ -570,7 +572,9 @@ class ReviewService:
                     comparison_result={"same_grade": False},
                     recommended_action={"action": "EXPERT_REVIEW"},
                     ai_status="AI_EXPLANATION_UNAVAILABLE",
-                    supersedes_finding_id=(supersedes_by_code or {}).get(finding_code),
+                    supersedes_finding_id=(supersedes_by_rule_id or {}).get(
+                        str(rule["validation_rule_id"])
+                    ),
                     rule_version_id=context.rule_version["rule_version_id"],
                 )
                 findings.append(finding)
@@ -735,10 +739,19 @@ class ReviewService:
             raise ResourceNotFoundError("審查案件")
         previous = []
         if review.latest_validation_run_id:
-            previous = await self.repository.list_findings(
+            previous = await self.repository.list_finding_rule_links(
                 review.latest_validation_run_id
             )
-        supersedes = {item.finding_code: item.finding_id for item in previous}
+        duplicate_rule_ids = set()
+        supersedes = {}
+        for finding_id, validation_rule_id in previous:
+            rule_id = str(validation_rule_id)
+            if rule_id in supersedes:
+                duplicate_rule_ids.add(rule_id)
+            else:
+                supersedes[rule_id] = finding_id
+        for rule_id in duplicate_rule_ids:
+            supersedes.pop(rule_id, None)
         run, summary = await self.create_run(review_id, actor_id, supersedes)
         return run, summary
 
@@ -748,7 +761,12 @@ class ReviewService:
         case = await self.repository.get_case_report_data(run.case_id)
         findings = await self.repository.list_findings(validation_run_id)
         risk = await self.get_risk_summary(validation_run_id)
-        decisions = await self.repository.list_decisions(review.review_id)
+        finding_ids = {item.finding_id for item in findings}
+        decisions = [
+            item
+            for item in await self.repository.list_decisions(review.review_id)
+            if item.finding_id in finding_ids
+        ]
         data = ReviewReportInput(
             case=ReportCase(**case),
             run=ReportRun(
