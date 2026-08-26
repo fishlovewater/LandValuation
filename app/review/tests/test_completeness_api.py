@@ -295,7 +295,7 @@ def test_completeness_blocks_draft_rule_source(
 
     assert response.status_code == 200
     assert response.json()["review_status"] == "PENDING_MATERIALS"
-    assert "TRUSTED_INPUT_MISSING" in {
+    assert "RULE_SOURCE_UNAVAILABLE" in {
         item["item_code"] for item in response.json()["items"]
     }
     with postgres_connection.cursor() as cursor:
@@ -318,7 +318,7 @@ def test_completeness_blocks_unextracted_published_rule_source(
 
     assert response.status_code == 200
     assert response.json()["review_status"] == "PENDING_MATERIALS"
-    assert "TRUSTED_INPUT_MISSING" in {
+    assert "RULE_SOURCE_UNAVAILABLE" in {
         item["item_code"] for item in response.json()["items"]
     }
     with postgres_connection.cursor() as cursor:
@@ -327,6 +327,42 @@ def test_completeness_blocks_unextracted_published_rule_source(
             (trusted_case.review_id,),
         )
         assert cursor.fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("effective_from_sql", "effective_to_sql"),
+    [
+        ("CURRENT_DATE + 1", "NULL"),
+        ("NULL", "CURRENT_DATE - 1"),
+    ],
+)
+def test_completeness_blocks_rule_source_outside_case_effective_period(
+    authorized_client,
+    trusted_case,
+    postgres_connection,
+    effective_from_sql,
+    effective_to_sql,
+):
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            UPDATE knowledge.documents
+            SET effective_from = {effective_from_sql}, effective_to = {effective_to_sql}
+            WHERE document_id = %s
+            """,
+            (trusted_case.source_document_id,),
+        )
+    postgres_connection.commit()
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{trusted_case.review_id}/completeness-check"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["review_status"] == "PENDING_MATERIALS"
+    assert "RULE_SOURCE_UNAVAILABLE" in {
+        item["item_code"] for item in response.json()["items"]
+    }
 
 
 @pytest.mark.parametrize("trusted_case", [{}], indirect=True)

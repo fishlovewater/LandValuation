@@ -15,7 +15,10 @@ def field(code, status="VERIFIED", official=True):
         normalized_value="-12",
         value_type="DECIMAL",
         page_number=3,
+        bounding_box=None,
         verification_status=status,
+        verified_by_user_id=None,
+        verified_at=None,
         is_official=official,
     )
 

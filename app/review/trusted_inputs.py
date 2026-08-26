@@ -27,7 +27,10 @@ class TrustedField:
     normalized_value: object
     value_type: str
     page_number: int
+    bounding_box: object
     verification_status: str
+    verified_by_user_id: str | None
+    verified_at: object | None
     is_official: bool
 
 

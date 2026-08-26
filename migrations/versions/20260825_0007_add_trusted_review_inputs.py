@@ -22,7 +22,9 @@ def upgrade() -> None:
         DO $$
         BEGIN
             IF EXISTS (
-                SELECT 1 FROM valuation.rule_versions WHERE status = 'PUBLISHED'
+                SELECT 1
+                FROM valuation.rule_versions
+                WHERE status = 'PUBLISHED' AND source_document_id IS NULL
             ) THEN
                 RAISE EXCEPTION
                     'published rule versions require an explicit knowledge source before 0007';

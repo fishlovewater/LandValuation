@@ -364,6 +364,132 @@ def test_run_executes_every_server_selected_rule_and_preserves_server_evidence(
     assert risk.json()["high_count"] == 1
 
 
+def test_run_snapshot_preserves_complete_trusted_audit_context(
+    authorized_client, runnable_review
+):
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
+    )
+
+    assert response.status_code == 202
+    snapshot = response.json()["input_snapshot"]
+    assert {
+        "case",
+        "report_context",
+        "document",
+        "extraction_run",
+        "field_snapshots",
+        "rule_version",
+        "rule_source",
+        "validation_rules",
+    } <= snapshot.keys()
+    assert {
+        "document_id",
+        "version_no",
+        "document_group_id",
+    } <= snapshot["document"].keys()
+    assert {
+        "extraction_run_id",
+        "run_no",
+        "extractor_name",
+        "extractor_version",
+    } <= snapshot["extraction_run"].keys()
+    field = next(
+        item
+        for item in snapshot["field_snapshots"]
+        if item["field_code"] == "adjustment_rate"
+    )
+    assert {
+        "extracted_field_id",
+        "field_code",
+        "raw_value",
+        "normalized_value",
+        "value_type",
+        "verification_status",
+        "verified_by_user_id",
+        "verified_at",
+        "page",
+        "bounding_box",
+        "field_path",
+        "excerpt",
+    } <= field.keys()
+    assert snapshot["rule_version"]["selection_priority"] == 10
+    assert snapshot["rule_source"]["document_id"] == str(
+        runnable_review.source_document_id
+    )
+    assert snapshot["report_context"] == {
+        "review_status": "REVIEW_REQUIRED",
+        "missing_item_count": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("effective_from_sql", "effective_to_sql", "expected_status"),
+    [
+        ("CURRENT_DATE + 1", "NULL", 409),
+        ("NULL", "CURRENT_DATE - 1", 409),
+        ("CURRENT_DATE", "CURRENT_DATE + 1", 202),
+        ("CURRENT_DATE - 1", "CURRENT_DATE", 202),
+        ("NULL", "CURRENT_DATE + 1", 202),
+        ("CURRENT_DATE - 1", "NULL", 202),
+    ],
+)
+def test_run_rule_source_effective_period_is_null_aware_and_inclusive(
+    authorized_client,
+    runnable_review,
+    postgres_connection,
+    effective_from_sql,
+    effective_to_sql,
+    expected_status,
+):
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            UPDATE knowledge.documents
+            SET effective_from = {effective_from_sql}, effective_to = {effective_to_sql}
+            WHERE document_id = %s
+            """,
+            (runnable_review.source_document_id,),
+        )
+    postgres_connection.commit()
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
+    )
+
+    assert response.status_code == expected_status
+    if expected_status == 409:
+        assert response.json()["error"]["code"] == "RULE_SOURCE_UNAVAILABLE"
+    else:
+        assert response.json()["run_status"] == "COMPLETED"
+
+
+def test_machine_finding_uses_field_code_not_field_path(
+    authorized_client, runnable_review, postgres_connection
+):
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
+    )
+    assert response.status_code == 202
+    finding = response.json()["validation_run_id"]
+
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT vf.field_code, f.field_path
+            FROM valuation.validation_findings vf
+            JOIN review.findings f
+              ON f.source_validation_finding_id = vf.finding_id
+            WHERE vf.validation_run_id = %s
+            """,
+            (finding,),
+        )
+        field_code, field_path = cursor.fetchone()
+
+    assert field_code == "adjustment_rate"
+    assert field_path == "report.adjustment_rate"
+
+
 def test_second_running_run_returns_conflict(
     authorized_client, runnable_review, postgres_connection
 ):

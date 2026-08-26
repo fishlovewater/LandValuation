@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 from sqlalchemy import case, func, or_, select, text
@@ -288,7 +288,7 @@ class ReviewRepository:
         ).mappings()
         return [dict(row) for row in rows]
 
-    async def get_rule_source(self, document_id: UUID):
+    async def get_rule_source(self, document_id: UUID, valuation_base_date: date):
         row = (
             await self.session.execute(
                 text(
@@ -299,9 +299,16 @@ class ReviewRepository:
                     WHERE document_id = :document_id
                       AND extraction_status = 'COMPLETED'
                       AND publication_status = 'PUBLISHED'
+                      AND (effective_from IS NULL
+                           OR effective_from <= :valuation_base_date)
+                      AND (effective_to IS NULL
+                           OR effective_to >= :valuation_base_date)
                     """
                 ),
-                {"document_id": document_id},
+                {
+                    "document_id": document_id,
+                    "valuation_base_date": valuation_base_date,
+                },
             )
         ).mappings().one_or_none()
         return dict(row) if row else None

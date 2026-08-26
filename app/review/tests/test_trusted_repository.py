@@ -380,7 +380,7 @@ async def test_loads_only_server_owned_trusted_context(trusted_repository_data):
         }
 
         source = await repository.get_rule_source(
-            trusted_repository_data.source_document_id
+            trusted_repository_data.source_document_id, date(2026, 8, 25)
         )
         assert source == {
             "document_id": trusted_repository_data.source_document_id,
@@ -390,8 +390,10 @@ async def test_loads_only_server_owned_trusted_context(trusted_repository_data):
             "effective_to": date(2026, 12, 31),
         }
         assert await repository.get_rule_source(
-            trusted_repository_data.completed_draft_source_document_id
+            trusted_repository_data.completed_draft_source_document_id,
+            date(2026, 8, 25),
         ) is None
         assert await repository.get_rule_source(
-            trusted_repository_data.pending_published_source_document_id
+            trusted_repository_data.pending_published_source_document_id,
+            date(2026, 8, 25),
         ) is None

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID
 
 from app.core.exceptions import AppError
@@ -194,7 +194,14 @@ class ReviewService:
                 normalized_value=row["normalized_value"],
                 value_type=row["value_type"],
                 page_number=row["page_number"],
+                bounding_box=row["bounding_box"],
                 verification_status=row["verification_status"],
+                verified_by_user_id=(
+                    str(row["verified_by_user_id"])
+                    if row["verified_by_user_id"] is not None
+                    else None
+                ),
+                verified_at=row["verified_at"],
                 is_official=row["is_official"],
             )
             for row in field_rows
@@ -228,11 +235,21 @@ class ReviewService:
             return (trusted_context_missing_requirement(),)
 
         selected_candidate = candidates_by_id[selection.rule.rule_version_id]
-        source_document_id = selected_candidate["source_document_id"]
-        if source_document_id is None or await self.repository.get_rule_source(
-            UUID(str(source_document_id))
-        ) is None:
-            return (trusted_context_missing_requirement(),)
+        if (
+            await self._usable_rule_source(
+                selected_candidate, case_context["valuation_base_date"]
+            )
+            is None
+        ):
+            return (
+                trusted_preflight_to_missing(
+                    AppError(
+                        "RULE_SOURCE_UNAVAILABLE",
+                        "正式規則版本缺少適用且可用的法規來源",
+                        409,
+                    )
+                ),
+            )
 
         active_rules = await self.repository.list_active_rules(
             UUID(selection.rule.rule_version_id), case_context["form_codes"]
@@ -255,6 +272,16 @@ class ReviewService:
         except AppError as error:
             return (trusted_preflight_to_missing(error),)
         return ()
+
+    async def _usable_rule_source(
+        self, rule_version: dict, valuation_base_date: date
+    ):
+        source_document_id = rule_version["source_document_id"]
+        if source_document_id is None:
+            return None
+        return await self.repository.get_rule_source(
+            UUID(str(source_document_id)), valuation_base_date
+        )
 
     async def list_missing_items(self, review_id):
         await self.get(review_id)
@@ -297,7 +324,14 @@ class ReviewService:
                 normalized_value=row["normalized_value"],
                 value_type=row["value_type"],
                 page_number=row["page_number"],
+                bounding_box=row["bounding_box"],
                 verification_status=row["verification_status"],
+                verified_by_user_id=(
+                    str(row["verified_by_user_id"])
+                    if row["verified_by_user_id"] is not None
+                    else None
+                ),
+                verified_at=row["verified_at"],
                 is_official=row["is_official"],
             )
             for row in field_rows
@@ -340,11 +374,8 @@ class ReviewService:
             )
         rule_version = candidates_by_id[selection.rule.rule_version_id]
 
-        source_document_id = rule_version["source_document_id"]
-        rule_source = (
-            await self.repository.get_rule_source(UUID(str(source_document_id)))
-            if source_document_id is not None
-            else None
+        rule_source = await self._usable_rule_source(
+            rule_version, case_context["valuation_base_date"]
         )
         if rule_source is None:
             raise AppError(
@@ -394,10 +425,12 @@ class ReviewService:
             {
                 "source_id": field.extracted_field_id,
                 "extracted_field_id": field.extracted_field_id,
+                "field_code": field.field_code,
                 "document_id": str(document["document_id"]),
                 "document_version": document["version_no"],
                 "page": field.page_number,
                 "field_path": field.field_path,
+                "bounding_box": field.bounding_box,
                 "excerpt": field.raw_text,
                 "verification_status": field.verification_status,
             }
@@ -416,11 +449,42 @@ class ReviewService:
                 "document_id": str(context.rule_source["document_id"]),
                 "document_version": context.rule_source["version_no"],
                 "checksum_sha256": context.rule_source["checksum_sha256"],
+                "effective_from": ReviewService._json_value(
+                    context.rule_source["effective_from"]
+                ),
+                "effective_to": ReviewService._json_value(
+                    context.rule_source["effective_to"]
+                ),
             }
         ]
 
     @staticmethod
-    def _input_snapshot(review, context: TrustedRunContext) -> dict:
+    def _json_value(value):
+        if isinstance(value, UUID):
+            return str(value)
+        if isinstance(value, (date, datetime)):
+            return value.isoformat()
+        return value
+
+    @staticmethod
+    def _field_snapshot(field: TrustedField) -> dict:
+        return {
+            "extracted_field_id": field.extracted_field_id,
+            "field_code": field.field_code,
+            "raw_value": field.raw_text,
+            "normalized_value": field.normalized_value,
+            "value_type": field.value_type,
+            "verification_status": field.verification_status,
+            "verified_by_user_id": field.verified_by_user_id,
+            "verified_at": ReviewService._json_value(field.verified_at),
+            "page": field.page_number,
+            "bounding_box": field.bounding_box,
+            "field_path": field.field_path,
+            "excerpt": field.raw_text,
+        }
+
+    @staticmethod
+    def _input_snapshot(review, case: dict, context: TrustedRunContext) -> dict:
         checks = []
         for prepared_rule in context.prepared_rules:
             rule = prepared_rule.rule
@@ -430,12 +494,7 @@ class ReviewService:
                     "finding_code": ReviewService._finding_code(rule),
                     "validation_rule_id": str(rule["validation_rule_id"]),
                     "rule_code": rule["rule_code"],
-                    "extracted_field_id": field.extracted_field_id,
-                    "document_id": str(context.document["document_id"]),
-                    "document_version": context.document["version_no"],
-                    "document_checksum": context.document["checksum_sha256"],
-                    "page_number": field.page_number,
-                    "field_path": field.field_path,
+                    **ReviewService._field_snapshot(field),
                     "reported_value": str(
                         prepared_rule.reported_rate
                         if prepared_rule.reported_rate is not None
@@ -445,17 +504,66 @@ class ReviewService:
                 }
             )
         return {
-            "case_id": str(review.case_id),
-            "rule_version_id": str(context.rule_version["rule_version_id"]),
+            "case": {
+                key: ReviewService._json_value(value) for key, value in case.items()
+            },
             "document": {
                 "document_id": str(context.document["document_id"]),
                 "version_no": context.document["version_no"],
+                "document_group_id": ReviewService._json_value(
+                    context.document["document_group_id"]
+                ),
                 "checksum_sha256": context.document["checksum_sha256"],
             },
             "extraction_run": {
                 "extraction_run_id": str(context.extraction_run["extraction_run_id"]),
                 "run_no": context.extraction_run["run_no"],
+                "extractor_name": context.extraction_run["extractor_name"],
+                "extractor_version": context.extraction_run["extractor_version"],
             },
+            "field_snapshots": [
+                ReviewService._field_snapshot(prepared_rule.field)
+                for prepared_rule in context.prepared_rules
+            ],
+            "rule_version": {
+                "rule_version_id": str(context.rule_version["rule_version_id"]),
+                "status": context.rule_version["status"],
+                "effective_from": ReviewService._json_value(
+                    context.rule_version["effective_from"]
+                ),
+                "effective_to": ReviewService._json_value(
+                    context.rule_version["effective_to"]
+                ),
+                "applicable_case_type": context.rule_version["applicable_case_type"],
+                "applicable_district_code": context.rule_version[
+                    "applicable_district_code"
+                ],
+                "selection_priority": context.rule_version["selection_priority"],
+            },
+            "rule_source": {
+                "document_id": str(context.rule_source["document_id"]),
+                "document_version": context.rule_source["version_no"],
+                "checksum_sha256": context.rule_source["checksum_sha256"],
+                "effective_from": ReviewService._json_value(
+                    context.rule_source["effective_from"]
+                ),
+                "effective_to": ReviewService._json_value(
+                    context.rule_source["effective_to"]
+                ),
+            },
+            "validation_rules": [
+                {
+                    "validation_rule_id": str(prepared_rule.rule["validation_rule_id"]),
+                    "rule_code": prepared_rule.rule["rule_code"],
+                    "target_form_code": prepared_rule.rule["target_form_code"],
+                    "target_table": prepared_rule.rule["target_table"],
+                    "target_field_code": prepared_rule.rule["target_field_code"],
+                    "severity": prepared_rule.rule["severity"],
+                    "configuration": prepared_rule.configuration,
+                    "target": prepared_rule.rule["target_field_code"],
+                }
+                for prepared_rule in context.prepared_rules
+            ],
             "validation_rule_ids": [
                 str(rule["validation_rule_id"]) for rule in context.validation_rules
             ],
@@ -474,7 +582,8 @@ class ReviewService:
             raise AppError("RUN_ALREADY_ACTIVE", "此案件已有執行中的檢核", 409)
 
         context = await self._resolve_trusted_run_context(review)
-        input_snapshot = self._input_snapshot(review, context)
+        case = await self.repository.get_case_report_data(review.case_id)
+        input_snapshot = self._input_snapshot(review, case, context)
 
         review.review_status = ensure_transition(review.review_status, "ANALYZING")
         run = await self.repository.create_run(
@@ -498,7 +607,7 @@ class ReviewService:
                 machine_finding = await self.repository.create_validation_finding(
                     validation_run_id=run.validation_run_id,
                     validation_rule_id=rule["validation_rule_id"],
-                    field_code=field.field_path,
+                    field_code=field.field_code,
                     severity=rule["severity"],
                     actual_value={"reported_rate": str(result.reported_rate)},
                     expected_value={"system_rate": str(result.system_rate)},
@@ -547,7 +656,7 @@ class ReviewService:
                 machine_finding = await self.repository.create_validation_finding(
                     validation_run_id=run.validation_run_id,
                     validation_rule_id=rule["validation_rule_id"],
-                    field_code=field.field_path,
+                    field_code=field.field_code,
                     severity="MEDIUM",
                     actual_value={"reported_grade": reported_grade},
                     expected_value={"system_grade": system_grade},
@@ -611,6 +720,13 @@ class ReviewService:
         review.medium_count = risk.medium_count
         review.low_count = risk.low_count
         review.review_status = ensure_transition("ANALYZING", "REVIEW_REQUIRED")
+        run.input_snapshot = {
+            **run.input_snapshot,
+            "report_context": {
+                "review_status": review.review_status,
+                "missing_item_count": review.missing_item_count,
+            },
+        }
         await self.repository.session.flush()
         await self.repository.session.refresh(run)
         return run, summary
@@ -722,6 +838,9 @@ class ReviewService:
         reason = payload.reason.strip()
         if payload.override_reason and payload.override_reason.strip():
             reason = f"{reason}\n覆核理由：{payload.override_reason.strip()}"
+        after_value = {"review_status": resulting_status}
+        if review.latest_validation_run_id is not None:
+            after_value["validation_run_id"] = str(review.latest_validation_run_id)
         return await self.repository.create_decision(
             review_id=review_id,
             finding_id=None,
@@ -730,7 +849,7 @@ class ReviewService:
             decided_by_user_id=actor_id,
             request_id=request_id,
             before_value={"review_status": before_status},
-            after_value={"review_status": resulting_status},
+            after_value=after_value,
         )
 
     async def list_decisions(self, review_id):
@@ -768,7 +887,6 @@ class ReviewService:
     async def build_report(self, validation_run_id):
         run = await self.get_run(validation_run_id)
         review = await self.get(run.review_id)
-        case = await self.repository.get_case_report_data(run.case_id)
         findings = await self.repository.list_findings(validation_run_id)
         risk = await self.get_risk_summary(validation_run_id)
         finding_ids = {item.finding_id for item in findings}
@@ -776,9 +894,23 @@ class ReviewService:
             item
             for item in await self.repository.list_decisions(review.review_id)
             if item.finding_id in finding_ids
+            or (
+                item.finding_id is None
+                and isinstance(item.after_value, dict)
+                and item.after_value.get("validation_run_id")
+                == str(validation_run_id)
+            )
         ]
+        report_context = run.input_snapshot.get("report_context")
+        case_context = run.input_snapshot.get("case")
+        if not isinstance(report_context, dict) or not isinstance(case_context, dict):
+            raise AppError(
+                "HISTORICAL_RUN_CONTEXT_UNAVAILABLE",
+                "舊檢核批次缺少不可變的報表脈絡",
+                409,
+            )
         data = ReviewReportInput(
-            case=ReportCase(**case),
+            case=ReportCase(**case_context),
             run=ReportRun(
                 validation_run_id=run.validation_run_id,
                 run_no=run.run_no,
@@ -789,8 +921,8 @@ class ReviewService:
                 started_at=run.started_at,
                 completed_at=run.completed_at,
             ),
-            review_status=review.review_status,
-            missing_item_count=review.missing_item_count,
+            review_status=report_context["review_status"],
+            missing_item_count=report_context["missing_item_count"],
             findings=[
                 FindingRead.model_validate(item).model_dump(mode="json")
                 for item in findings

@@ -110,7 +110,11 @@ def test_report_decisions_are_scoped_to_the_requested_run(
     ).status_code == 201
     with postgres_connection.cursor() as cursor:
         cursor.execute(
-            "UPDATE review.reviews SET review_status = 'READY_FOR_REVIEW' WHERE review_id = %s",
+            """
+            UPDATE review.reviews
+            SET review_status = 'READY_FOR_REVIEW', missing_item_count = 9
+            WHERE review_id = %s
+            """,
             (runnable_review.review_id,),
         )
     postgres_connection.commit()
@@ -143,5 +147,9 @@ def test_report_decisions_are_scoped_to_the_requested_run(
     assert [item["reason"] for item in report2["findings"][0]["decisions"]] == [
         "run-2 finding decision"
     ]
-    assert report1["case_decisions"] == []
+    assert [item["reason"] for item in report1["case_decisions"]] == [
+        "case decision"
+    ]
     assert report2["case_decisions"] == []
+    assert report1["review_status"] == "REVIEW_REQUIRED"
+    assert report1["missing_item_count"] == 0
