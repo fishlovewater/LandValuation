@@ -1,6 +1,4 @@
-import json
 from datetime import UTC, datetime
-from decimal import Decimal
 from uuid import UUID
 
 from app.core.exceptions import AppError
@@ -11,6 +9,7 @@ from app.review.completeness import (
     CompletenessResult,
     evaluate_completeness,
     trusted_context_missing_requirement,
+    trusted_preflight_to_missing,
     trusted_problem_to_missing,
 )
 from app.review.recalculation import recalculate_adjustment_rate
@@ -37,6 +36,7 @@ from app.review.trusted_inputs import (
     required_field_problems,
     trusted_fields_by_code,
     TrustedRunContext,
+    prepare_trusted_rules,
 )
 
 
@@ -244,10 +244,17 @@ class ReviewService:
             for rule in active_rules
             if rule["target_field_code"]
         }
-        return tuple(
+        problems = required_field_problems(required_codes, fields)
+        if problems:
+            return tuple(
             trusted_problem_to_missing(problem)
-            for problem in required_field_problems(required_codes, fields)
-        )
+                for problem in problems
+            )
+        try:
+            prepare_trusted_rules(active_rules, fields)
+        except AppError as error:
+            return (trusted_preflight_to_missing(error),)
+        return ()
 
     async def list_missing_items(self, review_id):
         await self.get(review_id)
@@ -372,6 +379,7 @@ class ReviewService:
                 409,
                 {"field_code": problem.field_code},
             )
+        prepared_rules = prepare_trusted_rules(validation_rules, fields)
 
         return TrustedRunContext(
             document=document,
@@ -380,45 +388,8 @@ class ReviewService:
             rule_version=rule_version,
             validation_rules=validation_rules,
             rule_source=rule_source,
+            prepared_rules=prepared_rules,
         )
-
-    def _validated_rule_configurations(self, context: TrustedRunContext) -> dict[str, dict]:
-        configurations: dict[str, dict] = {}
-        for rule in context.validation_rules:
-            try:
-                configuration = json.loads(rule["rule_expression"])
-            except (TypeError, ValueError) as exc:
-                raise AppError(
-                    "RULE_CONFIGURATION_INVALID",
-                    "正式規則設定不是有效 JSON",
-                    409,
-                ) from exc
-            if rule["rule_code"] == "ADJUSTMENT_RATE":
-                try:
-                    Decimal(str(configuration["system_rate"]))
-                    Decimal(str(configuration["tolerance"]))
-                except (KeyError, ArithmeticError, ValueError) as exc:
-                    raise AppError(
-                        "RULE_CONFIGURATION_INVALID",
-                        "調整率規則缺少有效的 system_rate 或 tolerance",
-                        409,
-                    ) from exc
-            elif rule["rule_code"] == "EXPERT_GRADE":
-                system_grade = configuration.get("system_grade")
-                if not isinstance(system_grade, str) or not system_grade.strip():
-                    raise AppError(
-                        "RULE_CONFIGURATION_INVALID",
-                        "級距規則缺少有效的 system_grade",
-                        409,
-                    )
-            else:
-                raise AppError(
-                    "RULE_CONFIGURATION_INVALID",
-                    f"尚未支援規則：{rule['rule_code']}",
-                    409,
-                )
-            configurations[str(rule["validation_rule_id"])] = configuration
-        return configurations
 
     @staticmethod
     def _source_evidence(document: dict, field: TrustedField):
@@ -447,12 +418,11 @@ class ReviewService:
         ]
 
     @staticmethod
-    def _input_snapshot(
-        review, context: TrustedRunContext, configurations: dict[str, dict]
-    ) -> dict:
+    def _input_snapshot(review, context: TrustedRunContext) -> dict:
         checks = []
-        for rule in context.validation_rules:
-            field = context.fields[rule["target_field_code"]]
+        for prepared_rule in context.prepared_rules:
+            rule = prepared_rule.rule
+            field = prepared_rule.field
             checks.append(
                 {
                     "finding_code": f"{rule['rule_code']}:{field.extracted_field_id}",
@@ -464,10 +434,12 @@ class ReviewService:
                     "document_checksum": context.document["checksum_sha256"],
                     "page_number": field.page_number,
                     "field_path": field.field_path,
-                    "reported_value": str(field.normalized_value),
-                    "rule_configuration": configurations[
-                        str(rule["validation_rule_id"])
-                    ],
+                    "reported_value": str(
+                        prepared_rule.reported_rate
+                        if prepared_rule.reported_rate is not None
+                        else prepared_rule.reported_grade
+                    ),
+                    "rule_configuration": prepared_rule.configuration,
                 }
             )
         return {
@@ -488,10 +460,7 @@ class ReviewService:
             "checks": checks,
         }
 
-    async def create_run(
-        self, review_id, payload, actor_id, supersedes_by_code=None
-    ):
-        del payload
+    async def create_run(self, review_id, actor_id, supersedes_by_code=None):
         review = await self.repository.get(review_id, for_update=True)
         if review is None:
             raise ResourceNotFoundError("審查案件")
@@ -499,8 +468,7 @@ class ReviewService:
             raise AppError("RUN_ALREADY_ACTIVE", "此案件已有執行中的檢核", 409)
 
         context = await self._resolve_trusted_run_context(review)
-        configurations = self._validated_rule_configurations(context)
-        input_snapshot = self._input_snapshot(review, context, configurations)
+        input_snapshot = self._input_snapshot(review, context)
 
         review.review_status = ensure_transition(review.review_status, "ANALYZING")
         run = await self.repository.create_run(
@@ -510,16 +478,15 @@ class ReviewService:
             input_snapshot,
         )
         findings = []
-        for rule in context.validation_rules:
-            field = context.fields[rule["target_field_code"]]
-            configuration = configurations[str(rule["validation_rule_id"])]
+        for prepared_rule in context.prepared_rules:
+            rule = prepared_rule.rule
+            field = prepared_rule.field
             finding_code = f"{rule['rule_code']}:{field.extracted_field_id}"
             if rule["rule_code"] == "ADJUSTMENT_RATE":
-                reported_rate = Decimal(str(field.normalized_value))
-                system_rate = Decimal(str(configuration["system_rate"]))
-                tolerance = Decimal(str(configuration["tolerance"]))
                 result = recalculate_adjustment_rate(
-                    reported_rate, system_rate, tolerance
+                    prepared_rule.reported_rate,
+                    prepared_rule.system_rate,
+                    prepared_rule.tolerance,
                 )
                 if result.within_tolerance:
                     run.passed_count += 1
@@ -555,7 +522,7 @@ class ReviewService:
                     system_adjustment_rate=result.system_rate,
                     comparison_result={
                         "difference": str(result.difference),
-                        "tolerance": str(tolerance),
+                        "tolerance": str(prepared_rule.tolerance),
                         "within_tolerance": False,
                     },
                     recommended_action={"action": "VERIFY_ADJUSTMENT_BASIS"},
@@ -566,8 +533,8 @@ class ReviewService:
                 findings.append(finding)
                 run.failed_count += 1
             elif rule["rule_code"] == "EXPERT_GRADE":
-                reported_grade = str(field.normalized_value)
-                system_grade = configuration["system_grade"]
+                reported_grade = prepared_rule.reported_grade
+                system_grade = prepared_rule.system_grade
                 if reported_grade == system_grade:
                     run.passed_count += 1
                     continue
@@ -762,7 +729,7 @@ class ReviewService:
         await self.get(review_id)
         return await self.repository.list_decisions(review_id)
 
-    async def rerun(self, review_id, payload, actor_id):
+    async def rerun(self, review_id, actor_id):
         review = await self.repository.get(review_id)
         if review is None:
             raise ResourceNotFoundError("審查案件")
@@ -772,9 +739,7 @@ class ReviewService:
                 review.latest_validation_run_id
             )
         supersedes = {item.finding_code: item.finding_id for item in previous}
-        run, summary = await self.create_run(
-            review_id, payload, actor_id, supersedes
-        )
+        run, summary = await self.create_run(review_id, actor_id, supersedes)
         return run, summary
 
     async def build_report(self, validation_run_id):

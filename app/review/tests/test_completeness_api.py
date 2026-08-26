@@ -134,9 +134,13 @@ def trusted_case(request, postgres_connection):
                 ids.source_document_id,
             ),
         )
-        for rule_code, field_code in (
-            ("ADJUSTMENT_RATE", "adjustment_rate"),
-            ("EXPERT_GRADE", "expert_grade"),
+        for rule_code, field_code, expression in (
+            (
+                "ADJUSTMENT_RATE",
+                "adjustment_rate",
+                '{"system_rate":"-5","tolerance":"0"}',
+            ),
+            ("EXPERT_GRADE", "expert_grade", '{"system_grade":"A"}'),
         ):
             cursor.execute(
                 """
@@ -144,7 +148,7 @@ def trusted_case(request, postgres_connection):
                     validation_rule_id, rule_version_id, rule_code, rule_name,
                     target_table, target_field_code, severity, rule_expression,
                     message_template, is_active
-                ) VALUES (%s, %s, %s, %s, 'comparison', %s, 'HIGH', '{}', %s, true)
+                ) VALUES (%s, %s, %s, %s, 'comparison', %s, 'HIGH', %s, %s, true)
                 """,
                 (
                     uuid4(),
@@ -152,6 +156,7 @@ def trusted_case(request, postgres_connection):
                     rule_code,
                     rule_code,
                     field_code,
+                    expression,
                     rule_code,
                 ),
             )
@@ -335,3 +340,50 @@ def test_completeness_accepts_verified_high_impact_fields(
     assert response.status_code == 200
     assert response.json()["review_status"] == "READY_FOR_REVIEW"
     assert response.json()["items"] == []
+
+
+def test_completeness_blocks_invalid_rule_configuration(
+    authorized_client, trusted_case, postgres_connection
+):
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE valuation.validation_rules SET rule_expression = '[]' "
+            "WHERE rule_version_id = %s AND rule_code = 'ADJUSTMENT_RATE'",
+            (trusted_case.rule_version_id,),
+        )
+    postgres_connection.commit()
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{trusted_case.review_id}/completeness-check"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["review_status"] == "PENDING_MATERIALS"
+    assert "RULE_CONFIGURATION_INVALID" in {
+        item["item_code"] for item in response.json()["items"]
+    }
+
+
+def test_completeness_blocks_invalid_trusted_normalized_value(
+    authorized_client, trusted_case, postgres_connection
+):
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE valuation.extracted_fields
+            SET normalized_value = 'true'::jsonb
+            WHERE extraction_run_id = %s AND field_code = 'adjustment_rate'
+            """,
+            (trusted_case.extraction_run_id,),
+        )
+    postgres_connection.commit()
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{trusted_case.review_id}/completeness-check"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["review_status"] == "PENDING_MATERIALS"
+    assert "TRUSTED_INPUT_UNVERIFIED_ADJUSTMENT_RATE" in {
+        item["item_code"] for item in response.json()["items"]
+    }

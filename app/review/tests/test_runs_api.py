@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
@@ -395,8 +396,12 @@ def test_second_running_run_returns_conflict(
         {"validation_rule_id": str(uuid4())},
         {"reported_rate": "-5"},
         {"reported_text": "偽造原文"},
+        {"reported_grade": "偽造級距"},
+        {"finding_code": "FORGED-FINDING"},
+        {"field_path": "forged.path"},
         {"page_number": 3},
         {"document_id": str(uuid4())},
+        {"document_version": 1},
         {"source_evidence": []},
         {"legal_basis": []},
         {"adjustment_checks": []},
@@ -466,3 +471,84 @@ def test_run_snapshot_preserves_zero_server_extracted_value(
         if check["rule_code"] == "ADJUSTMENT_RATE"
     )
     assert adjustment_check["reported_value"] == "0"
+
+
+@pytest.mark.parametrize(
+    ("field_code", "value_type", "normalized_value"),
+    [
+        ("adjustment_rate", "DECIMAL", None),
+        ("adjustment_rate", "DECIMAL", True),
+        ("adjustment_rate", "DECIMAL", ["-5"]),
+        ("adjustment_rate", "DECIMAL", "NaN"),
+        ("adjustment_rate", "DECIMAL", "Infinity"),
+        ("adjustment_rate", "TEXT", "-5"),
+        ("expert_grade", "TEXT", ["A"]),
+    ],
+)
+def test_run_rejects_invalid_trusted_normalized_value_before_mutation(
+    authorized_client,
+    runnable_review,
+    postgres_connection,
+    field_code,
+    value_type,
+    normalized_value,
+):
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE valuation.extracted_fields
+            SET value_type = %s, normalized_value = %s::jsonb
+            WHERE extraction_run_id = %s AND field_code = %s
+            """,
+            (
+                value_type,
+                json.dumps(normalized_value),
+                runnable_review.extraction_run_id,
+                field_code,
+            ),
+        )
+    postgres_connection.commit()
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "TRUSTED_INPUT_UNVERIFIED"
+    assert run_count(postgres_connection, runnable_review.review_id) == 0
+    assert authorized_client.get(
+        f"/api/v1/review/cases/{runnable_review.review_id}"
+    ).json()["review_status"] == "READY_FOR_REVIEW"
+
+
+@pytest.mark.parametrize(
+    "rule_id, column, value",
+    [
+        ("expert_rule_id", "target_field_code", None),
+        ("expert_rule_id", "target_field_code", "adjustment_rate"),
+        ("adjustment_rule_id", "rule_expression", "{}"),
+        ("adjustment_rule_id", "rule_expression", "[]"),
+        ("adjustment_rule_id", "rule_expression", '{"system_rate":"NaN","tolerance":"0"}'),
+        ("expert_rule_id", "rule_expression", '{"system_grade":null}'),
+    ],
+)
+def test_run_rejects_invalid_rule_configuration_before_mutation(
+    authorized_client, runnable_review, postgres_connection, rule_id, column, value
+):
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            f"UPDATE valuation.validation_rules SET {column} = %s WHERE validation_rule_id = %s",
+            (value, getattr(runnable_review, rule_id)),
+        )
+    postgres_connection.commit()
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "RULE_CONFIGURATION_INVALID"
+    assert run_count(postgres_connection, runnable_review.review_id) == 0
+    assert authorized_client.get(
+        f"/api/v1/review/cases/{runnable_review.review_id}"
+    ).json()["review_status"] == "READY_FOR_REVIEW"

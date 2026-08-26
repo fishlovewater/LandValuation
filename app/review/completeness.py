@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, Literal, Sequence
 
+from app.core.exceptions import AppError
 from app.review.trusted_inputs import TrustedInputProblem
 
 
@@ -157,5 +158,23 @@ def trusted_context_missing_requirement() -> MissingRequirement:
         item_name="正式檢核資料尚未完成",
         document_category="original",
         field_path=None,
+        blocked_rule_codes=frozenset({"TRUSTED_INPUT_REQUIRED"}),
+    )
+
+
+def trusted_preflight_to_missing(error: AppError) -> MissingRequirement:
+    field_code = (
+        error.details.get("field_code")
+        if isinstance(error.details, dict)
+        else None
+    )
+    item_code = (
+        f"{error.code}_{field_code.upper()}" if field_code else error.code
+    )
+    return MissingRequirement(
+        item_code=item_code,
+        item_name=f"正式檢核規則或欄位不可用：{error.message}",
+        document_category="original",
+        field_path=field_code,
         blocked_rule_codes=frozenset({"TRUSTED_INPUT_REQUIRED"}),
     )

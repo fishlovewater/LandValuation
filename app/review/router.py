@@ -171,9 +171,8 @@ async def create_review_run(
     session: DbSession,
     user=Depends(require_permissions("review.execute")),
 ) -> ValidationRunRead:
-    run, _summary = await service_for(session).create_run(
-        review_id, payload, user.user_id
-    )
+    del payload
+    run, _summary = await service_for(session).create_run(review_id, user.user_id)
     return run
 
 
@@ -285,9 +284,8 @@ async def rerun_review_case(
     session: DbSession,
     user=Depends(require_permissions("review.execute")),
 ) -> ValidationRunRead:
-    run, _summary = await service_for(session).rerun(
-        review_id, payload, user.user_id
-    )
+    del payload
+    run, _summary = await service_for(session).rerun(review_id, user.user_id)
     return run
 
 
