@@ -7,7 +7,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.auth.dependencies import get_current_user
+from app.core.exceptions import AppError
 from app.main import app
+from app.review.repository import ReviewRepository
 
 
 @pytest.fixture
@@ -481,6 +483,7 @@ def test_run_snapshot_preserves_zero_server_extracted_value(
         ("adjustment_rate", "DECIMAL", ["-5"]),
         ("adjustment_rate", "DECIMAL", "NaN"),
         ("adjustment_rate", "DECIMAL", "Infinity"),
+        ("adjustment_rate", "DECIMAL", "1E+999999"),
         ("adjustment_rate", "TEXT", "-5"),
         ("expert_grade", "TEXT", ["A"]),
     ],
@@ -529,6 +532,9 @@ def test_run_rejects_invalid_trusted_normalized_value_before_mutation(
         ("adjustment_rule_id", "rule_expression", "{}"),
         ("adjustment_rule_id", "rule_expression", "[]"),
         ("adjustment_rule_id", "rule_expression", '{"system_rate":"NaN","tolerance":"0"}'),
+        ("adjustment_rule_id", "rule_expression", '{"system_rate":"1E+999999","tolerance":"0"}'),
+        ("adjustment_rule_id", "rule_expression", '{"system_rate":"-5","tolerance":"1E+999999"}'),
+        ("adjustment_rule_id", "rule_expression", '{"system_rate":"-5","tolerance":"-0.01"}'),
         ("expert_rule_id", "rule_expression", '{"system_grade":null}'),
     ],
 )
@@ -549,6 +555,80 @@ def test_run_rejects_invalid_rule_configuration_before_mutation(
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "RULE_CONFIGURATION_INVALID"
     assert run_count(postgres_connection, runnable_review.review_id) == 0
+    assert authorized_client.get(
+        f"/api/v1/review/cases/{runnable_review.review_id}"
+    ).json()["review_status"] == "READY_FOR_REVIEW"
+
+
+def test_rule_configuration_precedes_missing_field_validation(
+    authorized_client, runnable_review, postgres_connection
+):
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE valuation.validation_rules
+            SET rule_code = 'UNSUPPORTED_RULE', target_field_code = 'missing_field'
+            WHERE validation_rule_id = %s
+            """,
+            (runnable_review.adjustment_rule_id,),
+        )
+    postgres_connection.commit()
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "RULE_CONFIGURATION_INVALID"
+    assert run_count(postgres_connection, runnable_review.review_id) == 0
+    assert authorized_client.get(
+        f"/api/v1/review/cases/{runnable_review.review_id}"
+    ).json()["review_status"] == "READY_FOR_REVIEW"
+
+
+def test_second_finding_persistence_failure_rolls_back_the_entire_run(
+    authorized_client, runnable_review, postgres_connection, monkeypatch
+):
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE valuation.extracted_fields
+            SET normalized_value = '"B"'::jsonb
+            WHERE extraction_run_id = %s AND field_code = 'expert_grade'
+            """,
+            (runnable_review.extraction_run_id,),
+        )
+    postgres_connection.commit()
+
+    original_create_finding = ReviewRepository.create_finding
+    calls = 0
+
+    async def fail_second_finding(self, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise AppError("TEST_PERSISTENCE_FAILURE", "測試用持久化失敗", 500)
+        return await original_create_finding(self, *args, **kwargs)
+
+    monkeypatch.setattr(ReviewRepository, "create_finding", fail_second_finding)
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
+    )
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "TEST_PERSISTENCE_FAILURE"
+    with postgres_connection.cursor() as cursor:
+        for table in (
+            "valuation.validation_runs",
+            "review.findings",
+            "review.risk_summaries",
+        ):
+            cursor.execute(
+                f"SELECT count(*) FROM {table} WHERE review_id = %s",
+                (runnable_review.review_id,),
+            )
+            assert cursor.fetchone()[0] == 0
     assert authorized_client.get(
         f"/api/v1/review/cases/{runnable_review.review_id}"
     ).json()["review_status"] == "READY_FOR_REVIEW"

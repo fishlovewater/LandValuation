@@ -12,7 +12,6 @@ from app.review.completeness import (
     trusted_preflight_to_missing,
     trusted_problem_to_missing,
 )
-from app.review.recalculation import recalculate_adjustment_rate
 from app.review.risks import FindingRisk, risk_level_for_findings
 from app.review.decisions import (
     CaseDecisionCommand,
@@ -37,6 +36,7 @@ from app.review.trusted_inputs import (
     trusted_fields_by_code,
     TrustedRunContext,
     prepare_trusted_rules,
+    validate_rule_contracts,
 )
 
 
@@ -239,19 +239,19 @@ class ReviewService:
         )
         if not active_rules:
             return (trusted_context_missing_requirement(),)
-        required_codes = {
-            rule["target_field_code"]
-            for rule in active_rules
-            if rule["target_field_code"]
-        }
+        try:
+            contracts = validate_rule_contracts(active_rules)
+        except AppError as error:
+            return (trusted_preflight_to_missing(error),)
+        required_codes = {contract.target_field_code for contract in contracts}
         problems = required_field_problems(required_codes, fields)
         if problems:
             return tuple(
-            trusted_problem_to_missing(problem)
+                trusted_problem_to_missing(problem)
                 for problem in problems
             )
         try:
-            prepare_trusted_rules(active_rules, fields)
+            prepare_trusted_rules(contracts, fields)
         except AppError as error:
             return (trusted_preflight_to_missing(error),)
         return ()
@@ -365,11 +365,8 @@ class ReviewService:
                 409,
             )
 
-        required_codes = {
-            rule["target_field_code"]
-            for rule in validation_rules
-            if rule["target_field_code"]
-        }
+        contracts = validate_rule_contracts(validation_rules)
+        required_codes = {contract.target_field_code for contract in contracts}
         problems = required_field_problems(required_codes, fields)
         if problems:
             problem = problems[0]
@@ -379,7 +376,7 @@ class ReviewService:
                 409,
                 {"field_code": problem.field_code},
             )
-        prepared_rules = prepare_trusted_rules(validation_rules, fields)
+        prepared_rules = prepare_trusted_rules(contracts, fields)
 
         return TrustedRunContext(
             document=document,
@@ -483,11 +480,9 @@ class ReviewService:
             field = prepared_rule.field
             finding_code = f"{rule['rule_code']}:{field.extracted_field_id}"
             if rule["rule_code"] == "ADJUSTMENT_RATE":
-                result = recalculate_adjustment_rate(
-                    prepared_rule.reported_rate,
-                    prepared_rule.system_rate,
-                    prepared_rule.tolerance,
-                )
+                result = prepared_rule.adjustment_result
+                if result is None:
+                    raise RuntimeError("調整率規則未完成 trusted preflight")
                 if result.within_tolerance:
                     run.passed_count += 1
                     continue

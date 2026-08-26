@@ -387,3 +387,28 @@ def test_completeness_blocks_invalid_trusted_normalized_value(
     assert "TRUSTED_INPUT_UNVERIFIED_ADJUSTMENT_RATE" in {
         item["item_code"] for item in response.json()["items"]
     }
+
+
+def test_completeness_prioritizes_invalid_rule_contract_over_missing_field(
+    authorized_client, trusted_case, postgres_connection
+):
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE valuation.validation_rules
+            SET rule_code = 'UNSUPPORTED_RULE', target_field_code = 'missing_field'
+            WHERE rule_version_id = %s AND rule_code = 'ADJUSTMENT_RATE'
+            """,
+            (trusted_case.rule_version_id,),
+        )
+    postgres_connection.commit()
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{trusted_case.review_id}/completeness-check"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["review_status"] == "PENDING_MATERIALS"
+    assert "RULE_CONFIGURATION_INVALID" in {
+        item["item_code"] for item in response.json()["items"]
+    }

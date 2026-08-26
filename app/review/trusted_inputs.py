@@ -1,8 +1,9 @@
 import json
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, DecimalException, InvalidOperation
 
 from app.core.exceptions import AppError
+from app.review.recalculation import AdjustmentResult, RATE_QUANTUM, recalculate_adjustment_rate
 
 
 HIGH_IMPACT_FIELD_CODES = frozenset(
@@ -55,7 +56,19 @@ class PreparedRule:
     reported_rate: Decimal | None = None
     system_rate: Decimal | None = None
     tolerance: Decimal | None = None
+    adjustment_result: AdjustmentResult | None = None
     reported_grade: str | None = None
+    system_grade: str | None = None
+
+
+@dataclass(frozen=True)
+class RuleContract:
+    rule: dict
+    target_field_code: str
+    expected_value_type: str
+    configuration: dict
+    system_rate: Decimal | None = None
+    tolerance: Decimal | None = None
     system_grade: str | None = None
 
 
@@ -117,10 +130,8 @@ def _finite_decimal(value: object) -> Decimal | None:
     return decimal_value if decimal_value.is_finite() else None
 
 
-def prepare_trusted_rules(
-    validation_rules, fields: dict[str, TrustedField]
-) -> tuple[PreparedRule, ...]:
-    prepared = []
+def validate_rule_contracts(validation_rules) -> tuple[RuleContract, ...]:
+    contracts = []
     expected_fields = {
         "ADJUSTMENT_RATE": ("adjustment_rate", "DECIMAL"),
         "EXPERT_GRADE": ("expert_grade", "TEXT"),
@@ -137,16 +148,6 @@ def prepare_trusted_rules(
             raise _configuration_error(
                 f"規則 {rule_code} 的 target_field_code 不正確", rule
             )
-        field = fields.get(target_field_code)
-        if field is None:
-            raise AppError(
-                "TRUSTED_INPUT_UNVERIFIED",
-                f"正式抽取欄位不可用：{target_field_code}",
-                409,
-                {"field_code": target_field_code},
-            )
-        if field.value_type != expected_value_type:
-            raise _unverified_value_error(field)
         try:
             configuration = json.loads(rule["rule_expression"])
         except (KeyError, TypeError, ValueError) as exc:
@@ -155,38 +156,93 @@ def prepare_trusted_rules(
             raise _configuration_error("正式規則設定必須是 JSON object", rule)
 
         if rule_code == "ADJUSTMENT_RATE":
-            reported_rate = _finite_decimal(field.normalized_value)
             system_rate = _finite_decimal(configuration.get("system_rate"))
             tolerance = _finite_decimal(configuration.get("tolerance"))
-            if reported_rate is None:
-                raise _unverified_value_error(field)
             if system_rate is None or tolerance is None:
                 raise _configuration_error(
                     "調整率規則缺少有效的 system_rate 或 tolerance", rule
                 )
-            prepared.append(
-                PreparedRule(
+            if tolerance < 0:
+                raise _configuration_error("調整率規則 tolerance 不得為負值", rule)
+            try:
+                tolerance.quantize(RATE_QUANTUM)
+                recalculate_adjustment_rate(Decimal("0"), system_rate, tolerance)
+            except (DecimalException, OverflowError) as exc:
+                raise _configuration_error(
+                    "調整率規則的數值無法執行計算", rule
+                ) from exc
+            contracts.append(
+                RuleContract(
                     rule=rule,
-                    field=field,
+                    target_field_code=target_field_code,
+                    expected_value_type=expected_value_type,
                     configuration=configuration,
-                    reported_rate=reported_rate,
                     system_rate=system_rate,
                     tolerance=tolerance,
                 )
             )
         else:
-            if not isinstance(field.normalized_value, str) or not field.normalized_value.strip():
-                raise _unverified_value_error(field)
             system_grade = configuration.get("system_grade")
             if not isinstance(system_grade, str) or not system_grade.strip():
                 raise _configuration_error("級距規則缺少有效的 system_grade", rule)
+            contracts.append(
+                RuleContract(
+                    rule=rule,
+                    target_field_code=target_field_code,
+                    expected_value_type=expected_value_type,
+                    configuration=configuration,
+                    system_grade=system_grade,
+                )
+            )
+    return tuple(contracts)
+
+
+def prepare_trusted_rules(
+    contracts: tuple[RuleContract, ...], fields: dict[str, TrustedField]
+) -> tuple[PreparedRule, ...]:
+    prepared = []
+    for contract in contracts:
+        field = fields.get(contract.target_field_code)
+        if field is None:
+            raise AppError(
+                "TRUSTED_INPUT_UNVERIFIED",
+                f"正式抽取欄位不可用：{contract.target_field_code}",
+                409,
+                {"field_code": contract.target_field_code},
+            )
+        if field.value_type != contract.expected_value_type:
+            raise _unverified_value_error(field)
+        if contract.rule["rule_code"] == "ADJUSTMENT_RATE":
+            reported_rate = _finite_decimal(field.normalized_value)
+            if reported_rate is None:
+                raise _unverified_value_error(field)
+            try:
+                adjustment_result = recalculate_adjustment_rate(
+                    reported_rate, contract.system_rate, contract.tolerance
+                )
+            except (DecimalException, OverflowError) as exc:
+                raise _unverified_value_error(field) from exc
             prepared.append(
                 PreparedRule(
-                    rule=rule,
+                    rule=contract.rule,
                     field=field,
-                    configuration=configuration,
+                    configuration=contract.configuration,
+                    reported_rate=reported_rate,
+                    system_rate=contract.system_rate,
+                    tolerance=contract.tolerance,
+                    adjustment_result=adjustment_result,
+                )
+            )
+        else:
+            if not isinstance(field.normalized_value, str) or not field.normalized_value.strip():
+                raise _unverified_value_error(field)
+            prepared.append(
+                PreparedRule(
+                    rule=contract.rule,
+                    field=field,
+                    configuration=contract.configuration,
                     reported_grade=field.normalized_value,
-                    system_grade=system_grade,
+                    system_grade=contract.system_grade,
                 )
             )
     return tuple(prepared)
