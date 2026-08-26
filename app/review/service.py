@@ -399,8 +399,13 @@ class ReviewService:
                 "page": field.page_number,
                 "field_path": field.field_path,
                 "excerpt": field.raw_text,
+                "verification_status": field.verification_status,
             }
         ]
+
+    @staticmethod
+    def _finding_code(rule: dict) -> str:
+        return f"{rule['rule_version_id']}:{rule['validation_rule_id']}"
 
     @staticmethod
     def _legal_basis(context: TrustedRunContext, rule: dict):
@@ -422,7 +427,7 @@ class ReviewService:
             field = prepared_rule.field
             checks.append(
                 {
-                    "finding_code": f"{rule['rule_code']}:{field.extracted_field_id}",
+                    "finding_code": ReviewService._finding_code(rule),
                     "validation_rule_id": str(rule["validation_rule_id"]),
                     "rule_code": rule["rule_code"],
                     "extracted_field_id": field.extracted_field_id,
@@ -478,7 +483,7 @@ class ReviewService:
         for prepared_rule in context.prepared_rules:
             rule = prepared_rule.rule
             field = prepared_rule.field
-            finding_code = f"{rule['rule_code']}:{field.extracted_field_id}"
+            finding_code = self._finding_code(rule)
             if rule["rule_code"] == "ADJUSTMENT_RATE":
                 result = prepared_rule.adjustment_result
                 if result is None:
@@ -591,7 +596,7 @@ class ReviewService:
         )
         now = datetime.now(UTC)
         run.run_status = "COMPLETED"
-        run.completed_at = now
+        run.completed_at = max(now, run.started_at)
         review.latest_validation_run_id = run.validation_run_id
         review.current_risk_level = risk.level
         review.high_count = risk.high_count

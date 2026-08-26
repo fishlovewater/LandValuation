@@ -42,7 +42,18 @@ def report_input():
                 "title": "調整率不一致",
                 "description": "報告值與重算值不同",
                 "status": "PARTIALLY_ACCEPTED",
-                "source_evidence": [{"source_id": "report-p3", "page": 3}],
+                "source_evidence": [
+                    {
+                        "source_id": "report-p3",
+                        "extracted_field_id": "field-v1",
+                        "document_id": "document-v1",
+                        "document_version": 1,
+                        "page": 3,
+                        "field_path": "comparables[0].adjustment_rate",
+                        "excerpt": "Adjustment rate -12%",
+                        "verification_status": "VERIFIED",
+                    }
+                ],
                 "reported_text": "-12%",
                 "reported_value": "-12",
                 "legal_basis": [{"source_id": "law-a10", "article": "第10條"}],
@@ -84,6 +95,8 @@ def test_report_keeps_machine_ai_and_human_records_separate():
 
     assert report.run.validation_run_id == data.run.validation_run_id
     assert report.findings[0].source_evidence
+    assert report.findings[0].source_evidence[0]["extracted_field_id"] == "field-v1"
+    assert report.findings[0].source_evidence[0]["verification_status"] == "VERIFIED"
     assert report.findings[0].ai_assessment.reasoning_summary
     assert report.findings[0].decisions[0].reason == "現勘資料支持部分調整"
     assert report.risk_summary.high_count == 1
