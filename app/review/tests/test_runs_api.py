@@ -340,7 +340,7 @@ def test_run_executes_every_server_selected_rule_and_preserves_server_evidence(
         f"/api/v1/review/cases/{runnable_review.review_id}/runs", json=run_payload()
     )
 
-    assert response.status_code == 202
+    assert response.status_code == 200
     run = response.json()
     assert run["run_status"] == "COMPLETED"
     assert run["failed_count"] == 1
@@ -393,7 +393,7 @@ def test_run_snapshot_preserves_complete_trusted_audit_context(
         f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
     )
 
-    assert response.status_code == 202
+    assert response.status_code == 200
     snapshot = response.json()["input_snapshot"]
     assert {
         "case",
@@ -606,10 +606,10 @@ def test_snapshot_deduplicates_shared_prepared_field_but_keeps_all_official_fiel
     [
         ("CURRENT_DATE + 1", "NULL", 409),
         ("NULL", "CURRENT_DATE - 1", 409),
-        ("CURRENT_DATE", "CURRENT_DATE + 1", 202),
-        ("CURRENT_DATE - 1", "CURRENT_DATE", 202),
-        ("NULL", "CURRENT_DATE + 1", 202),
-        ("CURRENT_DATE - 1", "NULL", 202),
+        ("CURRENT_DATE", "CURRENT_DATE + 1", 200),
+        ("CURRENT_DATE - 1", "CURRENT_DATE", 200),
+        ("NULL", "CURRENT_DATE + 1", 200),
+        ("CURRENT_DATE - 1", "NULL", 200),
     ],
 )
 def test_run_rule_source_effective_period_is_null_aware_and_inclusive(
@@ -648,7 +648,7 @@ def test_machine_finding_uses_field_code_not_field_path(
     response = authorized_client.post(
         f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
     )
-    assert response.status_code == 202
+    assert response.status_code == 200
     finding = response.json()["validation_run_id"]
 
     with postgres_connection.cursor() as cursor:
@@ -770,7 +770,7 @@ def test_run_snapshot_preserves_zero_server_extracted_value(
         f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
     )
 
-    assert response.status_code == 202
+    assert response.status_code == 200
     adjustment_check = next(
         check
         for check in response.json()["input_snapshot"]["checks"]
@@ -797,7 +797,7 @@ def test_run_snapshot_serializes_database_decimal_confidence_exactly(
         f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
     )
 
-    assert response.status_code == 202
+    assert response.status_code == 200
     snapshot = response.json()["input_snapshot"]
     response_confidence = next(
         field["confidence"]

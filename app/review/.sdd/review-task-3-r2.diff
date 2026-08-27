@@ -1,0 +1,253 @@
+# Review package: 927cab3..f385526
+
+## Commits
+f385526 fix(review): fail closed on ambiguous trusted fields
+9e4a407 feat(review): define trusted input policy
+
+## Files changed
+ app/review/rule_selection.py            |  5 +--
+ app/review/tests/test_rule_selection.py | 15 +++++++-
+ app/review/tests/test_trusted_inputs.py | 61 ++++++++++++++++++++++++++++++++
+ app/review/trusted_inputs.py            | 62 +++++++++++++++++++++++++++++++++
+ 4 files changed, 140 insertions(+), 3 deletions(-)
+
+## Diff
+diff --git a/app/review/rule_selection.py b/app/review/rule_selection.py
+index 1142eb8..2db7104 100644
+--- a/app/review/rule_selection.py
++++ b/app/review/rule_selection.py
+@@ -1,11 +1,12 @@
+ from dataclasses import dataclass
++from typing import AbstractSet
+ from datetime import date
+ 
+ from app.core.exceptions import AppError
+ 
+ 
+ @dataclass(frozen=True)
+ class RuleCandidate:
+     rule_version_id: str
+     status: str
+     effective_from: date
+@@ -20,33 +21,33 @@ class RuleCandidate:
+ class RuleSelection:
+     status: str
+     rule: RuleCandidate | None
+ 
+ 
+ def select_effective_rule(
+     candidates,
+     valuation_base_date: date,
+     case_type: str,
+     district_code: str,
+-    form_code: str,
++    form_codes: AbstractSet[str],
+ ) -> RuleSelection:
+     def matches(candidate: RuleCandidate) -> bool:
+         return (
+             candidate.status == "PUBLISHED"
+             and candidate.effective_from <= valuation_base_date
+             and (
+                 candidate.effective_to is None
+                 or candidate.effective_to >= valuation_base_date
+             )
+             and candidate.case_type in (None, case_type)
+             and candidate.district_code in (None, district_code)
+-            and candidate.form_code in (None, form_code)
++            and (candidate.form_code is None or candidate.form_code in form_codes)
+         )
+ 
+     eligible = [candidate for candidate in candidates if matches(candidate)]
+     if not eligible:
+         return RuleSelection("REQUIRES_EXPERT_JUDGMENT", None)
+ 
+     highest_priority = max(candidate.priority for candidate in eligible)
+     selected = [
+         candidate for candidate in eligible if candidate.priority == highest_priority
+     ]
+diff --git a/app/review/tests/test_rule_selection.py b/app/review/tests/test_rule_selection.py
+index 694745b..7df9fb4 100644
+--- a/app/review/tests/test_rule_selection.py
++++ b/app/review/tests/test_rule_selection.py
+@@ -18,21 +18,21 @@ def rule(rule_id="rule-1", **overrides):
+         "case_type": "LAND",
+         "district_code": "F01",
+         "form_code": "F01",
+         "priority": 10,
+     }
+     values.update(overrides)
+     return RuleCandidate(**values)
+ 
+ 
+ def select(candidates):
+-    return select_effective_rule(candidates, BASE_DATE, "LAND", "F01", "F01")
++    return select_effective_rule(candidates, BASE_DATE, "LAND", "F01", {"F01"})
+ 
+ 
+ def test_selects_only_published_effective_matching_rule():
+     result = select(
+         [
+             rule("draft", status="DRAFT", priority=100),
+             rule("expired", effective_to=date(2026, 8, 24), priority=90),
+             rule("other-district", district_code="F02", priority=80),
+             rule("selected", priority=20),
+         ]
+@@ -48,10 +48,23 @@ def test_ambiguous_highest_priority_rules_raise_conflict():
+ 
+     assert error.value.code == "RULE_SELECTION_CONFLICT"
+     assert error.value.status_code == 409
+ 
+ 
+ def test_no_match_requires_expert_judgment():
+     result = select([rule(status="DRAFT")])
+ 
+     assert result.status == "REQUIRES_EXPERT_JUDGMENT"
+     assert result.rule is None
++
++
++def test_selects_candidate_matching_any_form_code_in_set():
++    result = select_effective_rule(
++        [rule("f02", form_code="F02"), rule("f03", form_code="F03")],
++        BASE_DATE,
++        "LAND",
++        "F01",
++        {"F01", "F03"},
++    )
++
++    assert result.status == "SELECTED"
++    assert result.rule.rule_version_id == "f03"
+diff --git a/app/review/tests/test_trusted_inputs.py b/app/review/tests/test_trusted_inputs.py
+new file mode 100644
+index 0000000..4b7a6f8
+--- /dev/null
++++ b/app/review/tests/test_trusted_inputs.py
+@@ -0,0 +1,61 @@
++from app.review.trusted_inputs import (
++    TrustedField,
++    required_field_problems,
++    trusted_fields_by_code,
++)
++import pytest
++
++
++def field(code, status="VERIFIED", official=True):
++    return TrustedField(
++        extracted_field_id="field-1",
++        field_code=code,
++        field_path=code,
++        raw_text="來源原文",
++        normalized_value="-12",
++        value_type="DECIMAL",
++        page_number=3,
++        verification_status=status,
++        is_official=official,
++    )
++
++
++def test_high_impact_field_requires_verified_official_value():
++    fields = trusted_fields_by_code([field("adjustment_rate", "AUTO_EXTRACTED")])
++    problems = required_field_problems({"adjustment_rate"}, fields)
++    assert problems[0].code == "TRUSTED_INPUT_UNVERIFIED"
++
++
++def test_low_impact_field_accepts_auto_extracted_official_value():
++    fields = trusted_fields_by_code([field("property_description", "AUTO_EXTRACTED")])
++    assert required_field_problems({"property_description"}, fields) == ()
++
++
++def test_rejected_or_nonofficial_field_is_missing():
++    fields = trusted_fields_by_code([field("adjustment_rate", "REJECTED", False)])
++    assert required_field_problems({"adjustment_rate"}, fields)[0].code == "TRUSTED_INPUT_MISSING"
++
++
++def test_unknown_low_impact_status_is_unverified():
++    fields = trusted_fields_by_code([field("property_description", "PENDING")])
++    problems = required_field_problems({"property_description"}, fields)
++    assert problems[0].code == "TRUSTED_INPUT_UNVERIFIED"
++
++
++def test_rejected_official_field_is_missing():
++    fields = trusted_fields_by_code([field("adjustment_rate", "REJECTED")])
++    assert required_field_problems({"adjustment_rate"}, fields)[0].code == "TRUSTED_INPUT_MISSING"
++
++
++def test_verified_nonofficial_field_is_missing():
++    fields = trusted_fields_by_code([field("adjustment_rate", "VERIFIED", False)])
++    assert required_field_problems({"adjustment_rate"}, fields)[0].code == "TRUSTED_INPUT_MISSING"
++
++
++@pytest.mark.parametrize("ordered_fields", [
++    [field("adjustment_rate", "VERIFIED"), field("adjustment_rate", "REJECTED")],
++    [field("adjustment_rate", "REJECTED"), field("adjustment_rate", "VERIFIED")],
++])
++def test_duplicate_official_fields_are_missing_in_either_input_order(ordered_fields):
++    fields = trusted_fields_by_code(ordered_fields)
++    assert required_field_problems({"adjustment_rate"}, fields)[0].code == "TRUSTED_INPUT_MISSING"
+diff --git a/app/review/trusted_inputs.py b/app/review/trusted_inputs.py
+new file mode 100644
+index 0000000..20bf3da
+--- /dev/null
++++ b/app/review/trusted_inputs.py
+@@ -0,0 +1,62 @@
++from dataclasses import dataclass
++
++
++HIGH_IMPACT_FIELD_CODES = frozenset(
++    {
++        "adjustment_rate",
++        "comparison_price",
++        "recalculated_price",
++        "final_valuation",
++        "expert_grade",
++        "legal_basis",
++    }
++)
++
++
++@dataclass(frozen=True)
++class TrustedField:
++    extracted_field_id: str
++    field_code: str
++    field_path: str
++    raw_text: str
++    normalized_value: object
++    value_type: str
++    page_number: int
++    verification_status: str
++    is_official: bool
++
++
++@dataclass(frozen=True)
++class TrustedInputProblem:
++    code: str
++    field_code: str
++
++
++def trusted_fields_by_code(fields):
++    official_counts = {}
++    official_fields = {}
++    for item in fields:
++        if item.is_official:
++            official_counts[item.field_code] = official_counts.get(item.field_code, 0) + 1
++            official_fields[item.field_code] = item
++    return {
++        code: item
++        for code, item in official_fields.items()
++        if official_counts[code] == 1
++    }
++
++
++def required_field_problems(required_codes, fields):
++    problems = []
++    for code in sorted(required_codes):
++        item = fields.get(code)
++        if item is None or item.verification_status == "REJECTED":
++            problems.append(TrustedInputProblem("TRUSTED_INPUT_MISSING", code))
++        elif (
++            code in HIGH_IMPACT_FIELD_CODES
++            and item.verification_status != "VERIFIED"
++        ):
++            problems.append(TrustedInputProblem("TRUSTED_INPUT_UNVERIFIED", code))
++        elif item.verification_status not in {"AUTO_EXTRACTED", "VERIFIED"}:
++            problems.append(TrustedInputProblem("TRUSTED_INPUT_UNVERIFIED", code))
++    return tuple(problems)

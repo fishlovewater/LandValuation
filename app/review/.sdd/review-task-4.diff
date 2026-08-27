@@ -1,0 +1,548 @@
+# Review package: f385526..a9bb46f
+
+## Commits
+a9bb46f feat(review): load trusted run context
+
+## Files changed
+ app/review/repository.py                    | 161 +++++++++++++
+ app/review/tests/test_trusted_repository.py | 345 ++++++++++++++++++++++++++++
+ 2 files changed, 506 insertions(+)
+
+## Diff
+diff --git a/app/review/repository.py b/app/review/repository.py
+index dd57322..7e89a4a 100644
+--- a/app/review/repository.py
++++ b/app/review/repository.py
+@@ -138,20 +138,181 @@ class ReviewRepository:
+                 DocumentSnapshot(
+                     category=row["document_type"],
+                     version=row["version_no"],
+                     is_active=row["is_active"],
+                 )
+                 for row in document_rows
+             ),
+             normalized_fields=dict(case_row),
+         )
+ 
++    async def get_latest_original_document(self, case_id: UUID):
++        row = (
++            await self.session.execute(
++                text(
++                    """
++                    SELECT document_id, case_id, document_type, version_no,
++                           document_group_id, object_key, checksum_sha256
++                    FROM valuation.documents
++                    WHERE case_id = :case_id
++                      AND document_type = 'original'
++                      AND is_active = true
++                    ORDER BY version_no DESC, uploaded_at DESC, document_id DESC
++                    LIMIT 1
++                    """
++                ),
++                {"case_id": case_id},
++            )
++        ).mappings().one_or_none()
++        return dict(row) if row else None
++
++    async def get_latest_completed_extraction(
++        self, document_id: UUID, document_version: int
++    ):
++        row = (
++            await self.session.execute(
++                text(
++                    """
++                    SELECT extraction_run_id, case_id, document_id,
++                           document_version, run_no, status, extractor_name,
++                           extractor_version, started_at, completed_at
++                    FROM valuation.extraction_runs
++                    WHERE document_id = :document_id
++                      AND document_version = :document_version
++                      AND status = 'COMPLETED'
++                    ORDER BY run_no DESC, completed_at DESC, extraction_run_id DESC
++                    LIMIT 1
++                    """
++                ),
++                {
++                    "document_id": document_id,
++                    "document_version": document_version,
++                },
++            )
++        ).mappings().one_or_none()
++        return dict(row) if row else None
++
++    async def list_official_extracted_fields(self, extraction_run_id: UUID):
++        rows = (
++            await self.session.execute(
++                text(
++                    """
++                    SELECT extracted_field_id, extraction_run_id, field_code,
++                           field_path, value_type, raw_text, normalized_value,
++                           page_number, bounding_box, confidence,
++                           verification_status, verified_by_user_id, verified_at,
++                           is_official
++                    FROM valuation.extracted_fields
++                    WHERE extraction_run_id = :extraction_run_id
++                      AND is_official = true
++                    ORDER BY field_code, field_path, extracted_field_id
++                    """
++                ),
++                {"extraction_run_id": extraction_run_id},
++            )
++        ).mappings()
++        return [dict(row) for row in rows]
++
++    async def get_case_rule_context(self, case_id: UUID):
++        row = (
++            await self.session.execute(
++                text(
++                    """
++                    SELECT c.case_type, c.district_code, c.valuation_base_date,
++                           coalesce(
++                               array_agg(DISTINCT fi.form_code)
++                                   FILTER (
++                                       WHERE fi.form_code IS NOT NULL
++                                         AND fi.form_status <> 'VOID'
++                                   ),
++                               ARRAY[]::varchar[]
++                           ) AS form_codes
++                    FROM valuation.cases c
++                    LEFT JOIN valuation.form_instances fi ON fi.case_id = c.case_id
++                    WHERE c.case_id = :case_id
++                    GROUP BY c.case_id
++                    """
++                ),
++                {"case_id": case_id},
++            )
++        ).mappings().one_or_none()
++        if row is None:
++            return None
++        context = dict(row)
++        context["form_codes"] = frozenset(context["form_codes"] or ())
++        return context
++
++    async def list_rule_candidates(self):
++        rows = (
++            await self.session.execute(
++                text(
++                    """
++                    SELECT rule_version_id, status, effective_from, effective_to,
++                           applicable_case_type, applicable_district_code,
++                           selection_priority, source_document_id
++                    FROM valuation.rule_versions
++                    ORDER BY selection_priority DESC, rule_version_id
++                    """
++                )
++            )
++        ).mappings()
++        return [dict(row) for row in rows]
++
++    async def list_active_rules(
++        self, rule_version_id: UUID, form_codes: frozenset[str]
++    ):
++        rows = (
++            await self.session.execute(
++                text(
++                    """
++                    SELECT validation_rule_id, rule_version_id, rule_code,
++                           rule_name, target_form_code, target_table,
++                           target_field_code, severity, rule_expression,
++                           message_template, is_active
++                    FROM valuation.validation_rules
++                    WHERE rule_version_id = :rule_version_id
++                      AND is_active = true
++                      AND (
++                          target_form_code IS NULL
++                          OR target_form_code = ANY(
++                              CAST(:form_codes AS varchar[])
++                          )
++                      )
++                    ORDER BY rule_code, validation_rule_id
++                    """
++                ),
++                {
++                    "rule_version_id": rule_version_id,
++                    "form_codes": sorted(form_codes),
++                },
++            )
++        ).mappings()
++        return [dict(row) for row in rows]
++
++    async def get_rule_source(self, document_id: UUID):
++        row = (
++            await self.session.execute(
++                text(
++                    """
++                    SELECT document_id, checksum_sha256, version_no,
++                           effective_from, effective_to
++                    FROM knowledge.documents
++                    WHERE document_id = :document_id
++                      AND extraction_status = 'COMPLETED'
++                      AND publication_status = 'PUBLISHED'
++                    """
++                ),
++                {"document_id": document_id},
++            )
++        ).mappings().one_or_none()
++        return dict(row) if row else None
++
+     async def sync_missing_items(
+         self,
+         review_id: UUID,
+         requirements: tuple[MissingRequirement, ...],
+         actor_id: UUID,
+     ) -> list[MissingItem]:
+         open_items = list(
+             (
+                 await self.session.scalars(
+                     select(MissingItem).where(
+diff --git a/app/review/tests/test_trusted_repository.py b/app/review/tests/test_trusted_repository.py
+new file mode 100644
+index 0000000..71edb27
+--- /dev/null
++++ b/app/review/tests/test_trusted_repository.py
+@@ -0,0 +1,345 @@
++from datetime import UTC, date, datetime
++from types import SimpleNamespace
++from uuid import uuid4
++
++import pytest
++
++from app.db.session import AsyncSessionFactory
++from app.review.repository import ReviewRepository
++
++
++@pytest.fixture
++def trusted_repository_data(postgres_connection):
++    ids = SimpleNamespace(
++        user_id=uuid4(),
++        case_id=uuid4(),
++        other_case_id=uuid4(),
++        document_group_id=uuid4(),
++        original_v1_id=uuid4(),
++        original_v2_id=uuid4(),
++        other_document_id=uuid4(),
++        extraction_v1_id=uuid4(),
++        extraction_v2_id=uuid4(),
++        other_extraction_id=uuid4(),
++        source_document_id=uuid4(),
++        unavailable_source_document_id=uuid4(),
++        published_rule_version_id=uuid4(),
++        draft_rule_version_id=uuid4(),
++        global_rule_id=uuid4(),
++        f01_rule_id=uuid4(),
++        f02_rule_id=uuid4(),
++        inactive_rule_id=uuid4(),
++    )
++    with postgres_connection.cursor() as cursor:
++        cursor.execute(
++            """
++            INSERT INTO auth.users (
++                user_id, username, email, password_hash, display_name,
++                is_active, created_at, updated_at
++            ) VALUES (%s, %s, %s, 'not-used', 'Trusted Repository Tester',
++                      true, now(), now())
++            """,
++            (ids.user_id, f"trusted-repository-{ids.user_id}", f"{ids.user_id}@example.test"),
++        )
++        for case_id, case_no in (
++            (ids.case_id, f"TRUSTED-{str(ids.case_id)[:8]}"),
++            (ids.other_case_id, f"OTHER-{str(ids.other_case_id)[:8]}"),
++        ):
++            cursor.execute(
++                """
++                INSERT INTO valuation.cases (
++                    case_id, case_no, case_title, case_type,
++                    valuation_base_date, city_code, district_code, case_status
++                ) VALUES (%s, %s, 'Trusted Repository Case', 'LAND',
++                          DATE '2026-08-25', 'F', 'F01', 'DRAFT')
++                """,
++                (case_id, case_no),
++            )
++        for document_id, case_id, filename, checksum, version_no, group_id in (
++            (
++                ids.original_v1_id,
++                ids.case_id,
++                "original-v1.pdf",
++                "1" * 64,
++                1,
++                ids.document_group_id,
++            ),
++            (
++                ids.original_v2_id,
++                ids.case_id,
++                "original-v2.pdf",
++                "2" * 64,
++                2,
++                ids.document_group_id,
++            ),
++            (
++                ids.other_document_id,
++                ids.other_case_id,
++                "other-original.pdf",
++                "3" * 64,
++                9,
++                uuid4(),
++            ),
++        ):
++            cursor.execute(
++                """
++                INSERT INTO valuation.documents (
++                    document_id, case_id, document_type, original_filename,
++                    mime_type, bucket_name, object_key, checksum_sha256,
++                    file_size_bytes, version_no, is_active, document_group_id
++                ) VALUES (%s, %s, 'original', %s, 'application/pdf',
++                          'land-valuation', %s, %s, 100, %s, true, %s)
++                """,
++                (
++                    document_id,
++                    case_id,
++                    filename,
++                    f"cases/{case_id}/{filename}",
++                    checksum,
++                    version_no,
++                    group_id,
++                ),
++            )
++        cursor.execute(
++            """
++            INSERT INTO valuation.form_instances (
++                form_instance_id, case_id, form_code, version_no, form_status
++            ) VALUES (%s, %s, 'F01', 1, 'READY'),
++                     (%s, %s, 'F02', 1, 'VOID')
++            """,
++            (uuid4(), ids.case_id, uuid4(), ids.case_id),
++        )
++        for extraction_id, case_id, document_id, version_no, run_no in (
++            (ids.extraction_v1_id, ids.case_id, ids.original_v1_id, 1, 1),
++            (ids.extraction_v2_id, ids.case_id, ids.original_v2_id, 2, 2),
++            (ids.other_extraction_id, ids.other_case_id, ids.other_document_id, 9, 99),
++        ):
++            cursor.execute(
++                """
++                INSERT INTO valuation.extraction_runs (
++                    extraction_run_id, case_id, document_id, document_version,
++                    run_no, status, extractor_name, started_at, completed_at
++                ) VALUES (%s, %s, %s, %s, %s, 'COMPLETED', 'fixture',
++                          now() - interval '1 minute', now())
++                """,
++                (extraction_id, case_id, document_id, version_no, run_no),
++            )
++        for field_code, value_type, raw_text, normalized_value in (
++            ("adjustment_rate", "DECIMAL", "-5%", '"-5"'),
++            ("expert_grade", "TEXT", "A 級", '"A"'),
++        ):
++            cursor.execute(
++                """
++                INSERT INTO valuation.extracted_fields (
++                    extracted_field_id, extraction_run_id, field_code, field_path,
++                    value_type, raw_text, normalized_value, page_number,
++                    verification_status, is_official
++                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, 1,
++                          'AUTO_EXTRACTED', true)
++                """,
++                (
++                    uuid4(),
++                    ids.extraction_v2_id,
++                    field_code,
++                    f"report.{field_code}",
++                    value_type,
++                    raw_text,
++                    normalized_value,
++                ),
++            )
++        for document_id, document_code, filename, checksum, extraction_status, publication_status in (
++            (
++                ids.source_document_id,
++                f"TRUSTED-SOURCE-{str(ids.source_document_id)[:8]}",
++                "trusted-source.pdf",
++                "a" * 64,
++                "COMPLETED",
++                "PUBLISHED",
++            ),
++            (
++                ids.unavailable_source_document_id,
++                f"UNAVAILABLE-SOURCE-{str(ids.unavailable_source_document_id)[:8]}",
++                "unavailable-source.pdf",
++                "b" * 64,
++                "PENDING",
++                "DRAFT",
++            ),
++        ):
++            approved_by_user_id = (
++                ids.user_id if publication_status == "PUBLISHED" else None
++            )
++            approved_at = datetime.now(UTC) if approved_by_user_id else None
++            cursor.execute(
++                """
++                INSERT INTO knowledge.documents (
++                    document_id, document_code, title, document_type,
++                    original_filename, mime_type, bucket_name, object_key,
++                    checksum_sha256, file_size_bytes, version_no, effective_from,
++                    effective_to, extraction_status, publication_status,
++                    approved_by_user_id, approved_at
++                ) VALUES (%s, %s, 'Trusted Source', 'REGULATION', %s,
++                          'application/pdf', 'land-valuation', %s, %s, 100, 3,
++                          DATE '2026-01-01', DATE '2026-12-31', %s, %s, %s, %s)
++                """,
++                (
++                    document_id,
++                    document_code,
++                    filename,
++                    f"knowledge/rules/{document_id}/{filename}",
++                    checksum,
++                    extraction_status,
++                    publication_status,
++                    approved_by_user_id,
++                    approved_at,
++                ),
++            )
++        cursor.execute(
++            """
++            INSERT INTO valuation.rule_versions (
++                rule_version_id, rule_set_code, version_no, version_name,
++                effective_from, status, applicable_case_type,
++                applicable_district_code, selection_priority, source_document_id
++            ) VALUES (%s, %s, 1, 'Published Rules', DATE '2026-01-01',
++                      'PUBLISHED', 'LAND', 'F01', 10, %s),
++                     (%s, %s, 1, 'Draft Rules', DATE '2026-01-01',
++                      'DRAFT', NULL, NULL, 0, NULL)
++            """,
++            (
++                ids.published_rule_version_id,
++                f"TRUSTED_{str(ids.published_rule_version_id)[:8]}",
++                ids.source_document_id,
++                ids.draft_rule_version_id,
++                f"DRAFT_{str(ids.draft_rule_version_id)[:8]}",
++            ),
++        )
++        for rule_id, rule_code, target_form_code, is_active in (
++            (ids.global_rule_id, "GLOBAL", None, True),
++            (ids.f01_rule_id, "F01", "F01", True),
++            (ids.f02_rule_id, "F02", "F02", True),
++            (ids.inactive_rule_id, "INACTIVE", "F01", False),
++        ):
++            cursor.execute(
++                """
++                INSERT INTO valuation.validation_rules (
++                    validation_rule_id, rule_version_id, rule_code, rule_name,
++                    target_form_code, target_table, target_field_code, severity,
++                    rule_expression, message_template, is_active
++                ) VALUES (%s, %s, %s, %s, %s, 'comparison',
++                          'adjustment_rate', 'HIGH', '{}', %s, %s)
++                """,
++                (
++                    rule_id,
++                    ids.published_rule_version_id,
++                    rule_code,
++                    rule_code,
++                    target_form_code,
++                    rule_code,
++                    is_active,
++                ),
++            )
++    postgres_connection.commit()
++    yield ids
++    with postgres_connection.cursor() as cursor:
++        cursor.execute(
++            "DELETE FROM valuation.extracted_fields WHERE extraction_run_id IN (%s, %s, %s)",
++            (ids.extraction_v1_id, ids.extraction_v2_id, ids.other_extraction_id),
++        )
++        cursor.execute(
++            "DELETE FROM valuation.extraction_runs WHERE extraction_run_id IN (%s, %s, %s)",
++            (ids.extraction_v1_id, ids.extraction_v2_id, ids.other_extraction_id),
++        )
++        cursor.execute(
++            "DELETE FROM valuation.validation_rules WHERE rule_version_id IN (%s, %s)",
++            (ids.published_rule_version_id, ids.draft_rule_version_id),
++        )
++        cursor.execute(
++            "DELETE FROM valuation.rule_versions WHERE rule_version_id IN (%s, %s)",
++            (ids.published_rule_version_id, ids.draft_rule_version_id),
++        )
++        cursor.execute(
++            "DELETE FROM knowledge.documents WHERE document_id IN (%s, %s)",
++            (ids.source_document_id, ids.unavailable_source_document_id),
++        )
++        cursor.execute("DELETE FROM valuation.form_instances WHERE case_id = %s", (ids.case_id,))
++        cursor.execute(
++            "DELETE FROM valuation.documents WHERE case_id IN (%s, %s)",
++            (ids.case_id, ids.other_case_id),
++        )
++        cursor.execute(
++            "DELETE FROM valuation.cases WHERE case_id IN (%s, %s)",
++            (ids.case_id, ids.other_case_id),
++        )
++        cursor.execute("DELETE FROM auth.users WHERE user_id = %s", (ids.user_id,))
++    postgres_connection.commit()
++
++
++@pytest.mark.asyncio
++async def test_loads_only_server_owned_trusted_context(trusted_repository_data):
++    async with AsyncSessionFactory() as session:
++        repository = ReviewRepository(session)
++
++        document = await repository.get_latest_original_document(
++            trusted_repository_data.case_id
++        )
++        assert document["document_id"] == trusted_repository_data.original_v2_id
++        assert document["version_no"] == 2
++
++        extraction = await repository.get_latest_completed_extraction(
++            document["document_id"], document["version_no"]
++        )
++        assert extraction["extraction_run_id"] == trusted_repository_data.extraction_v2_id
++        assert extraction["status"] == "COMPLETED"
++        assert extraction["extraction_run_id"] != trusted_repository_data.other_extraction_id
++
++        fields = await repository.list_official_extracted_fields(
++            extraction["extraction_run_id"]
++        )
++        assert {row["field_code"] for row in fields} == {
++            "adjustment_rate",
++            "expert_grade",
++        }
++
++        context = await repository.get_case_rule_context(trusted_repository_data.case_id)
++        assert context["case_type"] == "LAND"
++        assert context["district_code"] == "F01"
++        assert context["form_codes"] == frozenset({"F01"})
++
++        candidates = await repository.list_rule_candidates()
++        published = next(
++            row
++            for row in candidates
++            if row["rule_version_id"] == trusted_repository_data.published_rule_version_id
++        )
++        assert published["applicable_case_type"] == "LAND"
++        assert published["applicable_district_code"] == "F01"
++        assert published["selection_priority"] == 10
++        assert published["source_document_id"] == trusted_repository_data.source_document_id
++        assert {
++            row["rule_version_id"] for row in candidates
++        } >= {
++            trusted_repository_data.published_rule_version_id,
++            trusted_repository_data.draft_rule_version_id,
++        }
++
++        active_rules = await repository.list_active_rules(
++            trusted_repository_data.published_rule_version_id,
++            context["form_codes"],
++        )
++        assert {row["validation_rule_id"] for row in active_rules} == {
++            trusted_repository_data.global_rule_id,
++            trusted_repository_data.f01_rule_id,
++        }
++
++        source = await repository.get_rule_source(
++            trusted_repository_data.source_document_id
++        )
++        assert source == {
++            "document_id": trusted_repository_data.source_document_id,
++            "checksum_sha256": "a" * 64,
++            "version_no": 3,
++            "effective_from": date(2026, 1, 1),
++            "effective_to": date(2026, 12, 31),
++        }
++        assert await repository.get_rule_source(
++            trusted_repository_data.unavailable_source_document_id
++        ) is None

@@ -115,7 +115,7 @@ def test_rerun_preserves_old_finding_and_links_replacement(
         f"/api/v1/review/cases/{runnable_review.review_id}/rerun", json={}
     )
 
-    assert rerun.status_code == 202
+    assert rerun.status_code == 200
     assert rerun.json()["run_no"] == 2
     new_findings = authorized_client.get(
         f"/api/v1/review/runs/{rerun.json()['validation_run_id']}/findings"
@@ -156,7 +156,7 @@ def test_rerun_supersedes_legacy_finding_code_by_validation_rule(
         f"/api/v1/review/cases/{runnable_review.review_id}/rerun", json={}
     )
 
-    assert rerun.status_code == 202
+    assert rerun.status_code == 200
     new_finding = authorized_client.get(
         f"/api/v1/review/runs/{rerun.json()['validation_run_id']}/findings"
     ).json()[0]
@@ -193,7 +193,7 @@ def test_rerun_fails_closed_when_previous_run_has_duplicate_rule_links(
         f"/api/v1/review/cases/{runnable_review.review_id}/rerun", json={}
     )
 
-    assert rerun.status_code == 202
+    assert rerun.status_code == 200
     new_finding = authorized_client.get(
         f"/api/v1/review/runs/{rerun.json()['validation_run_id']}/findings"
     ).json()[0]
@@ -389,7 +389,7 @@ def test_superseded_run_high_finding_does_not_block_current_clean_run(
         json={},
     )
 
-    assert rerun.status_code == 202
+    assert rerun.status_code == 200
     assert authorized_client.get(
         f"/api/v1/review/runs/{rerun.json()['validation_run_id']}/findings"
     ).json() == []

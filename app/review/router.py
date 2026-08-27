@@ -163,7 +163,7 @@ async def request_review_supplement(
 @router.post(
     "/cases/{review_id}/runs",
     response_model=ValidationRunRead,
-    status_code=status.HTTP_202_ACCEPTED,
+    status_code=status.HTTP_200_OK,
 )
 async def create_review_run(
     review_id: UUID,
@@ -276,7 +276,7 @@ async def list_review_decisions(
 @router.post(
     "/cases/{review_id}/rerun",
     response_model=ValidationRunRead,
-    status_code=status.HTTP_202_ACCEPTED,
+    status_code=status.HTTP_200_OK,
 )
 async def rerun_review_case(
     review_id: UUID,

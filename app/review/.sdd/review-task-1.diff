@@ -1,0 +1,1600 @@
+# Review package: b609234..5f81a0f
+
+## Commits
+5f81a0f fix(review): harden run and decision boundaries
+
+## Files changed
+ app/review/OUTSIDE_REVIEW_CHANGES.md   |   2 +-
+ app/review/decisions.py                |   1 +
+ app/review/recalculation.py            |   6 ++
+ app/review/repository.py               | 143 ++++++++++++++++++++++++---
+ app/review/risks.py                    |  26 +++--
+ app/review/schemas.py                  |  33 ++++---
+ app/review/service.py                  | 174 ++++++++++++++++++++++++++++++---
+ app/review/tests/test_cases_api.py     |   2 +-
+ app/review/tests/test_recalculation.py |  12 +++
+ app/review/tests/test_rerun.py         | 172 +++++++++++++++++++++++++++++++-
+ app/review/tests/test_runs_api.py      | 125 ++++++++++++++++++++---
+ app/review/tests/test_workflow_e2e.py  |  69 +++++++++----
+ 12 files changed, 680 insertions(+), 85 deletions(-)
+
+## Diff
+diff --git a/app/review/OUTSIDE_REVIEW_CHANGES.md b/app/review/OUTSIDE_REVIEW_CHANGES.md
+index dbddb81..30e7484 100644
+--- a/app/review/OUTSIDE_REVIEW_CHANGES.md
++++ b/app/review/OUTSIDE_REVIEW_CHANGES.md
+@@ -59,11 +59,11 @@
+ - 預定檔案：`migrations/versions/20260825_0006_expand_review_status_length.py`
+ - 發現原因：`review.reviews.review_status` 實際為 `varchar(20)`，但已確認狀態 `RETURNED_FOR_REVISION` 長度為 21，寫入時會觸發 `StringDataRightTruncation`。
+ - 預定修改：只將 `review.reviews.review_status` 擴為 `varchar(30)`；不刪資料、不改狀態值、不修改既有 migration。
+ - 回復方式：downgrade 前先檢查既有值長度；全部值不超過 20 時才縮回 `varchar(20)`，否則中止，避免資料截斷。
+ - 核准狀態：使用者已於 2026-08-25 明確同意新增 migration。
+ - 實際狀態：已建立並套用；主資料庫目前為 `20260825_0006 (head)`。
+ - 驗證：schema contract 已由 RED 轉為 GREEN；隔離資料庫已完成 `upgrade head → downgrade 0005 → upgrade head`，測試資料庫隨後刪除。
+ 
+ ## 範圍核對
+ 
+-截至建立本文件時，branch 起點 `9bcf5a0` 之後已提交的 `app/review/**` 外變更只有上述第 1～5 項；目前尚未提交的第 7 階段程式變更均位於 `app/review/**`。
++截至目前，branch 起點 `9bcf5a0` 之後的 `app/review/**` 外變更只有上述第 1～6 項；其餘後續程式變更均位於 `app/review/**`。
+diff --git a/app/review/decisions.py b/app/review/decisions.py
+index 97faf10..1cb5eae 100644
+--- a/app/review/decisions.py
++++ b/app/review/decisions.py
+@@ -20,20 +20,21 @@ class FindingDecisionCommand:
+     after_value: Any = None
+ 
+ 
+ @dataclass(frozen=True)
+ class CaseDecisionCommand:
+     decision: Literal[
+         "RETURNED_FOR_REVISION",
+         "SUPPLEMENT_REQUIRED",
+         "EXPERT_REVIEW",
+         "APPROVED",
++        "REVIEW_COMPLETED",
+     ]
+     reason: str
+     has_override_permission: bool = False
+     override_reason: str | None = None
+ 
+ 
+ @dataclass(frozen=True)
+ class ReviewGateSummary:
+     unresolved_high_count: int
+ 
+diff --git a/app/review/recalculation.py b/app/review/recalculation.py
+index dceb62f..12ada8b 100644
+--- a/app/review/recalculation.py
++++ b/app/review/recalculation.py
+@@ -32,20 +32,26 @@ def recalculate_adjustment_rate(
+     return AdjustmentResult(
+         reported,
+         system,
+         difference,
+         abs(difference) <= tolerance,
+     )
+ 
+ 
+ def recalculate_weighted_price(items) -> WeightedPriceResult:
+     items = tuple(items)
++    if any(weight < 0 for _, weight in items):
++        raise AppError(
++            "INVALID_WEIGHT",
++            "比較標的權重不得為負值",
++            422,
++        )
+     total_weight = sum((weight for _, weight in items), Decimal("0"))
+     if abs(total_weight - WEIGHT_TOTAL) > WEIGHT_TOLERANCE:
+         raise AppError(
+             "INVALID_WEIGHT_SUM",
+             "比較標的權重合計必須為 1",
+             422,
+             {"weight_sum": str(total_weight)},
+         )
+     unrounded = sum((price * weight for price, weight in items), Decimal("0"))
+     return WeightedPriceResult(
+diff --git a/app/review/repository.py b/app/review/repository.py
+index 7bf6a90..dd57322 100644
+--- a/app/review/repository.py
++++ b/app/review/repository.py
+@@ -1,29 +1,30 @@
+ from __future__ import annotations
+ 
+ from datetime import UTC, datetime
+ from uuid import UUID
+ 
+-from sqlalchemy import case, func, select, text
++from sqlalchemy import case, func, or_, select, text
+ from sqlalchemy.ext.asyncio import AsyncSession
+ 
+ from app.review.completeness import CaseInputSnapshot, DocumentSnapshot, MissingRequirement
+ from app.review.models import (
+     Decision,
+     Finding,
+     MissingItem,
+     Review,
+     RiskSummary,
+     ValidationFinding,
+     ValidationRun,
+ )
+ from app.review.schemas import ReviewCreate, ReviewListQuery, RunCreate
++from app.review.risks import EXPERT_MINIMUM_MEDIUM_TYPE, HIGH_RISK_FINDING_TYPES
+ 
+ 
+ class ReviewRepository:
+     def __init__(self, session: AsyncSession) -> None:
+         self.session = session
+ 
+     async def create(self, payload: ReviewCreate, started_by_user_id: UUID) -> Review:
+         values = payload.model_dump(exclude_none=True)
+         review = Review(
+             **values,
+@@ -214,53 +215,109 @@ class ReviewRepository:
+         return bool(
+             await self.session.scalar(
+                 select(func.count()).select_from(ValidationRun).where(
+                     ValidationRun.review_id == review_id,
+                     ValidationRun.run_status == "RUNNING",
+                 )
+             )
+         )
+ 
+     async def create_run(
+-        self, review: Review, payload: RunCreate, actor_id: UUID
++        self,
++        review: Review,
++        payload: RunCreate,
++        actor_id: UUID,
++        input_snapshot: dict,
+     ) -> ValidationRun:
+         run_no = (
+             await self.session.scalar(
+                 select(func.coalesce(func.max(ValidationRun.run_no), 0)).where(
+                     ValidationRun.review_id == review.review_id
+                 )
+             )
+         ) + 1
+         run = ValidationRun(
+             case_id=review.case_id,
+             review_id=review.review_id,
+             run_no=run_no,
+             run_status="RUNNING",
+             triggered_by_user_id=actor_id,
+             rule_version_id=payload.rule_version_id,
+             ruleset_snapshot={"rule_version_id": str(payload.rule_version_id)},
+-            input_snapshot={
+-                **payload.input_snapshot,
+-                "adjustment_checks": [
+-                    check.model_dump(mode="json")
+-                    for check in payload.adjustment_checks
+-                ],
+-                "expert_checks": [
+-                    check.model_dump(mode="json") for check in payload.expert_checks
+-                ],
+-            },
++            input_snapshot=input_snapshot,
+         )
+         self.session.add(run)
+         await self.session.flush()
+         await self.session.refresh(run)
+         return run
+ 
++    async def get_effective_rule(
++        self,
++        case_id: UUID,
++        rule_version_id: UUID,
++        validation_rule_id: UUID,
++    ):
++        row = (
++            await self.session.execute(
++                text(
++                    """
++                    SELECT vr.validation_rule_id, vr.rule_code, vr.severity,
++                           vr.rule_expression, rv.rule_version_id,
++                           rv.source_reference
++                    FROM valuation.cases c
++                    JOIN valuation.rule_versions rv
++                      ON rv.rule_version_id = :rule_version_id
++                     AND rv.status = 'PUBLISHED'
++                     AND rv.effective_from <= c.valuation_base_date
++                     AND (rv.effective_to IS NULL
++                          OR rv.effective_to >= c.valuation_base_date)
++                    JOIN valuation.validation_rules vr
++                      ON vr.rule_version_id = rv.rule_version_id
++                     AND vr.validation_rule_id = :validation_rule_id
++                     AND vr.is_active = true
++                    WHERE c.case_id = :case_id
++                    """
++                ),
++                {
++                    "case_id": case_id,
++                    "rule_version_id": rule_version_id,
++                    "validation_rule_id": validation_rule_id,
++                },
++            )
++        ).mappings().one_or_none()
++        return dict(row) if row else None
++
++    async def get_case_document(
++        self, case_id: UUID, document_id: UUID, version_no: int
++    ):
++        row = (
++            await self.session.execute(
++                text(
++                    """
++                    SELECT document_id, case_id, document_type, version_no,
++                           object_key, checksum_sha256
++                    FROM valuation.documents
++                    WHERE case_id = :case_id
++                      AND document_id = :document_id
++                      AND version_no = :version_no
++                      AND is_active = true
++                    """
++                ),
++                {
++                    "case_id": case_id,
++                    "document_id": document_id,
++                    "version_no": version_no,
++                },
++            )
++        ).mappings().one_or_none()
++        return dict(row) if row else None
++
+     async def create_validation_finding(self, **values) -> ValidationFinding:
+         finding = ValidationFinding(**values)
+         self.session.add(finding)
+         await self.session.flush()
+         await self.session.refresh(finding)
+         return finding
+ 
+     async def create_finding(self, **values) -> Finding:
+         finding = Finding(**values)
+         self.session.add(finding)
+@@ -330,31 +387,89 @@ class ReviewRepository:
+ 
+     async def list_decisions(self, review_id: UUID) -> list[Decision]:
+         statement = (
+             select(Decision)
+             .where(Decision.review_id == review_id)
+             .order_by(Decision.decided_at, Decision.decision_id)
+         )
+         return list((await self.session.scalars(statement)).all())
+ 
+     async def unresolved_high_count(self, review_id: UUID) -> int:
++        latest_run_id = select(Review.latest_validation_run_id).where(
++            Review.review_id == review_id
++        ).scalar_subquery()
+         return int(
+             await self.session.scalar(
+                 select(func.count()).select_from(Finding).where(
+                     Finding.review_id == review_id,
+-                    Finding.severity.in_(["HIGH", "CRITICAL"]),
+-                    Finding.status.in_(["OPEN", "REQUIRES_SUPPLEMENT", "EXPERT_REVIEW"]),
++                    Finding.validation_run_id == latest_run_id,
++                    or_(
++                        Finding.severity.in_(["HIGH", "CRITICAL"]),
++                        Finding.finding_type.in_(HIGH_RISK_FINDING_TYPES),
++                    ),
++                    Finding.status.in_(
++                        [
++                            "OPEN",
++                            "PARTIALLY_ACCEPTED",
++                            "REQUIRES_SUPPLEMENT",
++                            "EXPERT_REVIEW",
++                        ]
++                    ),
+                 )
+             )
+             or 0
+         )
+ 
++    async def current_risk_counts(self, review_id: UUID) -> dict[str, int]:
++        latest_run_id = select(Review.latest_validation_run_id).where(
++            Review.review_id == review_id
++        ).scalar_subquery()
++        normalized_severity = case(
++            (
++                Finding.finding_type.in_(HIGH_RISK_FINDING_TYPES)
++                & Finding.severity.not_in(["HIGH", "CRITICAL"]),
++                "HIGH",
++            ),
++            (
++                (Finding.finding_type == EXPERT_MINIMUM_MEDIUM_TYPE)
++                & (Finding.severity == "LOW"),
++                "MEDIUM",
++            ),
++            else_=Finding.severity,
++        )
++        rows = (
++            await self.session.execute(
++                select(normalized_severity, func.count())
++                .where(
++                    Finding.review_id == review_id,
++                    Finding.validation_run_id == latest_run_id,
++                    Finding.status.in_(
++                        [
++                            "OPEN",
++                            "PARTIALLY_ACCEPTED",
++                            "REQUIRES_SUPPLEMENT",
++                            "EXPERT_REVIEW",
++                        ]
++                    ),
++                )
++                .group_by(normalized_severity)
++            )
++        ).all()
++        by_severity = {severity: int(count) for severity, count in rows}
++        return {
++            "high": by_severity.get("HIGH", 0)
++            + by_severity.get("CRITICAL", 0),
++            "medium": by_severity.get("MEDIUM", 0),
++            "low": by_severity.get("LOW", 0),
++            "critical": by_severity.get("CRITICAL", 0),
++        }
++
+     async def get_case_report_data(self, case_id: UUID):
+         return (
+             await self.session.execute(
+                 text(
+                     """
+                     SELECT case_id, case_no, case_title,
+                            valuation_base_date::text AS valuation_base_date,
+                            district_code
+                     FROM valuation.cases
+                     WHERE case_id = :case_id
+diff --git a/app/review/risks.py b/app/review/risks.py
+index a61098f..b533da1 100644
+--- a/app/review/risks.py
++++ b/app/review/risks.py
+@@ -1,49 +1,57 @@
+ from dataclasses import dataclass
+ 
+ 
++HIGH_RISK_FINDING_TYPES = frozenset(
++    {
++        "WRONG_LEGAL_BASIS",
++        "OPPOSITE_DIRECTION",
++        "RATE_OUT_OF_RANGE",
++        "PRICE_FORMULA_MISMATCH",
++        "CRITICAL_SOURCE_CONTRADICTION",
++    }
++)
++EXPERT_MINIMUM_MEDIUM_TYPE = "EXPERT_GRADE_JUDGMENT"
++
++
+ @dataclass(frozen=True)
+ class FindingRisk:
+     finding_type: str
+     severity: str
+     resolved: bool = False
+ 
+ 
+ @dataclass(frozen=True)
+ class RiskResult:
+     level: str
+     high_count: int
+     medium_count: int
+     low_count: int
+ 
+ 
+ def risk_level_for_findings(findings, missing_data: bool = False) -> RiskResult:
+     if missing_data:
+         return RiskResult("MISSING_DATA", 0, 0, 0)
+ 
+-    high_types = {
+-        "WRONG_LEGAL_BASIS",
+-        "OPPOSITE_DIRECTION",
+-        "RATE_OUT_OF_RANGE",
+-        "PRICE_FORMULA_MISMATCH",
+-        "CRITICAL_SOURCE_CONTRADICTION",
+-    }
+     severity_rank = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+     normalized: list[str] = []
+     for finding in findings:
+         if finding.resolved:
+             continue
+         severity = finding.severity
+-        if finding.finding_type in high_types and severity_rank.get(severity, 0) < 3:
++        if (
++            finding.finding_type in HIGH_RISK_FINDING_TYPES
++            and severity_rank.get(severity, 0) < 3
++        ):
+             severity = "HIGH"
+         if (
+-            finding.finding_type == "EXPERT_GRADE_JUDGMENT"
++            finding.finding_type == EXPERT_MINIMUM_MEDIUM_TYPE
+             and severity_rank.get(severity, 0) < 2
+         ):
+             severity = "MEDIUM"
+         normalized.append(severity)
+ 
+     if not normalized:
+         return RiskResult("LOW", 0, 0, 0)
+     level = max(normalized, key=lambda value: severity_rank.get(value, 0))
+     return RiskResult(
+         level=level,
+diff --git a/app/review/schemas.py b/app/review/schemas.py
+index 1bd4ee4..fc6f75b 100644
+--- a/app/review/schemas.py
++++ b/app/review/schemas.py
+@@ -125,54 +125,58 @@ class SupplementRequest(BaseModel):
+ 
+     @field_validator("due_at")
+     @classmethod
+     def due_at_must_be_timezone_aware(cls, value: datetime) -> datetime:
+         if value.tzinfo is None:
+             raise ValueError("due_at 必須包含時區")
+         return value
+ 
+ 
+ class AdjustmentRateCheck(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
+     validation_rule_id: UUID
+     finding_code: str = Field(min_length=1, max_length=100)
+     reported_rate: Decimal
+-    system_rate: Decimal
+-    tolerance: Decimal = Field(ge=0)
+     reported_text: str
+     field_path: str
+-    source_evidence: list[dict]
+-    legal_basis: list[dict]
+-    document_id: UUID | None = None
+-    document_version: int | None = Field(default=None, ge=1)
+-    page_number: int | None = Field(default=None, ge=1)
++    document_id: UUID
++    document_version: int = Field(ge=1)
++    page_number: int = Field(ge=1)
+ 
+ 
+ class ExpertGradeCheck(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
+     validation_rule_id: UUID
+     finding_code: str = Field(min_length=1, max_length=100)
+     reported_grade: str
+-    system_grade: str
+     reported_text: str
+     field_path: str
+-    source_evidence: list[dict]
+-    legal_basis: list[dict]
+-    document_id: UUID | None = None
+-    document_version: int | None = Field(default=None, ge=1)
+-    page_number: int | None = Field(default=None, ge=1)
++    document_id: UUID
++    document_version: int = Field(ge=1)
++    page_number: int = Field(ge=1)
+ 
+ 
+ class RunCreate(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
+     rule_version_id: UUID
+-    input_snapshot: dict
+     adjustment_checks: list[AdjustmentRateCheck] = Field(default_factory=list)
+     expert_checks: list[ExpertGradeCheck] = Field(default_factory=list)
+ 
++    @model_validator(mode="after")
++    def require_at_least_one_check(self):
++        if not self.adjustment_checks and not self.expert_checks:
++            raise ValueError("至少必須執行一項檢核")
++        return self
++
+ 
+ class ValidationRunRead(BaseModel):
+     model_config = ConfigDict(from_attributes=True)
+ 
+     validation_run_id: UUID
+     case_id: UUID
+     review_id: UUID | None
+     run_no: int | None
+     run_status: str
+     passed_count: int
+@@ -245,20 +249,21 @@ FindingDecisionValue = Literal[
+     "PARTIALLY_ACCEPTED",
+     "REJECTED",
+     "REQUIRES_SUPPLEMENT",
+     "EXPERT_REVIEW",
+ ]
+ CaseDecisionValue = Literal[
+     "RETURNED_FOR_REVISION",
+     "SUPPLEMENT_REQUIRED",
+     "EXPERT_REVIEW",
+     "APPROVED",
++    "REVIEW_COMPLETED",
+ ]
+ 
+ 
+ class FindingDecisionRequest(BaseModel):
+     review_id: UUID
+     decision: FindingDecisionValue
+     reason: str
+     after_value: dict | None = None
+ 
+ 
+diff --git a/app/review/service.py b/app/review/service.py
+index 993c1ae..269c562 100644
+--- a/app/review/service.py
++++ b/app/review/service.py
+@@ -1,11 +1,13 @@
++import json
+ from datetime import UTC, datetime
++from decimal import Decimal
+ 
+ from app.core.exceptions import AppError
+ from app.core.exceptions import ResourceNotFoundError
+ from app.review.repository import ReviewRepository
+ from app.review.schemas import ReviewCreate, ReviewListQuery, ReviewUpdate
+ from app.review.completeness import evaluate_completeness
+ from app.review.recalculation import recalculate_adjustment_rate
+ from app.review.risks import FindingRisk, risk_level_for_findings
+ from app.review.decisions import (
+     CaseDecisionCommand,
+@@ -71,20 +73,32 @@ class ReviewService:
+             raise ResourceNotFoundError("審查案件")
+         return review
+ 
+     async def list(self, query: ReviewListQuery):
+         return await self.repository.list(query)
+ 
+     async def update(self, review_id, payload: ReviewUpdate):
+         review = await self.repository.get(review_id, for_update=True)
+         if review is None:
+             raise ResourceNotFoundError("審查案件")
++        if payload.review_status in {
++            "RETURNED_FOR_REVISION",
++            "SUPPLEMENT_REQUIRED",
++            "EXPERT_REVIEW",
++            "APPROVED",
++            "REVIEW_COMPLETED",
++        }:
++            raise AppError(
++                "REVIEW_DECISION_INVALID",
++                "人工決策狀態只能透過 decision API 變更",
++                409,
++            )
+         review.review_status = ensure_transition(
+             review.review_status, payload.review_status
+         )
+         await self.repository.session.flush()
+         return review
+ 
+     async def assign(self, review_id, reviewer_id):
+         try:
+             return await self.repository.assign(review_id, reviewer_id)
+         except LookupError as exc:
+@@ -138,109 +152,221 @@ class ReviewService:
+         return await self.repository.request_supplement(review_id, due_at)
+ 
+     async def create_run(
+         self, review_id, payload, actor_id, supersedes_by_code=None
+     ):
+         review = await self.repository.get(review_id, for_update=True)
+         if review is None:
+             raise ResourceNotFoundError("審查案件")
+         if await self.repository.active_run_exists(review_id):
+             raise AppError("RUN_ALREADY_ACTIVE", "此案件已有執行中的檢核", 409)
++        resolved: dict = {}
++        snapshot_checks = []
++        for expected_code, checks in (
++            ("ADJUSTMENT_RATE", payload.adjustment_checks),
++            ("EXPERT_GRADE", payload.expert_checks),
++        ):
++            for check in checks:
++                rule = await self.repository.get_effective_rule(
++                    review.case_id,
++                    payload.rule_version_id,
++                    check.validation_rule_id,
++                )
++                document = await self.repository.get_case_document(
++                    review.case_id, check.document_id, check.document_version
++                )
++                if rule is None or rule["rule_code"] != expected_code:
++                    raise AppError(
++                        "RULE_SELECTION_CONFLICT",
++                        "檢核規則未發布、已失效或不屬於指定規則版本",
++                        409,
++                        {"validation_rule_id": str(check.validation_rule_id)},
++                    )
++                if document is None:
++                    raise AppError(
++                        "EVIDENCE_SCOPE_CONFLICT",
++                        "證據文件不屬於此案件或版本不符",
++                        409,
++                        {"document_id": str(check.document_id)},
++                    )
++                try:
++                    configuration = json.loads(rule["rule_expression"])
++                except (TypeError, ValueError) as exc:
++                    raise AppError(
++                        "RULE_CONFIGURATION_INVALID",
++                        "正式規則設定不是有效 JSON",
++                        409,
++                    ) from exc
++                resolved[check.validation_rule_id] = (rule, document, configuration)
++                snapshot_checks.append(
++                    {
++                        "finding_code": check.finding_code,
++                        "validation_rule_id": str(check.validation_rule_id),
++                        "document_id": str(check.document_id),
++                        "document_version": check.document_version,
++                        "document_checksum": document["checksum_sha256"],
++                        "page_number": check.page_number,
++                        "field_path": check.field_path,
++                        "reported_value": str(
++                            check.reported_rate
++                            if expected_code == "ADJUSTMENT_RATE"
++                            else check.reported_grade
++                        ),
++                        "rule_configuration": configuration,
++                    }
++                )
+         review.review_status = ensure_transition(
+             review.review_status, "ANALYZING"
+         )
+-        run = await self.repository.create_run(review, payload, actor_id)
++        run = await self.repository.create_run(
++            review,
++            payload,
++            actor_id,
++            {
++                "case_id": str(review.case_id),
++                "rule_version_id": str(payload.rule_version_id),
++                "checks": snapshot_checks,
++            },
++        )
+         findings = []
+         for check in payload.adjustment_checks:
++            rule, document, configuration = resolved[check.validation_rule_id]
++            try:
++                system_rate = Decimal(str(configuration["system_rate"]))
++                tolerance = Decimal(str(configuration["tolerance"]))
++            except (KeyError, ArithmeticError, ValueError) as exc:
++                raise AppError(
++                    "RULE_CONFIGURATION_INVALID",
++                    "調整率規則缺少有效的 system_rate 或 tolerance",
++                    409,
++                ) from exc
+             result = recalculate_adjustment_rate(
+-                check.reported_rate, check.system_rate, check.tolerance
++                check.reported_rate, system_rate, tolerance
+             )
+             if result.within_tolerance:
+                 run.passed_count += 1
+                 continue
+             machine_finding = await self.repository.create_validation_finding(
+                 validation_run_id=run.validation_run_id,
+                 validation_rule_id=check.validation_rule_id,
+                 field_code=check.field_path,
+-                severity="HIGH",
++                severity=rule["severity"],
+                 actual_value={"reported_rate": str(result.reported_rate)},
+                 expected_value={"system_rate": str(result.system_rate)},
+                 finding_message="報告調整率與規則計算結果不一致",
+             )
+             finding = await self.repository.create_finding(
+                 review_id=review.review_id,
+                 source_validation_finding_id=machine_finding.finding_id,
+                 validation_run_id=run.validation_run_id,
+                 finding_code=check.finding_code,
+                 finding_type="RATE_OUT_OF_RANGE",
+-                severity="HIGH",
++                severity=rule["severity"],
+                 title="調整率超出允許差異",
+                 description="報告調整率與確定性重算結果不一致，需人工核對。",
+                 status="OPEN",
+                 document_id=check.document_id,
+                 document_version=check.document_version,
+                 page_number=check.page_number,
+                 field_path=check.field_path,
+-                source_evidence=check.source_evidence,
++                source_evidence=[
++                    {
++                        "source_id": str(document["document_id"]),
++                        "document_id": str(document["document_id"]),
++                        "document_version": document["version_no"],
++                        "page": check.page_number,
++                        "field_path": check.field_path,
++                        "excerpt": check.reported_text,
++                    }
++                ],
+                 reported_text=check.reported_text,
+                 reported_value=str(result.reported_rate),
+-                legal_basis=check.legal_basis,
++                legal_basis=[
++                    {
++                        "rule_version_id": str(rule["rule_version_id"]),
++                        "rule_code": rule["rule_code"],
++                        "source_reference": rule["source_reference"],
++                    }
++                ],
+                 reported_adjustment_rate=result.reported_rate,
+                 system_adjustment_rate=result.system_rate,
+                 comparison_result={
+                     "difference": str(result.difference),
+-                    "tolerance": str(check.tolerance),
++                    "tolerance": str(tolerance),
+                     "within_tolerance": False,
+                 },
+                 recommended_action={"action": "VERIFY_ADJUSTMENT_BASIS"},
+                 ai_status="AI_EXPLANATION_UNAVAILABLE",
+                 supersedes_finding_id=(supersedes_by_code or {}).get(
+                     check.finding_code
+                 ),
+                 rule_version_id=payload.rule_version_id,
+             )
+             findings.append(finding)
+             run.failed_count += 1
+ 
+         for check in payload.expert_checks:
+-            if check.reported_grade == check.system_grade:
++            rule, document, configuration = resolved[check.validation_rule_id]
++            system_grade = configuration.get("system_grade")
++            if not isinstance(system_grade, str) or not system_grade.strip():
++                raise AppError(
++                    "RULE_CONFIGURATION_INVALID",
++                    "級距規則缺少有效的 system_grade",
++                    409,
++                )
++            if check.reported_grade == system_grade:
+                 run.passed_count += 1
+                 continue
+             machine_finding = await self.repository.create_validation_finding(
+                 validation_run_id=run.validation_run_id,
+                 validation_rule_id=check.validation_rule_id,
+                 field_code=check.field_path,
+                 severity="MEDIUM",
+                 actual_value={"reported_grade": check.reported_grade},
+-                expected_value={"system_grade": check.system_grade},
++                expected_value={"system_grade": system_grade},
+                 finding_message="報告級距與規則建議級距不同，需專業判斷",
+             )
+             finding = await self.repository.create_finding(
+                 review_id=review.review_id,
+                 source_validation_finding_id=machine_finding.finding_id,
+                 validation_run_id=run.validation_run_id,
+                 finding_code=check.finding_code,
+                 finding_type="EXPERT_GRADE_JUDGMENT",
+                 severity="MEDIUM",
+                 title="級距判定需專業覆核",
+                 description="報告級距與規則建議不同，系統不自行取代估價專業判斷。",
+                 status="OPEN",
+                 document_id=check.document_id,
+                 document_version=check.document_version,
+                 page_number=check.page_number,
+                 field_path=check.field_path,
+-                source_evidence=check.source_evidence,
++                source_evidence=[
++                    {
++                        "source_id": str(document["document_id"]),
++                        "document_id": str(document["document_id"]),
++                        "document_version": document["version_no"],
++                        "page": check.page_number,
++                        "field_path": check.field_path,
++                        "excerpt": check.reported_text,
++                    }
++                ],
+                 reported_text=check.reported_text,
+                 reported_value=check.reported_grade,
+-                legal_basis=check.legal_basis,
++                legal_basis=[
++                    {
++                        "rule_version_id": str(rule["rule_version_id"]),
++                        "rule_code": rule["rule_code"],
++                        "source_reference": rule["source_reference"],
++                    }
++                ],
+                 reported_grade=check.reported_grade,
+-                system_grade=check.system_grade,
++                system_grade=system_grade,
+                 comparison_result={"same_grade": False},
+                 recommended_action={"action": "EXPERT_REVIEW"},
+                 ai_status="AI_EXPLANATION_UNAVAILABLE",
+                 supersedes_finding_id=(supersedes_by_code or {}).get(
+                     check.finding_code
+                 ),
+                 rule_version_id=payload.rule_version_id,
+             )
+             findings.append(finding)
+             run.warning_count += 1
+@@ -299,20 +425,30 @@ class ReviewService:
+     async def get_risk_summary(self, validation_run_id):
+         await self.get_run(validation_run_id)
+         summary = await self.repository.get_risk_summary(validation_run_id)
+         if summary is None:
+             raise ResourceNotFoundError("風險摘要")
+         return summary
+ 
+     async def decide_finding(
+         self, finding_id, payload, actor_id, request_id
+     ):
++        review = await self.repository.get(payload.review_id, for_update=True)
++        if review is None:
++            raise ResourceNotFoundError("審查案件")
++        if review.review_status not in {"REVIEW_REQUIRED", "EXPERT_REVIEW"}:
++            raise AppError(
++                "REVIEW_STATE_CONFLICT",
++                "目前案件狀態不可變更疑點決策",
++                409,
++                {"current": review.review_status},
++            )
+         finding = await self.repository.get_finding_for_review(
+             finding_id, payload.review_id, for_update=True
+         )
+         if finding is None:
+             raise ResourceNotFoundError("審查疑點")
+         resulting_status = validate_finding_decision(
+             FindingDecisionCommand(
+                 payload.decision, payload.reason, payload.after_value
+             )
+         )
+@@ -324,20 +460,34 @@ class ReviewService:
+         decision = await self.repository.create_decision(
+             review_id=finding.review_id,
+             finding_id=finding.finding_id,
+             decision=payload.decision,
+             reason=payload.reason.strip(),
+             decided_by_user_id=actor_id,
+             request_id=request_id,
+             before_value=before,
+             after_value=payload.after_value or {"status": resulting_status},
+         )
++        counts = await self.repository.current_risk_counts(finding.review_id)
++        review.high_count = counts["high"]
++        review.medium_count = counts["medium"]
++        review.low_count = counts["low"]
++        review.current_risk_level = (
++            "CRITICAL"
++            if counts["critical"]
++            else "HIGH"
++            if counts["high"]
++            else "MEDIUM"
++            if counts["medium"]
++            else "LOW"
++        )
++        await self.repository.session.flush()
+         return decision
+ 
+     async def decide_case(
+         self,
+         review_id,
+         payload,
+         actor_id,
+         request_id,
+         has_override_permission=False,
+     ):
+diff --git a/app/review/tests/test_cases_api.py b/app/review/tests/test_cases_api.py
+index 261ff5b..7ce6b73 100644
+--- a/app/review/tests/test_cases_api.py
++++ b/app/review/tests/test_cases_api.py
+@@ -105,21 +105,21 @@ def test_update_rejects_illegal_status_transition(authorized_client, queue_case)
+     created = authorized_client.post(
+         "/api/v1/review/cases", json={"case_id": str(queue_case.case_id)}
+     ).json()
+ 
+     response = authorized_client.patch(
+         f"/api/v1/review/cases/{created['review_id']}",
+         json={"review_status": "APPROVED"},
+     )
+ 
+     assert response.status_code == 409
+-    assert response.json()["error"]["code"] == "REVIEW_STATE_CONFLICT"
++    assert response.json()["error"]["code"] == "REVIEW_DECISION_INVALID"
+ 
+ 
+ def test_get_unknown_review_returns_404(authorized_client):
+     response = authorized_client.get(f"/api/v1/review/cases/{uuid4()}")
+ 
+     assert response.status_code == 404
+     assert response.json()["error"]["code"] == "RESOURCE_NOT_FOUND"
+ 
+ 
+ @pytest.mark.parametrize(
+diff --git a/app/review/tests/test_recalculation.py b/app/review/tests/test_recalculation.py
+index 869fced..4103c7e 100644
+--- a/app/review/tests/test_recalculation.py
++++ b/app/review/tests/test_recalculation.py
+@@ -32,15 +32,27 @@ def test_weighted_price_preserves_unrounded_and_final_values():
+     assert result.final == Decimal("100.66")
+ 
+ 
+ def test_weighted_price_rejects_invalid_weight_sum():
+     with pytest.raises(AppError) as error:
+         recalculate_weighted_price(((Decimal("100"), Decimal("0.9")),))
+ 
+     assert error.value.code == "INVALID_WEIGHT_SUM"
+ 
+ 
++def test_weighted_price_rejects_negative_weight_even_when_sum_is_one():
++    with pytest.raises(AppError) as error:
++        recalculate_weighted_price(
++            (
++                (Decimal("100"), Decimal("1.2")),
++                (Decimal("200"), Decimal("-0.2")),
++            )
++        )
++
++    assert error.value.code == "INVALID_WEIGHT"
++
++
+ def test_grade_for_value_uses_inclusive_decimal_bands():
+     bands = (("A", Decimal("0"), Decimal("10")), ("B", Decimal("10.01"), None))
+ 
+     assert grade_for_value(Decimal("10"), bands) == "A"
+     assert grade_for_value(Decimal("10.01"), bands) == "B"
+diff --git a/app/review/tests/test_rerun.py b/app/review/tests/test_rerun.py
+index 8e19714..3133b6c 100644
+--- a/app/review/tests/test_rerun.py
++++ b/app/review/tests/test_rerun.py
+@@ -34,39 +34,60 @@ def test_finding_and_case_decisions_are_append_only(
+             "review_id": str(runnable_review.review_id),
+             "decision": "PARTIALLY_ACCEPTED",
+             "reason": "現勘資料支持部分調整",
+             "after_value": {"reported_rate": "-7.00"},
+         },
+     )
+     assert decided.status_code == 201
+     assert decided.json()["decision"] == "PARTIALLY_ACCEPTED"
+     assert decided.json()["request_id"] == request_id
+ 
++    still_blocked = authorized_client.post(
++        f"/api/v1/review/cases/{runnable_review.review_id}/decision",
++        json={"decision": "APPROVED", "reason": "部分接受後嘗試核准"},
++    )
++    assert still_blocked.status_code == 409
++
++    resolved = authorized_client.post(
++        f"/api/v1/review/findings/{finding['finding_id']}/decisions",
++        json={
++            "review_id": str(runnable_review.review_id),
++            "decision": "ACCEPTED",
++            "reason": "補充證據已確認，疑點完成處理",
++        },
++    )
++    assert resolved.status_code == 201
++    current = authorized_client.get(
++        f"/api/v1/review/cases/{runnable_review.review_id}"
++    ).json()
++    assert current["high_count"] == 0
++    assert current["current_risk_level"] == "LOW"
++
+     approved = authorized_client.post(
+         f"/api/v1/review/cases/{runnable_review.review_id}/decision",
+         json={"decision": "APPROVED", "reason": "高風險疑點已完成處理"},
+     )
+     assert approved.status_code == 201
+     assert approved.json()["decision"] == "APPROVED"
+ 
+     decisions = authorized_client.get(
+         f"/api/v1/review/cases/{runnable_review.review_id}/decisions"
+     )
+     assert decisions.status_code == 200
+-    assert len(decisions.json()) == 2
++    assert len(decisions.json()) == 3
+ 
+     with postgres_connection.cursor() as cursor:
+         cursor.execute(
+             "SELECT count(*) FROM review.decisions WHERE review_id = %s",
+             (runnable_review.review_id,),
+         )
+-        assert cursor.fetchone()[0] == 2
++        assert cursor.fetchone()[0] == 3
+         cursor.execute(
+             "SELECT count(*) FROM valuation.validation_findings WHERE validation_run_id = %s",
+             (run["validation_run_id"],),
+         )
+         assert cursor.fetchone()[0] == 1
+ 
+ 
+ def test_rerun_preserves_old_finding_and_links_replacement(
+     authorized_client, runnable_review, postgres_connection
+ ):
+@@ -97,10 +118,157 @@ def test_rerun_preserves_old_finding_and_links_replacement(
+     ).json()
+     assert new_findings[0]["supersedes_finding_id"] == old_finding["finding_id"]
+     old_still_exists = authorized_client.get(
+         f"/api/v1/review/findings/{old_finding['finding_id']}"
+     )
+     assert old_still_exists.status_code == 200
+     runs = authorized_client.get(
+         f"/api/v1/review/cases/{runnable_review.review_id}/runs"
+     )
+     assert [item["run_no"] for item in runs.json()] == [1, 2]
++
++
++def test_generic_update_cannot_bypass_decision_gate(
++    authorized_client, runnable_review
++):
++    authorized_client.post(
++        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
++        json=run_payload(runnable_review),
++    )
++
++    response = authorized_client.patch(
++        f"/api/v1/review/cases/{runnable_review.review_id}",
++        json={"review_status": "APPROVED"},
++    )
++
++    assert response.status_code == 409
++    assert response.json()["error"]["code"] == "REVIEW_DECISION_INVALID"
++    review = authorized_client.get(
++        f"/api/v1/review/cases/{runnable_review.review_id}"
++    ).json()
++    assert review["review_status"] == "REVIEW_REQUIRED"
++    decisions = authorized_client.get(
++        f"/api/v1/review/cases/{runnable_review.review_id}/decisions"
++    ).json()
++    assert decisions == []
++
++
++def test_superseded_run_high_finding_does_not_block_current_clean_run(
++    authorized_client, runnable_review, postgres_connection
++):
++    first_run = authorized_client.post(
++        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
++        json=run_payload(runnable_review),
++    ).json()
++    assert authorized_client.get(
++        f"/api/v1/review/runs/{first_run['validation_run_id']}/findings"
++    ).json()
++    with postgres_connection.cursor() as cursor:
++        cursor.execute(
++            "UPDATE review.reviews SET review_status = 'READY_FOR_REVIEW' "
++            "WHERE review_id = %s",
++            (runnable_review.review_id,),
++        )
++    postgres_connection.commit()
++    payload = run_payload(runnable_review)
++    payload["adjustment_checks"][0]["reported_rate"] = "-5"
++
++    rerun = authorized_client.post(
++        f"/api/v1/review/cases/{runnable_review.review_id}/rerun",
++        json=payload,
++    )
++
++    assert rerun.status_code == 202
++    assert authorized_client.get(
++        f"/api/v1/review/runs/{rerun.json()['validation_run_id']}/findings"
++    ).json() == []
++    approved = authorized_client.post(
++        f"/api/v1/review/cases/{runnable_review.review_id}/decision",
++        json={"decision": "APPROVED", "reason": "目前批次已無高風險疑點"},
++    )
++    assert approved.status_code == 201
++
++
++def test_rate_finding_remains_high_gate_when_rule_severity_is_too_low(
++    authorized_client, runnable_review, postgres_connection
++):
++    with postgres_connection.cursor() as cursor:
++        cursor.execute(
++            "UPDATE valuation.validation_rules SET severity = 'LOW' "
++            "WHERE validation_rule_id = %s",
++            (runnable_review.validation_rule_id,),
++        )
++    postgres_connection.commit()
++    run = authorized_client.post(
++        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
++        json=run_payload(runnable_review),
++    ).json()
++    finding = authorized_client.get(
++        f"/api/v1/review/runs/{run['validation_run_id']}/findings"
++    ).json()[0]
++    decided = authorized_client.post(
++        f"/api/v1/review/findings/{finding['finding_id']}/decisions",
++        json={
++            "review_id": str(runnable_review.review_id),
++            "decision": "PARTIALLY_ACCEPTED",
++            "reason": "仍需確認部分差異",
++            "after_value": {"reported_rate": "-7"},
++        },
++    )
++    assert decided.status_code == 201
++    review = authorized_client.get(
++        f"/api/v1/review/cases/{runnable_review.review_id}"
++    ).json()
++    assert review["current_risk_level"] == "HIGH"
++    assert review["high_count"] == 1
++
++    approved = authorized_client.post(
++        f"/api/v1/review/cases/{runnable_review.review_id}/decision",
++        json={"decision": "APPROVED", "reason": "嘗試忽略風險"},
++    )
++
++    assert approved.status_code == 409
++
++
++def test_completed_case_rejects_late_finding_decision(
++    authorized_client, runnable_review
++):
++    run = authorized_client.post(
++        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
++        json=run_payload(runnable_review),
++    ).json()
++    finding = authorized_client.get(
++        f"/api/v1/review/runs/{run['validation_run_id']}/findings"
++    ).json()[0]
++    assert authorized_client.post(
++        f"/api/v1/review/findings/{finding['finding_id']}/decisions",
++        json={
++            "review_id": str(runnable_review.review_id),
++            "decision": "ACCEPTED",
++            "reason": "疑點已完成處理",
++        },
++    ).status_code == 201
++    assert authorized_client.post(
++        f"/api/v1/review/cases/{runnable_review.review_id}/decision",
++        json={"decision": "APPROVED", "reason": "准予核定"},
++    ).status_code == 201
++    completed = authorized_client.post(
++        f"/api/v1/review/cases/{runnable_review.review_id}/decision",
++        json={"decision": "REVIEW_COMPLETED", "reason": "審查程序完成"},
++    )
++    assert completed.status_code == 201
++    assert authorized_client.get(
++        f"/api/v1/review/cases/{runnable_review.review_id}"
++    ).json()["review_status"] == "REVIEW_COMPLETED"
++
++    late_decision = authorized_client.post(
++        f"/api/v1/review/findings/{finding['finding_id']}/decisions",
++        json={
++            "review_id": str(runnable_review.review_id),
++            "decision": "PARTIALLY_ACCEPTED",
++            "reason": "核定後不應再變更",
++            "after_value": {"reported_rate": "-7"},
++        },
++    )
++
++    assert late_decision.status_code == 409
++    assert late_decision.json()["error"]["code"] == "REVIEW_STATE_CONFLICT"
+diff --git a/app/review/tests/test_runs_api.py b/app/review/tests/test_runs_api.py
+index 8bcba0d..45bf24e 100644
+--- a/app/review/tests/test_runs_api.py
++++ b/app/review/tests/test_runs_api.py
+@@ -5,20 +5,21 @@ import pytest
+ from fastapi.testclient import TestClient
+ 
+ from app.auth.dependencies import get_current_user
+ from app.main import app
+ 
+ 
+ @pytest.fixture
+ def runnable_review(postgres_connection):
+     user_id, case_id, review_id = uuid4(), uuid4(), uuid4()
+     rule_version_id, validation_rule_id = uuid4(), uuid4()
++    document_id = uuid4()
+     with postgres_connection.cursor() as cursor:
+         cursor.execute(
+             """
+             INSERT INTO auth.users (
+                 user_id, username, email, password_hash, display_name,
+                 is_active, created_at, updated_at
+             ) VALUES (%s, %s, %s, 'not-used', 'Run Tester', true, now(), now())
+             """,
+             (user_id, f"run-{user_id}", f"{user_id}@example.test"),
+         )
+@@ -33,47 +34,69 @@ def runnable_review(postgres_connection):
+             (case_id, f"RUN-{str(case_id)[:8]}"),
+         )
+         cursor.execute(
+             """
+             INSERT INTO review.reviews (
+                 review_id, case_id, review_status, started_by_user_id
+             ) VALUES (%s, %s, 'READY_FOR_REVIEW', %s)
+             """,
+             (review_id, case_id, user_id),
+         )
++        cursor.execute(
++            """
++            INSERT INTO valuation.documents (
++                document_id, case_id, document_type, original_filename,
++                mime_type, bucket_name, object_key, checksum_sha256,
++                file_size_bytes, version_no, is_active
++            ) VALUES (%s, %s, 'original', 'run-source.pdf',
++                      'application/pdf', 'land-valuation', %s, %s,
++                      100, 1, true)
++            """,
++            (
++                document_id,
++                case_id,
++                f"cases/{case_id}/run-source.pdf",
++                "e" * 64,
++            ),
++        )
+         cursor.execute(
+             """
+             INSERT INTO valuation.rule_versions (
+                 rule_version_id, rule_set_code, version_no, version_name,
+                 effective_from, status
+             ) VALUES (%s, %s, 1, 'Run Test Rules', CURRENT_DATE, 'PUBLISHED')
+             """,
+             (rule_version_id, f"RUN_TEST_{str(rule_version_id)[:8]}"),
+         )
+         cursor.execute(
+             """
+             INSERT INTO valuation.validation_rules (
+                 validation_rule_id, rule_version_id, rule_code, rule_name,
+                 target_table, target_field_code, severity, rule_expression,
+                 message_template
+             ) VALUES (%s, %s, 'ADJUSTMENT_RATE', '調整率檢核',
+-                      'comparison', 'adjustment_rate', 'HIGH', '{}', '調整率不一致')
++                      'comparison', 'adjustment_rate', 'HIGH', %s, '調整率不一致')
+             """,
+-            (validation_rule_id, rule_version_id),
++            (
++                validation_rule_id,
++                rule_version_id,
++                '{"system_rate":"-5","tolerance":"0"}',
++            ),
+         )
+     postgres_connection.commit()
+     yield SimpleNamespace(
+         user_id=user_id,
+         case_id=case_id,
+         review_id=review_id,
+         rule_version_id=rule_version_id,
+         validation_rule_id=validation_rule_id,
++        document_id=document_id,
+     )
+     with postgres_connection.cursor() as cursor:
+         cursor.execute("DELETE FROM review.decisions WHERE review_id = %s", (review_id,))
+         cursor.execute("DELETE FROM review.risk_summaries WHERE review_id = %s", (review_id,))
+         cursor.execute("DELETE FROM review.findings WHERE review_id = %s", (review_id,))
+         cursor.execute(
+             "DELETE FROM valuation.validation_findings WHERE validation_run_id IN (SELECT validation_run_id FROM valuation.validation_runs WHERE review_id = %s)",
+             (review_id,),
+         )
+         cursor.execute("UPDATE review.reviews SET latest_validation_run_id = NULL WHERE review_id = %s", (review_id,))
+@@ -99,70 +122,66 @@ def authorized_client(runnable_review):
+     try:
+         with TestClient(app) as client:
+             yield client
+     finally:
+         app.dependency_overrides.clear()
+ 
+ 
+ def run_payload(data):
+     return {
+         "rule_version_id": str(data.rule_version_id),
+-        "input_snapshot": {"document_versions": [1], "case_id": str(data.case_id)},
+         "adjustment_checks": [
+             {
+                 "validation_rule_id": str(data.validation_rule_id),
+                 "finding_code": "RATE-COMP-001",
+                 "reported_rate": "-12",
+-                "system_rate": "-5",
+-                "tolerance": "0",
+                 "reported_text": "報告記載調整率 -12%",
+                 "field_path": "comparables[0].adjustment_rate",
+-                "source_evidence": [
+-                    {"source_id": "report-p3", "page": 3, "excerpt": "調整率 -12%"}
+-                ],
+-                "legal_basis": [
+-                    {"source_id": "law-a10", "article": "第10條"}
+-                ],
++                "document_id": str(data.document_id),
++                "document_version": 1,
++                "page_number": 3,
+             }
+         ],
+     }
+ 
+ 
+ def test_run_creates_machine_evidence_finding_and_risk_summary(
+     authorized_client, runnable_review
+ ):
+     response = authorized_client.post(
+         f"/api/v1/review/cases/{runnable_review.review_id}/runs",
+         json=run_payload(runnable_review),
+     )
+ 
+     assert response.status_code == 202
+     run = response.json()
+     assert run["run_status"] == "COMPLETED"
+     assert run["failed_count"] == 1
+-    assert run["input_snapshot"]["adjustment_checks"][0]["reported_rate"] == "-12"
++    assert run["input_snapshot"]["checks"][0]["reported_value"] == "-12"
+ 
+     runs = authorized_client.get(
+         f"/api/v1/review/cases/{runnable_review.review_id}/runs"
+     )
+     assert runs.status_code == 200
+     assert len(runs.json()) == 1
+ 
+     fetched = authorized_client.get(f"/api/v1/review/runs/{run['validation_run_id']}")
+     assert fetched.status_code == 200
+ 
+     findings = authorized_client.get(
+         f"/api/v1/review/runs/{run['validation_run_id']}/findings"
+     )
+     assert findings.status_code == 200
+     finding = findings.json()[0]
+-    assert finding["source_evidence"][0]["source_id"] == "report-p3"
++    assert finding["source_evidence"][0]["document_id"] == str(
++        runnable_review.document_id
++    )
+     assert finding["reported_adjustment_rate"] == "-12.000000"
+     assert finding["system_adjustment_rate"] == "-5.000000"
+     assert finding["comparison_result"]["difference"] == "-7.00"
+     assert finding["ai_status"] == "AI_EXPLANATION_UNAVAILABLE"
+ 
+     one_finding = authorized_client.get(
+         f"/api/v1/review/findings/{finding['finding_id']}"
+     )
+     assert one_finding.status_code == 200
+ 
+@@ -193,10 +212,90 @@ def test_second_running_run_returns_conflict(
+         )
+     postgres_connection.commit()
+ 
+     response = authorized_client.post(
+         f"/api/v1/review/cases/{runnable_review.review_id}/runs",
+         json=run_payload(runnable_review),
+     )
+ 
+     assert response.status_code == 409
+     assert response.json()["error"]["code"] == "RUN_ALREADY_ACTIVE"
++
++
++def test_run_rejects_client_supplied_authoritative_values(
++    authorized_client, runnable_review
++):
++    payload = run_payload(runnable_review)
++    payload["input_snapshot"] = {"forged": True}
++    payload["adjustment_checks"][0]["system_rate"] = "999"
++
++    response = authorized_client.post(
++        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
++        json=payload,
++    )
++
++    assert response.status_code == 422
++
++
++def test_run_rejects_empty_check_selection(authorized_client, runnable_review):
++    response = authorized_client.post(
++        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
++        json={
++            "rule_version_id": str(runnable_review.rule_version_id),
++            "adjustment_checks": [],
++            "expert_checks": [],
++        },
++    )
++
++    assert response.status_code == 422
++
++
++def test_run_snapshot_preserves_zero_reported_value(
++    authorized_client, runnable_review
++):
++    payload = run_payload(runnable_review)
++    payload["adjustment_checks"][0]["reported_rate"] = "0"
++
++    response = authorized_client.post(
++        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
++        json=payload,
++    )
++
++    assert response.status_code == 202
++    assert response.json()["input_snapshot"]["checks"][0]["reported_value"] == "0"
++
++
++def test_run_rejects_document_outside_case_without_changing_state(
++    authorized_client, runnable_review
++):
++    payload = run_payload(runnable_review)
++    payload["adjustment_checks"][0]["document_id"] = str(uuid4())
++
++    response = authorized_client.post(
++        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
++        json=payload,
++    )
++
++    assert response.status_code == 409
++    assert response.json()["error"]["code"] == "EVIDENCE_SCOPE_CONFLICT"
++    review = authorized_client.get(
++        f"/api/v1/review/cases/{runnable_review.review_id}"
++    ).json()
++    assert review["review_status"] == "READY_FOR_REVIEW"
++    assert authorized_client.get(
++        f"/api/v1/review/cases/{runnable_review.review_id}/runs"
++    ).json() == []
++
++
++def test_run_rejects_rule_not_in_published_ruleset(
++    authorized_client, runnable_review
++):
++    payload = run_payload(runnable_review)
++    payload["adjustment_checks"][0]["validation_rule_id"] = str(uuid4())
++
++    response = authorized_client.post(
++        f"/api/v1/review/cases/{runnable_review.review_id}/runs",
++        json=payload,
++    )
++
++    assert response.status_code == 409
++    assert response.json()["error"]["code"] == "RULE_SELECTION_CONFLICT"
+diff --git a/app/review/tests/test_workflow_e2e.py b/app/review/tests/test_workflow_e2e.py
+index 0bfece9..2afa8ea 100644
+--- a/app/review/tests/test_workflow_e2e.py
++++ b/app/review/tests/test_workflow_e2e.py
+@@ -10,20 +10,22 @@ from app.main import app
+ 
+ @pytest.fixture
+ def workflow_data(postgres_connection):
+     ids = SimpleNamespace(
+         user_id=uuid4(),
+         case_id=uuid4(),
+         rule_version_id=uuid4(),
+         high_rule_id=uuid4(),
+         medium_rule_id=uuid4(),
+         original_group_id=uuid4(),
++        current_document_id=None,
++        current_document_version=None,
+     )
+     with postgres_connection.cursor() as cursor:
+         cursor.execute(
+             """INSERT INTO auth.users
+                (user_id, username, email, password_hash, display_name,
+                 is_active, created_at, updated_at)
+                VALUES (%s, %s, %s, 'unused', 'E2E Reviewer', true, now(), now())""",
+             (ids.user_id, f"e2e-{ids.user_id}", f"{ids.user_id}@example.test"),
+         )
+         cursor.execute(
+@@ -34,31 +36,50 @@ def workflow_data(postgres_connection):
+                        'F', 'F01', 'DRAFT')""",
+             (ids.case_id, f"E2E-{str(ids.case_id)[:8]}"),
+         )
+         cursor.execute(
+             """INSERT INTO valuation.rule_versions
+                (rule_version_id, rule_set_code, version_no, version_name,
+                 effective_from, status)
+                VALUES (%s, %s, 1, 'E2E Rules', CURRENT_DATE, 'PUBLISHED')""",
+             (ids.rule_version_id, f"E2E_{str(ids.rule_version_id)[:8]}"),
+         )
+-        for rule_id, code, severity in (
+-            (ids.high_rule_id, "ADJUSTMENT_RATE", "HIGH"),
+-            (ids.medium_rule_id, "EXPERT_GRADE", "MEDIUM"),
++        for rule_id, code, severity, expression in (
++            (
++                ids.high_rule_id,
++                "ADJUSTMENT_RATE",
++                "HIGH",
++                '{"system_rate":"-5","tolerance":"0"}',
++            ),
++            (
++                ids.medium_rule_id,
++                "EXPERT_GRADE",
++                "MEDIUM",
++                '{"system_grade":"A"}',
++            ),
+         ):
+             cursor.execute(
+                 """INSERT INTO valuation.validation_rules
+                    (validation_rule_id, rule_version_id, rule_code, rule_name,
+                     target_table, target_field_code, severity, rule_expression,
+                     message_template)
+-                   VALUES (%s, %s, %s, %s, 'comparison', %s, %s, '{}', %s)""",
+-                (rule_id, ids.rule_version_id, code, code, code.lower(), severity, code),
++                   VALUES (%s, %s, %s, %s, 'comparison', %s, %s, %s, %s)""",
++                (
++                    rule_id,
++                    ids.rule_version_id,
++                    code,
++                    code,
++                    code.lower(),
++                    severity,
++                    expression,
++                    code,
++                ),
+             )
+     postgres_connection.commit()
+     yield ids
+     with postgres_connection.cursor() as cursor:
+         cursor.execute("DELETE FROM review.decisions WHERE review_id IN (SELECT review_id FROM review.reviews WHERE case_id = %s)", (ids.case_id,))
+         cursor.execute("DELETE FROM review.risk_summaries WHERE review_id IN (SELECT review_id FROM review.reviews WHERE case_id = %s)", (ids.case_id,))
+         cursor.execute("DELETE FROM review.findings WHERE review_id IN (SELECT review_id FROM review.reviews WHERE case_id = %s)", (ids.case_id,))
+         cursor.execute("DELETE FROM valuation.validation_findings WHERE validation_run_id IN (SELECT validation_run_id FROM valuation.validation_runs WHERE case_id = %s)", (ids.case_id,))
+         cursor.execute("UPDATE review.reviews SET latest_validation_run_id = NULL WHERE case_id = %s", (ids.case_id,))
+         cursor.execute("DELETE FROM valuation.validation_runs WHERE case_id = %s", (ids.case_id,))
+@@ -84,76 +105,86 @@ def workflow_client(workflow_data):
+             yield client
+     finally:
+         app.dependency_overrides.clear()
+ 
+ 
+ def add_complete_inputs(connection, data, version=1):
+     with connection.cursor() as cursor:
+         if version == 1:
+             for index, document_type in enumerate(("original", "land-register", "cadastral-map"), 1):
+                 group_id = data.original_group_id if document_type == "original" else uuid4()
++                document_id = uuid4()
++                if document_type == "original":
++                    data.current_document_id = document_id
++                    data.current_document_version = 1
+                 cursor.execute(
+                     """INSERT INTO valuation.documents
+-                       (case_id, document_type, original_filename, mime_type,
++                       (document_id, case_id, document_type, original_filename, mime_type,
+                         bucket_name, object_key, checksum_sha256, file_size_bytes,
+                         version_no, is_active, document_group_id)
+-                       VALUES (%s, %s, %s, 'application/pdf', 'land-valuation',
++                       VALUES (%s, %s, %s, %s, 'application/pdf', 'land-valuation',
+                                %s, %s, 100, 1, true, %s)""",
+-                    (data.case_id, document_type, f"{document_type}.pdf",
++                    (document_id, data.case_id, document_type, f"{document_type}.pdf",
+                      f"cases/{data.case_id}/{document_type}.pdf", str(index) * 64, group_id),
+                 )
+             cursor.execute(
+                 """INSERT INTO valuation.parcels
+                    (case_id, district_code, section_name, land_no, area_sqm)
+                    VALUES (%s, 'F01', '測試段', '1', 100.5)""",
+                 (data.case_id,),
+             )
+         else:
++            data.current_document_id = uuid4()
++            data.current_document_version = 2
+             cursor.execute(
+                 """INSERT INTO valuation.documents
+-                   (case_id, document_type, original_filename, mime_type,
++                   (document_id, case_id, document_type, original_filename, mime_type,
+                     bucket_name, object_key, checksum_sha256, file_size_bytes,
+                     version_no, is_active, document_group_id)
+-                   VALUES (%s, 'original', 'original-v2.pdf', 'application/pdf',
++                   VALUES (%s, %s, 'original', 'original-v2.pdf', 'application/pdf',
+                            'land-valuation', %s, %s, 120, 2, true, %s)""",
+-                (data.case_id, f"cases/{data.case_id}/original-v2.pdf", "d" * 64, data.original_group_id),
++                (
++                    data.current_document_id,
++                    data.case_id,
++                    f"cases/{data.case_id}/original-v2.pdf",
++                    "d" * 64,
++                    data.original_group_id,
++                ),
+             )
+     connection.commit()
+ 
+ 
+ def analysis_payload(data, reported="-12", include_medium=True):
+     payload = {
+         "rule_version_id": str(data.rule_version_id),
+-        "input_snapshot": {"case_id": str(data.case_id)},
+         "adjustment_checks": [{
+             "validation_rule_id": str(data.high_rule_id),
+             "finding_code": "HIGH-RATE",
+             "reported_rate": reported,
+-            "system_rate": "-5",
+-            "tolerance": "0",
+             "reported_text": f"調整率 {reported}%",
+             "field_path": "comparables[0].adjustment_rate",
+-            "source_evidence": [{"source_id": "report-p3", "page": 3}],
+-            "legal_basis": [{"source_id": "law-a10", "article": "第10條"}],
++            "document_id": str(data.current_document_id),
++            "document_version": data.current_document_version,
++            "page_number": 3,
+         }],
+         "expert_checks": [],
+     }
+     if include_medium:
+         payload["expert_checks"] = [{
+             "validation_rule_id": str(data.medium_rule_id),
+             "finding_code": "MEDIUM-GRADE",
+             "reported_grade": "B",
+-            "system_grade": "A",
+             "reported_text": "報告評定 B 級",
+             "field_path": "comparables[0].grade",
+-            "source_evidence": [{"source_id": "report-p4", "page": 4}],
+-            "legal_basis": [],
++            "document_id": str(data.current_document_id),
++            "document_version": data.current_document_version,
++            "page_number": 4,
+         }]
+     return payload
+ 
+ 
+ def test_fixed_case_workflow_preserves_history(workflow_client, workflow_data, postgres_connection):
+     created = workflow_client.post("/api/v1/review/cases", json={"case_id": str(workflow_data.case_id)}).json()
+     review_id = created["review_id"]
+     missing = workflow_client.post(f"/api/v1/review/cases/{review_id}/completeness-check").json()
+     assert missing["review_status"] == "PENDING_MATERIALS"
+     assert "DOC_LAND_REGISTER" in {item["item_code"] for item in missing["items"]}

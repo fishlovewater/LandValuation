@@ -180,7 +180,7 @@ def test_fixed_case_workflow_preserves_trusted_history(workflow_client, workflow
     add_complete_inputs(postgres_connection, workflow_data)
     assert workflow_client.post(f"/api/v1/review/cases/{review_id}/completeness-check").json()["review_status"] == "READY_FOR_REVIEW"
     run1_response = workflow_client.post(f"/api/v1/review/cases/{review_id}/runs", json={})
-    assert run1_response.status_code == 202
+    assert run1_response.status_code == 200
     run1 = run1_response.json()
     _assert_completed_after_started(run1)
     assert _snapshot_field_ids(run1) == workflow_data.v1_field_ids
@@ -196,7 +196,7 @@ def test_fixed_case_workflow_preserves_trusted_history(workflow_client, workflow
     add_complete_inputs(postgres_connection, workflow_data, version=2)
     assert workflow_client.post(f"/api/v1/review/cases/{review_id}/completeness-check").json()["review_status"] == "READY_FOR_REVIEW"
     run2_response = workflow_client.post(f"/api/v1/review/cases/{review_id}/rerun", json={})
-    assert run2_response.status_code == 202
+    assert run2_response.status_code == 200
     run2 = run2_response.json()
     _assert_completed_after_started(run2)
     assert _snapshot_field_ids(run2) == workflow_data.v2_field_ids

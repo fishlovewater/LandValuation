@@ -52,7 +52,7 @@
 - 時點：第 3 階段路徑限制生效前的最後一次產品程式外部修改。
 - 核准狀態：已核准。
 
-## 已核准、尚未完成的外部變更
+## 已核准且已完成的外部變更
 
 ### 6. Review 狀態欄位長度修正
 
@@ -61,7 +61,7 @@
 - 預定修改：只將 `review.reviews.review_status` 擴為 `varchar(30)`；不刪資料、不改狀態值、不修改既有 migration。
 - 回復方式：downgrade 前先檢查既有值長度；全部值不超過 20 時才縮回 `varchar(20)`，否則中止，避免資料截斷。
 - 核准狀態：使用者已於 2026-08-25 明確同意新增 migration。
-- 實際狀態：已建立並套用；主資料庫目前為 `20260825_0006 (head)`。
+- 實際狀態：已建立並套用；完成當時主資料庫為 `20260825_0006`，後續已正常升級至 `20260825_0007`。
 - 驗證：schema contract 已由 RED 轉為 GREEN；隔離資料庫已完成 `upgrade head → downgrade 0005 → upgrade head`，測試資料庫隨後刪除。
 
 ### 7. 可信輸入與規則自動選擇資料庫契約
@@ -70,9 +70,16 @@
 - 核准狀態：使用者已於 2026-08-25 明確同意此唯一的 `app/review/**` 外變更。
 - 原因：建立可追溯的正式抽取欄位與抽取批次資料契約，並支援依案件條件自動選擇規則。
 - 實際狀態：已建立並套用；主資料庫目前為 `20260825_0007 (head)`。
-- 驗證：最終修正 published-rule preflight 後，隔離資料庫 `land_valuation_migration_test_0007` 已在 `0006` seed 一筆具 `source_document_id` 的合法 `PUBLISHED` rule，並完成 `upgrade head → downgrade 0006 → upgrade head`；三個 Alembic 指令均成功並回到 `20260825_0007`，降級後亦確認 `source_document_id` 仍存在。驗證後會刪除該隔離資料庫。
+- 驗證：最終修正 published-rule preflight 後，隔離資料庫 `land_valuation_migration_test_0007` 已在 `0006` seed 一筆具 `source_document_id` 的合法 `PUBLISHED` rule，並完成 `upgrade head → downgrade 0006 → upgrade head`；三個 Alembic 指令均成功並回到 `20260825_0007`，降級後亦確認 `source_document_id` 仍存在。驗證後已刪除該隔離資料庫並確認不存在。
 - 補充：`source_document_id`、其外鍵與索引原已由 `20260824_0004` 建立，`0007` 僅保留其 ownership 並新增已發布規則的來源約束。
 
 ## 範圍核對
 
 截至目前，branch 起點 `9bcf5a0` 之後的 `app/review/**` 外變更只有上述第 1～7 項；除第 7 項已明確核准的 migration 外，其餘後續程式變更均位於 `app/review/**`。
+
+## 2026-08-27 維護範圍
+
+- 使用者明確要求不要修改根目錄 `pytest.ini`，避免分開開發的子系統互相影響。
+- 本次同步 run API 契約、測試、設計、計畫、changelog 與 `.sdd` 紀錄全部位於 `app/review/**`。
+- Review 測試以明確路徑 `pytest -q app/review/tests` 執行，不改全專案測試收集設定。
+- 本次沒有新增任何 `app/review/**` 外變更。
