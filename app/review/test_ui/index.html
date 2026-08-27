@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Review API 手動測試主控台</title>
+  <style>
+    :root {
+      --paper: #f3f0e8; --sheet: #fffdf7; --ink: #17252f; --muted: #5d6b70;
+      --line: #b7b7ad; --navy: #12384a; --navy-2: #0a2734; --seal: #b3392f;
+      --amber: #b86c12; --focus: #087d9d;
+      --mono: "Cascadia Code", Consolas, monospace;
+      --serif: "Noto Serif TC", "PMingLiU", Georgia, serif;
+      --sans: "Segoe UI", "Noto Sans TC", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0; color: var(--ink); background-color: var(--paper);
+      background-image: linear-gradient(rgba(18,56,74,.055) 1px, transparent 1px), linear-gradient(90deg, rgba(18,56,74,.055) 1px, transparent 1px);
+      background-size: 24px 24px; font-family: var(--sans); line-height: 1.5;
+    }
+    button, input, select, textarea { font: inherit; border-radius: 0; }
+    :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+    .masthead {
+      min-height: 176px; padding: 30px clamp(20px,5vw,72px); color: #f8f6ee;
+      background: var(--navy-2); border-bottom: 8px solid var(--seal); display: flex;
+      align-items: flex-end; justify-content: space-between; gap: 28px;
+    }
+    .eyebrow { margin: 0 0 8px; font: 700 12px/1 var(--mono); letter-spacing: .18em; text-transform: uppercase; color: #9bc4cf; }
+    h1 { margin: 0; font: 700 clamp(30px,5vw,56px)/1.08 var(--serif); }
+    .masthead p { max-width: 620px; margin: 14px 0 0; color: #c7d4d7; }
+    .env-stamp { border: 2px solid #e9d8c4; padding: 12px 16px; font: 700 12px/1.3 var(--mono); letter-spacing: .08em; text-align: center; transform: rotate(-2deg); }
+    .shell { width: min(1500px,100%); margin: 0 auto; padding: 28px clamp(16px,3vw,42px) 64px; display: grid; grid-template-columns: 230px minmax(0,1fr) minmax(300px,390px); gap: 24px; align-items: start; }
+    .rail, .log-panel { position: sticky; top: 18px; }
+    .rail { background: var(--navy); color: #eef5f3; padding: 18px 0 14px; border-left: 6px solid var(--seal); }
+    .rail-title { padding: 0 18px 14px; margin: 0; font: 700 12px var(--mono); letter-spacing: .12em; color: #9bc4cf; }
+    .rail ol { list-style: none; padding: 0; margin: 0; counter-reset: steps; }
+    .rail li { counter-increment: steps; border-top: 1px solid rgba(255,255,255,.14); }
+    .rail a { display: grid; grid-template-columns: 28px 1fr; gap: 9px; padding: 14px 18px; color: inherit; text-decoration: none; }
+    .rail a::before { content: "0" counter(steps); font: 700 11px var(--mono); color: #d9a681; }
+    .rail a:hover { background: rgba(255,255,255,.08); }
+    .state-strip { margin: 16px 14px 0; padding: 12px; background: rgba(0,0,0,.18); font: 11px/1.65 var(--mono); overflow-wrap: anywhere; }
+    .state-strip strong { color: #f4c49f; }
+    .workspace { display: grid; gap: 22px; }
+    .sheet { background: var(--sheet); border: 1px solid var(--line); border-top: 5px solid var(--navy); box-shadow: 5px 5px 0 rgba(23,37,47,.09); }
+    .sheet-head { padding: 20px 22px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 16px; align-items: baseline; }
+    .step-no { font: 700 12px var(--mono); color: var(--seal); letter-spacing: .1em; }
+    h2 { margin: 0; font: 700 clamp(21px,3vw,29px)/1.15 var(--serif); }
+    .sheet-body { padding: 20px 22px 24px; }
+    .note { margin: 0 0 18px; color: var(--muted); font-size: 14px; }
+    .warning { margin-top: 18px; padding: 12px 14px; border-left: 4px solid var(--amber); background: #f7ead7; color: #634013; font-size: 13px; }
+    .grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; }
+    .span-2 { grid-column: 1 / -1; }
+    label { display: grid; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .03em; }
+    input, select, textarea { width: 100%; min-height: 42px; padding: 9px 10px; color: var(--ink); background: #fff; border: 1px solid #899397; }
+    textarea { min-height: 76px; resize: vertical; }
+    .actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 16px; }
+    button { min-height: 42px; padding: 9px 14px; border: 1px solid var(--navy-2); color: white; background: var(--navy); cursor: pointer; font-weight: 700; }
+    button:hover { background: var(--navy-2); }
+    button.secondary { color: var(--navy-2); background: transparent; }
+    button.secondary:hover { color: white; background: var(--navy-2); }
+    button.danger { background: var(--seal); border-color: #7f221b; }
+    button:disabled { cursor: wait; opacity: .55; }
+    code, .mono { font-family: var(--mono); }
+    .cli { padding: 12px; background: #17252f; color: #f5efe3; overflow-x: auto; font: 12px/1.6 var(--mono); }
+    .log-panel { max-height: calc(100vh - 36px); background: #111d23; color: #dde9e9; border-top: 5px solid var(--seal); display: flex; flex-direction: column; }
+    .log-head { padding: 15px 16px; border-bottom: 1px solid #42535b; }
+    .log-head h2 { font: 700 16px var(--mono); }
+    .live-status { margin-top: 7px; color: #9bc4cf; font-size: 12px; }
+    .log-actions { padding: 9px 12px; border-bottom: 1px solid #42535b; }
+    .log-actions button { min-height: 32px; padding: 5px 9px; font-size: 11px; border-color: #6f7e84; background: transparent; }
+    #request-log { min-height: 280px; overflow: auto; padding: 12px; display: grid; gap: 10px; }
+    .log-entry { padding: 10px; border-left: 3px solid #7596a0; background: #1b2b32; }
+    .log-entry.ok { border-left-color: #5bb48c; }
+    .log-entry.fail { border-left-color: #e6695f; }
+    .log-meta { margin: 0 0 7px; font: 700 11px/1.4 var(--mono); color: #a8c6cd; }
+    .log-entry pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.5 var(--mono); color: #eef3ef; }
+    .empty-log { color: #82979d; font: 12px var(--mono); }
+    .footer { padding: 20px; text-align: center; color: var(--muted); font-size: 12px; }
+    @media (max-width: 1120px) { .shell { grid-template-columns: 190px minmax(0,1fr); } .log-panel { position: static; grid-column: 1 / -1; max-height: none; } #request-log { max-height: 520px; } }
+    @media (max-width: 760px) { .masthead { align-items: flex-start; flex-direction: column; } .shell { display: block; padding-inline: 12px; } .rail { position: static; margin-bottom: 20px; } .rail ol { display: grid; grid-template-columns: repeat(2,1fr); } .workspace { margin-bottom: 20px; } .grid { grid-template-columns: 1fr; } .span-2 { grid-column: auto; } .sheet-body, .sheet-head { padding-inline: 16px; } }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  </style>
+</head>
+<body>
+  <header class="masthead">
+    <div><p class="eyebrow">Land Valuation Assistant / Subsystem 02</p><h1>Review API 手動測試主控台</h1><p>使用真實 JWT、PostgreSQL、MinIO 與 Review API，逐步驗證審查閉環。這不是正式產品前端。</p></div>
+    <div class="env-stamp">DEVELOPMENT<br>LOCAL TEST ONLY</div>
+  </header>
+  <main class="shell">
+    <nav class="rail" aria-label="測試步驟">
+      <p class="rail-title">OPERATION INDEX</p>
+      <ol><li><a href="#connection">連線與登入</a></li><li><a href="#case">案件與完整性</a></li><li><a href="#run">執行與風險</a></li><li><a href="#decision">決策與複查</a></li><li><a href="#report">報告與下載</a></li></ol>
+      <div class="state-strip" id="state-strip">尚未建立測試狀態</div>
+    </nav>
+    <div class="workspace">
+      <section class="sheet" id="connection">
+        <div class="sheet-head"><span class="step-no">STEP 01</span><h2>連線與登入</h2></div>
+        <div class="sheet-body"><p class="note">先在終端執行 seed，將輸出的一次性密碼貼入。密碼不會保存在此頁。</p><div class="cli">docker exec land_valuation_api python -m app.review.demo seed</div>
+          <form id="login-form"><div class="grid">
+            <label>API Base<input id="api-base" value="/api/v1" autocomplete="off"></label>
+            <label>使用者名稱<input id="username" value="review_demo" autocomplete="username" required></label>
+            <label class="span-2">一次性密碼<input id="password" type="password" autocomplete="current-password" required></label>
+          </div><div class="actions"><button type="submit">登入並保存 Token</button><button type="button" class="secondary" data-action="me">查詢 /auth/me</button><button type="button" class="danger" data-action="logout">清除本頁狀態</button></div></form>
+        </div>
+      </section>
+      <section class="sheet" id="case">
+        <div class="sheet-head"><span class="step-no">STEP 02</span><h2>案件與完整性</h2></div>
+        <div class="sheet-body"><p class="note">貼上 seed 輸出的 <code>case_id</code>，先建立 Review case，再做完整性檢查。</p>
+          <form id="case-form"><div class="grid"><label class="span-2">Case ID<input id="case-id" placeholder="00000000-0000-0000-0000-000000000000" required></label><label class="span-2">Review ID（建立後自動帶入）<input id="review-id" placeholder="尚未建立"></label></div>
+            <div class="actions"><button type="submit">建立審查案件</button><button type="button" class="secondary" data-action="list-cases">列出案件</button><button type="button" class="secondary" data-action="get-case">讀取目前案件</button><button type="button" data-action="completeness">執行完整性檢查</button></div>
+          </form>
+        </div>
+      </section>
+      <section class="sheet" id="run">
+        <div class="sheet-head"><span class="step-no">STEP 03</span><h2>執行、疑點與風險</h2></div>
+        <div class="sheet-body" id="run-actions"><p class="note">Run 是同步 API；成功應為 HTTP 200，且 <code>run_status</code> 為 <code>COMPLETED</code>。</p>
+          <div class="grid"><label>Validation Run ID<input id="run-id" placeholder="執行後自動帶入"></label><label>Finding ID<input id="finding-id" placeholder="查詢疑點後自動帶入"></label></div>
+          <div class="actions"><button type="button" data-action="create-run">建立 Run</button><button type="button" class="secondary" data-action="list-runs">列出 Runs</button><button type="button" class="secondary" data-action="get-run">讀取 Run</button><button type="button" data-action="findings">查詢 Findings</button><button type="button" data-action="risk">查詢 Risk Summary</button></div>
+        </div>
+      </section>
+      <section class="sheet" id="decision">
+        <div class="sheet-head"><span class="step-no">STEP 04</span><h2>人工決策與修正版複查</h2></div>
+        <div class="sheet-body"><form id="decision-form"><div class="grid">
+          <label>Finding 決策<select id="finding-decision"><option>PARTIALLY_ACCEPTED</option><option>ACCEPTED</option><option>REJECTED</option><option>REQUIRES_SUPPLEMENT</option><option>EXPERT_REVIEW</option></select></label>
+          <label>案件決策<select id="case-decision"><option>RETURNED_FOR_REVISION</option><option>SUPPLEMENT_REQUIRED</option><option>EXPERT_REVIEW</option><option>APPROVED</option><option>REVIEW_COMPLETED</option></select></label>
+          <label class="span-2">決策理由<textarea id="decision-reason">Manual test: revise the official adjustment rate.</textarea></label>
+          </div><div class="actions"><button type="submit">送出 Finding 決策</button><button type="button" data-action="case-decision">送出案件決策</button><button type="button" class="secondary" data-action="list-decisions">列出決策</button><button type="button" class="secondary" data-action="preprocessing">狀態改為 PREPROCESSING</button></div></form>
+          <p class="warning">完成退回決策與 PREPROCESSING 後，在終端建立 v2，再回來做完整性檢查與 rerun。</p><div class="cli">docker exec land_valuation_api python -m app.review.demo revise</div><div class="actions"><button type="button" data-action="rerun">執行 Rerun</button></div>
+        </div>
+      </section>
+      <section class="sheet" id="report">
+        <div class="sheet-head"><span class="step-no">STEP 05</span><h2>JSON 與 PDF 報告</h2></div>
+        <div class="sheet-body" id="report-actions"><p class="note">PDF 先由 POST 產生並保存 MinIO metadata，再由 download endpoint 取得內容。</p><div class="actions"><button type="button" data-action="json-report">取得 JSON Report</button><button type="button" data-action="generate-pdf">產生 PDF</button><button type="button" class="secondary" data-action="download-pdf">下載 PDF</button></div><p class="warning">測試結束後清理：<code>docker exec land_valuation_api python -m app.review.demo reset</code></p></div>
+      </section>
+    </div>
+    <aside class="log-panel" aria-label="API 請求紀錄"><div class="log-head"><h2>REQUEST EVIDENCE</h2><div class="live-status" id="live-status" role="status" aria-live="polite">等待操作</div></div><div class="log-actions"><button type="button" data-action="clear-log">清除紀錄</button></div><div id="request-log"><p class="empty-log">每次 API 呼叫會記錄 method、path、status、耗時與 response。</p></div></aside>
+  </main>
+  <footer class="footer">Review subsystem development utility · no production exposure</footer>
+  <script>
+    (() => {
+      "use strict";
+      const storageKeys = ["review.token", "review.case_id", "review.review_id", "review.run_id", "review.finding_id"];
+      const $ = (selector) => document.querySelector(selector);
+      const state = {
+        token: sessionStorage.getItem("review.token") || "", caseId: sessionStorage.getItem("review.case_id") || "",
+        reviewId: sessionStorage.getItem("review.review_id") || "", runId: sessionStorage.getItem("review.run_id") || "",
+        findingId: sessionStorage.getItem("review.finding_id") || ""
+      };
+      const stateFields = { caseId: ["review.case_id", "#case-id"], reviewId: ["review.review_id", "#review-id"], runId: ["review.run_id", "#run-id"], findingId: ["review.finding_id", "#finding-id"] };
+      const escapeHtml = (value) => String(value).replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"})[char]);
+      function renderState() { $("#state-strip").innerHTML = [`<strong>TOKEN</strong> ${state.token ? "stored" : "missing"}`, `<strong>CASE</strong> ${escapeHtml(state.caseId || "—")}`, `<strong>REVIEW</strong> ${escapeHtml(state.reviewId || "—")}`, `<strong>RUN</strong> ${escapeHtml(state.runId || "—")}`, `<strong>FINDING</strong> ${escapeHtml(state.findingId || "—")}`].join("<br>"); }
+      function setState(key, value) { state[key] = value || ""; const config = stateFields[key]; if (config) { sessionStorage.setItem(config[0], state[key]); $(config[1]).value = state[key]; } renderState(); }
+      function syncInputs() { for (const [key, [, selector]] of Object.entries(stateFields)) { const value = $(selector).value.trim(); if (value !== state[key]) setState(key, value); } }
+      function friendlyError(status, payload) { const common = {401:"登入憑證無效或已過期，請重新 seed/login。",403:"目前使用者沒有此 Review 權限。",404:"找不到資源；請確認 ID 或 development 環境。",409:"目前狀態或正式資料不允許此操作。",422:"欄位格式不符合 API schema。",500:"伺服器執行失敗，請檢查 API log。"}; return payload?.error?.message || common[status] || `HTTP ${status}`; }
+      function appendLog({method,path,status,elapsed,payload,ok}) { const root = $("#request-log"); root.querySelector(".empty-log")?.remove(); const entry = document.createElement("article"); entry.className = `log-entry ${ok ? "ok" : "fail"}`; const meta = document.createElement("p"); meta.className = "log-meta"; meta.textContent = `${method} ${path} · ${status} · ${elapsed} ms`; const body = document.createElement("pre"); body.textContent = typeof payload === "string" ? payload : JSON.stringify(payload,null,2); entry.append(meta,body); root.prepend(entry); }
+      async function request(path, {method="GET", body, binary=false}={}) {
+        syncInputs(); const base = $("#api-base").value.trim().replace(/\/$/, ""); const headers = {};
+        if (state.token) headers.Authorization = `Bearer ${state.token}`; if (body !== undefined) headers["Content-Type"] = "application/json";
+        const start = performance.now(); $("#live-status").textContent = `${method} ${path} 執行中…`; let response;
+        try {
+          response = await fetch(`${base}${path}`, {method,headers,body: body === undefined ? undefined : JSON.stringify(body)});
+          const elapsed = Math.round(performance.now()-start); let payload;
+          if (binary && response.ok) { payload = await response.blob(); appendLog({method,path,status:response.status,elapsed,ok:true,payload:`PDF blob · ${payload.size} bytes`}); }
+          else { const text = await response.text(); try { payload = text ? JSON.parse(text) : null; } catch { payload = text; } appendLog({method,path,status:response.status,elapsed,payload,ok:response.ok}); }
+          if (!response.ok) throw new Error(friendlyError(response.status,payload)); $("#live-status").textContent = `${method} ${path} 完成：HTTP ${response.status}`; return payload;
+        } catch (error) { if (!response) appendLog({method,path,status:"NETWORK",elapsed:Math.round(performance.now()-start),payload:error.message,ok:false}); $("#live-status").textContent = `失敗：${error.message}`; throw error; }
+      }
+      async function perform(button, task) { button.disabled = true; try { await task(); } catch (error) { console.error(error); } finally { button.disabled = false; } }
+      $("#login-form").addEventListener("submit", (event) => { event.preventDefault(); perform(event.submitter, async () => { const payload = await request("/auth/login", {method:"POST",body:{username:$("#username").value.trim(),password:$("#password").value}}); state.token = payload.access_token; sessionStorage.setItem("review.token",state.token); $("#password").value = ""; renderState(); }); });
+      $("#case-form").addEventListener("submit", (event) => { event.preventDefault(); perform(event.submitter, async () => { const payload = await request("/review/cases", {method:"POST",body:{case_id:state.caseId}}); setState("reviewId",payload.review_id); }); });
+      $("#decision-form").addEventListener("submit", (event) => { event.preventDefault(); perform(event.submitter, () => request(`/review/findings/${state.findingId}/decisions`, {method:"POST",body:{review_id:state.reviewId,decision:$("#finding-decision").value,reason:$("#decision-reason").value,after_value:{manual_test:true}}})); });
+      const actions = {
+        me: () => request("/auth/me"),
+        logout: async () => { storageKeys.forEach((key) => sessionStorage.removeItem(key)); state.token = ""; for (const key of Object.keys(stateFields)) setState(key,""); $("#live-status").textContent = "已清除本頁 sessionStorage"; },
+        "list-cases": () => request("/review/cases?limit=50&offset=0"), "get-case": () => request(`/review/cases/${state.reviewId}`),
+        completeness: () => request(`/review/cases/${state.reviewId}/completeness-check`, {method:"POST"}),
+        "create-run": async () => { const payload = await request(`/review/cases/${state.reviewId}/runs`, {method:"POST",body:{}}); setState("runId",payload.validation_run_id); },
+        "list-runs": async () => { const payload = await request(`/review/cases/${state.reviewId}/runs`); if (payload.length) setState("runId",payload[payload.length-1].validation_run_id); },
+        "get-run": () => request(`/review/runs/${state.runId}`),
+        findings: async () => { const payload = await request(`/review/runs/${state.runId}/findings`); const preferred = payload.find((item) => item.severity === "HIGH") || payload[0]; if (preferred) setState("findingId",preferred.finding_id); },
+        risk: () => request(`/review/runs/${state.runId}/risk-summary`),
+        "case-decision": () => request(`/review/cases/${state.reviewId}/decision`, {method:"POST",body:{decision:$("#case-decision").value,reason:$("#decision-reason").value}}),
+        "list-decisions": () => request(`/review/cases/${state.reviewId}/decisions`),
+        preprocessing: () => request(`/review/cases/${state.reviewId}`, {method:"PATCH",body:{review_status:"PREPROCESSING"}}),
+        rerun: async () => { const payload = await request(`/review/cases/${state.reviewId}/rerun`, {method:"POST",body:{}}); setState("runId",payload.validation_run_id); setState("findingId",""); },
+        "json-report": () => request(`/review/runs/${state.runId}/report`), "generate-pdf": () => request(`/review/runs/${state.runId}/report/pdf`, {method:"POST"}),
+        "download-pdf": async () => { const blob = await request(`/review/runs/${state.runId}/report/pdf/download`, {binary:true}); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = `review-report-${state.runId}.pdf`; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url); },
+        "clear-log": async () => { $("#request-log").innerHTML = '<p class="empty-log">紀錄已清除。</p>'; }
+      };
+      document.addEventListener("click", (event) => { const button = event.target.closest("button[data-action]"); if (button && actions[button.dataset.action]) perform(button,actions[button.dataset.action]); });
+      for (const [key,[,selector]] of Object.entries(stateFields)) $(selector).value = state[key]; renderState();
+    })();
+  </script>
+</body>
+</html>

@@ -1,11 +1,14 @@
 from io import BytesIO
+from pathlib import Path
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse
 
 from app.auth.dependencies import DbSession, require_permissions
 from app.auth.service import permission_codes
+from app.core.config import get_settings
 from app.review.repository import ReviewRepository
 from app.review.schemas import (
     ReviewAssign,
@@ -35,6 +38,7 @@ from app.review.reports import ReviewReport
 from app.storage.dependencies import Storage
 
 router = APIRouter(prefix="/review", tags=["review"])
+TEST_UI_PATH = Path(__file__).with_name("test_ui") / "index.html"
 
 
 def service_for(session: DbSession) -> ReviewService:
@@ -46,6 +50,13 @@ def audit_request_id(request: Request) -> UUID:
         return UUID(request.state.request_id)
     except (AttributeError, TypeError, ValueError):
         return uuid4()
+
+
+@router.get("/test-ui", include_in_schema=False)
+async def review_test_ui() -> FileResponse:
+    if get_settings().app_env.lower() != "development":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return FileResponse(TEST_UI_PATH, media_type="text/html; charset=utf-8")
 
 
 @router.post("/cases", response_model=ReviewRead, status_code=status.HTTP_201_CREATED)
