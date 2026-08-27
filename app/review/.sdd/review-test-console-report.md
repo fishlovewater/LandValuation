@@ -17,6 +17,7 @@
 
 - username：`review_demo`
 - case number：`DEMO-REVIEW-001`
+- case/rule district：`DEMO-F01`
 - rule set：`DEMO-REVIEW-RULES`
 - knowledge document code：`DEMO-REVIEW-SOURCE`
 - 案件物件：`cases/{case_id}/demo/...`
@@ -44,9 +45,9 @@ rtk docker exec land_valuation_api python -m app.review.demo seed
 ## 驗證結果
 
 - 完整 Review suite：153 passed，1 個既有 deprecation warning。
+- Demo 預先存在時的完整 Review suite：153 passed，1 個既有 deprecation warning；專屬 district 已避免 Demo published rule 污染一般測試案件。
 - live readiness：PostgreSQL `ok`、MinIO `ok`。
 - live OpenAPI：run/rerun responses 均為 `200`、`422`。
 - live test UI：HTTP 200。
 - Python compile 與 JavaScript syntax：通過。
 - 自動化瀏覽器視覺驗收：未完成；瀏覽器控制端無法建立本機執行資源。此限制不影響 API/HTML/JS 契約結果，但仍建議人工確認實際畫面與 PDF 下載互動。
-

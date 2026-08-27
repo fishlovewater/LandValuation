@@ -14,4 +14,5 @@
 10. 使用 `.env.example` 重建 API image；live readiness、OpenAPI 200 契約與 test UI 200 均確認。
 11. 建立新 Demo 資料供人工測試；一次性密碼只在 CLI/交付訊息顯示，不寫入版本控制。
 12. 瀏覽器控制端因本機執行資源路徑錯誤無法連線，標記為尚未完成自動化視覺驗收，不將其描述為通過。
-
+13. 最終驗證在 Demo 預先存在時發現 7 failures：Demo `LAND + F01` 高優先規則污染一般 fixture，且碰撞測試假設 DB 為空。新增 `DEMO-F01` 專屬 district 並讓測試先清除固定 Demo；原失敗檔 11 passed，完整 suite 恢復 153 passed。
+14. 建立隔離修正提交 `d710b46`。

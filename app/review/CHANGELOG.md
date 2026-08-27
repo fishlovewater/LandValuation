@@ -12,6 +12,7 @@
 - seed 每次產生新密碼且只輸出一次；重複 seed 先安全清除舊 Demo，不累積固定案件或使用者。
 - revise 建立 original v2 與新 verified official fields，保留 v1 run、finding、decision 與 report 歷史。
 - reset 僅依固定 username、case number、rule set 與 knowledge code 清除；識別碰撞時 fail closed，不刪除資料。
+- Demo 案件與規則使用專屬 district `DEMO-F01`，避免已發布 Demo 規則被一般 `LAND + F01` 案件選中。
 - live API image 已重建；readiness 顯示 PostgreSQL/MinIO `ok`，run/rerun OpenAPI 都是 `200, 422`，測試頁回傳 200。
 
 ### TDD 與驗證證據
@@ -21,6 +22,7 @@
 - 真實工作流第一次發現所有權查詢參數順序錯誤；修正後端到端 `2 passed`。
 - 聚焦安全與流程測試：`12 passed, 1 warning`。
 - 完整 Review suite：`153 passed, 1 warning`；唯一警告仍為既有 Starlette TestClient/httpx deprecation。
+- 在 Demo 預先存在的條件下，完整 suite 曾抓到 7 failures；隔離 district 並修正碰撞測試前置清理後，同條件恢復 `153 passed, 1 warning`。
 - Python compile 成功；單檔 JavaScript 由 Node `new Function` 語法檢查通過。
 - 瀏覽器控制工具因本機執行資源路徑錯誤未能連線，因此未宣稱完成自動化視覺驗收；已完成 live HTTP 與契約驗證。
 
@@ -29,6 +31,7 @@
 - `29e6d96 docs(review): design manual test console`
 - `7a21cb7 docs(review): plan manual test console`
 - `bd78110 feat(review): add manual test console`
+- `d710b46 fix(review): isolate demo rule selection`
 
 ## 2026-08-27 - 同步 API 契約與紀錄整理
 
