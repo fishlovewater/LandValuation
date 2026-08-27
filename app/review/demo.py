@@ -26,6 +26,7 @@ DEMO_EMAIL = "review_demo@local.invalid"
 DEMO_DISPLAY_NAME = "Review Demo Reviewer"
 DEMO_CASE_NO = "DEMO-REVIEW-001"
 DEMO_CASE_TITLE = "Review API Manual Test Demo"
+DEMO_DISTRICT_CODE = "DEMO-F01"
 DEMO_RULE_SET_CODE = "DEMO-REVIEW-RULES"
 DEMO_KNOWLEDGE_CODE = "DEMO-REVIEW-SOURCE"
 DEMO_KNOWLEDGE_TITLE = "Review Demo Validation Rules"
@@ -367,9 +368,16 @@ def seed_demo() -> dict[str, Any]:
                             valuation_base_date, city_code, district_code, land_use_type,
                             case_status, created_by_user_id, updated_by_user_id
                         ) VALUES (%s, %s, %s, 'LAND', 'Review Demo Office', CURRENT_DATE,
-                                  'F', 'F01', 'RESIDENTIAL', 'DRAFT', %s, %s)
+                                  'F', %s, 'RESIDENTIAL', 'DRAFT', %s, %s)
                         """,
-                        (case_id, DEMO_CASE_NO, DEMO_CASE_TITLE, user_id, user_id),
+                        (
+                            case_id,
+                            DEMO_CASE_NO,
+                            DEMO_CASE_TITLE,
+                            DEMO_DISTRICT_CODE,
+                            user_id,
+                            user_id,
+                        ),
                     )
                     for (document_id, document_type, filename, group_id), upload in zip(documents, uploads[:3]):
                         cursor.execute(
@@ -401,9 +409,9 @@ def seed_demo() -> dict[str, Any]:
                         INSERT INTO valuation.parcels (
                             parcel_id, case_id, district_code, section_name,
                             land_no, area_sqm, land_use_zone
-                        ) VALUES (%s, %s, 'F01', 'Demo Section', '001', 100.5000, 'Residential')
+                        ) VALUES (%s, %s, %s, 'Demo Section', '001', 100.5000, 'Residential')
                         """,
-                        (uuid4(), case_id),
+                        (uuid4(), case_id, DEMO_DISTRICT_CODE),
                     )
                     cursor.execute(
                         """
@@ -448,7 +456,7 @@ def seed_demo() -> dict[str, Any]:
                             applicable_case_type, applicable_district_code, selection_priority
                         ) VALUES (%s, %s, 1, 'Review Demo Rules v1', CURRENT_DATE,
                                   'PUBLISHED', %s, %s, 'Owned by app.review.demo',
-                                  %s, 'LAND', 'F01', 100)
+                                  %s, 'LAND', %s, 100)
                         """,
                         (
                             rule_version_id,
@@ -456,6 +464,7 @@ def seed_demo() -> dict[str, Any]:
                             DEMO_KNOWLEDGE_CODE,
                             knowledge_upload["checksum_sha256"],
                             knowledge_document_id,
+                            DEMO_DISTRICT_CODE,
                         ),
                     )
                     for rule_code, field_code, severity, expression in (

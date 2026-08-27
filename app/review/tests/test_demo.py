@@ -25,6 +25,7 @@ def test_demo_ownership_constants_are_fixed():
     assert demo.DEMO_CASE_NO == "DEMO-REVIEW-001"
     assert demo.DEMO_RULE_SET_CODE == "DEMO-REVIEW-RULES"
     assert demo.DEMO_KNOWLEDGE_CODE == "DEMO-REVIEW-SOURCE"
+    assert demo.DEMO_DISTRICT_CODE == "DEMO-F01"
 
 
 def test_demo_pdf_is_a_real_pdf():
@@ -77,6 +78,7 @@ def test_seed_compensates_objects_when_upload_fails(monkeypatch):
 def test_reset_rejects_username_collision(postgres_connection):
     from app.review.demo import DEMO_USERNAME, DemoError, reset_demo
 
+    reset_demo()
     user_id = uuid4()
     with postgres_connection.cursor() as cursor:
         cursor.execute(
