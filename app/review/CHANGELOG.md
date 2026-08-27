@@ -2,6 +2,34 @@
 
 本文件只記錄 `app/review` 第二子系統。提交編號來自本分支 Git 紀錄；「已完成」僅代表已有程式與驗證證據，不包含其他子系統。
 
+## 2026-08-27 - Development 手動測試主控台
+
+### 已完成
+
+- 新增 development-only `GET /api/v1/review/test-ui`；非 development 固定回傳 404，且不列入 OpenAPI。
+- 新增單檔、零外部前端依賴的 Review API 測試主控台，涵蓋登入、案件、完整性、run、findings、risk、人工決策、rerun、JSON 與 PDF。
+- 新增 `python -m app.review.demo seed|revise|reset`，以固定所有權識別管理真實 PostgreSQL 與 MinIO Demo 資料。
+- seed 每次產生新密碼且只輸出一次；重複 seed 先安全清除舊 Demo，不累積固定案件或使用者。
+- revise 建立 original v2 與新 verified official fields，保留 v1 run、finding、decision 與 report 歷史。
+- reset 僅依固定 username、case number、rule set 與 knowledge code 清除；識別碰撞時 fail closed，不刪除資料。
+- live API image 已重建；readiness 顯示 PostgreSQL/MinIO `ok`，run/rerun OpenAPI 都是 `200, 422`，測試頁回傳 200。
+
+### TDD 與驗證證據
+
+- 測試頁 RED：`1 failed, 1 passed`；GREEN：`2 passed`。
+- Demo CLI RED：`6 failed`（模組不存在）；公開契約 GREEN：`6 passed`。
+- 真實工作流第一次發現所有權查詢參數順序錯誤；修正後端到端 `2 passed`。
+- 聚焦安全與流程測試：`12 passed, 1 warning`。
+- 完整 Review suite：`153 passed, 1 warning`；唯一警告仍為既有 Starlette TestClient/httpx deprecation。
+- Python compile 成功；單檔 JavaScript 由 Node `new Function` 語法檢查通過。
+- 瀏覽器控制工具因本機執行資源路徑錯誤未能連線，因此未宣稱完成自動化視覺驗收；已完成 live HTTP 與契約驗證。
+
+### 提交
+
+- `29e6d96 docs(review): design manual test console`
+- `7a21cb7 docs(review): plan manual test console`
+- `bd78110 feat(review): add manual test console`
+
 ## 2026-08-27 - 同步 API 契約與紀錄整理
 
 ### 已完成
