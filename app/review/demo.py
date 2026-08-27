@@ -318,6 +318,7 @@ def seed_demo() -> dict[str, Any]:
     password = secrets.token_urlsafe(18)
     user_id = uuid4()
     case_id = uuid4()
+    review_id = uuid4()
     original_document_id = uuid4()
     original_group_id = uuid4()
     knowledge_document_id = uuid4()
@@ -378,6 +379,16 @@ def seed_demo() -> dict[str, Any]:
                             user_id,
                             user_id,
                         ),
+                    )
+                    cursor.execute(
+                        """
+                        INSERT INTO review.reviews (
+                            review_id, case_id, review_status,
+                            started_by_user_id, assigned_reviewer_id,
+                            received_at
+                        ) VALUES (%s, %s, 'RECEIVED', %s, %s, now())
+                        """,
+                        (review_id, case_id, user_id, user_id),
                     )
                     for (document_id, document_type, filename, group_id), upload in zip(documents, uploads[:3]):
                         cursor.execute(
@@ -514,6 +525,7 @@ def seed_demo() -> dict[str, Any]:
         "username": DEMO_USERNAME,
         "password": password,
         "case_id": str(case_id),
+        "review_id": str(review_id),
         "test_ui_url": f"http://localhost:{get_settings().app_port}/api/v1/review/test-ui",
     }
 

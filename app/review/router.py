@@ -36,6 +36,18 @@ from app.review.service import ReviewService
 from app.review.pdf_reports import build_review_pdf
 from app.review.reports import ReviewReport
 from app.storage.dependencies import Storage
+from app.core.exceptions import AppError
+from app.review.demo import DemoError, revise_demo
+from app.review.workbench_repository import WorkbenchRepository
+from app.review.workbench_schemas import (
+    EligibleCaseRead,
+    WorkbenchCaseDetailRead,
+    WorkbenchCaseList,
+    WorkbenchStartRead,
+    WorkbenchStatusGroup,
+    WorkbenchSummaryRead,
+)
+from app.review.workbench_service import WorkbenchService
 
 router = APIRouter(prefix="/review", tags=["review"])
 TEST_UI_PATH = Path(__file__).with_name("test_ui") / "index.html"
@@ -43,6 +55,15 @@ TEST_UI_PATH = Path(__file__).with_name("test_ui") / "index.html"
 
 def service_for(session: DbSession) -> ReviewService:
     return ReviewService(ReviewRepository(session))
+
+
+def workbench_service_for(session: DbSession) -> WorkbenchService:
+    return WorkbenchService(WorkbenchRepository(session), ReviewRepository(session))
+
+
+def require_demo_development() -> None:
+    if get_settings().app_env.lower() != "development":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
 
 def audit_request_id(request: Request) -> UUID:
@@ -57,6 +78,72 @@ async def review_test_ui() -> FileResponse:
     if get_settings().app_env.lower() != "development":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     return FileResponse(TEST_UI_PATH, media_type="text/html; charset=utf-8")
+
+
+@router.post("/demo/revise", dependencies=[Depends(require_demo_development)])
+async def revise_review_demo(
+    user=Depends(require_permissions("review.execute")),
+) -> dict:
+    try:
+        return await run_in_threadpool(revise_demo)
+    except DemoError as exc:
+        raise AppError("DEMO_OPERATION_CONFLICT", str(exc), 409) from exc
+
+
+@router.get("/workbench/summary", response_model=WorkbenchSummaryRead)
+async def get_workbench_summary(
+    session: DbSession,
+    user=Depends(require_permissions("review.execute")),
+) -> WorkbenchSummaryRead:
+    return await workbench_service_for(session).summary()
+
+
+@router.get("/workbench/cases", response_model=WorkbenchCaseList)
+async def list_workbench_cases(
+    session: DbSession,
+    q: str | None = Query(default=None, max_length=200),
+    status_filter: ReviewStatus | None = Query(default=None, alias="status"),
+    risk_level: RiskLevel | None = None,
+    status_group: WorkbenchStatusGroup | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    user=Depends(require_permissions("review.execute")),
+) -> WorkbenchCaseList:
+    return await workbench_service_for(session).list_cases(
+        q, status_filter, risk_level, status_group, limit, offset
+    )
+
+
+@router.get("/workbench/eligible-cases", response_model=list[EligibleCaseRead])
+async def list_workbench_eligible_cases(
+    session: DbSession,
+    q: str | None = Query(default=None, max_length=200),
+    limit: int = Query(default=20, ge=1, le=100),
+    user=Depends(require_permissions("review.execute")),
+) -> list[EligibleCaseRead]:
+    return await workbench_service_for(session).eligible_cases(q, limit)
+
+
+@router.get(
+    "/workbench/cases/{review_id}", response_model=WorkbenchCaseDetailRead
+)
+async def get_workbench_case(
+    review_id: UUID,
+    session: DbSession,
+    user=Depends(require_permissions("review.execute")),
+) -> WorkbenchCaseDetailRead:
+    return await workbench_service_for(session).detail(review_id)
+
+
+@router.post(
+    "/workbench/cases/{review_id}/start", response_model=WorkbenchStartRead
+)
+async def start_workbench_case(
+    review_id: UUID,
+    session: DbSession,
+    user=Depends(require_permissions("review.execute")),
+) -> WorkbenchStartRead:
+    return await workbench_service_for(session).start(review_id, user.user_id)
 
 
 @router.post("/cases", response_model=ReviewRead, status_code=status.HTTP_201_CREATED)

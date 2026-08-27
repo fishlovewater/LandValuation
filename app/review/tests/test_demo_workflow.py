@@ -30,13 +30,7 @@ def test_demo_seed_is_idempotent_and_real_api_workflow_completes(postgres_connec
             assert login.status_code == 200
             headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
 
-            created = client.post(
-                "/api/v1/review/cases",
-                json={"case_id": second["case_id"]},
-                headers=headers,
-            )
-            assert created.status_code == 201
-            review_id = created.json()["review_id"]
+            review_id = second["review_id"]
 
             completeness = client.post(
                 f"/api/v1/review/cases/{review_id}/completeness-check",
@@ -144,4 +138,3 @@ def test_demo_reset_is_a_successful_noop():
     result = reset_demo()
 
     assert result == {"command": "reset", "removed": False, "object_count": 0}
-

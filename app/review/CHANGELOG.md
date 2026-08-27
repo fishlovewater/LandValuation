@@ -2,6 +2,31 @@
 
 本文件只記錄 `app/review` 第二子系統。提交編號來自本分支 Git 紀錄；「已完成」僅代表已有程式與驗證證據，不包含其他子系統。
 
+## 2026-08-28 - 審查人員工作台
+
+### 已完成
+
+- 以正式 Review View API 新增工作台摘要、案件清單、案件聚合詳情、eligible case 搜尋與 start/rerun orchestration；全部沿用既有 JWT、權限、完整性、規則、決策與報告能力。
+- Demo seed 直接建立一筆 `RECEIVED` Review；新增 development-only revise HTTP route，production 在驗證 JWT 前固定回傳 404，且 revise 維持冪等與固定 ownership。
+- 工作台 start 將完整性與同步 Run 合併為單一 use case；退回修正後同一路徑會先回到 preprocessing、重做完整性，再執行既有 rerun 並保留 supersedes 關聯。
+- 案件詳情聚合文件、缺件、Runs、最新 Findings/Risk、決策歷程、正式欄位版本差異與最新 report metadata；版本差異以 `document_group_id` 隔離 lineage。
+- 以零外部前端依賴的單檔工作台取代技術主控台，提供登入、伺服器端群組分頁、案件卷宗、完整性／智慧審查、證據與法規、人工決策、修正版、版本差異及 JSON/PDF 報告。
+- 開發資訊抽屜預設關閉，紀錄 method/path/status/elapsed/payload，但會遞迴遮蔽 token、authorization 與 password 欄位；JWT 只保存在 `sessionStorage`。
+- 新增零相依 Node 行為測試，實際執行憑證遮蔽、部分採納 payload、BLOCKED 提示與伺服器端群組分頁查詢邏輯；版本差異測試亦涵蓋空白 `field_path`。
+- 未新增 migration、Vue/React/npm runtime、根目錄依賴或固定 localhost object URL；所有原始碼變更限定於 `app/review/**`。
+
+### TDD、review 與驗證證據
+
+- 工作台 API RED：2 個 endpoint 皆 404；GREEN：summary/list/eligible/detail 與 blocked start 通過。
+- Demo 工作流 RED：缺少 seed review、revise route 與 rerun orchestration；GREEN：seed、start、決策、v2、rerun、version diff 與 supersedes 端到端通過。
+- production route hiding RED：無 token 時為 401；GREEN：有無 token 皆為 404，development 仍要求 `review.execute`。
+- document lineage RED：不同 group 被錯誤比較；GREEN：只在同一 `document_group_id` 內比較版本。
+- UI RED：舊 API 主控台缺少工作台結構；GREEN：工作台結構、安全遮蔽、BLOCKED 呈現、部分採納值、證據／法規／決策歷程與 server-side pagination 契約通過。
+- 獨立 code review 找到並修正 JWT logging、partial decision payload、BLOCKED success message、版本 lineage 與前 100 筆限制。
+- 完整 `app/review/tests`：`158 passed, 1 warning`；唯一警告仍為既有 Starlette TestClient/httpx deprecation。
+- Python compile 與 Node `new Function` JavaScript 語法檢查通過。
+- 瀏覽器完成桌面與 390×844 窄螢幕登入頁視覺驗收；登入後完整流程由真實 TestClient、PostgreSQL 與 MinIO 端到端測試驗證。
+
 ## 2026-08-27 - Development 手動測試主控台
 
 ### 已完成
