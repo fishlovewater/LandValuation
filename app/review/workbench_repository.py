@@ -208,6 +208,26 @@ class WorkbenchRepository:
         ).mappings()
         return [dict(row) for row in rows]
 
+    async def get_document_for_review(
+        self, review_id: UUID, document_id: UUID
+    ) -> dict | None:
+        row = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT d.document_id, d.original_filename, d.mime_type,
+                           d.object_key
+                    FROM review.reviews r
+                    JOIN valuation.documents d ON d.case_id = r.case_id
+                    WHERE r.review_id = :review_id
+                      AND d.document_id = :document_id
+                    """
+                ),
+                {"review_id": review_id, "document_id": document_id},
+            )
+        ).mappings().one_or_none()
+        return dict(row) if row else None
+
     async def list_official_field_versions(self, case_id: UUID) -> list[dict]:
         rows = (
             await self.session.execute(

@@ -1,10 +1,11 @@
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import quote
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.auth.dependencies import DbSession, require_permissions
 from app.auth.service import permission_codes
@@ -36,7 +37,7 @@ from app.review.service import ReviewService
 from app.review.pdf_reports import build_review_pdf
 from app.review.reports import ReviewReport
 from app.storage.dependencies import Storage
-from app.core.exceptions import AppError
+from app.core.exceptions import AppError, ResourceNotFoundError
 from app.review.demo import DemoError, revise_demo
 from app.review.workbench_repository import WorkbenchRepository
 from app.review.workbench_schemas import (
@@ -133,6 +134,48 @@ async def get_workbench_case(
     user=Depends(require_permissions("review.execute")),
 ) -> WorkbenchCaseDetailRead:
     return await workbench_service_for(session).detail(review_id)
+
+
+@router.get(
+    "/workbench/cases/{review_id}/documents/{document_id}/content"
+)
+async def get_workbench_document_content(
+    review_id: UUID,
+    document_id: UUID,
+    session: DbSession,
+    storage: Storage,
+    user=Depends(require_permissions("review.execute")),
+) -> StreamingResponse:
+    del user
+    metadata = await WorkbenchRepository(session).get_document_for_review(
+        review_id, document_id
+    )
+    if metadata is None:
+        raise ResourceNotFoundError("案件原文件")
+    if metadata["mime_type"] != "application/pdf":
+        raise AppError(
+            "REVIEW_DOCUMENT_PREVIEW_UNSUPPORTED",
+            "此文件格式不支援內嵌預覽",
+            415,
+        )
+    downloaded = await storage.download(metadata["object_key"])
+
+    def chunks():
+        try:
+            yield from downloaded.stream(amt=64 * 1024)
+        finally:
+            downloaded.close()
+            downloaded.release_conn()
+
+    filename = quote(metadata["original_filename"], safe="")
+    return StreamingResponse(
+        chunks(),
+        media_type=metadata["mime_type"],
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{filename}",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.post(

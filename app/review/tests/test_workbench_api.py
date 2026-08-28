@@ -6,6 +6,31 @@ from fastapi.testclient import TestClient
 
 from app.auth.dependencies import get_current_user
 from app.main import app
+from app.storage.dependencies import get_storage_service
+
+
+class DownloadObject:
+    def __init__(self, content: bytes):
+        self.content = content
+        self.closed = False
+
+    def stream(self, amt: int):
+        for offset in range(0, len(self.content), amt):
+            yield self.content[offset : offset + amt]
+
+    def close(self):
+        self.closed = True
+
+    def release_conn(self):
+        pass
+
+
+class DocumentStorage:
+    def __init__(self, objects: dict[str, bytes]):
+        self.objects = objects
+
+    async def download(self, object_key: str):
+        return DownloadObject(self.objects[object_key])
 
 
 @pytest.fixture
@@ -99,6 +124,69 @@ def workbench_client(workbench_records):
         app.dependency_overrides.clear()
 
 
+@pytest.fixture
+def preview_documents(postgres_connection, workbench_records):
+    owned_id = uuid4()
+    other_id = uuid4()
+    html_id = uuid4()
+    records = (
+        (
+            owned_id,
+            workbench_records.reviewed_case_id,
+            "owned.pdf",
+            "application/pdf",
+            "cases/reviewed/owned.pdf",
+        ),
+        (
+            other_id,
+            workbench_records.eligible_case_id,
+            "other.pdf",
+            "application/pdf",
+            "cases/eligible/other.pdf",
+        ),
+        (
+            html_id,
+            workbench_records.reviewed_case_id,
+            "unsafe.html",
+            "text/html",
+            "cases/reviewed/unsafe.html",
+        ),
+    )
+    with postgres_connection.cursor() as cursor:
+        for document_id, case_id, filename, mime_type, object_key in records:
+            cursor.execute(
+                """
+                INSERT INTO valuation.documents (
+                    document_id, case_id, document_type, original_filename,
+                    mime_type, bucket_name, object_key, checksum_sha256,
+                    file_size_bytes, version_no, uploaded_by_user_id,
+                    is_active, document_group_id
+                ) VALUES (%s, %s, 'original', %s, %s, 'land-valuation', %s,
+                          %s, 17, 1, %s, true, %s)
+                """,
+                (
+                    document_id,
+                    case_id,
+                    filename,
+                    mime_type,
+                    object_key,
+                    document_id.hex * 2,
+                    workbench_records.user_id,
+                    uuid4(),
+                ),
+            )
+    postgres_connection.commit()
+
+    yield SimpleNamespace(owned_id=owned_id, other_id=other_id, html_id=html_id)
+
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            "DELETE FROM valuation.documents WHERE document_id IN (%s, %s, %s)",
+            (owned_id, other_id, html_id),
+        )
+    postgres_connection.commit()
+
+
 def test_workbench_summary_list_eligible_and_detail(
     workbench_client, workbench_records
 ):
@@ -156,3 +244,54 @@ def test_workbench_start_blocked_does_not_create_run(
             (workbench_records.review_id,),
         )
         assert cursor.fetchone()[0] == 0
+
+
+def test_workbench_document_content_streams_owned_pdf(
+    workbench_client, workbench_records, preview_documents
+):
+    storage = DocumentStorage({"cases/reviewed/owned.pdf": b"%PDF-review-owned"})
+    app.dependency_overrides[get_storage_service] = lambda: storage
+    try:
+        response = workbench_client.get(
+            "/api/v1/review/workbench/cases/"
+            f"{workbench_records.review_id}/documents/"
+            f"{preview_documents.owned_id}/content"
+        )
+    finally:
+        app.dependency_overrides.pop(get_storage_service, None)
+
+    assert response.status_code == 200
+    assert response.content == b"%PDF-review-owned"
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"].startswith("inline;")
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_workbench_document_content_rejects_cross_case_and_missing_documents(
+    workbench_client, workbench_records, preview_documents
+):
+    cross_case = workbench_client.get(
+        "/api/v1/review/workbench/cases/"
+        f"{workbench_records.review_id}/documents/"
+        f"{preview_documents.other_id}/content"
+    )
+    missing = workbench_client.get(
+        "/api/v1/review/workbench/cases/"
+        f"{workbench_records.review_id}/documents/{uuid4()}/content"
+    )
+
+    assert cross_case.status_code == 404
+    assert missing.status_code == 404
+
+
+def test_workbench_document_content_rejects_active_content(
+    workbench_client, workbench_records, preview_documents
+):
+    response = workbench_client.get(
+        "/api/v1/review/workbench/cases/"
+        f"{workbench_records.review_id}/documents/"
+        f"{preview_documents.html_id}/content"
+    )
+
+    assert response.status_code == 415
+    assert response.json()["error"]["code"] == "REVIEW_DOCUMENT_PREVIEW_UNSUPPORTED"
