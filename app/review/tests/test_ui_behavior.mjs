@@ -16,7 +16,7 @@ assert.notEqual(end, -1, "testable workbench logic end marker is missing");
 
 const source = html.slice(start + startMarker.length, end);
 const logic = new Function(
-  `${source}; return { redactForLog, findingDecisionBody, startOutcomeMessage, workbenchCasesPath, copyDemoCommand };`,
+  `${source}; return { redactForLog, findingDecisionBody, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, flattenDisplayData, requiresAfterValue };`,
 )();
 
 test("request logs recursively redact credentials", () => {
@@ -112,4 +112,30 @@ test("clipboard failure keeps a manual-copy fallback", async () => {
     message: "無法自動複製，請手動選取上方指令。",
     error: true,
   });
+});
+
+test("review codes have Chinese display labels", () => {
+  assert.equal(logic.documentTypeLabel("cadastral-map"), "地籍圖");
+  assert.equal(logic.documentTypeLabel("land-register"), "土地登記謄本");
+  assert.equal(logic.findingDecisionLabel("PARTIALLY_ACCEPTED"), "部分採納");
+  assert.equal(logic.caseDecisionLabel("APPROVED"), "核定通過");
+  assert.equal(logic.documentTypeLabel("custom"), "其他文件（custom）");
+});
+
+test("structured evidence becomes readable rows instead of JSON", () => {
+  assert.deepEqual(
+    logic.flattenDisplayData([
+      { document_version: 2, page_number: 3, verification_status: "VERIFIED" },
+    ]),
+    [
+      { label: "文件版本", value: "2" },
+      { label: "頁碼", value: "3" },
+      { label: "確認狀態", value: "已確認" },
+    ],
+  );
+});
+
+test("only partial acceptance requires an after value", () => {
+  assert.equal(logic.requiresAfterValue("PARTIALLY_ACCEPTED"), true);
+  assert.equal(logic.requiresAfterValue("ACCEPTED"), false);
 });
