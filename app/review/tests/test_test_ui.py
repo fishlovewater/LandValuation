@@ -72,6 +72,8 @@ def test_test_ui_is_available_in_development(monkeypatch):
     assert "bucket_name" not in response.text
     assert "object_key" not in response.text
     assert "minio" not in response.text.lower()
+    assert 'document.createElement("details")' in response.text
+    assert '<summary class="log-meta"></summary>' in response.text
 
 
 def test_test_ui_is_hidden_outside_development(monkeypatch):

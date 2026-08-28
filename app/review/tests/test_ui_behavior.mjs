@@ -17,7 +17,7 @@ assert.notEqual(end, -1, "testable workbench logic end marker is missing");
 const source = html.slice(start + startMarker.length, end);
 const scriptSource = html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "";
 const logic = new Function(
-  `${source}; return { redactForLog, findingDecisionBody, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, flattenDisplayData, requiresAfterValue, documentContentPath, pdfPageTarget };`,
+  `${source}; return { redactForLog, findingDecisionBody, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, flattenDisplayData, requiresAfterValue, documentContentPath, pdfPageTarget, requestLogSummary };`,
 )();
 
 test("inline workbench script parses", () => {
@@ -152,4 +152,11 @@ test("document preview path is review scoped and page aware", () => {
   );
   assert.equal(logic.pdfPageTarget("blob:preview", 7), "blob:preview#page=7");
   assert.equal(logic.pdfPageTarget("blob:preview", null), "blob:preview#page=1");
+});
+
+test("request log summary keeps request identity while collapsed", () => {
+  assert.equal(
+    logic.requestLogSummary("GET", "/review/workbench/summary", 200, 42),
+    "GET /review/workbench/summary · 200 · 42 ms",
+  );
 });
