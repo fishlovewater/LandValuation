@@ -62,6 +62,16 @@ def test_test_ui_is_available_in_development(monkeypatch):
     assert 'id="case-prev"' in response.text
     assert 'id="case-next"' in response.text
     assert "status_group=" in response.text
+    assert "finding-workspace" in response.text
+    assert 'id="source-pdf"' in response.text
+    assert "data-view-source" in response.text
+    assert "/documents/" in response.text
+    assert "/content" in response.text
+    assert "URL.createObjectURL" in response.text
+    assert "URL.revokeObjectURL" in response.text
+    assert "bucket_name" not in response.text
+    assert "object_key" not in response.text
+    assert "minio" not in response.text.lower()
 
 
 def test_test_ui_is_hidden_outside_development(monkeypatch):

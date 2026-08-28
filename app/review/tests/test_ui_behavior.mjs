@@ -15,9 +15,14 @@ assert.notEqual(start, -1, "testable workbench logic start marker is missing");
 assert.notEqual(end, -1, "testable workbench logic end marker is missing");
 
 const source = html.slice(start + startMarker.length, end);
+const scriptSource = html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "";
 const logic = new Function(
-  `${source}; return { redactForLog, findingDecisionBody, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, flattenDisplayData, requiresAfterValue };`,
+  `${source}; return { redactForLog, findingDecisionBody, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, flattenDisplayData, requiresAfterValue, documentContentPath, pdfPageTarget };`,
 )();
+
+test("inline workbench script parses", () => {
+  assert.doesNotThrow(() => new Function(scriptSource));
+});
 
 test("request logs recursively redact credentials", () => {
   assert.deepEqual(
@@ -138,4 +143,13 @@ test("structured evidence becomes readable rows instead of JSON", () => {
 test("only partial acceptance requires an after value", () => {
   assert.equal(logic.requiresAfterValue("PARTIALLY_ACCEPTED"), true);
   assert.equal(logic.requiresAfterValue("ACCEPTED"), false);
+});
+
+test("document preview path is review scoped and page aware", () => {
+  assert.equal(
+    logic.documentContentPath("review-1", "document-2"),
+    "/review/workbench/cases/review-1/documents/document-2/content",
+  );
+  assert.equal(logic.pdfPageTarget("blob:preview", 7), "blob:preview#page=7");
+  assert.equal(logic.pdfPageTarget("blob:preview", null), "blob:preview#page=1");
 });
