@@ -13,6 +13,7 @@
 - 以零外部前端依賴的單檔工作台取代技術主控台，提供登入、伺服器端群組分頁、案件卷宗、完整性／智慧審查、證據與法規、人工決策、修正版、版本差異及 JSON/PDF 報告。
 - 開發資訊抽屜預設關閉，紀錄 method/path/status/elapsed/payload，但會遞迴遮蔽 token、authorization 與 password 欄位；JWT 只保存在 `sessionStorage`。
 - 新增零相依 Node 行為測試，實際執行憑證遮蔽、部分採納 payload、BLOCKED 提示與伺服器端群組分頁查詢邏輯；版本差異測試亦涵蓋空白 `field_path`。
+- 登入首頁新增可手動選取的 Demo seed PowerShell 指令與一鍵複製按鈕；Clipboard 成功或拒絕時均提供可見回饋，不保存固定測試密碼。
 - 未新增 migration、Vue/React/npm runtime、根目錄依賴或固定 localhost object URL；所有原始碼變更限定於 `app/review/**`。
 
 ### TDD、review 與驗證證據

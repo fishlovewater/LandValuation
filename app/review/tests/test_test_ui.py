@@ -66,3 +66,21 @@ def test_test_ui_is_hidden_outside_development(monkeypatch):
         response = client.get("/api/v1/review/test-ui")
 
     assert response.status_code == 404
+
+
+def test_test_ui_shows_copyable_demo_seed_command(monkeypatch):
+    monkeypatch.setattr(
+        "app.review.router.get_settings",
+        lambda: SimpleNamespace(app_env="development"),
+        raising=False,
+    )
+
+    with TestClient(app) as client:
+        html = client.get("/api/v1/review/test-ui").text
+
+    assert "取得測試帳密" in html
+    assert (
+        "rtk docker exec land_valuation_api python -m app.review.demo seed" in html
+    )
+    assert 'id="copy-demo-command"' in html
+    assert "終端機輸出" in html

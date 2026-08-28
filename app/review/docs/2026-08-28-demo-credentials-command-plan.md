@@ -29,7 +29,7 @@
 - Consumes: 瀏覽器 `navigator.clipboard.writeText(text)`。
 - Produces: `DEMO_SEED_COMMAND: string` 與 `copyDemoCommand(writeText): Promise<{message: string, error: boolean}>`。
 
-- [ ] **Step 1: 寫入失敗的登入頁契約測試**
+- [x] **Step 1: 寫入失敗的登入頁契約測試**
 
 在 `test_test_ui.py` 新增：
 
@@ -42,7 +42,7 @@ def test_test_ui_shows_copyable_demo_seed_command(client):
     assert "終端機輸出" in html
 ```
 
-- [ ] **Step 2: 寫入失敗的可執行 Clipboard 行為測試**
+- [x] **Step 2: 寫入失敗的可執行 Clipboard 行為測試**
 
 擴充 `test_ui_behavior.mjs` 的匯出函式清單，並新增：
 
@@ -60,7 +60,7 @@ test("clipboard failure keeps a manual-copy fallback", async () => {
 });
 ```
 
-- [ ] **Step 3: 執行聚焦測試並確認紅燈**
+- [x] **Step 3: 執行聚焦測試並確認紅燈**
 
 Run:
 
@@ -71,7 +71,7 @@ rtk proxy node --test app/review/tests/test_ui_behavior.mjs
 
 Expected: pytest 因首頁缺少「取得測試帳密」而失敗；Node 因 `copyDemoCommand` 尚未定義而失敗。
 
-- [ ] **Step 4: 加入最小登入頁與複製實作**
+- [x] **Step 4: 加入最小登入頁與複製實作**
 
 在登入卡片加入：
 
@@ -101,7 +101,7 @@ async function copyDemoCommand(writeText){
 
 按鈕事件將 `navigator.clipboard.writeText.bind(navigator.clipboard)` 傳入函式，並把回傳訊息顯示在 `copy-demo-feedback`；失敗時不隱藏可手動選取的 `<code>`。
 
-- [ ] **Step 5: 執行聚焦測試並確認綠燈**
+- [x] **Step 5: 執行聚焦測試並確認綠燈**
 
 Run:
 
@@ -113,7 +113,7 @@ rtk proxy node --test app/review/tests/test_ui_behavior.mjs
 
 Expected: pytest 通過；Node 6 tests 通過。
 
-- [ ] **Step 6: 更新變更紀錄並執行完整驗證**
+- [x] **Step 6: 更新變更紀錄並執行完整驗證**
 
 在 `CHANGELOG.md` 的 2026-08-28 工作台段落記錄登入首頁 Demo seed 指令與 Clipboard 回饋。執行：
 
@@ -126,7 +126,7 @@ rtk git diff --check
 
 Expected: pytest 無失敗；Node 6 tests 通過；JavaScript 語法與 Git whitespace 檢查 exit 0。
 
-- [ ] **Step 7: 提交實作**
+- [x] **Step 7: 提交實作**
 
 ```powershell
 rtk git add app/review

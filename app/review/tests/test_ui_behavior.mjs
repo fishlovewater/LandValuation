@@ -16,7 +16,7 @@ assert.notEqual(end, -1, "testable workbench logic end marker is missing");
 
 const source = html.slice(start + startMarker.length, end);
 const logic = new Function(
-  `${source}; return { redactForLog, findingDecisionBody, startOutcomeMessage, workbenchCasesPath };`,
+  `${source}; return { redactForLog, findingDecisionBody, startOutcomeMessage, workbenchCasesPath, copyDemoCommand };`,
 )();
 
 test("request logs recursively redact credentials", () => {
@@ -85,4 +85,31 @@ test("case queue request preserves server-side group pagination and filters", ()
     }),
     "/review/workbench/cases?limit=25&offset=25&status_group=completed&q=%E6%9D%BF%E6%A9%8B%20A&risk_level=HIGH",
   );
+});
+
+test("demo seed command is copied with visible success feedback", async () => {
+  let copied = "";
+  const result = await logic.copyDemoCommand(async (value) => {
+    copied = value;
+  });
+
+  assert.equal(
+    copied,
+    "rtk docker exec land_valuation_api python -m app.review.demo seed",
+  );
+  assert.deepEqual(result, {
+    message: "指令已複製，請貼到 PowerShell 執行。",
+    error: false,
+  });
+});
+
+test("clipboard failure keeps a manual-copy fallback", async () => {
+  const result = await logic.copyDemoCommand(async () => {
+    throw new Error("denied");
+  });
+
+  assert.deepEqual(result, {
+    message: "無法自動複製，請手動選取上方指令。",
+    error: true,
+  });
 });
