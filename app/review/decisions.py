@@ -43,7 +43,22 @@ class CaseDecisionCommand:
 
 @dataclass(frozen=True)
 class ReviewGateSummary:
-    unresolved_high_count: int
+    has_completed_run: bool
+    open_missing_count: int
+    unresolved_finding_count: int
+    invalid_value_count: int
+
+    def blockers(self) -> list[str]:
+        items = []
+        if not self.has_completed_run:
+            items.append("最新一次智慧審查尚未完成")
+        if self.open_missing_count:
+            items.append(f"仍有 {self.open_missing_count} 項缺件")
+        if self.unresolved_finding_count:
+            items.append(f"仍有 {self.unresolved_finding_count} 項疑點未完成")
+        if self.invalid_value_count:
+            items.append(f"仍有 {self.invalid_value_count} 項缺少正式採用內容")
+        return items
 
 
 def _has_meaningful_value(value: Any) -> bool:
@@ -111,14 +126,12 @@ def validate_case_decision(
         raise AppError(
             "REVIEW_DECISION_INVALID", "案件決策必須填寫理由", 409
         )
-    if command.decision == "APPROVED" and summary.unresolved_high_count > 0:
-        if not command.has_override_permission or not (
-            command.override_reason and command.override_reason.strip()
-        ):
-            raise AppError(
-                "REVIEW_DECISION_INVALID",
-                "仍有未解決高風險疑點，不得直接核准",
-                409,
-                {"unresolved_high_count": summary.unresolved_high_count},
-            )
+    blockers = summary.blockers() if command.decision == "APPROVED" else []
+    if blockers:
+        raise AppError(
+            "REVIEW_DECISION_INVALID",
+            "案件仍有未完成審查項目，不得核定",
+            409,
+            {"blockers": blockers},
+        )
     return command.decision

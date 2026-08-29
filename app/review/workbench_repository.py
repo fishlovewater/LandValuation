@@ -39,8 +39,7 @@ class WorkbenchRepository:
                 JOIN review.reviews r
                   ON r.review_id = f.review_id
                  AND r.latest_validation_run_id = f.validation_run_id
-                WHERE f.status IN ('OPEN', 'PARTIALLY_ACCEPTED',
-                                   'REQUIRES_SUPPLEMENT', 'EXPERT_REVIEW')
+                WHERE f.status IN ('OPEN', 'REQUIRES_SUPPLEMENT', 'EXPERT_REVIEW')
                 """
             )
         )

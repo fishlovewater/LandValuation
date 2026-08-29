@@ -47,6 +47,16 @@ def _first_present(*values):
     return next((value for value in values if value is not None), None)
 
 
+def _decision_has_final_value(decision) -> bool:
+    if decision is None or not isinstance(decision.after_value, dict):
+        return False
+    source = decision.after_value.get("selection_source")
+    value = decision.after_value.get("value")
+    return source in {"REPORTED", "SYSTEM", "REVIEWER"} and (
+        not isinstance(value, str) or bool(value.strip())
+    ) and value is not None
+
+
 ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     "RECEIVED": frozenset({"PREPROCESSING"}),
     "PREPROCESSING": frozenset({"PENDING_MATERIALS", "READY_FOR_REVIEW"}),
@@ -884,7 +894,11 @@ class ReviewService:
         review = await self.repository.get(review_id, for_update=True)
         if review is None:
             raise ResourceNotFoundError("審查案件")
-        unresolved = await self.repository.unresolved_high_count(review_id)
+        summary = (
+            await self._approval_gate_summary(review)
+            if payload.decision == "APPROVED"
+            else ReviewGateSummary(True, 0, 0, 0)
+        )
         resulting_status = validate_case_decision(
             CaseDecisionCommand(
                 decision=payload.decision,
@@ -892,14 +906,20 @@ class ReviewService:
                 has_override_permission=has_override_permission,
                 override_reason=payload.override_reason,
             ),
-            ReviewGateSummary(unresolved),
+            summary,
         )
         before_status = review.review_status
-        review.review_status = ensure_transition(before_status, resulting_status)
+        if resulting_status == "APPROVED":
+            ensure_transition(before_status, "APPROVED")
+            ensure_transition("APPROVED", "REVIEW_COMPLETED")
+            review.review_status = "REVIEW_COMPLETED"
+            review.completed_at = datetime.now(UTC)
+        else:
+            review.review_status = ensure_transition(before_status, resulting_status)
         reason = payload.reason.strip()
         if payload.override_reason and payload.override_reason.strip():
             reason = f"{reason}\n覆核理由：{payload.override_reason.strip()}"
-        after_value = {"review_status": resulting_status}
+        after_value = {"review_status": review.review_status}
         if review.latest_validation_run_id is not None:
             after_value["validation_run_id"] = str(review.latest_validation_run_id)
         return await self.repository.create_decision(
@@ -911,6 +931,44 @@ class ReviewService:
             request_id=request_id,
             before_value={"review_status": before_status},
             after_value=after_value,
+        )
+
+    async def _approval_gate_summary(self, review) -> ReviewGateSummary:
+        run = (
+            await self.repository.get_run(review.latest_validation_run_id)
+            if review.latest_validation_run_id
+            else None
+        )
+        missing = await self.repository.list_missing_items(
+            review.review_id, open_only=True
+        )
+        findings = (
+            await self.repository.list_findings(review.latest_validation_run_id)
+            if run
+            else []
+        )
+        decisions = {
+            item.finding_id: item
+            for item in await self.repository.list_decisions(review.review_id)
+            if item.finding_id is not None
+        }
+        unresolved = [
+            item
+            for item in findings
+            if item.status in {"OPEN", "REQUIRES_SUPPLEMENT", "EXPERT_REVIEW"}
+        ]
+        final_statuses = {"ACCEPTED", "REJECTED", "PARTIALLY_ACCEPTED"}
+        invalid_values = [
+            item
+            for item in findings
+            if item.status in final_statuses
+            and not _decision_has_final_value(decisions.get(item.finding_id))
+        ]
+        return ReviewGateSummary(
+            has_completed_run=bool(run and run.run_status == "COMPLETED"),
+            open_missing_count=len(missing),
+            unresolved_finding_count=len(unresolved),
+            invalid_value_count=len(invalid_values),
         )
 
     async def list_decisions(self, review_id):

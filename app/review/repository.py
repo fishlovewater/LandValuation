@@ -604,7 +604,6 @@ class ReviewRepository:
                     Finding.status.in_(
                         [
                             "OPEN",
-                            "PARTIALLY_ACCEPTED",
                             "REQUIRES_SUPPLEMENT",
                             "EXPERT_REVIEW",
                         ]
@@ -640,7 +639,6 @@ class ReviewRepository:
                     Finding.status.in_(
                         [
                             "OPEN",
-                            "PARTIALLY_ACCEPTED",
                             "REQUIRES_SUPPLEMENT",
                             "EXPERT_REVIEW",
                         ]

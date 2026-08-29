@@ -121,35 +121,28 @@ def test_system_choice_rejects_missing_system_value():
     assert error.value.code == "REVIEW_DECISION_INVALID"
 
 
-def test_unresolved_high_risk_blocks_approval_without_override():
+@pytest.mark.parametrize(
+    "summary",
+    [
+        ReviewGateSummary(False, 0, 0, 0),
+        ReviewGateSummary(True, 1, 0, 0),
+        ReviewGateSummary(True, 0, 1, 0),
+        ReviewGateSummary(True, 0, 0, 1),
+    ],
+)
+def test_any_incomplete_gate_blocks_approval(summary):
     with pytest.raises(AppError) as error:
-        validate_case_decision(
-            CaseDecisionCommand("APPROVED", "擬核准"),
-            ReviewGateSummary(unresolved_high_count=1),
-        )
+        validate_case_decision(CaseDecisionCommand("APPROVED", "擬核准"), summary)
 
     assert error.value.code == "REVIEW_DECISION_INVALID"
+    assert error.value.details["blockers"]
 
 
-def test_high_risk_override_requires_permission_and_reason():
-    with pytest.raises(AppError):
+def test_complete_gate_allows_approval():
+    assert (
         validate_case_decision(
-            CaseDecisionCommand(
-                "APPROVED",
-                "擬核准",
-                has_override_permission=True,
-                override_reason=" ",
-            ),
-            ReviewGateSummary(unresolved_high_count=1),
+            CaseDecisionCommand("APPROVED", "擬核准"),
+            ReviewGateSummary(True, 0, 0, 0),
         )
-
-    result = validate_case_decision(
-        CaseDecisionCommand(
-            "APPROVED",
-            "擬核准",
-            has_override_permission=True,
-            override_reason="主管依現勘資料覆核",
-        ),
-        ReviewGateSummary(unresolved_high_count=1),
+        == "APPROVED"
     )
-    assert result == "APPROVED"

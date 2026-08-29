@@ -53,11 +53,12 @@ def test_finding_decision_is_immutable_and_case_decisions_are_append_only(
         "value": "-7.00",
     }
 
-    still_blocked = authorized_client.post(
+    completed = authorized_client.post(
         f"/api/v1/review/cases/{runnable_review.review_id}/decision",
-        json={"decision": "APPROVED", "reason": "部分接受後嘗試核准"},
+        json={"decision": "APPROVED", "reason": "正式採用值已確認"},
     )
-    assert still_blocked.status_code == 409
+    assert completed.status_code == 201
+    assert completed.json()["after_value"]["review_status"] == "REVIEW_COMPLETED"
 
     duplicate = authorized_client.post(
         f"/api/v1/review/findings/{finding['finding_id']}/decisions",
@@ -68,11 +69,11 @@ def test_finding_decision_is_immutable_and_case_decisions_are_append_only(
         },
     )
     assert duplicate.status_code == 409
-    assert duplicate.json()["error"]["code"] == "FINDING_DECISION_CONFLICT"
+    assert duplicate.json()["error"]["code"] == "REVIEW_STATE_CONFLICT"
 
     approved = authorized_client.post(
         f"/api/v1/review/cases/{runnable_review.review_id}/decision",
-        json={"decision": "APPROVED", "reason": "高風險疑點已完成處理"},
+        json={"decision": "APPROVED", "reason": "不可重複核定"},
     )
     assert approved.status_code == 409
 
@@ -80,14 +81,14 @@ def test_finding_decision_is_immutable_and_case_decisions_are_append_only(
         f"/api/v1/review/cases/{runnable_review.review_id}/decisions"
     )
     assert decisions.status_code == 200
-    assert len(decisions.json()) == 1
+    assert len(decisions.json()) == 2
 
     with postgres_connection.cursor() as cursor:
         cursor.execute(
             "SELECT count(*) FROM review.decisions WHERE review_id = %s",
             (runnable_review.review_id,),
         )
-        assert cursor.fetchone()[0] == 1
+        assert cursor.fetchone()[0] == 2
         cursor.execute(
             "SELECT count(*) FROM valuation.validation_findings WHERE validation_run_id = %s",
             (run["validation_run_id"],),
@@ -411,7 +412,7 @@ def test_rerun_rejects_caller_owned_authoritative_values(
     assert response.status_code == 422
 
 
-def test_rate_finding_remains_high_gate_when_rule_severity_is_too_low(
+def test_custom_final_value_resolves_risk_even_when_rule_severity_is_too_low(
     authorized_client, runnable_review, postgres_connection
 ):
     with postgres_connection.cursor() as cursor:
@@ -441,15 +442,16 @@ def test_rate_finding_remains_high_gate_when_rule_severity_is_too_low(
     review = authorized_client.get(
         f"/api/v1/review/cases/{runnable_review.review_id}"
     ).json()
-    assert review["current_risk_level"] == "HIGH"
-    assert review["high_count"] == 1
+    assert review["current_risk_level"] == "LOW"
+    assert review["high_count"] == 0
 
     approved = authorized_client.post(
         f"/api/v1/review/cases/{runnable_review.review_id}/decision",
-        json={"decision": "APPROVED", "reason": "嘗試忽略風險"},
+        json={"decision": "APPROVED", "reason": "正式採用值已確認"},
     )
 
-    assert approved.status_code == 409
+    assert approved.status_code == 201
+    assert approved.json()["after_value"]["review_status"] == "REVIEW_COMPLETED"
 
 
 def test_completed_case_rejects_late_finding_decision(
@@ -470,18 +472,24 @@ def test_completed_case_rejects_late_finding_decision(
             "reason": "疑點已完成處理",
         },
     ).status_code == 201
-    assert authorized_client.post(
+    approved = authorized_client.post(
         f"/api/v1/review/cases/{runnable_review.review_id}/decision",
-        json={"decision": "APPROVED", "reason": "准予核定"},
-    ).status_code == 201
-    completed = authorized_client.post(
-        f"/api/v1/review/cases/{runnable_review.review_id}/decision",
-        json={"decision": "REVIEW_COMPLETED", "reason": "審查程序完成"},
+        json={"decision": "APPROVED", "reason": "核定並完成審查"},
     )
-    assert completed.status_code == 201
+    assert approved.status_code == 201
+    assert approved.json()["decision"] == "APPROVED"
+    assert approved.json()["after_value"]["review_status"] == "REVIEW_COMPLETED"
     assert authorized_client.get(
         f"/api/v1/review/cases/{runnable_review.review_id}"
     ).json()["review_status"] == "REVIEW_COMPLETED"
+    case_decisions = [
+        item
+        for item in authorized_client.get(
+            f"/api/v1/review/cases/{runnable_review.review_id}/decisions"
+        ).json()
+        if item["finding_id"] is None
+    ]
+    assert [item["decision"] for item in case_decisions] == ["APPROVED"]
 
     late_decision = authorized_client.post(
         f"/api/v1/review/findings/{finding['finding_id']}/decisions",
