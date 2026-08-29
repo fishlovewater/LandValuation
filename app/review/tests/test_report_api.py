@@ -101,7 +101,7 @@ def test_report_decisions_are_scoped_to_the_requested_run(
             "review_id": str(runnable_review.review_id),
             "decision": "PARTIALLY_ACCEPTED",
             "reason": "run-1 finding decision",
-            "after_value": {"rate": "-7"},
+            "after_value": {"value": "-7"},
         },
     ).status_code == 201
     assert authorized_client.post(

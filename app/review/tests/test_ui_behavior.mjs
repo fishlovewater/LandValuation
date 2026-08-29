@@ -271,6 +271,11 @@ test("approved choice is a single final action", () => {
   assert.doesNotMatch(html, /<option value="REVIEW_COMPLETED">/);
 });
 
+test("approved confirmation explains that review completes immediately", () => {
+  assert.match(html, /核定後案件將直接完成審查，確定送出？/);
+  assert.doesNotMatch(html, /此決策將完成重大案件審查/);
+});
+
 test("document preview path is review scoped and page aware", () => {
   assert.equal(
     logic.documentContentPath("review-1", "document-2"),

@@ -62,7 +62,7 @@ def test_demo_seed_is_idempotent_and_real_api_workflow_completes(postgres_connec
                     "review_id": review_id,
                     "decision": "PARTIALLY_ACCEPTED",
                     "reason": "Demo requires revision",
-                    "after_value": {"adjustment_rate": "-7"},
+                    "after_value": {"value": "-7"},
                 },
                 headers=headers,
             )

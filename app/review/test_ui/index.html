@@ -125,7 +125,72 @@
       input.setAttribute("aria-required",String(required));
       if(!required)input.value="";
     };
-        $("#case-detail").onclick=e=>{const button=e.target.closest("button");if(!button||!state.current)return;busy(button,async()=>{const reviewId=state.current.review.review_id,latest=state.current.runs.at(-1);if(button.dataset.toggleFinding){const id=button.dataset.toggleFinding,willExpand=!state.expandedFindingIds.has(id),finding=state.current.findings.find(x=>x.finding_id===id);if(willExpand)state.expandedFindingIds.add(id);else state.expandedFindingIds.delete(id);button.setAttribute("aria-expanded",String(willExpand));$(`[data-finding-detail="${id}"]`).classList.toggle("hidden",!willExpand);button.textContent=willExpand?"收起詳細資料":findingActionLabel(finding.status);if(willExpand)await loadDocumentPreview(finding);return}if(button.dataset.viewSource){const finding=state.current.findings.find(x=>x.finding_id===button.dataset.viewSource);await loadDocumentPreview(finding);return}if(button.dataset.tab){state.activeTab=button.dataset.tab;renderDetail(state.current);return}if(button.hasAttribute("data-start-review")){const started=await request(`/review/workbench/cases/${reviewId}/start`,{method:"POST"});await loadDetail(reviewId);await loadSummary();const notice=startOutcomeMessage(started);announce(notice.message,notice.error)}if(button.dataset.decideFinding){const id=button.dataset.decideFinding;state.activeTab="findings";state.expandedFindingIds.add(id);const reason=$(`[data-finding-reason="${id}"]`).value.trim(),decision=$(`[data-finding-decision="${id}"]`).value,afterValue=$(`[data-finding-after-value="${id}"]`).value.trim(),errors=validateFindingDecision(decision,reason,afterValue);if(showFindingErrors(id,errors))return;const finding=state.current.findings.find(x=>x.finding_id===id),body=findingDecisionBody(reviewId,finding,decision,reason,afterValue);await request(`/review/findings/${id}/decisions`,{method:"POST",body});await loadDetail(reviewId);await loadSummary();announce("疑點決策已儲存。",false)}if(button.hasAttribute("data-decide-case")){const reason=$("#case-decision-reason").value.trim();if(!reason)throw new Error("案件決策必須填寫理由。");if(["APPROVED","REVIEW_COMPLETED"].includes($("#case-decision").value)&&!confirm("此決策將完成重大案件審查，確定送出？"))return;await request(`/review/cases/${reviewId}/decision`,{method:"POST",body:{decision:$("#case-decision").value,reason}});await loadDetail(reviewId);await loadSummary()}if(button.hasAttribute("data-report-pdf")){if(!latest)throw new Error("請先完成智慧審查。");await request(`/review/runs/${latest.validation_run_id}/report/pdf`,{method:"POST"});await loadDetail(reviewId)}if(button.hasAttribute("data-report-download")){if(!latest)throw new Error("請先完成智慧審查。");const blob=await request(`/review/runs/${latest.validation_run_id}/report/pdf/download`,{binary:true}),url=URL.createObjectURL(blob),link=document.createElement("a");link.href=url;link.download=`review-report-${latest.run_no}.pdf`;link.click();URL.revokeObjectURL(url)}})};
+    $("#case-detail").onclick=e=>{
+      const button=e.target.closest("button");
+      if(!button||!state.current)return;
+      busy(button,async()=>{
+        const reviewId=state.current.review.review_id,latest=state.current.runs.at(-1);
+        if(button.dataset.toggleFinding){
+          const id=button.dataset.toggleFinding,willExpand=!state.expandedFindingIds.has(id),finding=state.current.findings.find(x=>x.finding_id===id);
+          if(willExpand)state.expandedFindingIds.add(id);else state.expandedFindingIds.delete(id);
+          button.setAttribute("aria-expanded",String(willExpand));
+          $(`[data-finding-detail="${id}"]`).classList.toggle("hidden",!willExpand);
+          button.textContent=willExpand?"收起詳細資料":findingActionLabel(finding.status);
+          if(willExpand)await loadDocumentPreview(finding);
+          return;
+        }
+        if(button.dataset.viewSource){
+          const finding=state.current.findings.find(x=>x.finding_id===button.dataset.viewSource);
+          await loadDocumentPreview(finding);
+          return;
+        }
+        if(button.dataset.tab){state.activeTab=button.dataset.tab;renderDetail(state.current);return}
+        if(button.hasAttribute("data-start-review")){
+          const started=await request(`/review/workbench/cases/${reviewId}/start`,{method:"POST"});
+          await loadDetail(reviewId);
+          await loadSummary();
+          const notice=startOutcomeMessage(started);
+          announce(notice.message,notice.error);
+          return;
+        }
+        if(button.dataset.decideFinding){
+          const id=button.dataset.decideFinding;
+          state.activeTab="findings";
+          state.expandedFindingIds.add(id);
+          const reason=$(`[data-finding-reason="${id}"]`).value.trim(),decision=$(`[data-finding-decision="${id}"]`).value,afterValue=$(`[data-finding-after-value="${id}"]`).value.trim(),errors=validateFindingDecision(decision,reason,afterValue);
+          if(showFindingErrors(id,errors))return;
+          const finding=state.current.findings.find(x=>x.finding_id===id),body=findingDecisionBody(reviewId,finding,decision,reason,afterValue);
+          await request(`/review/findings/${id}/decisions`,{method:"POST",body});
+          await loadDetail(reviewId);
+          await loadSummary();
+          announce("疑點決策已儲存。",false);
+          return;
+        }
+        if(button.hasAttribute("data-decide-case")){
+          const reason=$("#case-decision-reason").value.trim(),decision=$("#case-decision").value;
+          if(!reason)throw new Error("案件決策必須填寫理由。");
+          if(decision==="APPROVED"&&!confirm("核定後案件將直接完成審查，確定送出？"))return;
+          await request(`/review/cases/${reviewId}/decision`,{method:"POST",body:{decision,reason}});
+          await loadDetail(reviewId);
+          await loadSummary();
+          return;
+        }
+        if(button.hasAttribute("data-report-pdf")){
+          if(!latest)throw new Error("請先完成智慧審查。");
+          await request(`/review/runs/${latest.validation_run_id}/report/pdf`,{method:"POST"});
+          await loadDetail(reviewId);
+          return;
+        }
+        if(button.hasAttribute("data-report-download")){
+          if(!latest)throw new Error("請先完成智慧審查。");
+          const blob=await request(`/review/runs/${latest.validation_run_id}/report/pdf/download`,{binary:true}),url=URL.createObjectURL(blob),link=document.createElement("a");
+          link.href=url;
+          link.download=`review-report-${latest.run_no}.pdf`;
+          link.click();
+          URL.revokeObjectURL(url);
+        }
+      });
+    };
     $("#demo-revise").onclick=e=>busy(e.currentTarget,async()=>{const x=await request("/review/demo/revise",{method:"POST"});announce(x.created?"Demo 修正版 v2 已送出。":"Demo 修正版 v2 已存在，未重複建立。");if(state.current)await loadDetail(state.current.review.review_id)});if(state.token){showWorkbench();busy(null,refresh)}else showLogin();
   })();
   </script>

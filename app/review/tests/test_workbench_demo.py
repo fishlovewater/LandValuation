@@ -57,7 +57,7 @@ def test_seed_creates_received_review_and_start_completes(postgres_connection):
                     "review_id": seeded["review_id"],
                     "decision": "PARTIALLY_ACCEPTED",
                     "reason": "請依修正版重新檢核",
-                    "after_value": {"adjustment_rate": "-7"},
+                    "after_value": {"value": "-7"},
                 },
                 headers=headers,
             )
