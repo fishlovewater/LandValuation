@@ -69,6 +69,20 @@ test("partial acceptance sends a formal after value", () => {
   );
 });
 
+test("finding validation returns field-specific Chinese errors", () => {
+  assert.deepEqual(logic.validateFindingDecision("ACCEPTED", "", ""), {
+    reason: "請填寫決策理由。",
+  });
+  assert.deepEqual(
+    logic.validateFindingDecision("PARTIALLY_ACCEPTED", "同意部分內容", ""),
+    { afterValue: "請填寫採納後的正式值。" },
+  );
+  assert.deepEqual(
+    logic.validateFindingDecision("PARTIALLY_ACCEPTED", "同意部分內容", "-7"),
+    {},
+  );
+});
+
 test("blocked review is announced as an error", () => {
   assert.deepEqual(
     logic.startOutcomeMessage({

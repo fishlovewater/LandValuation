@@ -79,6 +79,10 @@ def test_test_ui_is_available_in_development(monkeypatch):
     assert "findingStatusLabel(f.status)" in response.text
     assert "state.activeTab" in response.text
     assert "state.expandedFindingIds" in response.text
+    assert 'class="finding-inline-error"' in response.text
+    assert "data-finding-error-reason" in response.text
+    assert "data-finding-error-after-value" in response.text
+    assert 'aria-live="polite"' in response.text
     assert '<option value="EXPERT_REVIEW">' not in response.text
 
 
