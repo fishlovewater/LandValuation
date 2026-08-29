@@ -17,7 +17,7 @@ assert.notEqual(end, -1, "testable workbench logic end marker is missing");
 const source = html.slice(start + startMarker.length, end);
 const scriptSource = html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "";
 const logic = new Function(
-  `${source}; return { redactForLog, findingDecisionBody, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, flattenDisplayData, requiresAfterValue, documentContentPath, pdfPageTarget, requestLogSummary };`,
+  `${source}; return { redactForLog, findingDecisionBody, validateFindingDecision, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, findingStatusLabel, severityLabel, flattenDisplayData, requiresAfterValue, documentContentPath, pdfPageTarget, requestLogSummary };`,
 )();
 
 test("inline workbench script parses", () => {
@@ -133,9 +133,45 @@ test("structured evidence becomes readable rows instead of JSON", () => {
       { document_version: 2, page_number: 3, verification_status: "VERIFIED" },
     ]),
     [
-      { label: "文件版本", value: "2" },
+      { label: "法規文件版本", value: "2" },
       { label: "頁碼", value: "3" },
       { label: "確認狀態", value: "已確認" },
+    ],
+  );
+});
+
+test("finding cards use Chinese decision and risk labels", () => {
+  assert.equal(logic.findingStatusLabel("OPEN"), "待決策");
+  assert.equal(logic.findingStatusLabel("ACCEPTED"), "已決策：採納疑點");
+  assert.equal(
+    logic.findingStatusLabel("EXPERT_REVIEW"),
+    "專業覆核（既有資料）",
+  );
+  assert.equal(logic.severityLabel("HIGH"), "高風險");
+  assert.equal(logic.severityLabel("MEDIUM"), "中風險");
+});
+
+test("review evidence hides trace keys and localizes legal fields", () => {
+  assert.deepEqual(
+    logic.flattenDisplayData([
+      {
+        rule_name: "調整率一致性檢核",
+        version_name: "2026 年正式版",
+        version_no: 3,
+        effective_from: "2026-01-01",
+        effective_to: null,
+        bounding_box: { left: 0.1 },
+        checksum_sha256: "a".repeat(64),
+        rule_version_id: "technical-id",
+        source_id: "source-id",
+      },
+    ]),
+    [
+      { label: "規則名稱", value: "調整率一致性檢核" },
+      { label: "規則版本", value: "2026 年正式版" },
+      { label: "版次", value: "3" },
+      { label: "生效日期", value: "2026-01-01" },
+      { label: "有效截止日", value: "持續有效" },
     ],
   );
 });
