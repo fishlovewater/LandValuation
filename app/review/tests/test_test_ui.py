@@ -56,9 +56,12 @@ def test_test_ui_is_available_in_development(monkeypatch):
     assert "法規依據" in response.text
     assert "地籍圖" in response.text
     assert "土地登記謄本" in response.text
-    assert "採納疑點" in response.text
-    assert "部分採納" in response.text
-    assert "核定通過" in response.text
+    assert "維持原申報內容" in response.text
+    assert "採用系統建議內容" in response.text
+    assert "另訂正式內容" in response.text
+    assert "資料不足，要求補件" in response.text
+    assert "核定並完成審查" in response.text
+    assert '<option value="REVIEW_COMPLETED">' not in response.text
     assert "renderStructuredContent" in response.text
     assert "data-partial-value-box" in response.text
     assert "JSON.stringify(f.source_evidence" not in response.text

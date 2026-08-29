@@ -17,7 +17,7 @@ assert.notEqual(end, -1, "testable workbench logic end marker is missing");
 const source = html.slice(start + startMarker.length, end);
 const scriptSource = html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "";
 const logic = new Function(
-  `${source}; return { redactForLog, findingDecisionBody, validateFindingDecision, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, findingStatusLabel, severityLabel, flattenDisplayData, requiresAfterValue, documentContentPath, pdfPageTarget, requestLogSummary, findingActionLabel, latestFindingDecision };`,
+  `${source}; return { redactForLog, findingDecisionBody, validateFindingDecision, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, findingStatusLabel, severityLabel, flattenDisplayData, requiresAfterValue, documentContentPath, pdfPageTarget, requestLogSummary, findingActionLabel, latestFindingDecision, approvalBlockers };`,
 )();
 
 test("inline workbench script parses", () => {
@@ -48,7 +48,7 @@ test("request logs recursively redact credentials", () => {
   );
 });
 
-test("partial acceptance sends a formal after value", () => {
+test("custom final content sends only the reviewer value", () => {
   assert.deepEqual(
     logic.findingDecisionBody(
       "review-1",
@@ -62,7 +62,6 @@ test("partial acceptance sends a formal after value", () => {
       decision: "PARTIALLY_ACCEPTED",
       reason: "採納修正值",
       after_value: {
-        field_path: "comparables[0].adjustment_rate",
         value: "-7",
       },
     },
@@ -76,7 +75,7 @@ test("partial acceptance sends a formal after value", () => {
         "採納修正值",
         "",
       ),
-    /正式值/,
+    /正式採用內容/,
   );
 });
 
@@ -86,7 +85,7 @@ test("finding validation returns field-specific Chinese errors", () => {
   });
   assert.deepEqual(
     logic.validateFindingDecision("PARTIALLY_ACCEPTED", "同意部分內容", ""),
-    { afterValue: "請填寫採納後的正式值。" },
+    { afterValue: "請填寫正式採用內容。" },
   );
   assert.deepEqual(
     logic.validateFindingDecision("PARTIALLY_ACCEPTED", "同意部分內容", "-7"),
@@ -147,8 +146,14 @@ test("clipboard failure keeps a manual-copy fallback", async () => {
 test("review codes have Chinese display labels", () => {
   assert.equal(logic.documentTypeLabel("cadastral-map"), "地籍圖");
   assert.equal(logic.documentTypeLabel("land-register"), "土地登記謄本");
-  assert.equal(logic.findingDecisionLabel("PARTIALLY_ACCEPTED"), "部分採納");
-  assert.equal(logic.caseDecisionLabel("APPROVED"), "核定通過");
+  assert.equal(logic.findingDecisionLabel("REJECTED"), "維持原申報內容");
+  assert.equal(logic.findingDecisionLabel("ACCEPTED"), "採用系統建議內容");
+  assert.equal(logic.findingDecisionLabel("PARTIALLY_ACCEPTED"), "另訂正式內容");
+  assert.equal(
+    logic.findingDecisionLabel("REQUIRES_SUPPLEMENT"),
+    "資料不足，要求補件",
+  );
+  assert.equal(logic.caseDecisionLabel("APPROVED"), "核定並完成審查");
   assert.equal(logic.documentTypeLabel("custom"), "其他文件（custom）");
   assert.equal(
     logic.findingDecisionLabel("EXPERT_REVIEW"),
@@ -175,7 +180,10 @@ test("structured evidence becomes readable rows instead of JSON", () => {
 
 test("finding cards use Chinese decision and risk labels", () => {
   assert.equal(logic.findingStatusLabel("OPEN"), "待決策");
-  assert.equal(logic.findingStatusLabel("ACCEPTED"), "已決策：採納疑點");
+  assert.equal(
+    logic.findingStatusLabel("ACCEPTED"),
+    "已決策：採用系統建議內容",
+  );
   assert.equal(
     logic.findingStatusLabel("EXPERT_REVIEW"),
     "專業覆核（既有資料）",
@@ -230,6 +238,37 @@ test("review evidence hides trace keys and localizes legal fields", () => {
 test("only partial acceptance requires an after value", () => {
   assert.equal(logic.requiresAfterValue("PARTIALLY_ACCEPTED"), true);
   assert.equal(logic.requiresAfterValue("ACCEPTED"), false);
+});
+
+test("approval blockers include every current unfinished item", () => {
+  assert.deepEqual(
+    logic.approvalBlockers({
+      runs: [{ run_status: "COMPLETED" }],
+      missing_items: [],
+      findings: [{ finding_id: "f-1", status: "OPEN" }],
+      decisions: [],
+    }),
+    ["尚有 1 項疑點未決策或待處理"],
+  );
+});
+
+test("approval blockers require a standardized final value", () => {
+  assert.deepEqual(
+    logic.approvalBlockers({
+      runs: [{ run_status: "COMPLETED" }],
+      missing_items: [],
+      findings: [{ finding_id: "f-1", status: "ACCEPTED" }],
+      decisions: [
+        { finding_id: "f-1", decision: "ACCEPTED", after_value: null },
+      ],
+    }),
+    ["尚有 1 項缺少正式採用內容"],
+  );
+});
+
+test("approved choice is a single final action", () => {
+  assert.match(html, />核定並完成審查</);
+  assert.doesNotMatch(html, /<option value="REVIEW_COMPLETED">/);
 });
 
 test("document preview path is review scoped and page aware", () => {
