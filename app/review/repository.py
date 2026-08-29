@@ -246,7 +246,8 @@ class ReviewRepository:
             await self.session.execute(
                 text(
                     """
-                    SELECT rule_version_id, status, effective_from, effective_to,
+                    SELECT rule_version_id, rule_set_code, version_no, version_name,
+                           status, effective_from, effective_to,
                            applicable_case_type, applicable_district_code,
                            selection_priority, source_document_id
                     FROM valuation.rule_versions

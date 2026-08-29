@@ -450,7 +450,11 @@ class ReviewService:
         return [
             {
                 "rule_version_id": str(context.rule_version["rule_version_id"]),
+                "rule_set_code": context.rule_version["rule_set_code"],
+                "version_name": context.rule_version["version_name"],
+                "version_no": context.rule_version["version_no"],
                 "rule_code": rule["rule_code"],
+                "rule_name": rule["rule_name"],
                 "document_id": str(context.rule_source["document_id"]),
                 "document_version": context.rule_source["version_no"],
                 "checksum_sha256": context.rule_source["checksum_sha256"],

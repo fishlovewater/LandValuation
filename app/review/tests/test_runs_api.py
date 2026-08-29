@@ -138,6 +138,10 @@ def runnable_review(request, postgres_connection):
                 """,
                 (rule_version_id, rule_set_code, ids.source_document_id),
             )
+        rule_names = {
+            "ADJUSTMENT_RATE": "調整率一致性檢核",
+            "EXPERT_GRADE": "級距一致性檢核",
+        }
         for rule_id, rule_code, target_field_code, severity, expression in (
             (
                 ids.adjustment_rule_id,
@@ -166,11 +170,11 @@ def runnable_review(request, postgres_connection):
                     rule_id,
                     ids.rule_version_id,
                     rule_code,
-                    rule_code,
+                    rule_names[rule_code],
                     target_field_code,
                     severity,
                     expression,
-                    rule_code,
+                    rule_names[rule_code],
                 ),
             )
         if unsupported_rule:
@@ -377,6 +381,12 @@ def test_run_executes_every_server_selected_rule_and_preserves_server_evidence(
     assert finding["legal_basis"][0]["document_id"] == str(
         runnable_review.source_document_id
     )
+    legal_basis = finding["legal_basis"][0]
+    assert legal_basis["rule_name"] == "調整率一致性檢核"
+    assert legal_basis["rule_code"] == "ADJUSTMENT_RATE"
+    assert legal_basis["rule_set_code"].startswith("RUN_RULES_")
+    assert legal_basis["version_name"] == "Run Test Rules"
+    assert legal_basis["version_no"] == 1
 
     risk = authorized_client.get(
         f"/api/v1/review/runs/{run['validation_run_id']}/risk-summary"
