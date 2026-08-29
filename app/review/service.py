@@ -17,7 +17,9 @@ from app.review.risks import FindingRisk, risk_level_for_findings
 from app.review.decisions import (
     CaseDecisionCommand,
     FindingDecisionCommand,
+    FindingValueContext,
     ReviewGateSummary,
+    build_finding_after_value,
     validate_case_decision,
     validate_finding_decision,
 )
@@ -39,6 +41,10 @@ from app.review.trusted_inputs import (
     prepare_trusted_rules,
     validate_rule_contracts,
 )
+
+
+def _first_present(*values):
+    return next((value for value in values if value is not None), None)
 
 
 ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -817,10 +823,24 @@ class ReviewService:
                 409,
                 {"current": finding.status},
             )
-        resulting_status = validate_finding_decision(
-            FindingDecisionCommand(
-                payload.decision, payload.reason, payload.after_value
-            )
+        command = FindingDecisionCommand(
+            payload.decision, payload.reason, payload.after_value
+        )
+        resulting_status = validate_finding_decision(command)
+        after_value = build_finding_after_value(
+            command,
+            FindingValueContext(
+                field_path=finding.field_path,
+                reported_value=_first_present(
+                    finding.reported_value,
+                    finding.reported_adjustment_rate,
+                    finding.reported_grade,
+                ),
+                system_value=_first_present(
+                    finding.system_adjustment_rate,
+                    finding.system_grade,
+                ),
+            ),
         )
         before = {
             "status": finding.status,
@@ -835,7 +855,7 @@ class ReviewService:
             decided_by_user_id=actor_id,
             request_id=request_id,
             before_value=before,
-            after_value=payload.after_value or {"status": resulting_status},
+            after_value=after_value or {"status": resulting_status},
         )
         counts = await self.repository.current_risk_counts(finding.review_id)
         review.high_count = counts["high"]

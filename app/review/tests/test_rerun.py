@@ -41,12 +41,17 @@ def test_finding_decision_is_immutable_and_case_decisions_are_append_only(
             "review_id": str(runnable_review.review_id),
             "decision": "PARTIALLY_ACCEPTED",
             "reason": "現勘資料支持部分調整",
-            "after_value": {"reported_rate": "-7.00"},
+            "after_value": {"value": "-7.00"},
         },
     )
     assert decided.status_code == 201
     assert decided.json()["decision"] == "PARTIALLY_ACCEPTED"
     assert decided.json()["request_id"] == request_id
+    assert decided.json()["after_value"] == {
+        "selection_source": "REVIEWER",
+        "field_path": finding["field_path"],
+        "value": "-7.00",
+    }
 
     still_blocked = authorized_client.post(
         f"/api/v1/review/cases/{runnable_review.review_id}/decision",
@@ -429,7 +434,7 @@ def test_rate_finding_remains_high_gate_when_rule_severity_is_too_low(
             "review_id": str(runnable_review.review_id),
             "decision": "PARTIALLY_ACCEPTED",
             "reason": "仍需確認部分差異",
-            "after_value": {"reported_rate": "-7"},
+            "after_value": {"value": "-7"},
         },
     )
     assert decided.status_code == 201

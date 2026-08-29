@@ -189,7 +189,7 @@ def test_fixed_case_workflow_preserves_trusted_history(workflow_client, workflow
     assert _evidence_field_ids(findings1) == workflow_data.v1_field_ids
 
     high = next(item for item in findings1 if item["severity"] == "HIGH")
-    assert workflow_client.post(f"/api/v1/review/findings/{high['finding_id']}/decisions", json={"review_id": review_id, "decision": "PARTIALLY_ACCEPTED", "reason": "Revision required", "after_value": {"rate": "-7"}}).status_code == 201
+    assert workflow_client.post(f"/api/v1/review/findings/{high['finding_id']}/decisions", json={"review_id": review_id, "decision": "PARTIALLY_ACCEPTED", "reason": "Revision required", "after_value": {"value": "-7"}}).status_code == 201
     assert workflow_client.post(f"/api/v1/review/cases/{review_id}/decision", json={"decision": "RETURNED_FOR_REVISION", "reason": "Correct original report"}).status_code == 201
     assert workflow_client.patch(f"/api/v1/review/cases/{review_id}", json={"review_status": "PREPROCESSING"}).status_code == 200
 

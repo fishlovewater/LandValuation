@@ -21,6 +21,13 @@ class FindingDecisionCommand:
 
 
 @dataclass(frozen=True)
+class FindingValueContext:
+    field_path: str | None
+    reported_value: Any
+    system_value: Any
+
+
+@dataclass(frozen=True)
 class CaseDecisionCommand:
     decision: Literal[
         "RETURNED_FOR_REVISION",
@@ -66,6 +73,35 @@ def validate_finding_decision(command: FindingDecisionCommand) -> FindingStatus:
             "REVIEW_DECISION_INVALID", "部分接受必須提供調整後內容", 409
         )
     return command.decision
+
+
+def build_finding_after_value(
+    command: FindingDecisionCommand,
+    context: FindingValueContext,
+) -> dict[str, Any] | None:
+    validate_finding_decision(command)
+    if command.decision == "REQUIRES_SUPPLEMENT":
+        return None
+    if command.decision == "REJECTED":
+        source, value = "REPORTED", context.reported_value
+    elif command.decision == "ACCEPTED":
+        source, value = "SYSTEM", context.system_value
+    elif command.decision == "PARTIALLY_ACCEPTED":
+        source = "REVIEWER"
+        value = command.after_value.get("value") if command.after_value else None
+    else:
+        return command.after_value
+    if not _has_meaningful_value(value):
+        raise AppError(
+            "REVIEW_DECISION_INVALID",
+            "所選內容沒有可用的正式採用值",
+            409,
+        )
+    return {
+        "selection_source": source,
+        "field_path": context.field_path,
+        "value": str(value).strip(),
+    }
 
 
 def validate_case_decision(

@@ -4,7 +4,9 @@ from app.core.exceptions import AppError
 from app.review.decisions import (
     CaseDecisionCommand,
     FindingDecisionCommand,
+    FindingValueContext,
     ReviewGateSummary,
+    build_finding_after_value,
     validate_case_decision,
     validate_finding_decision,
 )
@@ -73,6 +75,50 @@ def test_partial_acceptance_accepts_meaningful_after_value(after_value):
         )
         == "PARTIALLY_ACCEPTED"
     )
+
+
+@pytest.mark.parametrize(
+    ("decision", "source", "expected"),
+    [
+        ("REJECTED", "REPORTED", "-12"),
+        ("ACCEPTED", "SYSTEM", "-5"),
+        ("PARTIALLY_ACCEPTED", "REVIEWER", "-7"),
+    ],
+)
+def test_build_finding_after_value_uses_explicit_source(decision, source, expected):
+    command = FindingDecisionCommand(
+        decision=decision,
+        reason="人工覆核",
+        after_value={"value": "-7"} if decision == "PARTIALLY_ACCEPTED" else None,
+    )
+    context = FindingValueContext(
+        field_path="comparables[0].adjustment_rate",
+        reported_value="-12",
+        system_value="-5",
+    )
+
+    assert build_finding_after_value(command, context) == {
+        "selection_source": source,
+        "field_path": context.field_path,
+        "value": expected,
+    }
+
+
+def test_supplement_has_no_final_value():
+    command = FindingDecisionCommand("REQUIRES_SUPPLEMENT", "請補正")
+    context = FindingValueContext("field", "original", "system")
+
+    assert build_finding_after_value(command, context) is None
+
+
+def test_system_choice_rejects_missing_system_value():
+    with pytest.raises(AppError) as error:
+        build_finding_after_value(
+            FindingDecisionCommand("ACCEPTED", "採用系統建議"),
+            FindingValueContext("field", "original", None),
+        )
+
+    assert error.value.code == "REVIEW_DECISION_INVALID"
 
 
 def test_unresolved_high_risk_blocks_approval_without_override():
