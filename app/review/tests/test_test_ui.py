@@ -42,6 +42,11 @@ def test_test_ui_is_available_in_development(monkeypatch):
     assert 'started.outcome === "BLOCKED"' in response.text
     assert "/review/demo/revise" in response.text
     assert "/report/pdf" in response.text
+    assert "預覽 JSON" not in response.text
+    assert "data-report-json" not in response.text
+    assert 'id="report-preview"' not in response.text
+    assert 'button.hasAttribute("data-report-json")' not in response.text
+    assert "JSON.stringify(await request(`/review/runs/${latest.validation_run_id}/report`)" not in response.text
     assert "API Base" not in response.text
     assert ">Case ID<" not in response.text
     assert ">Review ID" not in response.text

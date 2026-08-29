@@ -24,6 +24,17 @@ test("inline workbench script parses", () => {
   assert.doesNotThrow(() => new Function(scriptSource));
 });
 
+test("reviewer report UI excludes raw structured-report rendering", () => {
+  assert.doesNotMatch(html, /預覽 JSON/);
+  assert.doesNotMatch(html, /data-report-json/);
+  assert.doesNotMatch(html, /id="report-preview"/);
+  assert.doesNotMatch(html, /button\.hasAttribute\("data-report-json"\)/);
+  assert.doesNotMatch(
+    html,
+    /JSON\.stringify\(await request\(`\/review\/runs\/\$\{latest\.validation_run_id\}\/report`\)/,
+  );
+});
+
 test("request logs recursively redact credentials", () => {
   assert.deepEqual(
     logic.redactForLog({
@@ -139,6 +150,14 @@ test("review codes have Chinese display labels", () => {
   assert.equal(logic.findingDecisionLabel("PARTIALLY_ACCEPTED"), "部分採納");
   assert.equal(logic.caseDecisionLabel("APPROVED"), "核定通過");
   assert.equal(logic.documentTypeLabel("custom"), "其他文件（custom）");
+  assert.equal(
+    logic.findingDecisionLabel("EXPERT_REVIEW"),
+    "專業覆核（既有資料）",
+  );
+  assert.equal(
+    logic.caseDecisionLabel("EXPERT_REVIEW"),
+    "專業覆核（既有資料）",
+  );
 });
 
 test("structured evidence becomes readable rows instead of JSON", () => {

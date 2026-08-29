@@ -35,13 +35,44 @@ def test_every_finding_decision_requires_nonblank_reason():
     assert error.value.status_code == 409
 
 
-def test_partial_acceptance_requires_after_value():
+@pytest.mark.parametrize(
+    "after_value",
+    [
+        None,
+        {},
+        [],
+        "",
+        "   ",
+        {"value": ""},
+        {"value": "   "},
+        {"field_path": "comparables[0].adjustment_rate", "value": ""},
+        {"field_path": None, "value": ""},
+        {"nested": {}},
+    ],
+)
+def test_partial_acceptance_rejects_semantically_empty_after_value(after_value):
     with pytest.raises(AppError) as error:
         validate_finding_decision(
-            FindingDecisionCommand("PARTIALLY_ACCEPTED", "部分接受")
+            FindingDecisionCommand("PARTIALLY_ACCEPTED", "部分接受", after_value)
         )
 
     assert error.value.code == "REVIEW_DECISION_INVALID"
+
+
+@pytest.mark.parametrize(
+    "after_value",
+    [
+        {"reported_rate": "-7"},
+        {"field_path": None, "value": "-7"},
+    ],
+)
+def test_partial_acceptance_accepts_meaningful_after_value(after_value):
+    assert (
+        validate_finding_decision(
+            FindingDecisionCommand("PARTIALLY_ACCEPTED", "部分接受", after_value)
+        )
+        == "PARTIALLY_ACCEPTED"
+    )
 
 
 def test_unresolved_high_risk_blocks_approval_without_override():

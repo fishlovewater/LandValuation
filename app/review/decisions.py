@@ -39,12 +39,29 @@ class ReviewGateSummary:
     unresolved_high_count: int
 
 
+def _has_meaningful_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        if "value" in value:
+            return _has_meaningful_value(value["value"])
+        return any(_has_meaningful_value(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_meaningful_value(item) for item in value)
+    return True
+
+
 def validate_finding_decision(command: FindingDecisionCommand) -> FindingStatus:
     if not command.reason.strip():
         raise AppError(
             "REVIEW_DECISION_INVALID", "人工決策必須填寫理由", 409
         )
-    if command.decision == "PARTIALLY_ACCEPTED" and command.after_value is None:
+    if (
+        command.decision == "PARTIALLY_ACCEPTED"
+        and not _has_meaningful_value(command.after_value)
+    ):
         raise AppError(
             "REVIEW_DECISION_INVALID", "部分接受必須提供調整後內容", 409
         )

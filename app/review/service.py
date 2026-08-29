@@ -810,6 +810,13 @@ class ReviewService:
         )
         if finding is None:
             raise ResourceNotFoundError("審查疑點")
+        if finding.status != "OPEN":
+            raise AppError(
+                "FINDING_DECISION_CONFLICT",
+                "疑點已完成決策，不可再次變更",
+                409,
+                {"current": finding.status},
+            )
         resulting_status = validate_finding_decision(
             FindingDecisionCommand(
                 payload.decision, payload.reason, payload.after_value

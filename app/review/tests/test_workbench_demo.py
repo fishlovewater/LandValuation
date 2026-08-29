@@ -95,6 +95,57 @@ def test_seed_creates_received_review_and_start_completes(postgres_connection):
         reset_demo()
 
 
+def test_finding_cannot_receive_a_second_decision(postgres_connection):
+    seeded = seed_demo()
+    try:
+        with TestClient(app) as client:
+            login = client.post(
+                "/api/v1/auth/login",
+                json={"username": seeded["username"], "password": seeded["password"]},
+            )
+            headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+            started = client.post(
+                f"/api/v1/review/workbench/cases/{seeded['review_id']}/start",
+                headers=headers,
+            )
+            finding = next(
+                item for item in started.json()["findings"] if item["severity"] == "HIGH"
+            )
+            payload = {
+                "review_id": seeded["review_id"],
+                "decision": "ACCEPTED",
+                "reason": "第一次人工決策",
+            }
+
+            first = client.post(
+                f"/api/v1/review/findings/{finding['finding_id']}/decisions",
+                json=payload,
+                headers=headers,
+            )
+            second = client.post(
+                f"/api/v1/review/findings/{finding['finding_id']}/decisions",
+                json={**payload, "decision": "REJECTED", "reason": "不應覆寫"},
+                headers=headers,
+            )
+
+        assert first.status_code == 201
+        assert second.status_code == 409
+        assert second.json()["error"]["code"] == "FINDING_DECISION_CONFLICT"
+        with postgres_connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT status FROM review.findings WHERE finding_id = %s",
+                (finding["finding_id"],),
+            )
+            assert cursor.fetchone()[0] == "ACCEPTED"
+            cursor.execute(
+                "SELECT count(*) FROM review.decisions WHERE finding_id = %s",
+                (finding["finding_id"],),
+            )
+            assert cursor.fetchone()[0] == 1
+    finally:
+        reset_demo()
+
+
 def test_demo_revise_http_is_development_only_and_idempotent(monkeypatch):
     seeded = seed_demo()
     try:

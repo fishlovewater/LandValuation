@@ -14,7 +14,7 @@ from app.review.tests.test_runs_api import (
 )
 
 
-def test_finding_and_case_decisions_are_append_only(
+def test_finding_decision_is_immutable_and_case_decisions_are_append_only(
     authorized_client, runnable_review, postgres_connection
 ):
     run = authorized_client.post(
@@ -54,40 +54,35 @@ def test_finding_and_case_decisions_are_append_only(
     )
     assert still_blocked.status_code == 409
 
-    resolved = authorized_client.post(
+    duplicate = authorized_client.post(
         f"/api/v1/review/findings/{finding['finding_id']}/decisions",
         json={
             "review_id": str(runnable_review.review_id),
             "decision": "ACCEPTED",
-            "reason": "補充證據已確認，疑點完成處理",
+            "reason": "不應覆寫既有疑點決策",
         },
     )
-    assert resolved.status_code == 201
-    current = authorized_client.get(
-        f"/api/v1/review/cases/{runnable_review.review_id}"
-    ).json()
-    assert current["high_count"] == 0
-    assert current["current_risk_level"] == "LOW"
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "FINDING_DECISION_CONFLICT"
 
     approved = authorized_client.post(
         f"/api/v1/review/cases/{runnable_review.review_id}/decision",
         json={"decision": "APPROVED", "reason": "高風險疑點已完成處理"},
     )
-    assert approved.status_code == 201
-    assert approved.json()["decision"] == "APPROVED"
+    assert approved.status_code == 409
 
     decisions = authorized_client.get(
         f"/api/v1/review/cases/{runnable_review.review_id}/decisions"
     )
     assert decisions.status_code == 200
-    assert len(decisions.json()) == 3
+    assert len(decisions.json()) == 1
 
     with postgres_connection.cursor() as cursor:
         cursor.execute(
             "SELECT count(*) FROM review.decisions WHERE review_id = %s",
             (runnable_review.review_id,),
         )
-        assert cursor.fetchone()[0] == 3
+        assert cursor.fetchone()[0] == 1
         cursor.execute(
             "SELECT count(*) FROM valuation.validation_findings WHERE validation_run_id = %s",
             (run["validation_run_id"],),
