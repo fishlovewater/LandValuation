@@ -17,7 +17,7 @@ assert.notEqual(end, -1, "testable workbench logic end marker is missing");
 const source = html.slice(start + startMarker.length, end);
 const scriptSource = html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "";
 const logic = new Function(
-  `${source}; return { redactForLog, findingDecisionBody, validateFindingDecision, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, findingStatusLabel, severityLabel, flattenDisplayData, requiresAfterValue, documentContentPath, pdfPageTarget, requestLogSummary };`,
+  `${source}; return { redactForLog, findingDecisionBody, validateFindingDecision, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, findingStatusLabel, severityLabel, flattenDisplayData, requiresAfterValue, documentContentPath, pdfPageTarget, requestLogSummary, findingActionLabel, latestFindingDecision };`,
 )();
 
 test("inline workbench script parses", () => {
@@ -149,6 +149,24 @@ test("finding cards use Chinese decision and risk labels", () => {
   );
   assert.equal(logic.severityLabel("HIGH"), "高風險");
   assert.equal(logic.severityLabel("MEDIUM"), "中風險");
+});
+
+test("finding action reflects whether a decision exists", () => {
+  assert.equal(logic.findingActionLabel("OPEN"), "開始審核");
+  assert.equal(logic.findingActionLabel("ACCEPTED"), "查看決策");
+  assert.equal(logic.findingActionLabel("REQUIRES_SUPPLEMENT"), "查看決策");
+});
+
+test("latest finding decision is selected by timestamp", () => {
+  const latest = logic.latestFindingDecision(
+    [
+      { finding_id: "f-1", reason: "第一次", decided_at: "2026-01-01T00:00:00Z" },
+      { finding_id: "f-2", reason: "別筆", decided_at: "2026-01-03T00:00:00Z" },
+      { finding_id: "f-1", reason: "第二次", decided_at: "2026-01-02T00:00:00Z" },
+    ],
+    "f-1",
+  );
+  assert.equal(latest.reason, "第二次");
 });
 
 test("review evidence hides trace keys and localizes legal fields", () => {

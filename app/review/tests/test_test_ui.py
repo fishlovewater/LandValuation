@@ -74,6 +74,12 @@ def test_test_ui_is_available_in_development(monkeypatch):
     assert "minio" not in response.text.lower()
     assert 'document.createElement("details")' in response.text
     assert '<summary class="log-meta"></summary>' in response.text
+    assert 'data-toggle-finding="${f.finding_id}"' in response.text
+    assert 'data-finding-detail="${f.finding_id}"' in response.text
+    assert "findingStatusLabel(f.status)" in response.text
+    assert "state.activeTab" in response.text
+    assert "state.expandedFindingIds" in response.text
+    assert '<option value="EXPERT_REVIEW">' not in response.text
 
 
 def test_test_ui_is_hidden_outside_development(monkeypatch):
