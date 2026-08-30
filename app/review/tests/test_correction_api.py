@@ -124,6 +124,65 @@ def test_create_draft_snapshots_only_confirmed_findings(review_client, triaged_c
     assert "object_key" not in body
 
 
+def test_workbench_detail_keeps_correction_request_after_reload(
+    review_client, triaged_case
+):
+    draft = review_client.post(
+        f"/api/v1/review/cases/{triaged_case.review_id}/correction-requests",
+        json={
+            "message": "請依確認疑點修正",
+            "due_at": triaged_case.future_due_at.isoformat(),
+        },
+    ).json()
+
+    detail = review_client.get(
+        f"/api/v1/review/workbench/cases/{triaged_case.review_id}"
+    )
+
+    assert detail.status_code == 200
+    requests = detail.json()["correction_requests"]
+    assert [item["correction_request_id"] for item in requests] == [
+        draft["correction_request_id"]
+    ]
+    assert requests[0]["status"] == "DRAFT"
+    assert [item["finding_id"] for item in requests[0]["items"]] == [
+        str(triaged_case.confirmed_finding_id)
+    ]
+
+
+def test_run_report_contains_scoped_correction_snapshot_and_history(
+    review_client, triaged_case
+):
+    draft = review_client.post(
+        f"/api/v1/review/cases/{triaged_case.review_id}/correction-requests",
+        json={
+            "message": "請依確認疑點修正",
+            "due_at": triaged_case.future_due_at.isoformat(),
+        },
+    ).json()
+    sent = review_client.post(
+        f"/api/v1/review/correction-requests/{draft['correction_request_id']}/send",
+        json={},
+    )
+    assert sent.status_code == 200
+
+    report = review_client.get(
+        f"/api/v1/review/runs/{draft['based_on_validation_run_id']}/report"
+    )
+
+    assert report.status_code == 200
+    body = report.json()
+    assert [item["correction_request_id"] for item in body["correction_requests"]] == [
+        draft["correction_request_id"]
+    ]
+    assert body["correction_requests"][0]["items"][0]["finding_id"] == str(
+        triaged_case.confirmed_finding_id
+    )
+    assert "CORRECTION_SENT" in {
+        item["event_type"] for item in body["history"]
+    }
+
+
 def test_send_locks_request_and_returns_case_for_revision(review_client, triaged_case):
     draft = review_client.post(
         f"/api/v1/review/cases/{triaged_case.review_id}/correction-requests",
@@ -268,6 +327,57 @@ def test_duplicate_resubmission_is_rejected(
         json={"document_id": str(workflow_data.v2_document_id), "document_version": 2},
     )
     assert second.status_code == 409
+
+
+def test_incomplete_recheck_persists_missing_items_without_creating_run(
+    review_client, sent_request, workflow_data, postgres_connection
+):
+    add_complete_inputs(postgres_connection, workflow_data, version=2)
+    registered = review_client.post(
+        f"/api/v1/review/correction-requests/{sent_request.id}/resubmissions",
+        json={
+            "document_id": str(workflow_data.v2_document_id),
+            "document_version": 2,
+        },
+    )
+    assert registered.status_code == 201
+
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE valuation.extraction_runs
+            SET status = 'PROCESSING', completed_at = NULL
+            WHERE document_id = %s
+            """,
+            (workflow_data.v2_document_id,),
+        )
+        cursor.execute(
+            "SELECT count(*) FROM valuation.validation_runs WHERE review_id = %s",
+            (sent_request.review_id,),
+        )
+        before_runs = cursor.fetchone()[0]
+    postgres_connection.commit()
+
+    blocked = review_client.post(
+        f"/api/v1/review/correction-requests/{sent_request.id}/recheck"
+    )
+
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "CORRECTION_RECHECK_INCOMPLETE"
+    request = review_client.get(
+        f"/api/v1/review/correction-requests/{sent_request.id}"
+    ).json()
+    assert request["status"] == "RESUBMITTED"
+    missing = review_client.get(
+        f"/api/v1/review/cases/{sent_request.review_id}/missing-items"
+    ).json()
+    assert missing
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT count(*) FROM valuation.validation_runs WHERE review_id = %s",
+            (sent_request.review_id,),
+        )
+        assert cursor.fetchone()[0] == before_runs
 
 
 def test_completion_blocked_while_request_active(review_client, sent_request):

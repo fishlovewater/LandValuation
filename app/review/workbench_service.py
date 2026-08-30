@@ -6,6 +6,7 @@ from app.core.exceptions import ResourceNotFoundError
 from app.review.correction_repository import CorrectionRepository
 from app.review.repository import ReviewRepository
 from app.review.schemas import ReviewUpdate
+from app.review.schemas import CorrectionRequestItemRead, CorrectionRequestRead
 from app.review.urgency import UrgencyThresholds, classify_urgency
 from app.review.workbench_repository import WorkbenchRepository
 from app.review.workbench_schemas import (
@@ -154,6 +155,24 @@ class WorkbenchService:
         field_versions = await self.repository.list_official_field_versions(
             review.case_id
         )
+        correction_requests = []
+        if self.corrections is not None:
+            for request in await self.corrections.list_requests(review_id):
+                correction_requests.append(
+                    CorrectionRequestRead(
+                        **{
+                            key: value
+                            for key, value in vars(request).items()
+                            if not key.startswith("_")
+                        },
+                        items=[
+                            CorrectionRequestItemRead.model_validate(item)
+                            for item in await self.corrections.list_items(
+                                request.correction_request_id
+                            )
+                        ],
+                    )
+                )
         return WorkbenchCaseDetailRead(
             case=case,
             review=review,
@@ -168,6 +187,7 @@ class WorkbenchService:
             generated_reports=await self.review_repository.list_generated_reports(
                 review.case_id
             ),
+            correction_requests=correction_requests,
         )
 
     async def start(self, review_id: UUID, actor_id: UUID) -> WorkbenchStartRead:

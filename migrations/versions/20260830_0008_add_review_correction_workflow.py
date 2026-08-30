@@ -45,6 +45,7 @@ def upgrade() -> None:
             created_at timestamptz NOT NULL DEFAULT now(),
             sent_by_user_id uuid REFERENCES auth.users(user_id) ON DELETE RESTRICT,
             sent_at timestamptz,
+            resubmitted_by_user_id uuid REFERENCES auth.users(user_id) ON DELETE RESTRICT,
             resubmitted_at timestamptz,
             rechecked_by_user_id uuid REFERENCES auth.users(user_id) ON DELETE RESTRICT,
             rechecked_at timestamptz,
@@ -57,23 +58,28 @@ def upgrade() -> None:
             CONSTRAINT ck_correction_requests_status_timeline CHECK (
                 (status = 'DRAFT'
                     AND sent_at IS NULL AND sent_by_user_id IS NULL
-                    AND response_document_id IS NULL AND resubmitted_at IS NULL
+                    AND response_document_id IS NULL
+                    AND resubmitted_by_user_id IS NULL AND resubmitted_at IS NULL
                     AND rechecked_by_user_id IS NULL AND rechecked_at IS NULL)
                 OR (status = 'SENT'
                     AND sent_at IS NOT NULL AND sent_by_user_id IS NOT NULL
-                    AND response_document_id IS NULL AND resubmitted_at IS NULL
+                    AND response_document_id IS NULL
+                    AND resubmitted_by_user_id IS NULL AND resubmitted_at IS NULL
                     AND rechecked_by_user_id IS NULL AND rechecked_at IS NULL)
                 OR (status = 'RESUBMITTED'
                     AND sent_at IS NOT NULL AND sent_by_user_id IS NOT NULL
-                    AND response_document_id IS NOT NULL AND resubmitted_at IS NOT NULL
+                    AND response_document_id IS NOT NULL
+                    AND resubmitted_by_user_id IS NOT NULL AND resubmitted_at IS NOT NULL
                     AND rechecked_by_user_id IS NULL AND rechecked_at IS NULL)
                 OR (status = 'RECHECKING'
                     AND sent_at IS NOT NULL AND sent_by_user_id IS NOT NULL
-                    AND response_document_id IS NOT NULL AND resubmitted_at IS NOT NULL
+                    AND response_document_id IS NOT NULL
+                    AND resubmitted_by_user_id IS NOT NULL AND resubmitted_at IS NOT NULL
                     AND rechecked_by_user_id IS NULL AND rechecked_at IS NULL)
                 OR (status = 'RECHECKED'
                     AND sent_at IS NOT NULL AND sent_by_user_id IS NOT NULL
-                    AND response_document_id IS NOT NULL AND resubmitted_at IS NOT NULL
+                    AND response_document_id IS NOT NULL
+                    AND resubmitted_by_user_id IS NOT NULL AND resubmitted_at IS NOT NULL
                     AND rechecked_by_user_id IS NOT NULL AND rechecked_at IS NOT NULL)
             )
         );

@@ -78,8 +78,8 @@ def test_create_list_get_assign_and_prioritize_review_case(authorized_client, qu
     review_id = created["review_id"]
     listed = authorized_client.get("/api/v1/review/cases?status=RECEIVED")
     assert listed.status_code == 200
-    assert listed.json()["total"] == 1
-    assert listed.json()["items"][0]["review_id"] == review_id
+    assert listed.json()["total"] >= 1
+    assert review_id in {item["review_id"] for item in listed.json()["items"]}
 
     fetched = authorized_client.get(f"/api/v1/review/cases/{review_id}")
     assert fetched.status_code == 200

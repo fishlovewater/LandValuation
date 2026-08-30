@@ -74,6 +74,17 @@ class CorrectionRepository:
         )
         return list((await self.session.scalars(statement)).all())
 
+    async def list_requests(self, review_id: UUID) -> list[CorrectionRequest]:
+        statement = (
+            select(CorrectionRequest)
+            .where(CorrectionRequest.review_id == review_id)
+            .order_by(
+                CorrectionRequest.request_no,
+                CorrectionRequest.correction_request_id,
+            )
+        )
+        return list((await self.session.scalars(statement)).all())
+
     async def valid_resubmission_document(
         self,
         case_id: UUID,

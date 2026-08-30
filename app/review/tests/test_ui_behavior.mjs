@@ -17,7 +17,7 @@ assert.notEqual(end, -1, "testable workbench logic end marker is missing");
 const source = html.slice(start + startMarker.length, end);
 const scriptSource = html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "";
 const logic = new Function(
-  `${source}; return { redactForLog, findingTriageBody, validateFindingTriage, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, findingStatusLabel, severityLabel, flattenDisplayData, documentContentPath, pdfPageTarget, requestLogSummary, findingActionLabel, latestFindingDecision, correctionBlockers, completionBlockers, activeCorrectionRequest, canRegisterResubmission, canRecheck, isCorrectionReadOnly, canExportCorrectionNotice, canExportFinalReport, correctionRequestBody, correctionStatusLabel, recheckOutcomeLabel, urgencyLabel, urgencyBadgeText, riskBadgeText, isLegacyDecision, reviewProgress, executeReviewWorkflow, createDraftTracker, confirmDiscardChanges, applyBeforeUnload, canStartReview };`,
+  `${source}; return { redactForLog, findingTriageBody, validateFindingTriage, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, findingStatusLabel, severityLabel, flattenDisplayData, documentContentPath, pdfPageTarget, requestLogSummary, findingActionLabel, latestFindingDecision, correctionBlockers, completionBlockers, activeCorrectionRequest, recheckDisplayRequest, canRegisterResubmission, canRecheck, isCorrectionReadOnly, canExportCorrectionNotice, canExportFinalReport, correctionRequestBody, correctionStatusLabel, recheckOutcomeLabel, urgencyLabel, urgencyBadgeText, riskBadgeText, isLegacyDecision, reviewProgress, executeReviewWorkflow, createDraftTracker, confirmDiscardChanges, applyBeforeUnload, canStartReview };`,
 )();
 
 test("inline workbench script parses", () => {
@@ -543,6 +543,21 @@ test("correction lifecycle gates match the server state machine", () => {
   assert.equal(
     logic.activeCorrectionRequest({ correction_requests: [{ status: "RECHECKED" }] }),
     null,
+  );
+  assert.equal(
+    logic.recheckDisplayRequest({
+      correction_requests: [
+        { request_no: 1, status: "RECHECKED" },
+        { request_no: 2, status: "SENT" },
+      ],
+    }).request_no,
+    2,
+  );
+  assert.equal(
+    logic.recheckDisplayRequest({
+      correction_requests: [{ request_no: 1, status: "RECHECKED" }],
+    }).request_no,
+    1,
   );
 });
 

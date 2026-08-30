@@ -5,6 +5,7 @@ from uuid import UUID
 from app.core.exceptions import AppError
 from app.core.exceptions import ResourceNotFoundError
 from app.review.repository import ReviewRepository
+from app.review.correction_repository import CorrectionRepository
 from app.review.schemas import ReviewCreate, ReviewListQuery, ReviewUpdate
 from app.review.completeness import (
     CompletenessResult,
@@ -27,12 +28,17 @@ from app.review.decisions import (
 )
 from app.review.reports import (
     ReportCase,
+    ReportCorrectionItem,
+    ReportCorrectionRequest,
     ReportDecision,
+    ReportHistoryEvent,
     ReportRiskSummary,
     ReportRun,
+    ReportUrgency,
     ReviewReportInput,
     build_review_report,
 )
+from app.review.urgency import classify_urgency
 from app.review.schemas import FindingRead
 from app.review.rule_selection import RuleCandidate, select_effective_rule
 from app.review.trusted_inputs import (
@@ -1091,6 +1097,94 @@ class ReviewService:
                 "舊檢核批次缺少不可變的報表脈絡",
                 409,
             )
+        corrections = CorrectionRepository(self.repository.session)
+        run_document = run.input_snapshot.get("document")
+        run_document_id = (
+            str(run_document.get("document_id"))
+            if isinstance(run_document, dict) and run_document.get("document_id")
+            else None
+        )
+        report_requests = []
+        history = []
+        for request in await corrections.list_requests(review.review_id):
+            belongs_to_run = request.based_on_validation_run_id == validation_run_id
+            if request.response_document_id is not None and run_document_id is not None:
+                belongs_to_run = belongs_to_run or (
+                    str(request.response_document_id) == run_document_id
+                )
+            if not belongs_to_run:
+                continue
+            items = await corrections.list_items(request.correction_request_id)
+            report_requests.append(
+                ReportCorrectionRequest(
+                    correction_request_id=request.correction_request_id,
+                    request_no=request.request_no,
+                    status=request.status,
+                    due_at=request.due_at,
+                    message=request.message,
+                    base_document_id=request.base_document_id,
+                    base_document_version=request.base_document_version,
+                    response_document_id=request.response_document_id,
+                    response_document_version=request.response_document_version,
+                    sent_at=request.sent_at,
+                    resubmitted_at=request.resubmitted_at,
+                    rechecked_at=request.rechecked_at,
+                    items=[
+                        ReportCorrectionItem(
+                            finding_id=item.finding_id,
+                            finding_code=item.finding_code,
+                            severity=item.severity,
+                            page_number=item.page_number,
+                            reported_text=item.reported_text,
+                            reported_value=item.reported_value,
+                            legal_basis=item.legal_basis_snapshot,
+                            source_evidence=item.source_evidence_snapshot,
+                            issue_summary=item.issue_summary,
+                            requested_correction=item.requested_correction,
+                            recheck_outcome=item.recheck_outcome,
+                            resulting_finding_id=item.resulting_finding_id,
+                        )
+                        for item in items
+                    ],
+                )
+            )
+            history.append(
+                ReportHistoryEvent(
+                    event_type="CORRECTION_CREATED",
+                    occurred_at=request.created_at,
+                    actor_id=request.created_by_user_id,
+                    reason=request.message,
+                )
+            )
+            if request.sent_at is not None:
+                history.append(
+                    ReportHistoryEvent(
+                        event_type="CORRECTION_SENT",
+                        occurred_at=request.sent_at,
+                        actor_id=request.sent_by_user_id,
+                        reason=request.message,
+                    )
+                )
+            if request.resubmitted_at is not None:
+                history.append(
+                    ReportHistoryEvent(
+                        event_type="CORRECTION_RESUBMITTED",
+                        occurred_at=request.resubmitted_at,
+                        actor_id=request.resubmitted_by_user_id,
+                        reason=f"新版文件 v{request.response_document_version}",
+                    )
+                )
+            if request.rechecked_at is not None:
+                history.append(
+                    ReportHistoryEvent(
+                        event_type="CORRECTION_RECHECKED",
+                        occurred_at=request.rechecked_at,
+                        actor_id=request.rechecked_by_user_id,
+                        reason=None,
+                    )
+                )
+        thresholds = await corrections.urgency_thresholds()
+        urgency = classify_urgency(review.due_at, datetime.now(UTC), thresholds)
         data = ReviewReportInput(
             case=ReportCase(**case_context),
             run=ReportRun(
@@ -1130,5 +1224,12 @@ class ReviewService:
                 )
                 for item in decisions
             ],
+            urgency=ReportUrgency(
+                level=urgency.level,
+                remaining_days=urgency.remaining_days,
+                due_at=review.due_at,
+            ),
+            correction_requests=report_requests,
+            history=sorted(history, key=lambda item: item.occurred_at),
         )
         return build_review_report(data)

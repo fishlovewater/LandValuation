@@ -103,6 +103,7 @@ async def _correction_request_read(
                 "response_document_id",
                 "response_document_version",
                 "sent_at",
+                "resubmitted_by_user_id",
                 "resubmitted_at",
                 "rechecked_at",
             )
@@ -613,7 +614,11 @@ async def recheck_correction_request(
     run, _summary = await service.recheck(correction_request_id, user.user_id)
     request = await service.corrections.get_request(correction_request_id)
     if run is None:
-        # Completeness blocked; request reverted to RESUBMITTED.
+        # Completeness is a durable business result: keep the missing-item
+        # records and the RESUBMITTED request state even though the HTTP result
+        # is a conflict. Raising before this commit would make the session
+        # dependency roll the entire completeness check back.
+        await session.commit()
         raise AppError(
             "CORRECTION_RECHECK_INCOMPLETE",
             "新版文件尚未備齊，無法重檢",

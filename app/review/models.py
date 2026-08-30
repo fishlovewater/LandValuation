@@ -225,6 +225,7 @@ class CorrectionRequest(Base):
     )
     sent_by_user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resubmitted_by_user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
     resubmitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     rechecked_by_user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
     rechecked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

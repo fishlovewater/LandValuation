@@ -374,6 +374,7 @@ class CorrectionRequestRead(BaseModel):
     response_document_id: UUID | None
     response_document_version: int | None
     sent_at: datetime | None
+    resubmitted_by_user_id: UUID | None
     resubmitted_at: datetime | None
     rechecked_at: datetime | None
     items: list[CorrectionRequestItemRead]

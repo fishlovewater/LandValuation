@@ -68,6 +68,7 @@ import pytest
     [
         ("review", "correction_requests", "based_on_validation_run_id"),
         ("review", "correction_requests", "response_document_id"),
+        ("review", "correction_requests", "resubmitted_by_user_id"),
         ("review", "correction_request_items", "recheck_outcome"),
         ("review", "urgency_settings", "urgent_days"),
     ],
@@ -200,12 +201,16 @@ def _insert_recheck_history(cursor, review_id, run_id, document_id, user_id, req
             (correction_request_id, review_id, request_no, based_on_validation_run_id,
              status, due_at, message, base_document_id, base_document_version,
              response_document_id, response_document_version,
-             created_by_user_id, sent_by_user_id, sent_at, resubmitted_at,
+             created_by_user_id, sent_by_user_id, sent_at,
+             resubmitted_by_user_id, resubmitted_at,
              rechecked_by_user_id, rechecked_at)
         VALUES (%s, %s, %s, %s, 'RECHECKED', now() + interval '3 days', 'msg', %s, 1,
-                %s, 2, %s, %s, now(), now(), %s, now())
+                %s, 2, %s, %s, now(), %s, now(), %s, now())
         """,
-        (request_id, review_id, request_no, run_id, document_id, document_id, user_id, user_id, user_id),
+        (
+            request_id, review_id, request_no, run_id, document_id, document_id,
+            user_id, user_id, user_id, user_id,
+        ),
     )
     return request_id
 

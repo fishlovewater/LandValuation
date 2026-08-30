@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.review.schemas import (
     CompletenessResponse,
+    CorrectionRequestRead,
     DecisionRead,
     FindingRead,
     MissingItemRead,
@@ -123,6 +124,7 @@ class WorkbenchCaseDetailRead(BaseModel):
     # Safe metadata only: never a bucket name or object key.
     report_document: ReportDocumentRead | None
     generated_reports: list[ReportDocumentRead] = Field(default_factory=list)
+    correction_requests: list[CorrectionRequestRead] = Field(default_factory=list)
 
 
 class WorkbenchCompletenessRead(CompletenessResponse):

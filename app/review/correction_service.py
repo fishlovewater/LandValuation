@@ -175,6 +175,7 @@ class CorrectionService:
             )
         request.response_document_id = document["document_id"]
         request.response_document_version = document["version_no"]
+        request.resubmitted_by_user_id = actor_id
         request.resubmitted_at = datetime.now(UTC)
         request.status = "RESUBMITTED"
         await self.corrections.session.flush()
