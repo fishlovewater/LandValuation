@@ -74,6 +74,50 @@ class ReportRiskSummary(BaseModel):
     risk_reasons: list
 
 
+class ReportUrgency(BaseModel):
+    level: str
+    remaining_days: int | None = None
+    due_at: datetime | None = None
+
+
+class ReportCorrectionItem(BaseModel):
+    finding_id: UUID
+    finding_code: str
+    severity: str
+    page_number: int | None = None
+    reported_text: str | None = None
+    reported_value: str | None = None
+    legal_basis: list = Field(default_factory=list)
+    source_evidence: list = Field(default_factory=list)
+    issue_summary: str
+    requested_correction: str
+    recheck_outcome: str
+    resulting_finding_id: UUID | None = None
+
+
+class ReportCorrectionRequest(BaseModel):
+    correction_request_id: UUID
+    request_no: int
+    status: str
+    due_at: datetime
+    message: str
+    base_document_id: UUID
+    base_document_version: int
+    response_document_id: UUID | None = None
+    response_document_version: int | None = None
+    sent_at: datetime | None = None
+    resubmitted_at: datetime | None = None
+    rechecked_at: datetime | None = None
+    items: list[ReportCorrectionItem] = Field(default_factory=list)
+
+
+class ReportHistoryEvent(BaseModel):
+    event_type: str
+    occurred_at: datetime
+    actor_id: UUID | None = None
+    reason: str | None = None
+
+
 class ReviewReportInput(BaseModel):
     case: ReportCase
     run: ReportRun
@@ -82,6 +126,9 @@ class ReviewReportInput(BaseModel):
     findings: list[dict[str, Any]]
     risk_summary: ReportRiskSummary
     decisions: list[ReportDecision]
+    urgency: ReportUrgency | None = None
+    correction_requests: list[ReportCorrectionRequest] = Field(default_factory=list)
+    history: list[ReportHistoryEvent] = Field(default_factory=list)
 
 
 class ReviewReport(BaseModel):
@@ -92,6 +139,9 @@ class ReviewReport(BaseModel):
     findings: list[ReportFinding]
     risk_summary: ReportRiskSummary
     case_decisions: list[ReportDecision]
+    urgency: ReportUrgency | None = None
+    correction_requests: list[ReportCorrectionRequest] = Field(default_factory=list)
+    history: list[ReportHistoryEvent] = Field(default_factory=list)
 
 
 def build_review_report(data: ReviewReportInput) -> ReviewReport:
@@ -134,4 +184,7 @@ def build_review_report(data: ReviewReportInput) -> ReviewReport:
         findings=findings,
         risk_summary=data.risk_summary,
         case_decisions=case_decisions,
+        urgency=data.urgency,
+        correction_requests=data.correction_requests,
+        history=data.history,
     )
