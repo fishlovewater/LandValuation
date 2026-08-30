@@ -71,6 +71,122 @@ def open_finding(review_with_findings):
     )
 
 
+@pytest.fixture
+def triaged_case(review_client, review_with_findings):
+    """Confirm the HIGH finding and dismiss the rest so the send gate passes."""
+    review_id = review_with_findings.review_id
+    confirmed_finding_id = None
+    for finding in review_with_findings.findings:
+        if finding["severity"] == "HIGH" and confirmed_finding_id is None:
+            decision = "CONFIRMED_ISSUE"
+            confirmed_finding_id = finding["finding_id"]
+        else:
+            decision = "DISMISSED_FALSE_POSITIVE"
+        response = review_client.post(
+            f"/api/v1/review/findings/{finding['finding_id']}/triage",
+            json={
+                "review_id": str(review_id),
+                "decision": decision,
+                "reason": "判定理由",
+            },
+        )
+        assert response.status_code == 201
+    return SimpleNamespace(
+        review_id=review_id,
+        confirmed_finding_id=confirmed_finding_id,
+        future_due_at=_future_due_at(),
+    )
+
+
+def _future_due_at():
+    from datetime import UTC, datetime, timedelta
+
+    return datetime.now(UTC) + timedelta(days=5)
+
+
+def test_create_draft_snapshots_only_confirmed_findings(review_client, triaged_case):
+    response = review_client.post(
+        f"/api/v1/review/cases/{triaged_case.review_id}/correction-requests",
+        json={
+            "message": "請依附件疑點修正",
+            "due_at": triaged_case.future_due_at.isoformat(),
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert {item["finding_id"] for item in body["items"]} == {
+        str(triaged_case.confirmed_finding_id)
+    }
+    assert body["status"] == "DRAFT"
+    assert body["request_no"] == 1
+    # No storage internals leaked.
+    assert "bucket_name" not in body
+    assert "object_key" not in body
+
+
+def test_send_locks_request_and_returns_case_for_revision(review_client, triaged_case):
+    draft = review_client.post(
+        f"/api/v1/review/cases/{triaged_case.review_id}/correction-requests",
+        json={
+            "message": "請修正",
+            "due_at": triaged_case.future_due_at.isoformat(),
+        },
+    ).json()
+    request_id = draft["correction_request_id"]
+    sent = review_client.post(
+        f"/api/v1/review/correction-requests/{request_id}/send", json={}
+    )
+    assert sent.status_code == 200
+    assert sent.json()["status"] == "SENT"
+    review = review_client.get(
+        f"/api/v1/review/cases/{triaged_case.review_id}"
+    ).json()
+    assert review["review_status"] == "RETURNED_FOR_REVISION"
+
+
+def test_second_active_request_is_blocked(review_client, triaged_case):
+    first = review_client.post(
+        f"/api/v1/review/cases/{triaged_case.review_id}/correction-requests",
+        json={"message": "第一次", "due_at": triaged_case.future_due_at.isoformat()},
+    )
+    assert first.status_code == 201
+    second = review_client.post(
+        f"/api/v1/review/cases/{triaged_case.review_id}/correction-requests",
+        json={"message": "第二次", "due_at": triaged_case.future_due_at.isoformat()},
+    )
+    assert second.status_code == 409
+
+
+def test_send_gate_blocks_when_findings_untriaged(review_client, review_with_findings):
+    response = review_client.post(
+        f"/api/v1/review/cases/{review_with_findings.review_id}/correction-requests",
+        json={
+            "message": "尚未判定",
+            "due_at": _future_due_at().isoformat(),
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "CORRECTION_REQUEST_BLOCKED"
+
+
+def test_get_correction_request_returns_immutable_snapshot(
+    review_client, triaged_case
+):
+    draft = review_client.post(
+        f"/api/v1/review/cases/{triaged_case.review_id}/correction-requests",
+        json={"message": "請修正", "due_at": triaged_case.future_due_at.isoformat()},
+    ).json()
+    request_id = draft["correction_request_id"]
+    review_client.post(f"/api/v1/review/correction-requests/{request_id}/send", json={})
+    fetched = review_client.get(
+        f"/api/v1/review/correction-requests/{request_id}"
+    ).json()
+    assert fetched["status"] == "SENT"
+    assert {item["finding_id"] for item in fetched["items"]} == {
+        str(triaged_case.confirmed_finding_id)
+    }
+
+
 def test_triage_confirmed_issue_writes_no_formal_value(review_client, open_finding):
     response = review_client.post(
         f"/api/v1/review/findings/{open_finding.finding_id}/triage",

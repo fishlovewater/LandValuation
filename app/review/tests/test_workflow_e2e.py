@@ -32,7 +32,11 @@ def workflow_data(postgres_connection):
         )
     postgres_connection.commit()
     yield data
+    # Recover the shared connection if a test left it in an aborted transaction.
+    postgres_connection.rollback()
     with postgres_connection.cursor() as cursor:
+        cursor.execute("DELETE FROM review.correction_request_items WHERE correction_request_id IN (SELECT correction_request_id FROM review.correction_requests WHERE review_id IN (SELECT review_id FROM review.reviews WHERE case_id = %s))", (data.case_id,))
+        cursor.execute("DELETE FROM review.correction_requests WHERE review_id IN (SELECT review_id FROM review.reviews WHERE case_id = %s)", (data.case_id,))
         cursor.execute("DELETE FROM review.decisions WHERE review_id IN (SELECT review_id FROM review.reviews WHERE case_id = %s)", (data.case_id,))
         cursor.execute("DELETE FROM review.risk_summaries WHERE review_id IN (SELECT review_id FROM review.reviews WHERE case_id = %s)", (data.case_id,))
         cursor.execute("DELETE FROM review.findings WHERE review_id IN (SELECT review_id FROM review.reviews WHERE case_id = %s)", (data.case_id,))

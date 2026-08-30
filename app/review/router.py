@@ -18,6 +18,10 @@ from app.review.schemas import (
     ReviewListQuery,
     CompletenessResponse,
     CaseDecisionRequest,
+    CorrectionRequestCreate,
+    CorrectionRequestItemRead,
+    CorrectionRequestRead,
+    CorrectionRequestSend,
     DecisionRead,
     FindingRead,
     FindingDecisionRequest,
@@ -35,6 +39,8 @@ from app.review.schemas import (
     ValidationRunRead,
 )
 from app.review.service import ReviewService
+from app.review.correction_repository import CorrectionRepository
+from app.review.correction_service import CorrectionService
 from app.review.pdf_reports import build_review_pdf
 from app.review.reports import ReviewReport
 from app.storage.dependencies import Storage
@@ -58,6 +64,40 @@ TEST_UI_PATH = Path(__file__).with_name("test_ui") / "index.html"
 
 def service_for(session: DbSession) -> ReviewService:
     return ReviewService(ReviewRepository(session))
+
+
+def correction_service_for(session: DbSession) -> CorrectionService:
+    return CorrectionService(
+        ReviewRepository(session), CorrectionRepository(session)
+    )
+
+
+async def _correction_request_read(
+    corrections: CorrectionRepository, request
+) -> CorrectionRequestRead:
+    items = await corrections.list_items(request.correction_request_id)
+    return CorrectionRequestRead(
+        **{
+            column: getattr(request, column)
+            for column in (
+                "correction_request_id",
+                "review_id",
+                "request_no",
+                "based_on_validation_run_id",
+                "status",
+                "due_at",
+                "message",
+                "base_document_id",
+                "base_document_version",
+                "response_document_id",
+                "response_document_version",
+                "sent_at",
+                "resubmitted_at",
+                "rechecked_at",
+            )
+        },
+        items=[CorrectionRequestItemRead.model_validate(item) for item in items],
+    )
 
 
 def workbench_service_for(session: DbSession) -> WorkbenchService:
@@ -447,6 +487,58 @@ async def list_review_decisions(
     user=Depends(require_permissions("review.decide")),
 ) -> list[DecisionRead]:
     return await service_for(session).list_decisions(review_id)
+
+
+@router.post(
+    "/cases/{review_id}/correction-requests",
+    response_model=CorrectionRequestRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_correction_request(
+    review_id: UUID,
+    payload: CorrectionRequestCreate,
+    session: DbSession,
+    user=Depends(require_permissions("review.decide")),
+) -> CorrectionRequestRead:
+    service = correction_service_for(session)
+    request = await service.create_draft(review_id, payload, user.user_id)
+    return await _correction_request_read(service.corrections, request)
+
+
+@router.get(
+    "/correction-requests/{correction_request_id}",
+    response_model=CorrectionRequestRead,
+)
+async def get_correction_request(
+    correction_request_id: UUID,
+    session: DbSession,
+    user=Depends(require_permissions("review.decide")),
+) -> CorrectionRequestRead:
+    corrections = CorrectionRepository(session)
+    request = await corrections.get_request(correction_request_id)
+    if request is None:
+        raise ResourceNotFoundError("修正通知")
+    return await _correction_request_read(corrections, request)
+
+
+@router.post(
+    "/correction-requests/{correction_request_id}/send",
+    response_model=CorrectionRequestRead,
+    status_code=status.HTTP_200_OK,
+)
+async def send_correction_request(
+    correction_request_id: UUID,
+    payload: CorrectionRequestSend,
+    request: Request,
+    session: DbSession,
+    user=Depends(require_permissions("review.decide")),
+) -> CorrectionRequestRead:
+    del payload
+    service = correction_service_for(session)
+    sent = await service.send(
+        correction_request_id, user.user_id, audit_request_id(request)
+    )
+    return await _correction_request_read(service.corrections, sent)
 
 
 @router.post(

@@ -277,6 +277,66 @@ class DecisionRead(BaseModel):
     after_value: dict | None
 
 
+class CorrectionRequestCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=1, max_length=4000)
+    due_at: datetime
+
+    @field_validator("due_at")
+    @classmethod
+    def due_at_must_be_timezone_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("due_at 必須包含時區")
+        return value
+
+
+class CorrectionRequestSend(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class CorrectionRequestItemRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    correction_request_item_id: UUID
+    finding_id: UUID
+    finding_code: str
+    finding_type: str
+    severity: str
+    document_id: UUID | None
+    document_version: int | None
+    page_number: int | None
+    reported_text: str | None
+    reported_value: str | None
+    legal_basis_snapshot: list
+    source_evidence_snapshot: list
+    issue_summary: str
+    requested_correction: str
+    recheck_outcome: str
+    resulting_finding_id: UUID | None
+    rechecked_at: datetime | None
+
+
+class CorrectionRequestRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    correction_request_id: UUID
+    review_id: UUID
+    request_no: int
+    based_on_validation_run_id: UUID
+    status: str
+    due_at: datetime
+    message: str
+    base_document_id: UUID
+    base_document_version: int
+    response_document_id: UUID | None
+    response_document_version: int | None
+    sent_at: datetime | None
+    resubmitted_at: datetime | None
+    rechecked_at: datetime | None
+    items: list[CorrectionRequestItemRead]
+
+
 class ReportDocumentRead(BaseModel):
     document_id: UUID
     case_id: UUID
