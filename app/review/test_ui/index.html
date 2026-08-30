@@ -209,7 +209,7 @@
             preflight:()=>request(`/review/workbench/cases/${reviewId}/start/preflight`,{method:"POST"}),
             run:()=>request(`/review/cases/${reviewId}/${latest?"rerun":"runs"}`,{method:"POST",body:{}}),
             loadDetail:()=>loadDetail(reviewId),
-            loadSummary,
+            loadSummary:()=>Promise.all([loadSummary(),loadCases()]),
           });
           const notice=startOutcomeMessage(started);
           announce(notice.message,notice.error);
@@ -226,7 +226,7 @@
             await request(`/review/findings/${id}/triage`,{method:"POST",body});
             state.drafts.clear(findingDraftKey(id));
             await loadDetail(reviewId);
-            await loadSummary();
+            await Promise.all([loadSummary(),loadCases()]);
           });
           announce("疑點判定已儲存。",false);
           return;
@@ -237,7 +237,7 @@
             await request(`/review/cases/${reviewId}/correction-requests`,{method:"POST",body});
             state.drafts.clear(caseDraftKey(reviewId));
             await loadDetail(reviewId);
-            await loadSummary();
+            await Promise.all([loadSummary(),loadCases()]);
           });
           announce("修正通知單草稿已建立，請確認內容後送出。",false);
           return;
@@ -247,7 +247,7 @@
           await withDetailLocked(async()=>{
             await request(`/review/correction-requests/${button.dataset.sendCorrection}/send`,{method:"POST",body:{}});
             await loadDetail(reviewId);
-            await loadSummary();
+            await Promise.all([loadSummary(),loadCases()]);
           });
           announce("修正通知已送出，等待查估端提交修正版。",false);
           return;
@@ -259,6 +259,7 @@
           await withDetailLocked(async()=>{
             await request(`/review/correction-requests/${button.dataset.registerResubmission}/resubmissions`,{method:"POST",body:{document_id:documentId,document_version:version}});
             await loadDetail(reviewId);
+            await loadCases();
           });
           announce("新版文件已登記，可執行新版重檢。",false);
           return;
@@ -267,7 +268,7 @@
           await withDetailLocked(async()=>{
             await request(`/review/correction-requests/${button.dataset.recheck}/recheck`,{method:"POST"});
             await loadDetail(reviewId);
-            await loadSummary();
+            await Promise.all([loadSummary(),loadCases()]);
           });
           announce("新版重檢已完成，請確認各項修正結果。",false);
           return;
@@ -280,7 +281,7 @@
             await request(`/review/cases/${reviewId}/complete-review`,{method:"POST",body:{reason}});
             state.drafts.clear(caseDraftKey(reviewId));
             await loadDetail(reviewId);
-            await loadSummary();
+            await Promise.all([loadSummary(),loadCases()]);
           });
           announce("審查已完成。",false);
           return;
