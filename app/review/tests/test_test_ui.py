@@ -72,17 +72,20 @@ def test_test_ui_is_available_in_development(monkeypatch):
     assert "法規依據" in response.text
     assert "地籍圖" in response.text
     assert "土地登記謄本" in response.text
-    assert "維持原申報內容" in response.text
-    assert "採用系統建議內容" in response.text
-    assert "另訂正式內容" in response.text
-    assert "資料不足，要求補件" in response.text
-    assert "核定並完成審查" in response.text
+    # New triage + correction controls replace reviewer value selection.
+    assert "確認有問題" in response.text
+    assert "排除誤判" in response.text
+    assert "轉專業覆核" in response.text
+    assert "建立修正通知單" in response.text
+    assert "新版重檢" in response.text
+    assert "匯出 Excel" in response.text
+    assert "匯出 Word" in response.text
+    assert "確認無誤並完成審查" in response.text
     assert '<option value="REVIEW_COMPLETED">' not in response.text
+    assert '<option value="APPROVED">' not in response.text
     assert "renderStructuredContent" in response.text
-    assert "data-partial-value-box" in response.text
     assert "JSON.stringify(f.source_evidence" not in response.text
     assert "JSON.stringify(f.legal_basis" not in response.text
-    assert "data-finding-after-value" in response.text
     assert 'id="case-prev"' in response.text
     assert 'id="case-next"' in response.text
     assert "status_group=" in response.text
@@ -105,9 +108,78 @@ def test_test_ui_is_available_in_development(monkeypatch):
     assert "state.expandedFindingIds" in response.text
     assert 'class="finding-inline-error"' in response.text
     assert "data-finding-error-reason" in response.text
-    assert "data-finding-error-after-value" in response.text
+    assert "data-finding-error-decision" in response.text
     assert 'aria-live="polite"' in response.text
-    assert '<option value="EXPERT_REVIEW">' not in response.text
+
+
+def test_ui_removes_reviewer_value_selection(monkeypatch):
+    monkeypatch.setattr(
+        "app.review.router.get_settings",
+        lambda: SimpleNamespace(app_env="development"),
+        raising=False,
+    )
+    with TestClient(app) as client:
+        html = client.get("/api/v1/review/test-ui").text
+
+    for forbidden in [
+        "本項最後採用哪個內容",
+        "維持原申報內容</option>",
+        "採用系統建議內容</option>",
+        "另訂正式內容</option>",
+        "data-finding-after-value",
+        "data-partial-value-box",
+        "after_value",
+        "selection_source",
+    ]:
+        assert forbidden not in html
+    for required in [
+        "確認有問題",
+        "排除誤判",
+        "轉專業覆核",
+        "建立修正通知單",
+        "新版重檢",
+        "匯出 Excel",
+        "匯出 Word",
+        "確認無誤並完成審查",
+    ]:
+        assert required in html
+
+
+def test_ui_uses_correction_workflow_routes(monkeypatch):
+    monkeypatch.setattr(
+        "app.review.router.get_settings",
+        lambda: SimpleNamespace(app_env="development"),
+        raising=False,
+    )
+    with TestClient(app) as client:
+        html = client.get("/api/v1/review/test-ui").text
+
+    assert "/triage" in html
+    assert "/correction-requests" in html
+    assert "/resubmissions" in html
+    assert "/recheck" in html
+    assert "/complete-review" in html
+    assert "/reports" in html
+    # The disabled legacy write routes must not be called by the workbench.
+    assert "/decisions`" not in html
+    assert "/decision`" not in html
+
+
+def test_ui_separates_risk_from_deadline_urgency(monkeypatch):
+    monkeypatch.setattr(
+        "app.review.router.get_settings",
+        lambda: SimpleNamespace(app_env="development"),
+        raising=False,
+    )
+    with TestClient(app) as client:
+        html = client.get("/api/v1/review/test-ui").text
+
+    assert "urgencyBadgeText" in html
+    assert "riskBadgeText" in html
+    assert "badge urgency" in html
+    assert "badge risk" in html
+    assert "內容風險" in html
+    assert "舊流程歷史決策" in html
 
 
 def test_test_ui_is_hidden_outside_development(monkeypatch):

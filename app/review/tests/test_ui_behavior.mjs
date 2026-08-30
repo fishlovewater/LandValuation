@@ -17,7 +17,7 @@ assert.notEqual(end, -1, "testable workbench logic end marker is missing");
 const source = html.slice(start + startMarker.length, end);
 const scriptSource = html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "";
 const logic = new Function(
-  `${source}; return { redactForLog, findingDecisionBody, validateFindingDecision, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, findingStatusLabel, severityLabel, flattenDisplayData, requiresAfterValue, documentContentPath, pdfPageTarget, requestLogSummary, findingActionLabel, latestFindingDecision, approvalBlockers, reviewProgress, executeReviewWorkflow, createDraftTracker, confirmDiscardChanges, applyBeforeUnload, canStartReview };`,
+  `${source}; return { redactForLog, findingTriageBody, validateFindingTriage, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, findingStatusLabel, severityLabel, flattenDisplayData, documentContentPath, pdfPageTarget, requestLogSummary, findingActionLabel, latestFindingDecision, correctionBlockers, completionBlockers, activeCorrectionRequest, canRegisterResubmission, canRecheck, isCorrectionReadOnly, canExportCorrectionNotice, canExportFinalReport, correctionRequestBody, correctionStatusLabel, recheckOutcomeLabel, urgencyLabel, urgencyBadgeText, riskBadgeText, isLegacyDecision, reviewProgress, executeReviewWorkflow, createDraftTracker, confirmDiscardChanges, applyBeforeUnload, canStartReview };`,
 )();
 
 test("inline workbench script parses", () => {
@@ -50,45 +50,40 @@ test("request logs recursively redact credentials", () => {
 
 test("custom final content sends only the reviewer value", () => {
   assert.deepEqual(
-    logic.findingDecisionBody(
-      "review-1",
-      { field_path: "comparables[0].adjustment_rate" },
-      "PARTIALLY_ACCEPTED",
-      "採納修正值",
-      "-7",
-    ),
+    logic.findingTriageBody("review-1", "CONFIRMED_ISSUE", " 與適用規則不一致 "),
     {
       review_id: "review-1",
-      decision: "PARTIALLY_ACCEPTED",
-      reason: "採納修正值",
-      after_value: {
-        value: "-7",
-      },
+      decision: "CONFIRMED_ISSUE",
+      reason: "與適用規則不一致",
     },
   );
-  assert.throws(
-    () =>
-      logic.findingDecisionBody(
-        "review-1",
-        { field_path: null },
-        "PARTIALLY_ACCEPTED",
-        "採納修正值",
-        "",
-      ),
-    /正式採用內容/,
+  // A triage body must never carry a reviewer-selected formal value.
+  assert.equal(
+    "after_value" in
+      logic.findingTriageBody("review-1", "CONFIRMED_ISSUE", "理由"),
+    false,
   );
+  assert.throws(
+    () => logic.findingTriageBody("review-1", "CONFIRMED_ISSUE", "   "),
+    /判定理由/,
+  );
+  for (const legacy of ["ACCEPTED", "REJECTED", "PARTIALLY_ACCEPTED"]) {
+    assert.throws(
+      () => logic.findingTriageBody("review-1", legacy, "理由"),
+      /人工判定結果/,
+    );
+  }
 });
 
-test("finding validation returns field-specific Chinese errors", () => {
-  assert.deepEqual(logic.validateFindingDecision("ACCEPTED", "", ""), {
-    reason: "請填寫決策理由。",
+test("triage validation returns field-specific Chinese errors", () => {
+  assert.deepEqual(logic.validateFindingTriage("CONFIRMED_ISSUE", ""), {
+    reason: "請填寫判定理由。",
+  });
+  assert.deepEqual(logic.validateFindingTriage("PARTIALLY_ACCEPTED", "理由"), {
+    decision: "請選擇人工判定結果。",
   });
   assert.deepEqual(
-    logic.validateFindingDecision("PARTIALLY_ACCEPTED", "同意部分內容", ""),
-    { afterValue: "請填寫正式採用內容。" },
-  );
-  assert.deepEqual(
-    logic.validateFindingDecision("PARTIALLY_ACCEPTED", "同意部分內容", "-7"),
+    logic.validateFindingTriage("DISMISSED_FALSE_POSITIVE", "屬誤判"),
     {},
   );
 });
@@ -333,23 +328,40 @@ test("clipboard failure keeps a manual-copy fallback", async () => {
 test("review codes have Chinese display labels", () => {
   assert.equal(logic.documentTypeLabel("cadastral-map"), "地籍圖");
   assert.equal(logic.documentTypeLabel("land-register"), "土地登記謄本");
-  assert.equal(logic.findingDecisionLabel("REJECTED"), "維持原申報內容");
-  assert.equal(logic.findingDecisionLabel("ACCEPTED"), "採用系統建議內容");
-  assert.equal(logic.findingDecisionLabel("PARTIALLY_ACCEPTED"), "另訂正式內容");
-  assert.equal(
-    logic.findingDecisionLabel("REQUIRES_SUPPLEMENT"),
-    "資料不足，要求補件",
-  );
-  assert.equal(logic.caseDecisionLabel("APPROVED"), "核定並完成審查");
   assert.equal(logic.documentTypeLabel("custom"), "其他文件（custom）");
+  assert.equal(logic.findingDecisionLabel("CONFIRMED_ISSUE"), "確認有問題");
   assert.equal(
-    logic.findingDecisionLabel("EXPERT_REVIEW"),
-    "專業覆核（既有資料）",
+    logic.findingDecisionLabel("DISMISSED_FALSE_POSITIVE"),
+    "排除誤判",
   );
-  assert.equal(
-    logic.caseDecisionLabel("EXPERT_REVIEW"),
-    "專業覆核（既有資料）",
+  assert.equal(logic.findingDecisionLabel("EXPERT_REVIEW"), "轉專業覆核");
+  assert.equal(logic.caseDecisionLabel("APPROVED"), "確認無誤並完成審查");
+  assert.equal(logic.caseDecisionLabel("RETURNED_FOR_REVISION"), "送出修正通知");
+});
+
+test("legacy stored decisions are labelled as history, not as new actions", () => {
+  for (const legacy of [
+    "ACCEPTED",
+    "REJECTED",
+    "PARTIALLY_ACCEPTED",
+    "REQUIRES_SUPPLEMENT",
+  ]) {
+    assert.equal(logic.isLegacyDecision(legacy), true);
+    assert.match(logic.findingDecisionLabel(legacy), /舊流程歷史決策/);
+  }
+  assert.equal(logic.isLegacyDecision("CONFIRMED_ISSUE"), false);
+  assert.doesNotMatch(
+    logic.findingDecisionLabel("CONFIRMED_ISSUE"),
+    /舊流程歷史決策/,
   );
+});
+
+test("correction and recheck states have Chinese labels", () => {
+  assert.equal(logic.correctionStatusLabel("SENT"), "已送出，等待修正版");
+  assert.equal(logic.correctionStatusLabel("RECHECKED"), "重檢完成");
+  assert.equal(logic.recheckOutcomeLabel("RESOLVED"), "已解決");
+  assert.equal(logic.recheckOutcomeLabel("STILL_PRESENT"), "仍存在");
+  assert.equal(logic.recheckOutcomeLabel("NOT_EVALUATED"), "無法判定");
 });
 
 test("structured evidence becomes readable rows instead of JSON", () => {
@@ -365,24 +377,36 @@ test("structured evidence becomes readable rows instead of JSON", () => {
   );
 });
 
-test("finding cards use Chinese decision and risk labels", () => {
-  assert.equal(logic.findingStatusLabel("OPEN"), "待決策");
+test("finding cards use Chinese triage and risk labels", () => {
+  assert.equal(logic.findingStatusLabel("OPEN"), "尚未判定");
   assert.equal(
-    logic.findingStatusLabel("ACCEPTED"),
-    "已決策：採用系統建議內容",
+    logic.findingStatusLabel("CONFIRMED_ISSUE"),
+    "已判定：確認有問題",
   );
   assert.equal(
-    logic.findingStatusLabel("EXPERT_REVIEW"),
-    "專業覆核（既有資料）",
+    logic.findingStatusLabel("DISMISSED_FALSE_POSITIVE"),
+    "已判定：排除誤判",
   );
+  assert.match(logic.findingStatusLabel("PARTIALLY_ACCEPTED"), /舊流程歷史決策/);
   assert.equal(logic.severityLabel("HIGH"), "高風險");
   assert.equal(logic.severityLabel("MEDIUM"), "中風險");
 });
 
-test("finding action reflects whether a decision exists", () => {
-  assert.equal(logic.findingActionLabel("OPEN"), "開始審核");
-  assert.equal(logic.findingActionLabel("ACCEPTED"), "查看決策");
-  assert.equal(logic.findingActionLabel("REQUIRES_SUPPLEMENT"), "查看決策");
+test("risk and deadline urgency use separate wording", () => {
+  assert.equal(logic.riskBadgeText("HIGH"), "高風險");
+  assert.equal(logic.riskBadgeText(null), "尚未評級");
+  assert.equal(logic.urgencyBadgeText("URGENT", 2), "剩 2 天・緊急");
+  assert.equal(logic.urgencyBadgeText("DUE_SOON", 6), "剩 6 天・即將到期");
+  assert.equal(logic.urgencyBadgeText("OVERDUE", -1), "已逾期・已逾期");
+  assert.equal(logic.urgencyBadgeText("NOT_SET", null), "期限未設定");
+  // A deadline label must never read as a content-risk label.
+  assert.notEqual(logic.urgencyBadgeText("URGENT", 2), logic.riskBadgeText("HIGH"));
+});
+
+test("finding action reflects whether a triage exists", () => {
+  assert.equal(logic.findingActionLabel("OPEN"), "開始判定");
+  assert.equal(logic.findingActionLabel("CONFIRMED_ISSUE"), "查看判定");
+  assert.equal(logic.findingActionLabel("DISMISSED_FALSE_POSITIVE"), "查看判定");
 });
 
 test("latest finding decision is selected by timestamp", () => {
@@ -422,45 +446,158 @@ test("review evidence hides trace keys and localizes legal fields", () => {
   );
 });
 
-test("only partial acceptance requires an after value", () => {
-  assert.equal(logic.requiresAfterValue("PARTIALLY_ACCEPTED"), true);
-  assert.equal(logic.requiresAfterValue("ACCEPTED"), false);
-});
-
-test("approval blockers include every current unfinished item", () => {
+test("correction blockers require a fully triaged run with a confirmed issue", () => {
   assert.deepEqual(
-    logic.approvalBlockers({
+    logic.correctionBlockers({
       runs: [{ run_status: "COMPLETED" }],
-      missing_items: [],
       findings: [{ finding_id: "f-1", status: "OPEN" }],
-      decisions: [],
+      correction_requests: [],
     }),
-    ["尚有 1 項疑點未決策或待處理"],
+    ["尚有 1 項疑點未判定", "沒有確認成立的疑點"],
+  );
+  assert.deepEqual(
+    logic.correctionBlockers({
+      runs: [{ run_status: "COMPLETED" }],
+      findings: [{ finding_id: "f-1", status: "EXPERT_REVIEW" }],
+      correction_requests: [],
+    }),
+    ["尚有 1 項專業覆核", "沒有確認成立的疑點"],
+  );
+  assert.deepEqual(
+    logic.correctionBlockers({
+      runs: [{ run_status: "COMPLETED" }],
+      findings: [{ finding_id: "f-1", status: "CONFIRMED_ISSUE" }],
+      correction_requests: [],
+    }),
+    [],
+  );
+  assert.deepEqual(
+    logic.correctionBlockers({
+      runs: [{ run_status: "COMPLETED" }],
+      findings: [{ finding_id: "f-1", status: "CONFIRMED_ISSUE" }],
+      correction_requests: [{ status: "SENT" }],
+    }),
+    ["已有未完成修正通知"],
   );
 });
 
-test("approval blockers require a standardized final value", () => {
+test("completion blockers cover every unfinished condition", () => {
+  const clean = {
+    review: { review_status: "REVIEW_REQUIRED" },
+    runs: [{ run_status: "COMPLETED" }],
+    missing_items: [],
+    findings: [{ finding_id: "f-1", status: "DISMISSED_FALSE_POSITIVE" }],
+    correction_requests: [],
+  };
+  assert.deepEqual(logic.completionBlockers(clean), []);
   assert.deepEqual(
-    logic.approvalBlockers({
-      runs: [{ run_status: "COMPLETED" }],
-      missing_items: [],
-      findings: [{ finding_id: "f-1", status: "ACCEPTED" }],
-      decisions: [
-        { finding_id: "f-1", decision: "ACCEPTED", after_value: null },
+    logic.completionBlockers({ ...clean, missing_items: [{}] }),
+    ["仍有 1 項缺件"],
+  );
+  assert.deepEqual(
+    logic.completionBlockers({
+      ...clean,
+      findings: [{ finding_id: "f-1", status: "CONFIRMED_ISSUE" }],
+    }),
+    ["仍有 1 項疑點待修正"],
+  );
+  assert.deepEqual(
+    logic.completionBlockers({
+      ...clean,
+      correction_requests: [{ status: "SENT", items: [] }],
+    }),
+    ["仍有修正通知尚未完成新版重檢"],
+  );
+  assert.deepEqual(
+    logic.completionBlockers({
+      ...clean,
+      correction_requests: [
+        { status: "RECHECKED", items: [{ recheck_outcome: "NOT_EVALUATED" }] },
       ],
     }),
-    ["尚有 1 項缺少正式採用內容"],
+    ["仍有修正項目無法判定重檢結果"],
   );
 });
 
-test("approved choice is a single final action", () => {
-  assert.match(html, />核定並完成審查</);
-  assert.doesNotMatch(html, /<option value="REVIEW_COMPLETED">/);
+test("correction lifecycle gates match the server state machine", () => {
+  const sent = { status: "SENT" };
+  const resubmitted = { status: "RESUBMITTED" };
+  const rechecked = { status: "RECHECKED" };
+  assert.equal(logic.canRegisterResubmission(sent), true);
+  assert.equal(logic.canRegisterResubmission(resubmitted), false);
+  assert.equal(logic.canRecheck(resubmitted), true);
+  assert.equal(logic.canRecheck(sent), false);
+  // While waiting for a revised version the case stays read-only.
+  assert.equal(logic.isCorrectionReadOnly(sent), true);
+  assert.equal(logic.isCorrectionReadOnly({ status: "DRAFT" }), false);
+  assert.equal(logic.isCorrectionReadOnly(rechecked), false);
+  assert.equal(logic.canExportCorrectionNotice({ status: "DRAFT" }), false);
+  assert.equal(logic.canExportCorrectionNotice(sent), true);
+  assert.equal(logic.canExportCorrectionNotice(rechecked), true);
+  assert.equal(
+    logic.activeCorrectionRequest({
+      correction_requests: [{ status: "RECHECKED" }, { status: "SENT" }],
+    }).status,
+    "SENT",
+  );
+  assert.equal(
+    logic.activeCorrectionRequest({ correction_requests: [{ status: "RECHECKED" }] }),
+    null,
+  );
 });
 
-test("approved confirmation explains that review completes immediately", () => {
-  assert.match(html, /核定後案件將直接完成審查，確定送出？/);
-  assert.doesNotMatch(html, /此決策將完成重大案件審查/);
+test("final report export is only offered after the review completes", () => {
+  assert.equal(
+    logic.canExportFinalReport({ review: { review_status: "REVIEW_COMPLETED" } }),
+    true,
+  );
+  assert.equal(
+    logic.canExportFinalReport({ review: { review_status: "REVIEW_REQUIRED" } }),
+    false,
+  );
+});
+
+test("correction request body requires a message and a deadline", () => {
+  assert.deepEqual(
+    logic.correctionRequestBody(" 請更正 ", "2026-09-05T10:00"),
+    { message: "請更正", due_at: new Date("2026-09-05T10:00").toISOString() },
+  );
+  assert.throws(() => logic.correctionRequestBody("  ", "2026-09-05T10:00"), /修正通知內容/);
+  assert.throws(() => logic.correctionRequestBody("請更正", ""), /修正期限/);
+});
+
+test("completion is a single final action without legacy value choices", () => {
+  assert.match(html, />確認無誤並完成審查</);
+  assert.doesNotMatch(html, /<option value="REVIEW_COMPLETED">/);
+  assert.doesNotMatch(html, /<option value="APPROVED">/);
+  for (const forbidden of [
+    "本項最後採用哪個內容",
+    "維持原申報內容<\\/option>",
+    "採用系統建議內容<\\/option>",
+    "另訂正式內容<\\/option>",
+  ]) {
+    assert.doesNotMatch(html, new RegExp(forbidden));
+  }
+  assert.doesNotMatch(html, /data-finding-after-value/);
+  assert.doesNotMatch(html, /data-partial-value-box/);
+  assert.doesNotMatch(html, /after_value/);
+});
+
+test("the four business tabs are present", () => {
+  for (const tab of ["檢核結果", "修正通知", "新版重檢", "報告與歷程"]) {
+    assert.match(html, new RegExp(tab));
+  }
+  assert.match(html, /匯出 Excel/);
+  assert.match(html, /匯出 Word/);
+  assert.match(html, /建立修正通知單/);
+});
+
+test("irreversible actions are confirmed with plain wording", () => {
+  assert.match(html, /完成後案件即結案且不可再變更，確定送出？/);
+  assert.match(
+    html,
+    /送出後修正通知內容即固定，且案件將轉為退回修正，確定送出？/,
+  );
 });
 
 test("document preview path is review scoped and page aware", () => {
