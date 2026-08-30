@@ -1,4 +1,9 @@
+from datetime import UTC, datetime, timedelta
+from io import BytesIO
+
+from docx import Document
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 
 from app.main import app
 from app.review.demo import (
@@ -56,49 +61,81 @@ def test_demo_seed_is_idempotent_and_real_api_workflow_completes(postgres_connec
             assert {item["severity"] for item in findings1.json()} == {"HIGH", "MEDIUM"}
             high = next(item for item in findings1.json() if item["severity"] == "HIGH")
 
-            finding_decision = client.post(
-                f"/api/v1/review/findings/{high['finding_id']}/decisions",
-                json={
-                    "review_id": review_id,
-                    "decision": "PARTIALLY_ACCEPTED",
-                    "reason": "Demo requires revision",
-                    "after_value": {"value": "-7"},
-                },
-                headers=headers,
-            )
-            assert finding_decision.status_code == 201
+            # Triage every finding, then raise and send a correction request.
+            for item in findings1.json():
+                decision = (
+                    "CONFIRMED_ISSUE"
+                    if item["finding_id"] == high["finding_id"]
+                    else "DISMISSED_FALSE_POSITIVE"
+                )
+                triaged = client.post(
+                    f"/api/v1/review/findings/{item['finding_id']}/triage",
+                    json={
+                        "review_id": review_id,
+                        "decision": decision,
+                        "reason": "Demo triage",
+                    },
+                    headers=headers,
+                )
+                assert triaged.status_code == 201
 
-            case_decision = client.post(
-                f"/api/v1/review/cases/{review_id}/decision",
+            due_at = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+            draft = client.post(
+                f"/api/v1/review/cases/{review_id}/correction-requests",
                 json={
-                    "decision": "RETURNED_FOR_REVISION",
-                    "reason": "Use the revised official report",
+                    "message": "Use the revised official report",
+                    "due_at": due_at,
                 },
                 headers=headers,
             )
-            assert case_decision.status_code == 201
-            assert client.patch(
-                f"/api/v1/review/cases/{review_id}",
-                json={"review_status": "PREPROCESSING"},
+            assert draft.status_code == 201
+            request_id = draft.json()["correction_request_id"]
+            assert client.post(
+                f"/api/v1/review/correction-requests/{request_id}/send",
+                json={},
                 headers=headers,
             ).status_code == 200
+            assert client.get(
+                f"/api/v1/review/cases/{review_id}", headers=headers
+            ).json()["review_status"] == "RETURNED_FOR_REVISION"
 
             revision = revise_demo()
             assert revision["created"] is True
             assert revise_demo()["created"] is False
-            assert client.post(
-                f"/api/v1/review/cases/{review_id}/completeness-check",
-                headers=headers,
-            ).json()["ready"] is True
 
-            run2 = client.post(
-                f"/api/v1/review/cases/{review_id}/rerun",
-                json={},
+            revised_document = next(
+                item
+                for item in client.get(
+                    f"/api/v1/review/workbench/cases/{review_id}", headers=headers
+                ).json()["documents"]
+                if item["document_type"] == "original" and item["version_no"] == 2
+            )
+            assert client.post(
+                f"/api/v1/review/correction-requests/{request_id}/resubmissions",
+                json={
+                    "document_id": revised_document["document_id"],
+                    "document_version": 2,
+                },
+                headers=headers,
+            ).status_code == 201
+            rechecked = client.post(
+                f"/api/v1/review/correction-requests/{request_id}/recheck",
                 headers=headers,
             )
-            assert run2.status_code == 200
-            assert run2.json()["run_no"] == 2
-            run2_id = run2.json()["validation_run_id"]
+            assert rechecked.status_code == 200
+            assert rechecked.json()["status"] == "RECHECKED"
+            assert {
+                item["recheck_outcome"] for item in rechecked.json()["items"]
+            } <= {"RESOLVED", "STILL_PRESENT"}
+
+            run2 = next(
+                item
+                for item in client.get(
+                    f"/api/v1/review/cases/{review_id}/runs", headers=headers
+                ).json()
+                if item["run_no"] == 2
+            )
+            run2_id = run2["validation_run_id"]
             assert client.get(
                 f"/api/v1/review/runs/{run1_id}", headers=headers
             ).status_code == 200
@@ -122,6 +159,50 @@ def test_demo_seed_is_idempotent_and_real_api_workflow_completes(postgres_connec
             )
             assert downloaded.status_code == 200
             assert downloaded.content.startswith(b"%PDF-")
+
+            # Complete the review, then export the immutable Excel and Word
+            # artifacts and reopen both byte streams.
+            remaining = client.get(
+                f"/api/v1/review/runs/{run2_id}/findings", headers=headers
+            ).json()
+            for item in remaining:
+                if item["status"] != "OPEN":
+                    continue
+                assert client.post(
+                    f"/api/v1/review/findings/{item['finding_id']}/triage",
+                    json={
+                        "review_id": review_id,
+                        "decision": "DISMISSED_FALSE_POSITIVE",
+                        "reason": "修正版已排除",
+                    },
+                    headers=headers,
+                ).status_code == 201
+            completed = client.post(
+                f"/api/v1/review/cases/{review_id}/complete-review",
+                json={"reason": "修正版已確認無誤"},
+                headers=headers,
+            )
+            assert completed.status_code == 201
+            for format_name, opener in (
+                ("xlsx", load_workbook),
+                ("docx", Document),
+            ):
+                exported = client.post(
+                    f"/api/v1/review/runs/{run2_id}/reports",
+                    json={"format": format_name},
+                    headers=headers,
+                )
+                assert exported.status_code == 201
+                body = exported.json()
+                assert "bucket_name" not in body
+                assert "object_key" not in body
+                artifact = client.get(
+                    f"/api/v1/review/reports/{body['document_id']}/download",
+                    headers=headers,
+                )
+                assert artifact.status_code == 200
+                # Both artifacts reopen successfully.
+                assert opener(BytesIO(artifact.content)) is not None
     finally:
         removed = reset_demo()
         assert removed["removed"] is True

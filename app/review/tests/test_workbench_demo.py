@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
@@ -102,43 +103,66 @@ def test_seed_creates_received_review_and_start_completes(postgres_connection):
             high = next(
                 item for item in started.json()["findings"] if item["severity"] == "HIGH"
             )
-            finding_decision = client.post(
-                f"/api/v1/review/findings/{high['finding_id']}/decisions",
-                json={
-                    "review_id": seeded["review_id"],
-                    "decision": "PARTIALLY_ACCEPTED",
-                    "reason": "請依修正版重新檢核",
-                    "after_value": {"value": "-7"},
-                },
+            # Triage every finding, then raise and send a correction request.
+            for item in started.json()["findings"]:
+                decision = (
+                    "CONFIRMED_ISSUE"
+                    if item["finding_id"] == high["finding_id"]
+                    else "DISMISSED_FALSE_POSITIVE"
+                )
+                triaged = client.post(
+                    f"/api/v1/review/findings/{item['finding_id']}/triage",
+                    json={
+                        "review_id": seeded["review_id"],
+                        "decision": decision,
+                        "reason": "請依修正版重新檢核",
+                    },
+                    headers=headers,
+                )
+                assert triaged.status_code == 201
+            due_at = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+            draft = client.post(
+                f"/api/v1/review/cases/{seeded['review_id']}/correction-requests",
+                json={"message": "請提交修正版正式報告", "due_at": due_at},
                 headers=headers,
             )
-            assert finding_decision.status_code == 201
-            case_decision = client.post(
-                f"/api/v1/review/cases/{seeded['review_id']}/decision",
-                json={
-                    "decision": "RETURNED_FOR_REVISION",
-                    "reason": "請提交修正版正式報告",
-                },
-                headers=headers,
-            )
-            assert case_decision.status_code == 201
-            assert revise_demo()["created"] is True
-
-            preflight = client.post(
-                "/api/v1/review/workbench/cases/"
-                f"{seeded['review_id']}/start/preflight",
-                headers=headers,
-            )
-            assert preflight.status_code == 200
-            assert preflight.json()["outcome"] == "READY"
-
-            rerun = client.post(
-                f"/api/v1/review/cases/{seeded['review_id']}/rerun",
+            assert draft.status_code == 201
+            request_id = draft.json()["correction_request_id"]
+            sent = client.post(
+                f"/api/v1/review/correction-requests/{request_id}/send",
                 json={},
                 headers=headers,
             )
-            assert rerun.status_code == 200
-            assert rerun.json()["run_no"] == 2
+            assert sent.status_code == 200
+            assert revise_demo()["created"] is True
+
+            revised = client.get(
+                f"/api/v1/review/workbench/cases/{seeded['review_id']}",
+                headers=headers,
+            )
+            revised_document = next(
+                item
+                for item in revised.json()["documents"]
+                if item["document_type"] == "original" and item["version_no"] == 2
+            )
+            resubmitted = client.post(
+                f"/api/v1/review/correction-requests/{request_id}/resubmissions",
+                json={
+                    "document_id": revised_document["document_id"],
+                    "document_version": 2,
+                },
+                headers=headers,
+            )
+            assert resubmitted.status_code == 201
+            rechecked = client.post(
+                f"/api/v1/review/correction-requests/{request_id}/recheck",
+                headers=headers,
+            )
+            assert rechecked.status_code == 200
+            assert rechecked.json()["status"] == "RECHECKED"
+            assert {
+                item["recheck_outcome"] for item in rechecked.json()["items"]
+            } <= {"RESOLVED", "STILL_PRESENT"}
 
             detail = client.get(
                 f"/api/v1/review/workbench/cases/{seeded['review_id']}",
@@ -172,18 +196,22 @@ def test_finding_cannot_receive_a_second_decision(postgres_connection):
             )
             payload = {
                 "review_id": seeded["review_id"],
-                "decision": "ACCEPTED",
-                "reason": "第一次人工決策",
+                "decision": "CONFIRMED_ISSUE",
+                "reason": "第一次人工判定",
             }
 
             first = client.post(
-                f"/api/v1/review/findings/{finding['finding_id']}/decisions",
+                f"/api/v1/review/findings/{finding['finding_id']}/triage",
                 json=payload,
                 headers=headers,
             )
             second = client.post(
-                f"/api/v1/review/findings/{finding['finding_id']}/decisions",
-                json={**payload, "decision": "REJECTED", "reason": "不應覆寫"},
+                f"/api/v1/review/findings/{finding['finding_id']}/triage",
+                json={
+                    **payload,
+                    "decision": "DISMISSED_FALSE_POSITIVE",
+                    "reason": "不應覆寫",
+                },
                 headers=headers,
             )
 
@@ -195,7 +223,7 @@ def test_finding_cannot_receive_a_second_decision(postgres_connection):
                 "SELECT status FROM review.findings WHERE finding_id = %s",
                 (finding["finding_id"],),
             )
-            assert cursor.fetchone()[0] == "ACCEPTED"
+            assert cursor.fetchone()[0] == "CONFIRMED_ISSUE"
             cursor.execute(
                 "SELECT count(*) FROM review.decisions WHERE finding_id = %s",
                 (finding["finding_id"],),

@@ -2,6 +2,34 @@
 
 本文件只記錄 `app/review` 第二子系統。提交編號來自本分支 Git 紀錄；「已完成」僅代表已有程式與驗證證據，不包含其他子系統。
 
+## 2026-08-30 - 疑點判定、修正通知與新版重檢
+
+### 審查責任邊界
+
+- 審查子系統只負責「發現問題、確認問題、發出修正要求、重檢新版本」，不再產生任何正式估價值。
+- 估價報告內容與正式採用值一律由查估端負責更正；審查僅接受同案件、版本更新且沿革一致的新版文件。
+
+### 已完成
+
+- 疑點人工判定改為 `CONFIRMED_ISSUE`、`DISMISSED_FALSE_POSITIVE`、`EXPERT_REVIEW` 三種，必填理由，且 API 以 `extra="forbid"` 直接拒絕 `after_value`。
+- 新增 `POST /findings/{id}/triage`；舊版 `POST /findings/{id}/decisions` 與 `POST /cases/{id}/decision` 改為回傳 409（`LEGACY_FINDING_DECISION_DISABLED`、`LEGACY_CASE_DECISION_DISABLED`），既有歷史決策仍可讀取並標示為「舊流程歷史決策」。
+- 新增 `review.correction_requests`、`review.correction_request_items`、`review.urgency_settings` 三張表（migration `20260830_0008`）；每個 Review 同時只允許一筆未完成修正通知，`RECHECKED` 歷史筆數不限。
+- 修正通知一經送出即固定案件、Run、原文件版本、通知內容與逐項快照；項目只會來自最新 Run 且經人工確認成立的疑點，內容全部由伺服器端載入。
+- 新版重檢會先回到完整性檢查再執行既有 rerun，並依 `supersedes_finding_id` 將每個項目標記為 `RESOLVED`、`STILL_PRESENT` 或 `NOT_EVALUATED`；無法判定者會阻擋完成審查。
+- 完成審查合併為單一動作「確認無誤並完成審查」，於單一交易內鎖定案件、重新驗證所有門檻、寫入稽核決策並設為 `REVIEW_COMPLETED`；不再以正式值存在與否作為完成條件。
+- 期限緊急度與內容風險完全分離：緊急度於請求時依單一設定快照計算（預設 `urgent_days=3`、`due_soon_days=7`），不寫回 Review 資料列；佇列排序改由 `urgency.py` 統一分級。
+- 新增 Excel 與 Word 風險報告產出；工作表與章節皆為業務用中文，證據以可讀欄位／值呈現，且不含任何正式採用值欄位。
+- 所有報告 API 回應改用安全 metadata，不再出現 bucket 名稱、object key 或固定 localhost 網址；下載一律以 `document_id` 由伺服器端解析物件位置。
+- 產出物為 run/request 範圍且不可變：既有檔案不會被覆寫，相同內容因 per-case checksum 唯一約束而不會重複產生。
+- 工作台以「檢核結果／修正通知／新版重檢／報告與歷程」四個業務分頁取代原本的值選取介面；案件清單以獨立徽章分別顯示內容風險與期限緊急度。
+
+### 驗證
+
+- Node 工作台行為測試：`38 pass, 0 fail`（於主機執行，api 映像未安裝 node）。
+- 完整 `app/review/tests`：`277 passed, 1 warning`。
+- 全專案 `tests app/review/tests`：`289 passed, 1 skipped, 1 warning`；唯一警告仍為既有 Starlette TestClient/httpx deprecation。
+- Alembic `current` 與 `heads` 均為 `20260830_0008`，且已驗證 `downgrade 20260825_0007` 後可再 `upgrade head`。
+
 ## 2026-08-30 - 正式採用內容與單一步驟核定
 
 ### 已完成

@@ -170,6 +170,16 @@ def _reset_database(connection) -> tuple[dict[str, UUID | None], list[str]]:
             )
             object_keys.extend(row[0] for row in cursor.fetchall())
 
+            # Correction rows reference findings/reviews with ON DELETE RESTRICT,
+            # so they must be cleared before the findings they snapshot.
+            cursor.execute(
+                "DELETE FROM review.correction_request_items WHERE correction_request_id IN (SELECT correction_request_id FROM review.correction_requests WHERE review_id IN (SELECT review_id FROM review.reviews WHERE case_id = %s))",
+                (case_id,),
+            )
+            cursor.execute(
+                "DELETE FROM review.correction_requests WHERE review_id IN (SELECT review_id FROM review.reviews WHERE case_id = %s)",
+                (case_id,),
+            )
             cursor.execute(
                 "DELETE FROM review.decisions WHERE review_id IN (SELECT review_id FROM review.reviews WHERE case_id = %s)",
                 (case_id,),
