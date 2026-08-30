@@ -17,11 +17,13 @@ from app.review.risks import FindingRisk, risk_level_for_findings
 from app.review.decisions import (
     CaseDecisionCommand,
     FindingDecisionCommand,
+    FindingTriageCommand,
     FindingValueContext,
     ReviewGateSummary,
     build_finding_after_value,
     validate_case_decision,
     validate_finding_decision,
+    validate_finding_triage,
 )
 from app.review.reports import (
     ReportCase,
@@ -807,6 +809,67 @@ class ReviewService:
         if summary is None:
             raise ResourceNotFoundError("風險摘要")
         return summary
+
+    async def triage_finding(self, finding_id, payload, actor_id, request_id):
+        """Confirm, dismiss, or escalate a finding without selecting a value."""
+        review = await self.repository.get(payload.review_id, for_update=True)
+        if review is None:
+            raise ResourceNotFoundError("審查案件")
+        if review.review_status not in {"REVIEW_REQUIRED", "EXPERT_REVIEW"}:
+            raise AppError(
+                "REVIEW_STATE_CONFLICT",
+                "目前案件狀態不可判定疑點",
+                409,
+                {"current": review.review_status},
+            )
+        finding = await self.repository.get_finding_for_review(
+            finding_id, payload.review_id, for_update=True
+        )
+        if finding is None:
+            raise ResourceNotFoundError("審查疑點")
+        if (
+            finding.validation_run_id != review.latest_validation_run_id
+            or finding.status != "OPEN"
+        ):
+            raise AppError(
+                "FINDING_DECISION_CONFLICT",
+                "疑點不是最新待判定項目",
+                409,
+                {"current": finding.status},
+            )
+        status = validate_finding_triage(
+            FindingTriageCommand(payload.decision, payload.reason)
+        )
+        before = {"status": finding.status}
+        finding.status = status
+        decision = await self.repository.create_decision(
+            review_id=review.review_id,
+            finding_id=finding.finding_id,
+            decision=status,
+            reason=payload.reason.strip(),
+            decided_by_user_id=actor_id,
+            request_id=request_id,
+            before_value=before,
+            after_value={"status": status},
+        )
+        await self._refresh_review_risk_counts(review)
+        await self.repository.session.flush()
+        return decision
+
+    async def _refresh_review_risk_counts(self, review) -> None:
+        counts = await self.repository.current_risk_counts(review.review_id)
+        review.high_count = counts["high"]
+        review.medium_count = counts["medium"]
+        review.low_count = counts["low"]
+        review.current_risk_level = (
+            "CRITICAL"
+            if counts["critical"]
+            else "HIGH"
+            if counts["high"]
+            else "MEDIUM"
+            if counts["medium"]
+            else "LOW"
+        )
 
     async def decide_finding(
         self, finding_id, payload, actor_id, request_id

@@ -606,6 +606,7 @@ class ReviewRepository:
                             "OPEN",
                             "REQUIRES_SUPPLEMENT",
                             "EXPERT_REVIEW",
+                            "CONFIRMED_ISSUE",
                         ]
                     ),
                 )
@@ -641,6 +642,7 @@ class ReviewRepository:
                             "OPEN",
                             "REQUIRES_SUPPLEMENT",
                             "EXPERT_REVIEW",
+                            "CONFIRMED_ISSUE",
                         ]
                     ),
                 )

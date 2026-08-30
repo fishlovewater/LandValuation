@@ -21,6 +21,7 @@ from app.review.schemas import (
     DecisionRead,
     FindingRead,
     FindingDecisionRequest,
+    FindingTriageRequest,
     MissingItemRead,
     ReviewPriority,
     ReportDocumentRead,
@@ -389,7 +390,28 @@ async def decide_review_finding(
     session: DbSession,
     user=Depends(require_permissions("review.decide")),
 ) -> DecisionRead:
-    return await service_for(session).decide_finding(
+    # Legacy formal-value decision writes are disabled in the correction
+    # workflow. Historical decisions remain readable via the list route.
+    raise AppError(
+        "LEGACY_FINDING_DECISION_DISABLED",
+        "舊版疑點決策已停用，請改用疑點判定 /triage",
+        409,
+    )
+
+
+@router.post(
+    "/findings/{finding_id}/triage",
+    response_model=DecisionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def triage_review_finding(
+    finding_id: UUID,
+    payload: FindingTriageRequest,
+    request: Request,
+    session: DbSession,
+    user=Depends(require_permissions("review.decide")),
+) -> DecisionRead:
+    return await service_for(session).triage_finding(
         finding_id,
         payload,
         user.user_id,
