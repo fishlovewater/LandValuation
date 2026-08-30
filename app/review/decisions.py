@@ -12,12 +12,32 @@ FindingStatus = Literal[
     "EXPERT_REVIEW",
 ]
 
+# New finding-triage semantics. Review confirms, dismisses, or escalates a
+# finding; it never selects a formal appraisal value.
+FindingTriageDecision = Literal[
+    "CONFIRMED_ISSUE",
+    "DISMISSED_FALSE_POSITIVE",
+    "EXPERT_REVIEW",
+]
+
 
 @dataclass(frozen=True)
 class FindingDecisionCommand:
     decision: FindingStatus
     reason: str
     after_value: Any = None
+
+
+@dataclass(frozen=True)
+class FindingTriageCommand:
+    decision: FindingTriageDecision
+    reason: str
+
+
+def validate_finding_triage(command: FindingTriageCommand) -> str:
+    if not command.reason.strip():
+        raise AppError("REVIEW_DECISION_INVALID", "人工判定必須填寫理由", 409)
+    return command.decision
 
 
 @dataclass(frozen=True)

@@ -1,15 +1,55 @@
 import pytest
+from pydantic import ValidationError
 
 from app.core.exceptions import AppError
 from app.review.decisions import (
     CaseDecisionCommand,
     FindingDecisionCommand,
+    FindingTriageCommand,
     FindingValueContext,
     ReviewGateSummary,
     build_finding_after_value,
     validate_case_decision,
     validate_finding_decision,
+    validate_finding_triage,
 )
+from app.review.schemas import FindingTriageRequest
+
+
+@pytest.mark.parametrize(
+    "decision",
+    ["CONFIRMED_ISSUE", "DISMISSED_FALSE_POSITIVE", "EXPERT_REVIEW"],
+)
+def test_finding_triage_accepts_only_review_meaning(decision):
+    assert (
+        validate_finding_triage(FindingTriageCommand(decision, "已核對證據"))
+        == decision
+    )
+
+
+def test_finding_triage_requires_reason():
+    with pytest.raises(AppError, match="必須填寫理由"):
+        validate_finding_triage(FindingTriageCommand("CONFIRMED_ISSUE", "   "))
+
+
+@pytest.mark.parametrize("legacy", ["ACCEPTED", "REJECTED", "PARTIALLY_ACCEPTED"])
+def test_new_triage_schema_rejects_legacy_value_choices(legacy):
+    with pytest.raises(ValidationError):
+        FindingTriageRequest(
+            review_id="00000000-0000-0000-0000-000000000001",
+            decision=legacy,
+            reason="x",
+        )
+
+
+def test_new_triage_schema_rejects_after_value():
+    with pytest.raises(ValidationError):
+        FindingTriageRequest(
+            review_id="00000000-0000-0000-0000-000000000001",
+            decision="CONFIRMED_ISSUE",
+            reason="x",
+            after_value={"value": "不得接受"},
+        )
 
 
 @pytest.mark.parametrize(

@@ -224,7 +224,32 @@ CaseDecisionValue = Literal[
 ]
 
 
+FindingTriageDecision = Literal[
+    "CONFIRMED_ISSUE",
+    "DISMISSED_FALSE_POSITIVE",
+    "EXPERT_REVIEW",
+]
+
+
+class FindingTriageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    review_id: UUID
+    decision: FindingTriageDecision
+    reason: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("reason")
+    @classmethod
+    def reason_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("reason 不得為空白")
+        return value
+
+
 class FindingDecisionRequest(BaseModel):
+    # Legacy request model retained only for reading historical payloads. Do not
+    # connect this to a write route in the new workflow.
     review_id: UUID
     decision: FindingDecisionValue
     reason: str
