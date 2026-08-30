@@ -17,7 +17,7 @@ assert.notEqual(end, -1, "testable workbench logic end marker is missing");
 const source = html.slice(start + startMarker.length, end);
 const scriptSource = html.match(/<script>([\s\S]*)<\/script>/)?.[1] ?? "";
 const logic = new Function(
-  `${source}; return { redactForLog, findingDecisionBody, validateFindingDecision, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, findingStatusLabel, severityLabel, flattenDisplayData, requiresAfterValue, documentContentPath, pdfPageTarget, requestLogSummary, findingActionLabel, latestFindingDecision, approvalBlockers };`,
+  `${source}; return { redactForLog, findingDecisionBody, validateFindingDecision, startOutcomeMessage, workbenchCasesPath, copyDemoCommand, documentTypeLabel, findingDecisionLabel, caseDecisionLabel, findingStatusLabel, severityLabel, flattenDisplayData, requiresAfterValue, documentContentPath, pdfPageTarget, requestLogSummary, findingActionLabel, latestFindingDecision, approvalBlockers, reviewProgress, executeReviewWorkflow, createDraftTracker, confirmDiscardChanges, applyBeforeUnload, canStartReview };`,
 )();
 
 test("inline workbench script parses", () => {
@@ -101,6 +101,193 @@ test("blocked review is announced as an error", () => {
     }),
     { message: "智慧審查暫停：土地登記謄本。", error: true },
   );
+});
+
+test("review progress uses only completed workflow milestones", () => {
+  assert.deepEqual(logic.reviewProgress("PREPARING"), {
+    value: 0,
+    label: "準備檢核",
+  });
+  assert.deepEqual(logic.reviewProgress("COMPLETENESS"), {
+    value: 25,
+    label: "完整性檢查完成",
+  });
+  assert.equal(logic.reviewProgress("RULES").value, 75);
+  assert.equal(logic.reviewProgress("DETAIL").value, 90);
+  assert.equal(logic.reviewProgress("COMPLETE").value, 100);
+  assert.throws(() => logic.reviewProgress("UNKNOWN"), /未知的檢核進度/);
+});
+
+test("blocked review stops after completeness without creating a run", async () => {
+  const calls = [];
+  const result = await logic.executeReviewWorkflow({
+    onProgress: (stage) => calls.push(`progress:${stage}`),
+    preflight: async () => {
+      calls.push("preflight");
+      return { outcome: "BLOCKED", completeness: { items: [] } };
+    },
+    run: async () => calls.push("run"),
+    loadDetail: async () => calls.push("detail"),
+    loadSummary: async () => calls.push("summary"),
+  });
+
+  assert.equal(result.outcome, "BLOCKED");
+  assert.deepEqual(calls, [
+    "progress:PREPARING",
+    "preflight",
+    "progress:COMPLETENESS",
+    "detail",
+    "summary",
+  ]);
+});
+
+test("ready review advances only after each real operation completes", async () => {
+  const calls = [];
+  await logic.executeReviewWorkflow({
+    onProgress: (stage) => calls.push(`progress:${stage}`),
+    preflight: async () => {
+      calls.push("preflight");
+      return { outcome: "READY" };
+    },
+    run: async () => calls.push("run"),
+    loadDetail: async () => calls.push("detail"),
+    loadSummary: async () => calls.push("summary"),
+  });
+
+  assert.deepEqual(calls, [
+    "progress:PREPARING",
+    "preflight",
+    "progress:COMPLETENESS",
+    "run",
+    "progress:RULES",
+    "detail",
+    "progress:DETAIL",
+    "summary",
+    "progress:COMPLETE",
+  ]);
+});
+
+test("review workflow locks editing until every operation settles", async () => {
+  let releasePreflight;
+  const locks = [];
+  const pending = new Promise((resolve) => {
+    releasePreflight = resolve;
+  });
+  const workflow = logic.executeReviewWorkflow({
+    setLocked: (locked) => locks.push(locked),
+    onProgress: () => {},
+    preflight: () => pending,
+    run: async () => {},
+    loadDetail: async () => {},
+    loadSummary: async () => {},
+  });
+
+  await Promise.resolve();
+  assert.deepEqual(locks, [true]);
+  releasePreflight({ outcome: "BLOCKED" });
+  await workflow;
+  assert.deepEqual(locks, [true, false]);
+});
+
+test("failed run keeps the last completed milestone and unlocks editing", async () => {
+  const stages = [];
+  const locks = [];
+  await assert.rejects(
+    logic.executeReviewWorkflow({
+      setLocked: (locked) => locks.push(locked),
+      onProgress: (stage) => stages.push(stage),
+      preflight: async () => ({ outcome: "READY" }),
+      run: async () => {
+        throw new Error("run failed");
+      },
+      loadDetail: async () => {},
+      loadSummary: async () => {},
+    }),
+    /run failed/,
+  );
+  assert.deepEqual(stages, ["PREPARING", "COMPLETENESS"]);
+  assert.deepEqual(locks, [true, false]);
+});
+
+test("ready review remains runnable after a failed first run or rerun", () => {
+  assert.equal(
+    logic.canStartReview({ review: { review_status: "READY_FOR_REVIEW" }, runs: [] }),
+    true,
+  );
+  assert.equal(
+    logic.canStartReview({
+      review: { review_status: "READY_FOR_REVIEW" },
+      runs: [{ run_no: 1 }],
+    }),
+    true,
+  );
+});
+
+test("draft tracker becomes clean again when values return to baseline", () => {
+  const drafts = logic.createDraftTracker();
+  const initial = { decision: "REJECTED", reason: "", afterValue: "" };
+  drafts.register("finding:f-1", initial);
+
+  drafts.update("finding:f-1", { ...initial, reason: "待確認" });
+  assert.equal(drafts.isDirty("finding:f-1"), true);
+  assert.equal(drafts.hasAny(), true);
+
+  drafts.update("finding:f-1", initial);
+  assert.equal(drafts.isDirty("finding:f-1"), false);
+  assert.equal(drafts.hasAny(), false);
+});
+
+test("draft tracker isolates findings and clears only a successful save", () => {
+  const drafts = logic.createDraftTracker();
+  const initial = { decision: "REJECTED", reason: "", afterValue: "" };
+  drafts.register("finding:f-1", initial);
+  drafts.register("finding:f-2", initial);
+  drafts.update("finding:f-1", { ...initial, reason: "第一筆" });
+  drafts.update("finding:f-2", { ...initial, reason: "第二筆" });
+
+  drafts.clear("finding:f-1");
+
+  assert.equal(drafts.isDirty("finding:f-1"), false);
+  assert.equal(drafts.isDirty("finding:f-2"), true);
+  assert.deepEqual(drafts.value("finding:f-2"), {
+    ...initial,
+    reason: "第二筆",
+  });
+  assert.equal(drafts.hasAny(), true);
+});
+
+test("discard confirmation runs only for dirty drafts", () => {
+  const drafts = logic.createDraftTracker();
+  let asked = 0;
+  assert.equal(
+    logic.confirmDiscardChanges(drafts, () => {
+      asked += 1;
+      return false;
+    }),
+    true,
+  );
+  assert.equal(asked, 0);
+
+  drafts.register("case:r-1", { reason: "" });
+  drafts.update("case:r-1", { reason: "待確認" });
+  assert.equal(logic.confirmDiscardChanges(drafts, () => false), false);
+  assert.equal(drafts.hasAny(), true);
+  assert.equal(logic.confirmDiscardChanges(drafts, () => true), true);
+  assert.equal(drafts.hasAny(), false);
+});
+
+test("beforeunload is blocked only while drafts are dirty", () => {
+  const drafts = logic.createDraftTracker();
+  const cleanEvent = { prevented: false, preventDefault() { this.prevented = true; } };
+  assert.equal(logic.applyBeforeUnload(cleanEvent, drafts), false);
+  assert.equal(cleanEvent.prevented, false);
+
+  drafts.register("finding:f-1", { reason: "" });
+  drafts.update("finding:f-1", { reason: "尚未儲存" });
+  const dirtyEvent = { prevented: false, returnValue: null, preventDefault() { this.prevented = true; } };
+  assert.equal(logic.applyBeforeUnload(dirtyEvent, drafts), true);
+  assert.equal(dirtyEvent.prevented, true);
+  assert.equal(dirtyEvent.returnValue, "");
 });
 
 test("case queue request preserves server-side group pagination and filters", () => {

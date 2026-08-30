@@ -44,6 +44,7 @@ from app.review.workbench_schemas import (
     EligibleCaseRead,
     WorkbenchCaseDetailRead,
     WorkbenchCaseList,
+    WorkbenchPreflightRead,
     WorkbenchStartRead,
     WorkbenchStatusGroup,
     WorkbenchSummaryRead,
@@ -176,6 +177,18 @@ async def get_workbench_document_content(
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+@router.post(
+    "/workbench/cases/{review_id}/start/preflight",
+    response_model=WorkbenchPreflightRead,
+)
+async def preflight_workbench_case(
+    review_id: UUID,
+    session: DbSession,
+    user=Depends(require_permissions("review.execute")),
+) -> WorkbenchPreflightRead:
+    return await workbench_service_for(session).preflight(review_id, user.user_id)
 
 
 @router.post(

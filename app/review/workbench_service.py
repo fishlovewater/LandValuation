@@ -14,6 +14,7 @@ from app.review.workbench_schemas import (
     WorkbenchCompletenessRead,
     WorkbenchFieldVersionRead,
     WorkbenchLatestRunRead,
+    WorkbenchPreflightRead,
     WorkbenchStartRead,
     WorkbenchSummaryRead,
 )
@@ -146,17 +147,12 @@ class WorkbenchService:
         review_service = ReviewService(self.review_repository)
         review = await review_service.get(review_id)
         is_rerun = review.latest_validation_run_id is not None
-        if review.review_status in {"RETURNED_FOR_REVISION", "SUPPLEMENT_REQUIRED"}:
-            await review_service.update(
-                review_id, ReviewUpdate(review_status="PREPROCESSING")
-            )
-        result, review, items = await review_service.check_completeness(
-            review_id, actor_id
-        )
-        completeness = WorkbenchCompletenessRead.from_result(result, review, items)
-        if not result.ready:
+        preflight = await self.preflight(review_id, actor_id)
+        if preflight.outcome == "BLOCKED":
             return WorkbenchStartRead(
-                outcome="BLOCKED", completeness=completeness, run=None
+                outcome="BLOCKED",
+                completeness=preflight.completeness,
+                run=None,
             )
         if is_rerun:
             run, risk_summary = await review_service.rerun(review_id, actor_id)
@@ -165,8 +161,35 @@ class WorkbenchService:
         findings = await review_service.list_findings(run.validation_run_id)
         return WorkbenchStartRead(
             outcome="COMPLETED",
-            completeness=completeness,
+            completeness=preflight.completeness,
             run=run,
             findings=findings,
             risk_summary=risk_summary,
+        )
+
+    async def preflight(
+        self, review_id: UUID, actor_id: UUID
+    ) -> WorkbenchPreflightRead:
+        from app.review.service import ReviewService
+
+        review_service = ReviewService(self.review_repository)
+        review = await review_service.get(review_id)
+        if review.review_status in {
+            "READY_FOR_REVIEW",
+            "RETURNED_FOR_REVISION",
+            "SUPPLEMENT_REQUIRED",
+        }:
+            await review_service.update(
+                review_id, ReviewUpdate(review_status="PREPROCESSING")
+            )
+        result, review, items = await review_service.check_completeness(
+            review_id, actor_id
+        )
+        completeness = WorkbenchCompletenessRead.from_result(result, review, items)
+        if not result.ready:
+            return WorkbenchPreflightRead(
+                outcome="BLOCKED", completeness=completeness
+            )
+        return WorkbenchPreflightRead(
+            outcome="READY", completeness=completeness
         )

@@ -39,7 +39,23 @@ def test_test_ui_is_available_in_development(monkeypatch):
     assert "/review/workbench/cases" in response.text
     assert "/review/workbench/eligible-cases" in response.text
     assert "/start" in response.text
-    assert 'started.outcome === "BLOCKED"' in response.text
+    assert "/start/preflight" in response.text
+    assert 'role="progressbar"' in response.text
+    assert 'max="100"' in response.text
+    assert "executeReviewWorkflow" in response.text
+    assert "beforeunload" in response.text
+    assert "尚有未儲存的審查內容，確定離開嗎？" in response.text
+    assert "confirmDiscardChanges" in response.text
+    assert "const selectedCaseId=state.selectedEligible;" in response.text
+    assert (
+        'if(!selectedCaseId){announce("請先選擇一筆案件。",true);return}'
+        in response.text
+    )
+    assert "const createDraft=" in response.text
+    assert "if(!confirmDiscardCurrent())return;" in response.text
+    assert "body={case_id:createDraft.selectedCaseId}" in response.text
+    assert "withDetailLocked(()=>loadDetail(row.dataset.reviewId))" in response.text
+    assert "await withDetailLocked(async()=>" in response.text
     assert "/review/demo/revise" in response.text
     assert "/report/pdf" in response.text
     assert "預覽 JSON" not in response.text

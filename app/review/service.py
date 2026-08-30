@@ -61,7 +61,7 @@ ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     "RECEIVED": frozenset({"PREPROCESSING"}),
     "PREPROCESSING": frozenset({"PENDING_MATERIALS", "READY_FOR_REVIEW"}),
     "PENDING_MATERIALS": frozenset({"PREPROCESSING"}),
-    "READY_FOR_REVIEW": frozenset({"ANALYZING"}),
+    "READY_FOR_REVIEW": frozenset({"PREPROCESSING", "ANALYZING"}),
     "ANALYZING": frozenset({"REVIEW_REQUIRED"}),
     "REVIEW_REQUIRED": frozenset(
         {

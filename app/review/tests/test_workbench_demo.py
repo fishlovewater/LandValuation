@@ -6,6 +6,57 @@ from app.main import app
 from app.review.demo import DEMO_CASE_NO, reset_demo, revise_demo, seed_demo
 
 
+def test_preflight_ready_does_not_create_run(postgres_connection):
+    seeded = seed_demo()
+    try:
+        with TestClient(app) as client:
+            login = client.post(
+                "/api/v1/auth/login",
+                json={"username": seeded["username"], "password": seeded["password"]},
+            )
+            headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+            response = client.post(
+                "/api/v1/review/workbench/cases/"
+                f"{seeded['review_id']}/start/preflight",
+                headers=headers,
+            )
+            repeated = client.post(
+                "/api/v1/review/workbench/cases/"
+                f"{seeded['review_id']}/start/preflight",
+                headers=headers,
+            )
+
+        assert response.status_code == 200
+        assert response.json()["outcome"] == "READY"
+        assert response.json()["completeness"]["ready"] is True
+        assert response.json()["completeness"]["review_status"] == "READY_FOR_REVIEW"
+        assert repeated.status_code == 200
+        assert repeated.json()["outcome"] == "READY"
+        with postgres_connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT count(*) FROM valuation.validation_runs WHERE review_id = %s",
+                (seeded["review_id"],),
+            )
+            assert cursor.fetchone()[0] == 0
+
+        with TestClient(app) as client:
+            login = client.post(
+                "/api/v1/auth/login",
+                json={"username": seeded["username"], "password": seeded["password"]},
+            )
+            headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+            started = client.post(
+                f"/api/v1/review/workbench/cases/{seeded['review_id']}/start",
+                headers=headers,
+            )
+        assert started.status_code == 200
+        assert started.json()["outcome"] == "COMPLETED"
+        assert started.json()["run"]["run_no"] == 1
+    finally:
+        reset_demo()
+
+
 def test_seed_creates_received_review_and_start_completes(postgres_connection):
     seeded = seed_demo()
     try:
@@ -73,13 +124,21 @@ def test_seed_creates_received_review_and_start_completes(postgres_connection):
             assert case_decision.status_code == 201
             assert revise_demo()["created"] is True
 
+            preflight = client.post(
+                "/api/v1/review/workbench/cases/"
+                f"{seeded['review_id']}/start/preflight",
+                headers=headers,
+            )
+            assert preflight.status_code == 200
+            assert preflight.json()["outcome"] == "READY"
+
             rerun = client.post(
-                f"/api/v1/review/workbench/cases/{seeded['review_id']}/start",
+                f"/api/v1/review/cases/{seeded['review_id']}/rerun",
+                json={},
                 headers=headers,
             )
             assert rerun.status_code == 200
-            assert rerun.json()["outcome"] == "COMPLETED"
-            assert rerun.json()["run"]["run_no"] == 2
+            assert rerun.json()["run_no"] == 2
 
             detail = client.get(
                 f"/api/v1/review/workbench/cases/{seeded['review_id']}",

@@ -127,6 +127,11 @@ class WorkbenchCompletenessRead(CompletenessResponse):
         )
 
 
+class WorkbenchPreflightRead(BaseModel):
+    outcome: Literal["READY", "BLOCKED"]
+    completeness: WorkbenchCompletenessRead
+
+
 class WorkbenchStartRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

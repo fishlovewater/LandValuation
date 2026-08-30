@@ -246,6 +246,27 @@ def test_workbench_start_blocked_does_not_create_run(
         assert cursor.fetchone()[0] == 0
 
 
+def test_workbench_preflight_blocked_does_not_create_run(
+    workbench_client, workbench_records, postgres_connection
+):
+    response = workbench_client.post(
+        "/api/v1/review/workbench/cases/"
+        f"{workbench_records.review_id}/start/preflight"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["outcome"] == "BLOCKED"
+    assert response.json()["completeness"]["ready"] is False
+    assert response.json()["completeness"]["items"]
+
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT count(*) FROM valuation.validation_runs WHERE review_id = %s",
+            (workbench_records.review_id,),
+        )
+        assert cursor.fetchone()[0] == 0
+
+
 def test_workbench_document_content_streams_owned_pdf(
     workbench_client, workbench_records, preview_documents
 ):
