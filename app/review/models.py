@@ -3,7 +3,7 @@ from uuid import UUID
 
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Integer, Numeric, String, Text, text
+from sqlalchemy import DateTime, Integer, Numeric, SmallInteger, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -198,3 +198,78 @@ class Decision(Base):
     request_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
     before_value: Mapped[dict | None] = mapped_column(JSONB)
     after_value: Mapped[dict | None] = mapped_column(JSONB)
+
+
+class CorrectionRequest(Base):
+    __tablename__ = "correction_requests"
+    __table_args__ = {"schema": "review"}
+
+    correction_request_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    review_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    request_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    based_on_validation_run_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(20), server_default="DRAFT")
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    base_document_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    base_document_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    response_document_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    response_document_version: Mapped[int | None] = mapped_column(Integer)
+    created_by_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()")
+    )
+    sent_by_user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resubmitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rechecked_by_user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    rechecked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CorrectionRequestItem(Base):
+    __tablename__ = "correction_request_items"
+    __table_args__ = {"schema": "review"}
+
+    correction_request_item_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    correction_request_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=False
+    )
+    finding_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    finding_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    finding_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False)
+    document_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    document_version: Mapped[int | None] = mapped_column(Integer)
+    page_number: Mapped[int | None] = mapped_column(Integer)
+    reported_text: Mapped[str | None] = mapped_column(Text)
+    reported_value: Mapped[str | None] = mapped_column(Text)
+    legal_basis_snapshot: Mapped[list] = mapped_column(
+        JSONB, server_default=text("'[]'::jsonb")
+    )
+    source_evidence_snapshot: Mapped[list] = mapped_column(
+        JSONB, server_default=text("'[]'::jsonb")
+    )
+    issue_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    requested_correction: Mapped[str] = mapped_column(Text, nullable=False)
+    recheck_outcome: Mapped[str] = mapped_column(String(20), server_default="PENDING")
+    resulting_finding_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    rechecked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UrgencySettings(Base):
+    __tablename__ = "urgency_settings"
+    __table_args__ = {"schema": "review"}
+
+    settings_id: Mapped[int] = mapped_column(SmallInteger, primary_key=True)
+    urgent_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    due_soon_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_by_user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()")
+    )

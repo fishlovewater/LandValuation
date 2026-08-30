@@ -58,6 +58,162 @@ def test_trusted_input_schema_contract(postgres_connection):
     assert TRUSTED_INPUT_COLUMNS <= actual
 
 
+import uuid
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    ("schema", "table", "column"),
+    [
+        ("review", "correction_requests", "based_on_validation_run_id"),
+        ("review", "correction_requests", "response_document_id"),
+        ("review", "correction_request_items", "recheck_outcome"),
+        ("review", "urgency_settings", "urgent_days"),
+    ],
+)
+def test_correction_schema_columns_exist(postgres_connection, schema, table, column):
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema=%s AND table_name=%s AND column_name=%s
+            """,
+            (schema, table, column),
+        )
+        assert cursor.fetchone() == (1,)
+
+
+def _seed_review_with_run(cursor):
+    """Insert a minimal case/review/run/document graph and return their ids."""
+    case_id = uuid.uuid4()
+    review_id = uuid.uuid4()
+    run_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    user_id = uuid.uuid4()
+    cursor.execute(
+        "SELECT user_id FROM auth.users ORDER BY created_at LIMIT 1"
+    )
+    row = cursor.fetchone()
+    if row is not None:
+        user_id = row[0]
+    cursor.execute(
+        """
+        INSERT INTO valuation.cases
+            (case_id, case_no, case_title, case_type, valuation_base_date,
+             city_code, district_code)
+        VALUES (%s, %s, '測試案件', 'LAND', current_date, '01', '001')
+        """,
+        (case_id, f"CASE-{uuid.uuid4().hex[:8]}"),
+    )
+    cursor.execute(
+        """
+        INSERT INTO review.reviews (review_id, case_id, review_type, review_status)
+        VALUES (%s, %s, 'SMART_REVIEW', 'REVIEW_REQUIRED')
+        """,
+        (review_id, case_id),
+    )
+    cursor.execute(
+        """
+        INSERT INTO valuation.validation_runs
+            (validation_run_id, case_id, run_status, review_id, ruleset_snapshot)
+        VALUES (%s, %s, 'COMPLETED', %s, '{"rules": []}'::jsonb)
+        """,
+        (run_id, case_id, review_id),
+    )
+    cursor.execute(
+        """
+        INSERT INTO valuation.documents
+            (document_id, case_id, document_type, original_filename, mime_type,
+             bucket_name, object_key, checksum_sha256, file_size_bytes, version_no,
+             is_active, document_group_id)
+        VALUES (%s, %s, 'APPRAISAL_REPORT', 'r.pdf', 'application/pdf',
+                'land-valuation', %s, %s, 1, 1, true, %s)
+        """,
+        (
+            document_id,
+            case_id,
+            f"cases/{case_id}/{uuid.uuid4()}.pdf",
+            uuid.uuid4().hex + uuid.uuid4().hex,
+            uuid.uuid4(),
+        ),
+    )
+    return review_id, run_id, document_id, user_id
+
+
+def _insert_request(cursor, review_id, run_id, document_id, user_id, status, request_no):
+    request_id = uuid.uuid4()
+    sent_at = "now()" if status != "DRAFT" else "NULL"
+    cursor.execute(
+        f"""
+        INSERT INTO review.correction_requests
+            (correction_request_id, review_id, request_no, based_on_validation_run_id,
+             status, due_at, message, base_document_id, base_document_version,
+             created_by_user_id, sent_by_user_id, sent_at)
+        VALUES (%s, %s, %s, %s, %s, now() + interval '3 days', 'msg', %s, 1, %s,
+                {'%s' if status != 'DRAFT' else 'NULL'},
+                {sent_at})
+        """,
+        (
+            (request_id, review_id, request_no, run_id, status, document_id, user_id, user_id)
+            if status != "DRAFT"
+            else (request_id, review_id, request_no, run_id, status, document_id, user_id)
+        ),
+    )
+    return request_id
+
+
+def test_only_one_active_correction_request_per_review(postgres_connection):
+    postgres_connection.autocommit = False
+    try:
+        with postgres_connection.cursor() as cursor:
+            review_id, run_id, document_id, user_id = _seed_review_with_run(cursor)
+            _insert_request(cursor, review_id, run_id, document_id, user_id, "DRAFT", 1)
+            with pytest.raises(psycopg_errors_unique()):
+                _insert_request(
+                    cursor, review_id, run_id, document_id, user_id, "SENT", 2
+                )
+    finally:
+        postgres_connection.rollback()
+
+
+def test_many_rechecked_requests_are_allowed(postgres_connection):
+    postgres_connection.autocommit = False
+    try:
+        with postgres_connection.cursor() as cursor:
+            review_id, run_id, document_id, user_id = _seed_review_with_run(cursor)
+            for request_no in (1, 2, 3):
+                _insert_recheck_history(
+                    cursor, review_id, run_id, document_id, user_id, request_no
+                )
+    finally:
+        postgres_connection.rollback()
+
+
+def _insert_recheck_history(cursor, review_id, run_id, document_id, user_id, request_no):
+    request_id = uuid.uuid4()
+    cursor.execute(
+        """
+        INSERT INTO review.correction_requests
+            (correction_request_id, review_id, request_no, based_on_validation_run_id,
+             status, due_at, message, base_document_id, base_document_version,
+             response_document_id, response_document_version,
+             created_by_user_id, sent_by_user_id, sent_at, resubmitted_at,
+             rechecked_by_user_id, rechecked_at)
+        VALUES (%s, %s, %s, %s, 'RECHECKED', now() + interval '3 days', 'msg', %s, 1,
+                %s, 2, %s, %s, now(), now(), %s, now())
+        """,
+        (request_id, review_id, request_no, run_id, document_id, document_id, user_id, user_id, user_id),
+    )
+    return request_id
+
+
+def psycopg_errors_unique():
+    from psycopg import errors
+
+    return errors.UniqueViolation
+
+
 def test_review_status_column_accepts_all_workflow_statuses(postgres_connection):
     with postgres_connection.cursor() as cursor:
         cursor.execute(
