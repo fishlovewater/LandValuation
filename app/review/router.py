@@ -22,6 +22,8 @@ from app.review.schemas import (
     CorrectionRequestItemRead,
     CorrectionRequestRead,
     CorrectionRequestSend,
+    CorrectionResubmissionCreate,
+    ReviewCompletionRequest,
     DecisionRead,
     FindingRead,
     FindingDecisionRequest,
@@ -67,8 +69,11 @@ def service_for(session: DbSession) -> ReviewService:
 
 
 def correction_service_for(session: DbSession) -> CorrectionService:
+    repository = ReviewRepository(session)
     return CorrectionService(
-        ReviewRepository(session), CorrectionRepository(session)
+        repository,
+        CorrectionRepository(session),
+        review_service=ReviewService(repository),
     )
 
 
@@ -471,12 +476,14 @@ async def decide_review_case(
     session: DbSession,
     user=Depends(require_permissions("review.decide")),
 ) -> DecisionRead:
-    return await service_for(session).decide_case(
-        review_id,
-        payload,
-        user.user_id,
-        audit_request_id(request),
-        "review.override_high_risk" in permission_codes(user),
+    # Legacy case-decision writes (RETURNED_FOR_REVISION / APPROVED /
+    # REVIEW_COMPLETED) are disabled. Those transitions now happen only through
+    # correction send and /complete-review. History remains readable.
+    del payload
+    raise AppError(
+        "LEGACY_CASE_DECISION_DISABLED",
+        "舊版案件決策已停用，請改用修正通知與完成審查流程",
+        409,
     )
 
 
@@ -539,6 +546,65 @@ async def send_correction_request(
         correction_request_id, user.user_id, audit_request_id(request)
     )
     return await _correction_request_read(service.corrections, sent)
+
+
+@router.post(
+    "/correction-requests/{correction_request_id}/resubmissions",
+    response_model=CorrectionRequestRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def register_correction_resubmission(
+    correction_request_id: UUID,
+    payload: CorrectionResubmissionCreate,
+    session: DbSession,
+    user=Depends(require_permissions("review.execute")),
+) -> CorrectionRequestRead:
+    service = correction_service_for(session)
+    request = await service.register_resubmission(
+        correction_request_id, payload, user.user_id
+    )
+    return await _correction_request_read(service.corrections, request)
+
+
+@router.post(
+    "/correction-requests/{correction_request_id}/recheck",
+    response_model=CorrectionRequestRead,
+    status_code=status.HTTP_200_OK,
+)
+async def recheck_correction_request(
+    correction_request_id: UUID,
+    session: DbSession,
+    user=Depends(require_permissions("review.execute")),
+) -> CorrectionRequestRead:
+    service = correction_service_for(session)
+    run, _summary = await service.recheck(correction_request_id, user.user_id)
+    request = await service.corrections.get_request(correction_request_id)
+    if run is None:
+        # Completeness blocked; request reverted to RESUBMITTED.
+        raise AppError(
+            "CORRECTION_RECHECK_INCOMPLETE",
+            "新版文件尚未備齊，無法重檢",
+            409,
+        )
+    return await _correction_request_read(service.corrections, request)
+
+
+@router.post(
+    "/cases/{review_id}/complete-review",
+    response_model=DecisionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def complete_review_case(
+    review_id: UUID,
+    payload: ReviewCompletionRequest,
+    request: Request,
+    session: DbSession,
+    user=Depends(require_permissions("review.decide")),
+) -> DecisionRead:
+    service = correction_service_for(session)
+    return await service.complete_review(
+        review_id, payload.reason, user.user_id, audit_request_id(request)
+    )
 
 
 @router.post(

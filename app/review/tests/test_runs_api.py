@@ -254,6 +254,14 @@ def runnable_review(request, postgres_connection):
     yield ids
     with postgres_connection.cursor() as cursor:
         cursor.execute(
+            "DELETE FROM review.correction_request_items WHERE correction_request_id IN (SELECT correction_request_id FROM review.correction_requests WHERE review_id = %s)",
+            (ids.review_id,),
+        )
+        cursor.execute(
+            "DELETE FROM review.correction_requests WHERE review_id = %s",
+            (ids.review_id,),
+        )
+        cursor.execute(
             "DELETE FROM review.decisions WHERE review_id = %s", (ids.review_id,)
         )
         cursor.execute(

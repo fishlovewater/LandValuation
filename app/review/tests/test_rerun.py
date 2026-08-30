@@ -14,7 +14,7 @@ from app.review.tests.test_runs_api import (
 )
 
 
-def test_finding_decision_is_immutable_and_case_decisions_are_append_only(
+def test_finding_triage_is_immutable_and_decisions_are_append_only(
     authorized_client, runnable_review, postgres_connection
 ):
     run = authorized_client.post(
@@ -26,69 +26,51 @@ def test_finding_decision_is_immutable_and_case_decisions_are_append_only(
     ).json()[0]
     request_id = str(uuid4())
 
+    # Legacy case-decision writes are disabled in the correction workflow.
     blocked = authorized_client.post(
         f"/api/v1/review/cases/{runnable_review.review_id}/decision",
-        headers={"X-Request-ID": request_id},
         json={"decision": "APPROVED", "reason": "先嘗試核准"},
     )
     assert blocked.status_code == 409
-    assert blocked.json()["error"]["code"] == "REVIEW_DECISION_INVALID"
+    assert blocked.json()["error"]["code"] == "LEGACY_CASE_DECISION_DISABLED"
 
-    decided = authorized_client.post(
-        f"/api/v1/review/findings/{finding['finding_id']}/decisions",
+    triaged = authorized_client.post(
+        f"/api/v1/review/findings/{finding['finding_id']}/triage",
         headers={"X-Request-ID": request_id},
         json={
             "review_id": str(runnable_review.review_id),
-            "decision": "PARTIALLY_ACCEPTED",
-            "reason": "現勘資料支持部分調整",
-            "after_value": {"value": "-7.00"},
+            "decision": "CONFIRMED_ISSUE",
+            "reason": "現勘資料確認疑點成立",
         },
     )
-    assert decided.status_code == 201
-    assert decided.json()["decision"] == "PARTIALLY_ACCEPTED"
-    assert decided.json()["request_id"] == request_id
-    assert decided.json()["after_value"] == {
-        "selection_source": "REVIEWER",
-        "field_path": finding["field_path"],
-        "value": "-7.00",
-    }
-
-    completed = authorized_client.post(
-        f"/api/v1/review/cases/{runnable_review.review_id}/decision",
-        json={"decision": "APPROVED", "reason": "正式採用值已確認"},
-    )
-    assert completed.status_code == 201
-    assert completed.json()["after_value"]["review_status"] == "REVIEW_COMPLETED"
+    assert triaged.status_code == 201
+    assert triaged.json()["decision"] == "CONFIRMED_ISSUE"
+    assert triaged.json()["request_id"] == request_id
+    assert triaged.json()["after_value"] == {"status": "CONFIRMED_ISSUE"}
 
     duplicate = authorized_client.post(
-        f"/api/v1/review/findings/{finding['finding_id']}/decisions",
+        f"/api/v1/review/findings/{finding['finding_id']}/triage",
         json={
             "review_id": str(runnable_review.review_id),
-            "decision": "ACCEPTED",
-            "reason": "不應覆寫既有疑點決策",
+            "decision": "DISMISSED_FALSE_POSITIVE",
+            "reason": "不應覆寫既有判定",
         },
     )
     assert duplicate.status_code == 409
-    assert duplicate.json()["error"]["code"] == "REVIEW_STATE_CONFLICT"
-
-    approved = authorized_client.post(
-        f"/api/v1/review/cases/{runnable_review.review_id}/decision",
-        json={"decision": "APPROVED", "reason": "不可重複核定"},
-    )
-    assert approved.status_code == 409
+    assert duplicate.json()["error"]["code"] == "FINDING_DECISION_CONFLICT"
 
     decisions = authorized_client.get(
         f"/api/v1/review/cases/{runnable_review.review_id}/decisions"
     )
     assert decisions.status_code == 200
-    assert len(decisions.json()) == 2
+    assert len(decisions.json()) == 1
 
     with postgres_connection.cursor() as cursor:
         cursor.execute(
             "SELECT count(*) FROM review.decisions WHERE review_id = %s",
             (runnable_review.review_id,),
         )
-        assert cursor.fetchone()[0] == 2
+        assert cursor.fetchone()[0] == 1
         cursor.execute(
             "SELECT count(*) FROM valuation.validation_findings WHERE validation_run_id = %s",
             (run["validation_run_id"],),
@@ -394,11 +376,11 @@ def test_superseded_run_high_finding_does_not_block_current_clean_run(
     assert authorized_client.get(
         f"/api/v1/review/runs/{rerun.json()['validation_run_id']}/findings"
     ).json() == []
-    approved = authorized_client.post(
-        f"/api/v1/review/cases/{runnable_review.review_id}/decision",
-        json={"decision": "APPROVED", "reason": "目前批次已無高風險疑點"},
+    completed = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/complete-review",
+        json={"reason": "目前批次已無高風險疑點"},
     )
-    assert approved.status_code == 201
+    assert completed.status_code == 201
 
 
 def test_rerun_rejects_caller_owned_authoritative_values(
@@ -412,94 +394,70 @@ def test_rerun_rejects_caller_owned_authoritative_values(
     assert response.status_code == 422
 
 
-def test_custom_final_value_resolves_risk_even_when_rule_severity_is_too_low(
+def test_dismissing_finding_clears_risk_counts(
     authorized_client, runnable_review, postgres_connection
 ):
-    with postgres_connection.cursor() as cursor:
-        cursor.execute(
-            "UPDATE valuation.validation_rules SET severity = 'LOW' "
-            "WHERE validation_rule_id = %s",
-            (runnable_review.validation_rule_id,),
-        )
-    postgres_connection.commit()
     run = authorized_client.post(
         f"/api/v1/review/cases/{runnable_review.review_id}/runs",
         json=run_payload(runnable_review),
     ).json()
-    finding = authorized_client.get(
+    findings = authorized_client.get(
         f"/api/v1/review/runs/{run['validation_run_id']}/findings"
-    ).json()[0]
-    decided = authorized_client.post(
-        f"/api/v1/review/findings/{finding['finding_id']}/decisions",
-        json={
-            "review_id": str(runnable_review.review_id),
-            "decision": "PARTIALLY_ACCEPTED",
-            "reason": "仍需確認部分差異",
-            "after_value": {"value": "-7"},
-        },
-    )
-    assert decided.status_code == 201
+    ).json()
+    for finding in findings:
+        dismissed = authorized_client.post(
+            f"/api/v1/review/findings/{finding['finding_id']}/triage",
+            json={
+                "review_id": str(runnable_review.review_id),
+                "decision": "DISMISSED_FALSE_POSITIVE",
+                "reason": "屬誤判，排除",
+            },
+        )
+        assert dismissed.status_code == 201
     review = authorized_client.get(
         f"/api/v1/review/cases/{runnable_review.review_id}"
     ).json()
-    assert review["current_risk_level"] == "LOW"
     assert review["high_count"] == 0
-
-    approved = authorized_client.post(
-        f"/api/v1/review/cases/{runnable_review.review_id}/decision",
-        json={"decision": "APPROVED", "reason": "正式採用值已確認"},
-    )
-
-    assert approved.status_code == 201
-    assert approved.json()["after_value"]["review_status"] == "REVIEW_COMPLETED"
+    assert review["current_risk_level"] == "LOW"
 
 
-def test_completed_case_rejects_late_finding_decision(
+def test_completed_case_rejects_late_finding_triage(
     authorized_client, runnable_review
 ):
     run = authorized_client.post(
         f"/api/v1/review/cases/{runnable_review.review_id}/runs",
         json=run_payload(runnable_review),
     ).json()
-    finding = authorized_client.get(
+    findings = authorized_client.get(
         f"/api/v1/review/runs/{run['validation_run_id']}/findings"
-    ).json()[0]
-    assert authorized_client.post(
-        f"/api/v1/review/findings/{finding['finding_id']}/decisions",
-        json={
-            "review_id": str(runnable_review.review_id),
-            "decision": "ACCEPTED",
-            "reason": "疑點已完成處理",
-        },
-    ).status_code == 201
-    approved = authorized_client.post(
-        f"/api/v1/review/cases/{runnable_review.review_id}/decision",
-        json={"decision": "APPROVED", "reason": "核定並完成審查"},
+    ).json()
+    for finding in findings:
+        assert authorized_client.post(
+            f"/api/v1/review/findings/{finding['finding_id']}/triage",
+            json={
+                "review_id": str(runnable_review.review_id),
+                "decision": "DISMISSED_FALSE_POSITIVE",
+                "reason": "疑點屬誤判",
+            },
+        ).status_code == 201
+    completed = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/complete-review",
+        json={"reason": "確認無誤並完成審查"},
     )
-    assert approved.status_code == 201
-    assert approved.json()["decision"] == "APPROVED"
-    assert approved.json()["after_value"]["review_status"] == "REVIEW_COMPLETED"
+    assert completed.status_code == 201
+    assert completed.json()["decision"] == "APPROVED"
+    assert completed.json()["after_value"]["review_status"] == "REVIEW_COMPLETED"
     assert authorized_client.get(
         f"/api/v1/review/cases/{runnable_review.review_id}"
     ).json()["review_status"] == "REVIEW_COMPLETED"
-    case_decisions = [
-        item
-        for item in authorized_client.get(
-            f"/api/v1/review/cases/{runnable_review.review_id}/decisions"
-        ).json()
-        if item["finding_id"] is None
-    ]
-    assert [item["decision"] for item in case_decisions] == ["APPROVED"]
 
-    late_decision = authorized_client.post(
-        f"/api/v1/review/findings/{finding['finding_id']}/decisions",
+    late_triage = authorized_client.post(
+        f"/api/v1/review/findings/{findings[0]['finding_id']}/triage",
         json={
             "review_id": str(runnable_review.review_id),
-            "decision": "PARTIALLY_ACCEPTED",
-            "reason": "核定後不應再變更",
-            "after_value": {"reported_rate": "-7"},
+            "decision": "CONFIRMED_ISSUE",
+            "reason": "完成後不應再變更",
         },
     )
-
-    assert late_decision.status_code == 409
-    assert late_decision.json()["error"]["code"] == "REVIEW_STATE_CONFLICT"
+    assert late_triage.status_code == 409
+    assert late_triage.json()["error"]["code"] == "REVIEW_STATE_CONFLICT"

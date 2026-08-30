@@ -6,8 +6,10 @@ from uuid import UUID
 from app.core.exceptions import AppError, ResourceNotFoundError
 from app.review.corrections import (
     CorrectionGateSummary,
+    ReviewCompletionSummary,
     build_correction_item_snapshot,
     validate_correction_send,
+    validate_review_completion,
 )
 from app.review.correction_repository import CorrectionRepository
 from app.review.repository import ReviewRepository
@@ -25,9 +27,11 @@ class CorrectionService:
         self,
         review_repository: ReviewRepository,
         correction_repository: CorrectionRepository,
+        review_service=None,
     ) -> None:
         self.review_repository = review_repository
         self.corrections = correction_repository
+        self._review_service = review_service
 
     async def _gate_inputs(self, review) -> tuple[CorrectionGateSummary, list]:
         run = (
@@ -141,3 +145,162 @@ class CorrectionService:
         )
         await self.corrections.session.flush()
         return request
+
+
+    async def register_resubmission(self, request_id, payload, actor_id):
+        request = await self.corrections.get_request(request_id, for_update=True)
+        if request is None:
+            raise ResourceNotFoundError("修正通知")
+        if request.status != "SENT":
+            raise AppError(
+                "CORRECTION_RESUBMISSION_INVALID",
+                "只有已送出且尚未回件的修正通知可登記新版文件",
+                409,
+            )
+        review = await self.review_repository.get(request.review_id)
+        if review is None:
+            raise ResourceNotFoundError("審查案件")
+        document = await self.corrections.valid_resubmission_document(
+            case_id=review.case_id,
+            base_document_id=request.base_document_id,
+            base_document_version=request.base_document_version,
+            document_id=payload.document_id,
+            document_version=payload.document_version,
+        )
+        if document is None:
+            raise AppError(
+                "CORRECTION_RESUBMISSION_INVALID",
+                "回件文件必須屬於同一案件、版本更新且沿革一致",
+                409,
+            )
+        request.response_document_id = document["document_id"]
+        request.response_document_version = document["version_no"]
+        request.resubmitted_at = datetime.now(UTC)
+        request.status = "RESUBMITTED"
+        await self.corrections.session.flush()
+        return request
+
+    async def recheck(self, request_id, actor_id):
+        request = await self.corrections.get_request(request_id, for_update=True)
+        if request is None:
+            raise ResourceNotFoundError("修正通知")
+        if request.status != "RESUBMITTED":
+            raise AppError(
+                "CORRECTION_RECHECK_INVALID",
+                "只有已回件的修正通知可執行新版重檢",
+                409,
+            )
+        review = await self.review_repository.get(request.review_id, for_update=True)
+        if review is None:
+            raise ResourceNotFoundError("審查案件")
+
+        request.status = "RECHECKING"
+        await self.corrections.session.flush()
+
+        # Move the review back through preprocessing and completeness before the
+        # run, exactly like a normal revised-version re-analysis.
+        if review.review_status == "RETURNED_FOR_REVISION":
+            review.review_status = ensure_transition(
+                review.review_status, "PREPROCESSING"
+            )
+            await self.review_repository.session.flush()
+        result, review, _items = await self._review_service.check_completeness(
+            review.review_id, actor_id
+        )
+        if not result.ready:
+            # Revert to RESUBMITTED and surface the normal missing-item response.
+            request.status = "RESUBMITTED"
+            await self.corrections.session.flush()
+            return None, result
+
+        run, summary = await self._review_service.rerun(review.review_id, actor_id)
+
+        new_findings = await self.review_repository.list_findings(
+            run.validation_run_id
+        )
+        by_supersedes: dict = {}
+        for finding in new_findings:
+            if finding.supersedes_finding_id is not None:
+                by_supersedes.setdefault(finding.supersedes_finding_id, []).append(
+                    finding
+                )
+
+        now = datetime.now(UTC)
+        items = await self.corrections.list_items(request.correction_request_id)
+        for item in items:
+            matches = by_supersedes.get(item.finding_id, [])
+            if len(matches) > 1:
+                item.recheck_outcome = "NOT_EVALUATED"
+                item.resulting_finding_id = None
+            elif len(matches) == 1:
+                item.recheck_outcome = "STILL_PRESENT"
+                item.resulting_finding_id = matches[0].finding_id
+            else:
+                item.recheck_outcome = "RESOLVED"
+                item.resulting_finding_id = None
+            item.rechecked_at = now
+
+        request.status = "RECHECKED"
+        request.rechecked_by_user_id = actor_id
+        request.rechecked_at = now
+        await self.corrections.session.flush()
+        return run, summary
+
+    async def _completion_summary(self, review) -> ReviewCompletionSummary:
+        run = (
+            await self.review_repository.get_run(review.latest_validation_run_id)
+            if review.latest_validation_run_id
+            else None
+        )
+        findings = (
+            await self.review_repository.list_findings(
+                review.latest_validation_run_id
+            )
+            if run
+            else []
+        )
+        missing = await self.review_repository.list_missing_items(
+            review.review_id, open_only=True
+        )
+        open_count = sum(1 for f in findings if f.status in _OPEN_STATUSES)
+        confirmed = sum(1 for f in findings if f.status == _CONFIRMED_STATUS)
+        expert = sum(1 for f in findings if f.status in _EXPERT_STATUSES)
+        return ReviewCompletionSummary(
+            has_completed_run=bool(run and run.run_status == "COMPLETED"),
+            open_missing_count=len(missing),
+            open_finding_count=open_count,
+            confirmed_finding_count=confirmed,
+            expert_finding_count=expert,
+            active_request_count=await self.corrections.count_active_requests(
+                review.review_id
+            ),
+            non_rechecked_request_count=0,
+            not_evaluated_item_count=await self.corrections.count_not_evaluated_items(
+                review.review_id
+            ),
+        )
+
+    async def complete_review(self, review_id, reason, actor_id, audit_request_id):
+        review = await self.review_repository.get(review_id, for_update=True)
+        if review is None:
+            raise ResourceNotFoundError("審查案件")
+        summary = await self._completion_summary(review)
+        validate_review_completion(reason, summary)
+        before_status = review.review_status
+        decision = await self.review_repository.create_decision(
+            review_id=review.review_id,
+            finding_id=None,
+            decision="APPROVED",
+            reason=reason.strip(),
+            decided_by_user_id=actor_id,
+            request_id=audit_request_id,
+            before_value={"review_status": before_status},
+            after_value={
+                "review_status": "REVIEW_COMPLETED",
+                "validation_run_id": str(review.latest_validation_run_id),
+            },
+        )
+        review.review_status = "REVIEW_COMPLETED"
+        review.completed_at = datetime.now(UTC)
+        await self.review_repository.session.flush()
+        return decision

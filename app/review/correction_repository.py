@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.review.models import CorrectionRequest, CorrectionRequestItem
@@ -67,3 +67,73 @@ class CorrectionRepository:
             .order_by(CorrectionRequestItem.correction_request_item_id)
         )
         return list((await self.session.scalars(statement)).all())
+
+    async def valid_resubmission_document(
+        self,
+        case_id: UUID,
+        base_document_id: UUID,
+        base_document_version: int,
+        document_id: UUID,
+        document_version: int,
+    ) -> dict | None:
+        """Return the resubmission document only when ownership+lineage hold.
+
+        Requires: same case, active, matching payload version, version greater
+        than the base version, and same document_group_id as the base document.
+        """
+        row = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT d.document_id, d.version_no, d.document_group_id
+                    FROM valuation.documents d
+                    JOIN valuation.documents base
+                      ON base.document_id = :base_document_id
+                    WHERE d.document_id = :document_id
+                      AND d.case_id = :case_id
+                      AND d.is_active = true
+                      AND d.version_no = :document_version
+                      AND d.version_no > :base_document_version
+                      AND d.document_group_id = base.document_group_id
+                    """
+                ),
+                {
+                    "case_id": case_id,
+                    "base_document_id": base_document_id,
+                    "base_document_version": base_document_version,
+                    "document_id": document_id,
+                    "document_version": document_version,
+                },
+            )
+        ).mappings().one_or_none()
+        return dict(row) if row else None
+
+    async def count_active_requests(self, review_id: UUID) -> int:
+        value = await self.session.scalar(
+            select(func.count())
+            .select_from(CorrectionRequest)
+            .where(
+                CorrectionRequest.review_id == review_id,
+                CorrectionRequest.status != "RECHECKED",
+            )
+        )
+        return int(value or 0)
+
+    async def count_non_rechecked_requests(self, review_id: UUID) -> int:
+        return await self.count_active_requests(review_id)
+
+    async def count_not_evaluated_items(self, review_id: UUID) -> int:
+        value = await self.session.scalar(
+            select(func.count())
+            .select_from(CorrectionRequestItem)
+            .join(
+                CorrectionRequest,
+                CorrectionRequest.correction_request_id
+                == CorrectionRequestItem.correction_request_id,
+            )
+            .where(
+                CorrectionRequest.review_id == review_id,
+                CorrectionRequestItem.recheck_outcome == "NOT_EVALUATED",
+            )
+        )
+        return int(value or 0)

@@ -92,22 +92,35 @@ def test_report_decisions_are_scoped_to_the_requested_run(
         f"/api/v1/review/cases/{runnable_review.review_id}/runs",
         json=run_payload(runnable_review),
     ).json()
-    finding1 = authorized_client.get(
+    findings1 = authorized_client.get(
         f"/api/v1/review/runs/{run1['validation_run_id']}/findings"
-    ).json()[0]
-    assert authorized_client.post(
-        f"/api/v1/review/findings/{finding1['finding_id']}/decisions",
+    ).json()
+    finding1 = findings1[0]
+    from datetime import UTC, datetime, timedelta
+
+    for item in findings1:
+        decision = "CONFIRMED_ISSUE" if item["finding_id"] == finding1["finding_id"] else "DISMISSED_FALSE_POSITIVE"
+        reason = "run-1 finding decision" if item["finding_id"] == finding1["finding_id"] else "run-1 dismiss"
+        assert authorized_client.post(
+            f"/api/v1/review/findings/{item['finding_id']}/triage",
+            json={
+                "review_id": str(runnable_review.review_id),
+                "decision": decision,
+                "reason": reason,
+            },
+        ).status_code == 201
+    draft = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/correction-requests",
         json={
-            "review_id": str(runnable_review.review_id),
-            "decision": "PARTIALLY_ACCEPTED",
-            "reason": "run-1 finding decision",
-            "after_value": {"value": "-7"},
+            "message": "case decision",
+            "due_at": (datetime.now(UTC) + timedelta(days=5)).isoformat(),
         },
-    ).status_code == 201
+    )
+    assert draft.status_code == 201
     assert authorized_client.post(
-        f"/api/v1/review/cases/{runnable_review.review_id}/decision",
-        json={"decision": "RETURNED_FOR_REVISION", "reason": "case decision"},
-    ).status_code == 201
+        f"/api/v1/review/correction-requests/{draft.json()['correction_request_id']}/send",
+        json={},
+    ).status_code == 200
     with postgres_connection.cursor() as cursor:
         cursor.execute(
             """
@@ -126,10 +139,10 @@ def test_report_decisions_are_scoped_to_the_requested_run(
         f"/api/v1/review/runs/{run2['validation_run_id']}/findings"
     ).json()[0]
     assert authorized_client.post(
-        f"/api/v1/review/findings/{finding2['finding_id']}/decisions",
+        f"/api/v1/review/findings/{finding2['finding_id']}/triage",
         json={
             "review_id": str(runnable_review.review_id),
-            "decision": "ACCEPTED",
+            "decision": "CONFIRMED_ISSUE",
             "reason": "run-2 finding decision",
         },
     ).status_code == 201
@@ -147,9 +160,9 @@ def test_report_decisions_are_scoped_to_the_requested_run(
     assert [item["reason"] for item in report2["findings"][0]["decisions"]] == [
         "run-2 finding decision"
     ]
-    assert [item["reason"] for item in report1["case_decisions"]] == [
-        "case decision"
-    ]
+    # Correction-send case decisions are scoped by correction request, not run,
+    # so they no longer appear in a run-scoped report's case_decisions.
+    assert report1["case_decisions"] == []
     assert report2["case_decisions"] == []
     assert report1["review_status"] == "REVIEW_REQUIRED"
     assert report1["missing_item_count"] == 0

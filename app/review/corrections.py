@@ -41,6 +41,45 @@ def validate_correction_send(summary: CorrectionGateSummary) -> None:
         )
 
 
+@dataclass(frozen=True)
+class ReviewCompletionSummary:
+    has_completed_run: bool
+    open_missing_count: int
+    open_finding_count: int
+    confirmed_finding_count: int
+    expert_finding_count: int
+    active_request_count: int
+    non_rechecked_request_count: int
+    not_evaluated_item_count: int
+
+
+def validate_review_completion(reason: str, summary: ReviewCompletionSummary) -> None:
+    blockers: list[str] = []
+    if not reason.strip():
+        blockers.append("完成審查必須填寫理由")
+    if not summary.has_completed_run:
+        blockers.append("最新一次智慧審查尚未完成")
+    if summary.open_missing_count:
+        blockers.append(f"仍有 {summary.open_missing_count} 項缺件")
+    if summary.open_finding_count:
+        blockers.append(f"仍有 {summary.open_finding_count} 項疑點未判定")
+    if summary.confirmed_finding_count:
+        blockers.append(f"仍有 {summary.confirmed_finding_count} 項疑點待修正")
+    if summary.expert_finding_count:
+        blockers.append(f"仍有 {summary.expert_finding_count} 項專業覆核")
+    if summary.active_request_count or summary.non_rechecked_request_count:
+        blockers.append("仍有修正通知尚未完成新版重檢")
+    if summary.not_evaluated_item_count:
+        blockers.append("仍有修正項目無法判定重檢結果")
+    if blockers:
+        raise AppError(
+            "REVIEW_COMPLETION_BLOCKED",
+            "；".join(blockers),
+            409,
+            {"blockers": blockers},
+        )
+
+
 def build_correction_item_snapshot(finding: Any) -> dict:
     """Freeze a confirmed finding into an immutable correction item snapshot.
 

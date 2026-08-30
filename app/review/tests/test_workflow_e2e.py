@@ -192,16 +192,27 @@ def test_fixed_case_workflow_preserves_trusted_history(workflow_client, workflow
     findings1 = workflow_client.get(f"/api/v1/review/runs/{run1['validation_run_id']}/findings").json()
     assert _evidence_field_ids(findings1) == workflow_data.v1_field_ids
 
-    high = next(item for item in findings1 if item["severity"] == "HIGH")
-    assert workflow_client.post(f"/api/v1/review/findings/{high['finding_id']}/decisions", json={"review_id": review_id, "decision": "PARTIALLY_ACCEPTED", "reason": "Revision required", "after_value": {"value": "-7"}}).status_code == 201
-    assert workflow_client.post(f"/api/v1/review/cases/{review_id}/decision", json={"decision": "RETURNED_FOR_REVISION", "reason": "Correct original report"}).status_code == 201
-    assert workflow_client.patch(f"/api/v1/review/cases/{review_id}", json={"review_status": "PREPROCESSING"}).status_code == 200
+    # Triage every finding, then raise and send a correction request.
+    from datetime import UTC, datetime, timedelta
 
+    for item in findings1:
+        decision = "CONFIRMED_ISSUE" if item["severity"] == "HIGH" else "DISMISSED_FALSE_POSITIVE"
+        assert workflow_client.post(f"/api/v1/review/findings/{item['finding_id']}/triage", json={"review_id": review_id, "decision": decision, "reason": "人工判定"}).status_code == 201
+    due_at = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+    draft = workflow_client.post(f"/api/v1/review/cases/{review_id}/correction-requests", json={"message": "請更正原報告", "due_at": due_at})
+    assert draft.status_code == 201
+    request_id = draft.json()["correction_request_id"]
+    assert workflow_client.post(f"/api/v1/review/correction-requests/{request_id}/send", json={}).status_code == 200
+    assert workflow_client.get(f"/api/v1/review/cases/{review_id}").json()["review_status"] == "RETURNED_FOR_REVISION"
+
+    # Register a genuine newer version and recheck it through the correction loop.
     add_complete_inputs(postgres_connection, workflow_data, version=2)
-    assert workflow_client.post(f"/api/v1/review/cases/{review_id}/completeness-check").json()["review_status"] == "READY_FOR_REVIEW"
-    run2_response = workflow_client.post(f"/api/v1/review/cases/{review_id}/rerun", json={})
-    assert run2_response.status_code == 200
-    run2 = run2_response.json()
+    resubmitted = workflow_client.post(f"/api/v1/review/correction-requests/{request_id}/resubmissions", json={"document_id": str(workflow_data.v2_document_id), "document_version": 2})
+    assert resubmitted.status_code == 201
+    rechecked = workflow_client.post(f"/api/v1/review/correction-requests/{request_id}/recheck")
+    assert rechecked.status_code == 200
+    assert rechecked.json()["status"] == "RECHECKED"
+    run2 = next(item for item in workflow_client.get(f"/api/v1/review/cases/{review_id}/runs").json() if item["run_no"] == 2)
     _assert_completed_after_started(run2)
     assert _snapshot_field_ids(run2) == workflow_data.v2_field_ids
     assert _snapshot_audit_field_ids(run2) == workflow_data.v2_field_ids

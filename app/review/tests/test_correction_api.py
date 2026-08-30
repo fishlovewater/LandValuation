@@ -187,6 +187,108 @@ def test_get_correction_request_returns_immutable_snapshot(
     }
 
 
+@pytest.fixture
+def sent_request(review_client, triaged_case):
+    draft = review_client.post(
+        f"/api/v1/review/cases/{triaged_case.review_id}/correction-requests",
+        json={"message": "請修正", "due_at": triaged_case.future_due_at.isoformat()},
+    ).json()
+    request_id = draft["correction_request_id"]
+    sent = review_client.post(
+        f"/api/v1/review/correction-requests/{request_id}/send", json={}
+    ).json()
+    return SimpleNamespace(
+        id=request_id,
+        review_id=triaged_case.review_id,
+        base_document_id=sent["base_document_id"],
+        base_document_version=sent["base_document_version"],
+    )
+
+
+def test_resubmission_rejects_other_case_document(review_client, sent_request):
+    response = review_client.post(
+        f"/api/v1/review/correction-requests/{sent_request.id}/resubmissions",
+        json={"document_id": str(uuid4()), "document_version": 2},
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "CORRECTION_RESUBMISSION_INVALID"
+
+
+def test_resubmission_rejects_equal_or_older_version(review_client, sent_request):
+    response = review_client.post(
+        f"/api/v1/review/correction-requests/{sent_request.id}/resubmissions",
+        json={
+            "document_id": sent_request.base_document_id,
+            "document_version": sent_request.base_document_version,
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "CORRECTION_RESUBMISSION_INVALID"
+
+
+def test_full_resubmit_recheck_complete_flow(
+    review_client, sent_request, workflow_data, postgres_connection
+):
+    # Register a genuine same-lineage newer version, recheck, then complete.
+    add_complete_inputs(postgres_connection, workflow_data, version=2)
+    resubmitted = review_client.post(
+        f"/api/v1/review/correction-requests/{sent_request.id}/resubmissions",
+        json={
+            "document_id": str(workflow_data.v2_document_id),
+            "document_version": 2,
+        },
+    )
+    assert resubmitted.status_code == 201
+    assert resubmitted.json()["status"] == "RESUBMITTED"
+    assert resubmitted.json()["response_document_version"] == 2
+
+    rechecked = review_client.post(
+        f"/api/v1/review/correction-requests/{sent_request.id}/recheck"
+    )
+    assert rechecked.status_code == 200
+    body = rechecked.json()
+    assert body["status"] == "RECHECKED"
+    assert {item["recheck_outcome"] for item in body["items"]} <= {
+        "RESOLVED",
+        "STILL_PRESENT",
+    }
+
+
+def test_duplicate_resubmission_is_rejected(
+    review_client, sent_request, workflow_data, postgres_connection
+):
+    add_complete_inputs(postgres_connection, workflow_data, version=2)
+    first = review_client.post(
+        f"/api/v1/review/correction-requests/{sent_request.id}/resubmissions",
+        json={"document_id": str(workflow_data.v2_document_id), "document_version": 2},
+    )
+    assert first.status_code == 201
+    second = review_client.post(
+        f"/api/v1/review/correction-requests/{sent_request.id}/resubmissions",
+        json={"document_id": str(workflow_data.v2_document_id), "document_version": 2},
+    )
+    assert second.status_code == 409
+
+
+def test_completion_blocked_while_request_active(review_client, sent_request):
+    response = review_client.post(
+        f"/api/v1/review/cases/{sent_request.review_id}/complete-review",
+        json={"reason": "嘗試完成"},
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "REVIEW_COMPLETION_BLOCKED"
+
+
+def test_legacy_case_decision_route_is_disabled(review_client, triaged_case):
+    for decision in ("RETURNED_FOR_REVISION", "APPROVED", "REVIEW_COMPLETED"):
+        response = review_client.post(
+            f"/api/v1/review/cases/{triaged_case.review_id}/decision",
+            json={"decision": decision, "reason": "legacy"},
+        )
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "LEGACY_CASE_DECISION_DISABLED"
+
+
 def test_triage_confirmed_issue_writes_no_formal_value(review_client, open_finding):
     response = review_client.post(
         f"/api/v1/review/findings/{open_finding.finding_id}/triage",
