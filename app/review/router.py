@@ -24,6 +24,8 @@ from app.review.schemas import (
     CorrectionRequestSend,
     CorrectionResubmissionCreate,
     ReviewCompletionRequest,
+    UrgencySettingsRead,
+    UrgencySettingsUpdate,
     DecisionRead,
     FindingRead,
     FindingDecisionRequest,
@@ -106,7 +108,11 @@ async def _correction_request_read(
 
 
 def workbench_service_for(session: DbSession) -> WorkbenchService:
-    return WorkbenchService(WorkbenchRepository(session), ReviewRepository(session))
+    return WorkbenchService(
+        WorkbenchRepository(session),
+        ReviewRepository(session),
+        CorrectionRepository(session),
+    )
 
 
 def require_demo_development() -> None:
@@ -494,6 +500,29 @@ async def list_review_decisions(
     user=Depends(require_permissions("review.decide")),
 ) -> list[DecisionRead]:
     return await service_for(session).list_decisions(review_id)
+
+
+@router.get("/settings/urgency", response_model=UrgencySettingsRead)
+async def get_urgency_settings(
+    session: DbSession,
+    user=Depends(require_permissions("review.execute")),
+) -> UrgencySettingsRead:
+    settings = await CorrectionRepository(session).get_urgency_settings()
+    if settings is None:
+        raise ResourceNotFoundError("期限緊急度設定")
+    return UrgencySettingsRead.model_validate(settings)
+
+
+@router.put("/settings/urgency", response_model=UrgencySettingsRead)
+async def update_urgency_settings(
+    payload: UrgencySettingsUpdate,
+    session: DbSession,
+    user=Depends(require_permissions("review.override_high_risk")),
+) -> UrgencySettingsRead:
+    settings = await CorrectionRepository(session).update_urgency_settings(
+        payload.urgent_days, payload.due_soon_days, user.user_id
+    )
+    return UrgencySettingsRead.model_validate(settings)
 
 
 @router.post(

@@ -92,11 +92,13 @@ def _seed_review_with_run(cursor):
     document_id = uuid.uuid4()
     user_id = uuid.uuid4()
     cursor.execute(
-        "SELECT user_id FROM auth.users ORDER BY created_at LIMIT 1"
+        """
+        INSERT INTO auth.users (user_id, username, email, password_hash,
+                                display_name, is_active, created_at, updated_at)
+        VALUES (%s, %s, %s, 'unused', '結構測試使用者', true, now(), now())
+        """,
+        (user_id, f"schema-{user_id}", f"{user_id}@example.test"),
     )
-    row = cursor.fetchone()
-    if row is not None:
-        user_id = row[0]
     cursor.execute(
         """
         INSERT INTO valuation.cases

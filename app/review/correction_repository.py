@@ -1,11 +1,17 @@
 """Persistence for correction requests, items, settings, and resubmissions."""
 
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.review.models import CorrectionRequest, CorrectionRequestItem
+from app.review.models import (
+    CorrectionRequest,
+    CorrectionRequestItem,
+    UrgencySettings,
+)
+from app.review.urgency import UrgencyThresholds
 
 
 class CorrectionRepository:
@@ -107,6 +113,35 @@ class CorrectionRepository:
             )
         ).mappings().one_or_none()
         return dict(row) if row else None
+
+    async def get_urgency_settings(
+        self, for_update: bool = False
+    ) -> UrgencySettings | None:
+        statement = select(UrgencySettings).where(UrgencySettings.settings_id == 1)
+        if for_update:
+            statement = statement.with_for_update()
+        return await self.session.scalar(statement)
+
+    async def update_urgency_settings(
+        self, urgent_days: int, due_soon_days: int, actor_id: UUID
+    ) -> UrgencySettings:
+        settings = await self.get_urgency_settings(for_update=True)
+        if settings is None:
+            settings = UrgencySettings(settings_id=1)
+            self.session.add(settings)
+        settings.urgent_days = urgent_days
+        settings.due_soon_days = due_soon_days
+        settings.updated_by_user_id = actor_id
+        settings.updated_at = datetime.now(UTC)
+        await self.session.flush()
+        await self.session.refresh(settings)
+        return settings
+
+    async def urgency_thresholds(self) -> UrgencyThresholds:
+        settings = await self.get_urgency_settings()
+        if settings is None:
+            return UrgencyThresholds()
+        return UrgencyThresholds(settings.urgent_days, settings.due_soon_days)
 
     async def count_active_requests(self, review_id: UUID) -> int:
         value = await self.session.scalar(

@@ -42,10 +42,18 @@ class WorkbenchCaseListItem(BaseModel):
     review_status: str
     current_risk_level: str | None
     missing_item_count: int
+    high_count: int
+    medium_count: int
+    low_count: int
     received_at: datetime
     due_at: datetime | None
     assigned_reviewer_display_name: str | None
     latest_run: WorkbenchLatestRunRead | None
+    # Deadline urgency is separate from content risk.
+    urgency_level: Literal["OVERDUE", "URGENT", "DUE_SOON", "NORMAL", "NOT_SET"]
+    remaining_days: int | None
+    correction_round: int
+    latest_correction_status: str | None
 
 
 class WorkbenchCaseList(BaseModel):

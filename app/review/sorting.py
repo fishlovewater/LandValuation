@@ -1,6 +1,12 @@
 from datetime import datetime
 from typing import Protocol
 
+from app.review.urgency import (
+    URGENCY_RANK,
+    UrgencyThresholds,
+    classify_urgency,
+)
+
 
 class QueueSortable(Protocol):
     manual_priority: int
@@ -19,13 +25,22 @@ def remaining_days(due_at: datetime | None, now: datetime) -> int | None:
 def review_queue_key(
     item: QueueSortable,
     now: datetime,
+    thresholds: UrgencyThresholds | None = None,
 ) -> tuple[int, int, int, int, int, datetime]:
-    days = remaining_days(item.due_at, now)
-    is_overdue = item.due_at is not None and item.due_at < now
-    due_rank = days if days is not None else 2**31 - 1
+    """Deterministic queue order.
+
+    Deadline classification is delegated to urgency.py so the queue and the
+    Workbench badges always agree on the same thresholds.
+    """
+    urgency = classify_urgency(
+        item.due_at, now, thresholds or UrgencyThresholds()
+    )
+    due_rank = (
+        urgency.remaining_days if urgency.remaining_days is not None else 2**31 - 1
+    )
     return (
         -item.manual_priority,
-        0 if is_overdue else 1,
+        URGENCY_RANK[urgency.level],
         -item.high_count,
         -item.medium_count,
         due_rank,

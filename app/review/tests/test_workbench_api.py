@@ -316,3 +316,95 @@ def test_workbench_document_content_rejects_active_content(
 
     assert response.status_code == 415
     assert response.json()["error"]["code"] == "REVIEW_DOCUMENT_PREVIEW_UNSUPPORTED"
+
+
+def test_workbench_case_list_exposes_urgency_separate_from_risk(
+    workbench_client, workbench_records
+):
+    listed = workbench_client.get(
+        "/api/v1/review/workbench/cases?q=WB-REVIEWED&status=RECEIVED"
+    )
+    assert listed.status_code == 200
+    item = listed.json()["items"][0]
+    # due_at is now + 3 days, which is inside the default urgent_days=3 window.
+    assert item["urgency_level"] == "URGENT"
+    assert item["remaining_days"] == 2
+    assert item["correction_round"] == 0
+    assert item["latest_correction_status"] is None
+    # Deadline urgency must never be reported as content risk.
+    assert item["current_risk_level"] != item["urgency_level"]
+    assert {"high_count", "medium_count", "low_count"} <= item.keys()
+
+
+def test_workbench_case_without_deadline_is_not_set(
+    workbench_client, workbench_records, postgres_connection
+):
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE review.reviews SET due_at = NULL WHERE review_id = %s",
+            (workbench_records.review_id,),
+        )
+    postgres_connection.commit()
+    listed = workbench_client.get(
+        "/api/v1/review/workbench/cases?q=WB-REVIEWED&status=RECEIVED"
+    )
+    item = listed.json()["items"][0]
+    assert item["urgency_level"] == "NOT_SET"
+    assert item["remaining_days"] is None
+
+
+def test_urgency_settings_get_returns_seeded_defaults(workbench_client):
+    response = workbench_client.get("/api/v1/review/settings/urgency")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["urgent_days"] == 3
+    assert body["due_soon_days"] == 7
+
+
+def test_urgency_settings_put_requires_supervisor_permission(workbench_client):
+    # workbench_client only holds review.execute.
+    response = workbench_client.put(
+        "/api/v1/review/settings/urgency",
+        json={"urgent_days": 1, "due_soon_days": 5},
+    )
+    assert response.status_code == 403
+
+
+def test_urgency_settings_put_rejects_invalid_pair(
+    workbench_records, postgres_connection
+):
+    permissions = [
+        SimpleNamespace(permission_code="review.execute"),
+        SimpleNamespace(permission_code="review.override_high_risk"),
+    ]
+    role = SimpleNamespace(
+        role_code="SUPERVISOR", is_active=True, permissions=permissions
+    )
+    user = SimpleNamespace(user_id=workbench_records.user_id, roles=[role])
+    app.dependency_overrides[get_current_user] = lambda: user
+    try:
+        with TestClient(app) as client:
+            invalid = client.put(
+                "/api/v1/review/settings/urgency",
+                json={"urgent_days": 7, "due_soon_days": 3},
+            )
+            assert invalid.status_code == 422
+            updated = client.put(
+                "/api/v1/review/settings/urgency",
+                json={"urgent_days": 1, "due_soon_days": 5},
+            )
+            assert updated.status_code == 200
+            assert updated.json()["urgent_days"] == 1
+            # Restore the seeded defaults for other tests.
+            client.put(
+                "/api/v1/review/settings/urgency",
+                json={"urgent_days": 3, "due_soon_days": 7},
+            )
+    finally:
+        app.dependency_overrides.clear()
+        # Release the settings FK so the shared user fixture can be deleted.
+        with postgres_connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE review.urgency_settings SET updated_by_user_id = NULL"
+            )
+        postgres_connection.commit()

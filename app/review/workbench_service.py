@@ -1,9 +1,12 @@
 from collections import defaultdict
+from datetime import UTC, datetime
 from uuid import UUID
 
 from app.core.exceptions import ResourceNotFoundError
+from app.review.correction_repository import CorrectionRepository
 from app.review.repository import ReviewRepository
 from app.review.schemas import ReviewUpdate
+from app.review.urgency import UrgencyThresholds, classify_urgency
 from app.review.workbench_repository import WorkbenchRepository
 from app.review.workbench_schemas import (
     EligibleCaseRead,
@@ -25,9 +28,11 @@ class WorkbenchService:
         self,
         repository: WorkbenchRepository,
         review_repository: ReviewRepository,
+        corrections: CorrectionRepository | None = None,
     ) -> None:
         self.repository = repository
         self.review_repository = review_repository
+        self.corrections = corrections
 
     async def summary(self) -> WorkbenchSummaryRead:
         return WorkbenchSummaryRead(**(await self.repository.summary()))
@@ -44,6 +49,13 @@ class WorkbenchService:
         rows, total = await self.repository.list_cases(
             q, status_filter, risk_level, status_group, limit, offset
         )
+        # One settings snapshot per request; urgency is never persisted on rows.
+        thresholds = (
+            await self.corrections.urgency_thresholds()
+            if self.corrections is not None
+            else UrgencyThresholds()
+        )
+        now = datetime.now(UTC)
         items = []
         for row in rows:
             latest_run = None
@@ -53,7 +65,21 @@ class WorkbenchService:
                     run_no=row["run_no"],
                     run_status=row["run_status"],
                 )
-            items.append(WorkbenchCaseListItem(**row, latest_run=latest_run))
+            urgency = classify_urgency(row["due_at"], now, thresholds)
+            fields = {
+                key: value
+                for key, value in row.items()
+                if key not in {"validation_run_id", "run_no", "run_status",
+                               "manual_priority"}
+            }
+            items.append(
+                WorkbenchCaseListItem(
+                    **fields,
+                    latest_run=latest_run,
+                    urgency_level=urgency.level,
+                    remaining_days=urgency.remaining_days,
+                )
+            )
         return WorkbenchCaseList(
             items=items, total=total, limit=limit, offset=offset
         )

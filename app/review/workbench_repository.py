@@ -121,9 +121,23 @@ class WorkbenchRepository:
                     SELECT r.review_id, r.case_id, c.case_no, c.case_title,
                            c.district_code, r.review_status,
                            r.current_risk_level, r.missing_item_count,
+                           r.high_count, r.medium_count, r.low_count,
+                           r.manual_priority,
                            r.received_at, r.due_at,
                            u.display_name AS assigned_reviewer_display_name,
-                           vr.validation_run_id, vr.run_no, vr.run_status
+                           vr.validation_run_id, vr.run_no, vr.run_status,
+                           coalesce((
+                               SELECT max(cr.request_no)
+                               FROM review.correction_requests cr
+                               WHERE cr.review_id = r.review_id
+                           ), 0) AS correction_round,
+                           (
+                               SELECT cr.status
+                               FROM review.correction_requests cr
+                               WHERE cr.review_id = r.review_id
+                               ORDER BY cr.request_no DESC
+                               LIMIT 1
+                           ) AS latest_correction_status
                     FROM review.reviews r
                     JOIN valuation.cases c ON c.case_id = r.case_id
                     LEFT JOIN auth.users u ON u.user_id = r.assigned_reviewer_id

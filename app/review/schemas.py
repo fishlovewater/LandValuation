@@ -295,6 +295,27 @@ class CorrectionRequestSend(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class UrgencySettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    urgent_days: int = Field(ge=0)
+    due_soon_days: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def urgent_must_be_before_due_soon(self):
+        if not self.urgent_days < self.due_soon_days:
+            raise ValueError("urgent_days 必須小於 due_soon_days")
+        return self
+
+
+class UrgencySettingsRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    urgent_days: int
+    due_soon_days: int
+    updated_at: datetime
+
+
 class CorrectionResubmissionCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
