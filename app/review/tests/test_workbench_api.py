@@ -408,3 +408,18 @@ def test_urgency_settings_put_rejects_invalid_pair(
                 "UPDATE review.urgency_settings SET updated_by_user_id = NULL"
             )
         postgres_connection.commit()
+
+
+def test_workbench_detail_never_exposes_storage_internals(
+    workbench_client, workbench_records
+):
+    detail = workbench_client.get(
+        f"/api/v1/review/workbench/cases/{workbench_records.review_id}"
+    )
+    assert detail.status_code == 200
+    body = detail.text
+    assert "bucket_name" not in body
+    assert "object_key" not in body
+    assert "land-valuation" not in body
+    assert "localhost" not in body
+    assert detail.json()["generated_reports"] == []

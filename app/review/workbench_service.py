@@ -165,6 +165,9 @@ class WorkbenchService:
             decisions=decisions,
             version_diffs=self._version_diffs(field_versions),
             report_document=report_document,
+            generated_reports=await self.review_repository.list_generated_reports(
+                review.case_id
+            ),
         )
 
     async def start(self, review_id: UUID, actor_id: UUID) -> WorkbenchStartRead:

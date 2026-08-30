@@ -120,7 +120,9 @@ class WorkbenchCaseDetailRead(BaseModel):
     risk_summary: RiskSummaryRead | None
     decisions: list[DecisionRead]
     version_diffs: list[FieldVersionDiffRead]
+    # Safe metadata only: never a bucket name or object key.
     report_document: ReportDocumentRead | None
+    generated_reports: list[ReportDocumentRead] = Field(default_factory=list)
 
 
 class WorkbenchCompletenessRead(CompletenessResponse):

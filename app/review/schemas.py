@@ -379,14 +379,27 @@ class CorrectionRequestRead(BaseModel):
     items: list[CorrectionRequestItemRead]
 
 
-class ReportDocumentRead(BaseModel):
+class GeneratedReportRead(BaseModel):
+    """Public report metadata. Never exposes bucket names or object keys."""
+
     document_id: UUID
     case_id: UUID
     document_type: str
     original_filename: str
     mime_type: str
-    bucket_name: str
-    object_key: str
     checksum_sha256: str
     file_size_bytes: int
     version_no: int
+
+
+# The historical PDF response now uses the same safe shape.
+ReportDocumentRead = GeneratedReportRead
+
+
+ReportFormat = Literal["xlsx", "docx"]
+
+
+class GeneratedReportCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    format: ReportFormat

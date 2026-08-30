@@ -26,6 +26,8 @@ from app.review.schemas import (
     ReviewCompletionRequest,
     UrgencySettingsRead,
     UrgencySettingsUpdate,
+    GeneratedReportCreate,
+    GeneratedReportRead,
     DecisionRead,
     FindingRead,
     FindingDecisionRequest,
@@ -46,6 +48,8 @@ from app.review.service import ReviewService
 from app.review.correction_repository import CorrectionRepository
 from app.review.correction_service import CorrectionService
 from app.review.pdf_reports import build_review_pdf
+from app.review.xlsx_reports import build_review_xlsx
+from app.review.docx_reports import build_review_docx
 from app.review.reports import ReviewReport
 from app.storage.dependencies import Storage
 from app.core.exceptions import AppError, ResourceNotFoundError
@@ -704,6 +708,182 @@ async def generate_review_report_pdf(
         await storage.delete(object_key)
         raise
     return ReportDocumentRead(**metadata)
+
+
+XLSX_MIME = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+DOCX_MIME = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
+
+# One map instead of duplicated per-format upload branches.
+REPORT_FORMATS = {
+    "xlsx": (build_review_xlsx, XLSX_MIME),
+    "docx": (build_review_docx, DOCX_MIME),
+}
+
+
+async def _store_generated_report(
+    *,
+    service: ReviewService,
+    storage,
+    case_id: UUID,
+    document_type: str,
+    filename_stem: str,
+    report: ReviewReport,
+    format_name: str,
+    actor_id: UUID,
+) -> GeneratedReportRead:
+    builder, mime_type = REPORT_FORMATS[format_name]
+    content = await run_in_threadpool(builder, report)
+    document_id = uuid4()
+    version = await service.repository.next_generated_version(
+        case_id, document_type
+    )
+    object_key = (
+        f"cases/{case_id}/generated/{document_id}/v{version}/"
+        f"{filename_stem}.{format_name}"
+    )
+    uploaded = await storage.upload(
+        object_key,
+        BytesIO(content),
+        len(content),
+        content_type=mime_type,
+    )
+    try:
+        metadata = await service.repository.save_report_document(
+            document_id=document_id,
+            case_id=case_id,
+            document_type=document_type,
+            mime_type=mime_type,
+            original_filename=f"{filename_stem}.{format_name}",
+            bucket_name=uploaded["bucket_name"],
+            object_key=uploaded["object_key"],
+            checksum_sha256=uploaded["checksum_sha256"],
+            file_size_bytes=uploaded["file_size_bytes"],
+            version_no=version,
+            uploaded_by_user_id=actor_id,
+            storage_etag=uploaded.get("etag"),
+        )
+    except Exception:
+        # Remove only the exact object just uploaded.
+        await storage.delete(object_key)
+        raise
+    return GeneratedReportRead(**metadata)
+
+
+@router.post(
+    "/runs/{validation_run_id}/reports",
+    response_model=GeneratedReportRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def generate_final_review_report(
+    validation_run_id: UUID,
+    payload: GeneratedReportCreate,
+    session: DbSession,
+    storage: Storage,
+    user=Depends(require_permissions("review.execute")),
+) -> GeneratedReportRead:
+    service = service_for(session)
+    run = await service.get_run(validation_run_id)
+    review = await service.get(run.review_id)
+    if review.review_status != "REVIEW_COMPLETED":
+        raise AppError(
+            "REVIEW_REPORT_NOT_AVAILABLE",
+            "最終風險報告僅在審查完成後可產生",
+            409,
+        )
+    if review.latest_validation_run_id != validation_run_id:
+        raise AppError(
+            "REVIEW_REPORT_NOT_AVAILABLE",
+            "最終風險報告僅能基於最新一次已完成檢核",
+            409,
+        )
+    report = await service.build_report(validation_run_id)
+    return await _store_generated_report(
+        service=service,
+        storage=storage,
+        case_id=run.case_id,
+        document_type="review-report",
+        filename_stem="review-risk-report",
+        report=report,
+        format_name=payload.format,
+        actor_id=user.user_id,
+    )
+
+
+@router.post(
+    "/correction-requests/{correction_request_id}/reports",
+    response_model=GeneratedReportRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def generate_correction_request_report(
+    correction_request_id: UUID,
+    payload: GeneratedReportCreate,
+    session: DbSession,
+    storage: Storage,
+    user=Depends(require_permissions("review.execute")),
+) -> GeneratedReportRead:
+    service = service_for(session)
+    corrections = CorrectionRepository(session)
+    correction_request = await corrections.get_request(correction_request_id)
+    if correction_request is None:
+        raise ResourceNotFoundError("修正通知")
+    if correction_request.status not in {
+        "SENT",
+        "RESUBMITTED",
+        "RECHECKING",
+        "RECHECKED",
+    }:
+        raise AppError(
+            "CORRECTION_REPORT_NOT_AVAILABLE",
+            "修正通知尚未送出，無法產生通知文件",
+            409,
+        )
+    review = await service.get(correction_request.review_id)
+    report = await service.build_report(
+        correction_request.based_on_validation_run_id
+    )
+    return await _store_generated_report(
+        service=service,
+        storage=storage,
+        case_id=review.case_id,
+        document_type="correction-request",
+        filename_stem=f"correction-request-{correction_request.request_no}",
+        report=report,
+        format_name=payload.format,
+        actor_id=user.user_id,
+    )
+
+
+@router.get("/reports/{document_id}/download")
+async def download_generated_report(
+    document_id: UUID,
+    session: DbSession,
+    storage: Storage,
+    user=Depends(require_permissions("review.execute")),
+) -> Response:
+    # Never accept an object key from the client; resolve it server side.
+    repository = ReviewRepository(session)
+    metadata = await repository.get_generated_document(document_id)
+    if metadata is None:
+        raise ResourceNotFoundError("審查報告文件")
+    downloaded = await storage.download(metadata["object_key"])
+    try:
+        content = await run_in_threadpool(downloaded.read)
+    finally:
+        await run_in_threadpool(downloaded.close)
+        await run_in_threadpool(downloaded.release_conn)
+    return Response(
+        content=content,
+        media_type=metadata["mime_type"],
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{metadata["original_filename"]}"'
+            )
+        },
+    )
 
 
 @router.get("/runs/{validation_run_id}/report/pdf/download")

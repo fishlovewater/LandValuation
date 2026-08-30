@@ -688,6 +688,15 @@ class ReviewRepository:
         return int(value)
 
     async def save_report_document(self, **values):
+        """Persist generated-report metadata.
+
+        `document_type` and `mime_type` are explicit so the same numbering and
+        storage discipline covers PDF, XLSX, and DOCX artifacts. The returned
+        dict keeps bucket/object key for repository-internal use only; public
+        responses must be serialized through GeneratedReportRead.
+        """
+        values.setdefault("document_type", "review-report")
+        values.setdefault("mime_type", "application/pdf")
         row = (
             await self.session.execute(
                 text(
@@ -698,8 +707,8 @@ class ReviewRepository:
                         file_size_bytes, version_no, uploaded_by_user_id,
                         storage_etag
                     ) VALUES (
-                        :document_id, :case_id, 'review-report', :original_filename,
-                        'application/pdf', :bucket_name, :object_key,
+                        :document_id, :case_id, :document_type, :original_filename,
+                        :mime_type, :bucket_name, :object_key,
                         :checksum_sha256, :file_size_bytes, :version_no,
                         :uploaded_by_user_id, :storage_etag
                     )
@@ -713,6 +722,104 @@ class ReviewRepository:
             )
         ).mappings().one()
         return dict(row)
+
+    async def next_generated_version(self, case_id: UUID, document_type: str) -> int:
+        value = await self.session.scalar(
+            text(
+                """
+                SELECT coalesce(max(version_no), 0) + 1
+                FROM valuation.documents
+                WHERE case_id = :case_id AND document_type = :document_type
+                """
+            ),
+            {"case_id": case_id, "document_type": document_type},
+        )
+        return int(value)
+
+    async def get_report_document_for_review(
+        self, document_id: UUID, review_id: UUID
+    ):
+        """Return internal storage metadata only if the Review owns the case."""
+        row = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT d.document_id, d.case_id, d.document_type,
+                           d.original_filename, d.mime_type, d.bucket_name,
+                           d.object_key, d.checksum_sha256, d.file_size_bytes,
+                           d.version_no
+                    FROM valuation.documents d
+                    JOIN review.reviews r ON r.case_id = d.case_id
+                    WHERE d.document_id = :document_id
+                      AND r.review_id = :review_id
+                    """
+                ),
+                {"document_id": document_id, "review_id": review_id},
+            )
+        ).mappings().one_or_none()
+        return dict(row) if row else None
+
+    async def get_generated_document_for_case(
+        self, document_id: UUID, case_id: UUID
+    ):
+        row = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT document_id, case_id, document_type,
+                           original_filename, mime_type, bucket_name,
+                           object_key, checksum_sha256, file_size_bytes,
+                           version_no
+                    FROM valuation.documents
+                    WHERE document_id = :document_id AND case_id = :case_id
+                    """
+                ),
+                {"document_id": document_id, "case_id": case_id},
+            )
+        ).mappings().one_or_none()
+        return dict(row) if row else None
+
+    async def list_generated_reports(self, case_id: UUID) -> list[dict]:
+        rows = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT document_id, case_id, document_type,
+                           original_filename, mime_type, checksum_sha256,
+                           file_size_bytes, version_no
+                    FROM valuation.documents
+                    WHERE case_id = :case_id
+                      AND document_type IN (
+                          'review-report', 'correction-request'
+                      )
+                    ORDER BY document_type, version_no DESC, uploaded_at DESC
+                    """
+                ),
+                {"case_id": case_id},
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+    async def get_generated_document(self, document_id: UUID):
+        row = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT document_id, case_id, document_type,
+                           original_filename, mime_type, bucket_name,
+                           object_key, checksum_sha256, file_size_bytes,
+                           version_no
+                    FROM valuation.documents
+                    WHERE document_id = :document_id
+                      AND document_type IN (
+                          'review-report', 'correction-request'
+                      )
+                    """
+                ),
+                {"document_id": document_id},
+            )
+        ).mappings().one_or_none()
+        return dict(row) if row else None
 
     async def get_report_document(self, validation_run_id: UUID):
         row = (
