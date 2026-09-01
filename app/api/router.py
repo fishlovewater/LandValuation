@@ -7,7 +7,6 @@ from app.valuation.automation.router import router as automation_router
 from app.valuation.documents.router import router as document_router
 from app.valuation.extraction.router import router as extraction_router
 from app.valuation.facilities.router import router as facilities_router
-from app.valuation.operations.router import router as operations_router
 from app.valuation.report_packages.router import router as report_package_router
 from app.valuation.router import router as valuation_router
 from app.valuation.rule_packs.router import router as rule_pack_router
@@ -22,7 +21,6 @@ api_router.include_router(
     prefix="/valuation",
     tags=["valuation-report-packages"],
 )
-api_router.include_router(operations_router, prefix="/valuation", tags=["valuation-operations"])
 api_router.include_router(rule_pack_router, prefix="/valuation", tags=["valuation-rule-packs"])
 api_router.include_router(facilities_router, prefix="/valuation", tags=["valuation-facilities"])
 api_router.include_router(automation_router, prefix="/valuation", tags=["valuation-auto-workflow"])
