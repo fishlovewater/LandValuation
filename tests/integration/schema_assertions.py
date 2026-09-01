@@ -23,7 +23,7 @@ def unique_columns(cursor, table_name: str, schema: str = "public") -> set[tuple
         JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
         CROSS JOIN LATERAL unnest(pg_constraint_row.conkey) WITH ORDINALITY AS key(attribute_number, ordinality)
         JOIN pg_attribute attribute ON attribute.attrelid = relation.oid AND attribute.attnum = key.attribute_number
-        WHERE namespace.nspname = %s AND relation.relname = %s AND pg_constraint_row.contype IN ('p', 'u')
+        WHERE namespace.nspname = %s AND relation.relname = %s AND pg_constraint_row.contype = 'u'
         GROUP BY pg_constraint_row.oid
         """,
         (schema, table_name),
