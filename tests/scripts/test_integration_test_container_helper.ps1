@@ -2,17 +2,26 @@ $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "..\..\scripts\integration-test-container.ps1")
 
-$global:DockerScenario = "missing"
 function global:docker {
     $Arguments = $args
 
     $global:LASTEXITCODE = 0
     if ($Arguments -contains "ps") {
-        return ""
+        if ($global:DockerScenario -eq "missing") {
+            return ""
+        }
+        if ($Arguments -notcontains "--all") {
+            throw "exited test containers require docker compose ps --all"
+        }
+        return "test-container-id"
     }
-    throw "docker inspect should not run when the test container is missing"
+    if ($Arguments -contains "inspect") {
+        return '{"Status":"exited","ExitCode":0}'
+    }
+    throw "Unexpected docker invocation: $Arguments"
 }
 
+$global:DockerScenario = "missing"
 $threw = $false
 try {
     Assert-IntegrationTestContainerSucceeded `
@@ -30,4 +39,9 @@ if (-not $threw) {
     throw "Expected a missing test container to be rejected"
 }
 
-Write-Output "PASS: missing test container is rejected"
+$global:DockerScenario = "exited"
+Assert-IntegrationTestContainerSucceeded `
+    -ComposeProject "valuation-review-test" `
+    -ComposeFile "docker-compose.integration.yml"
+
+Write-Output "PASS: missing and exited test containers are handled"

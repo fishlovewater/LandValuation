@@ -18,13 +18,13 @@ def unique_columns(cursor, table_name: str, schema: str = "public") -> set[tuple
     cursor.execute(
         """
         SELECT array_agg(attribute.attname ORDER BY ordinality)
-        FROM pg_constraint constraint
-        JOIN pg_class relation ON relation.oid = constraint.conrelid
+        FROM pg_constraint pg_constraint_row
+        JOIN pg_class relation ON relation.oid = pg_constraint_row.conrelid
         JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
-        CROSS JOIN LATERAL unnest(constraint.conkey) WITH ORDINALITY AS key(attribute_number, ordinality)
+        CROSS JOIN LATERAL unnest(pg_constraint_row.conkey) WITH ORDINALITY AS key(attribute_number, ordinality)
         JOIN pg_attribute attribute ON attribute.attrelid = relation.oid AND attribute.attnum = key.attribute_number
-        WHERE namespace.nspname = %s AND relation.relname = %s AND constraint.contype IN ('p', 'u')
-        GROUP BY constraint.oid
+        WHERE namespace.nspname = %s AND relation.relname = %s AND pg_constraint_row.contype IN ('p', 'u')
+        GROUP BY pg_constraint_row.oid
         """,
         (schema, table_name),
     )

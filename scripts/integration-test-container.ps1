@@ -5,7 +5,7 @@ function Assert-IntegrationTestContainerSucceeded {
         [Parameter(Mandatory = $true)][string]$ComposeFile
     )
 
-    $testContainerId = & docker compose -p $ComposeProject -f $ComposeFile ps -q test
+    $testContainerId = & docker compose -p $ComposeProject -f $ComposeFile ps -q --all test
     $composePsExitCode = $LASTEXITCODE
     if ($composePsExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($testContainerId)) {
         throw "integration tests failed: test container was not created"

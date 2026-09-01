@@ -19,10 +19,23 @@ $env:PYTEST_ARGS = $PytestArgs
 try {
     docker compose -p $project -f docker-compose.integration.yml up --build --abort-on-container-exit --exit-code-from test
     $composeUpExitCode = $LASTEXITCODE
-    Assert-IntegrationTestContainerSucceeded `
-        -ComposeProject $project `
-        -ComposeFile "docker-compose.integration.yml"
-    if ($composeUpExitCode -ne 0) { throw "integration tests failed (compose exit code $composeUpExitCode)" }
+    $testContainerFailure = $null
+    try {
+        Assert-IntegrationTestContainerSucceeded `
+            -ComposeProject $project `
+            -ComposeFile "docker-compose.integration.yml"
+    }
+    catch {
+        $testContainerFailure = $_.Exception.Message
+    }
+
+    if ($composeUpExitCode -ne 0) {
+        if ($testContainerFailure -and $testContainerFailure -notmatch "test container was not created") {
+            throw "integration tests failed: compose exit code $composeUpExitCode; $testContainerFailure"
+        }
+        throw "integration tests failed: compose exit code $composeUpExitCode"
+    }
+    if ($testContainerFailure) { throw $testContainerFailure }
 }
 finally {
     docker compose -p $project -f docker-compose.integration.yml down --volumes --remove-orphans

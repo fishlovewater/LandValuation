@@ -85,8 +85,8 @@ def create_extraction(cursor, user_id, case_id, document_id, *, provider="LOCAL_
     return extraction_id
 
 
-def test_canonical_extraction_schema_contract(db_cursor):
-    assert set(column_names(db_cursor, "document_extractions", "valuation")) >= {
+def test_canonical_extraction_schema_contract(admin_cursor):
+    assert set(column_names(admin_cursor, "document_extractions", "valuation")) >= {
         "extraction_id",
         "case_id",
         "document_id",
@@ -95,7 +95,7 @@ def test_canonical_extraction_schema_contract(db_cursor):
         "created_by_user_id",
         "completed_at",
     }
-    assert set(column_names(db_cursor, "extracted_fields", "valuation")) >= {
+    assert set(column_names(admin_cursor, "extracted_fields", "valuation")) >= {
         "extracted_field_id",
         "case_id",
         "extraction_id",
@@ -115,7 +115,7 @@ def test_canonical_extraction_schema_contract(db_cursor):
         "applied_form_instance_id",
         "applied_at",
     }
-    assert set(column_names(db_cursor, "assistant_sessions", "valuation")) >= {
+    assert set(column_names(admin_cursor, "assistant_sessions", "valuation")) >= {
         "assistant_session_id",
         "case_id",
         "user_id",
@@ -126,7 +126,7 @@ def test_canonical_extraction_schema_contract(db_cursor):
         "prompt_version",
         "session_status",
     }
-    assert set(column_names(db_cursor, "assistant_messages", "valuation")) >= {
+    assert set(column_names(admin_cursor, "assistant_messages", "valuation")) >= {
         "assistant_message_id",
         "assistant_session_id",
         "message_no",
@@ -134,8 +134,8 @@ def test_canonical_extraction_schema_contract(db_cursor):
         "content",
         "tool_name",
     }
-    assert not table_exists(db_cursor, "extraction_runs", "valuation")
-    assert unique_columns(db_cursor, "extracted_fields", "valuation") == {
+    assert not table_exists(admin_cursor, "extraction_runs", "valuation")
+    assert unique_columns(admin_cursor, "extracted_fields", "valuation") == {
         ("extraction_id", "form_code", "field_name")
     }
 

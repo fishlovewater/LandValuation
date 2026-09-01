@@ -212,6 +212,27 @@ class ReviewRepository:
         ).mappings()
         return [dict(row) for row in rows]
 
+    async def list_applied_confirmed_extracted_fields(self, case_id: UUID):
+        rows = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT ef.extracted_field_id, ef.form_code, ef.field_name,
+                           ef.confirmed_value, ef.source_page, ef.source_text,
+                           ef.confidence, ef.field_status,
+                           ef.confirmed_by_user_id, ef.confirmed_at
+                    FROM valuation.extracted_fields ef
+                    WHERE ef.case_id = :case_id
+                      AND ef.field_status = 'APPLIED'
+                      AND ef.confirmed_value IS NOT NULL
+                    ORDER BY ef.form_code, ef.field_name, ef.extracted_field_id
+                    """
+                ),
+                {"case_id": case_id},
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
     async def get_case_rule_context(self, case_id: UUID):
         row = (
             await self.session.execute(
