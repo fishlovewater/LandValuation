@@ -22,7 +22,7 @@ services:
       MINIO_ROOT_USER: integration-root
       MINIO_ROOT_PASSWORD: integration-minio-secret
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD-SHELL", "curl --fail --silent --show-error http://localhost:9000/minio/health/live"]
       interval: 2s
       timeout: 5s
       retries: 30

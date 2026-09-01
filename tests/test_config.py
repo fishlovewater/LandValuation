@@ -24,7 +24,7 @@ def test_test_environment_allows_run_scoped_minio_bucket():
     ],
 )
 def test_test_environment_rejects_invalid_run_scoped_minio_bucket(bucket):
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="invalid test MINIO_BUCKET"):
         Settings(app_env="test", minio_bucket=bucket)
 
 

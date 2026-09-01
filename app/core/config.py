@@ -50,11 +50,10 @@ class Settings(BaseSettings):
     def validate_bucket(cls, value: str, info: ValidationInfo) -> str:
         if value == "land-valuation":
             return value
-        if (
-            info.data.get("app_env", "development").lower() == "test"
-            and re.fullmatch(r"land-valuation-test-[a-z0-9-]+", value)
-        ):
-            return value
+        if info.data.get("app_env", "development").lower() == "test":
+            if re.fullmatch(r"land-valuation-test-[a-z0-9-]+", value):
+                return value
+            raise ValueError("invalid test MINIO_BUCKET")
         raise ValueError("MINIO_BUCKET must be land-valuation outside test")
 
     @model_validator(mode="after")
