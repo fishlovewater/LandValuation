@@ -19,6 +19,7 @@
 - 正式數值使用 `Decimal`；Snapshot 以固定十進位字串序列化，不得經 float。
 - Submission、Run、finding、decision、correction request 及報告歷史不可覆寫。
 - 測試必須使用隔離 PostgreSQL database、隔離 MinIO bucket/prefix 及一次性容器；無論成功失敗都清理，最後驗證零殘留。
+- PostgreSQL migration/cleanup 使用管理連線；API 與行為測試使用 `land_valuation_app` 群組成員的 runtime 連線，兩者不得共用角色。
 - 不把 Demo/fake rows 寫進 migration 或開發資料庫。
 - 每個任務依 TDD 執行，先看到指定失敗，再寫最小實作；每個任務只提交其列出的檔案。
 
@@ -72,12 +73,13 @@
 - Create: `scripts/run-integration-tests.ps1`
 - Create: `tests/integration/conftest.py`
 - Create: `tests/integration/schema_assertions.py`
+- Create: `tests/integration/sql/001_runtime_role.sql`
 - Create: `tests/integration/test_environment_isolation.py`
 - Modify: `.gitignore`
 
 **Interfaces:**
 - Consumes: Docker Engine and the existing `Dockerfile.api` / `Dockerfile.migrations`.
-- Produces: `scripts/run-integration-tests.ps1 -PytestArgs <string>`; fixtures `db_cursor` and `alembic_to(revision: str)`; environment variables `TEST_RUN_ID`, `POSTGRES_DB`, `MINIO_BUCKET`; guaranteed `docker compose down --volumes --remove-orphans` in `finally`.
+- Produces: `scripts/run-integration-tests.ps1 -PytestArgs <string>`; fixtures `db_cursor`, `admin_cursor`, and `alembic_to(revision: str)`; environment variables `TEST_RUN_ID`, `POSTGRES_DB`, `APP_POSTGRES_USER`, `MINIO_BUCKET`; guaranteed `docker compose down --volumes --remove-orphans` in `finally`.
 
 - [ ] **Step 1: Write the failing isolation test**
 
@@ -115,9 +117,11 @@ environment:
 
 The `minio-init` service creates exactly `${MINIO_BUCKET}`. The `test` service bind-mounts the current checkout read-only at `/workspace` and uses `/tmp` for pytest temporary files.
 
+PostgreSQL starts with a migration-owner account. `tests/integration/sql/001_runtime_role.sql` creates the NOLOGIN group `land_valuation_app` and the run-scoped `${APP_POSTGRES_USER}` member through the DB init wrapper. `migrate` uses the owner URL; `test` and API behavior use the runtime URL. The two URLs must differ by username.
+
 - [ ] **Step 4: Add database contract fixtures**
 
-`tests/integration/conftest.py` creates a psycopg connection from `POSTGRES_*`, returns a rollback-safe cursor, and exposes this exact migration fixture:
+`tests/integration/conftest.py` creates the default rollback-safe `db_cursor` from runtime `DATABASE_URL`, creates `admin_cursor` from `MIGRATION_DATABASE_URL`, asserts the usernames differ, and exposes this exact migration fixture using the migration URL:
 
 ```python
 @pytest.fixture
@@ -172,7 +176,7 @@ Expected: `1 passed`, followed by no matching containers or volumes.
 - [ ] **Step 7: Commit the harness**
 
 ```bash
-git add .gitignore docker-compose.integration.yml scripts/run-integration-tests.ps1 tests/integration/conftest.py tests/integration/schema_assertions.py tests/integration/test_environment_isolation.py
+git add .gitignore docker-compose.integration.yml scripts/run-integration-tests.ps1 tests/integration/conftest.py tests/integration/schema_assertions.py tests/integration/sql/001_runtime_role.sql tests/integration/test_environment_isolation.py
 git commit -m "test(integration): add isolated postgres and minio harness"
 ```
 
@@ -532,7 +536,7 @@ def test_submission_schema(db_cursor):
     }
 ```
 
-Add tests that an `UPDATE` and `DELETE` executed through the application DB role both fail with `review submissions are immutable`, and that the composite supersedes FK rejects a Submission from another Review.
+Add tests that an `UPDATE` and `DELETE` executed through `db_cursor` both fail with `review submissions are immutable`, the same cleanup through `admin_cursor` succeeds only in the isolated test database, and the composite supersedes FK rejects a Submission from another Review.
 
 - [ ] **Step 2: Verify failure at 0011**
 
@@ -553,7 +557,7 @@ Create the 12-column table from the approved design, including `CHECK (submissio
 
 Add nullable `review.reviews.latest_submission_id`, then its FK after table creation. Add nullable `valuation.validation_runs.submission_id` plus index and FK. Expand Valuation case status constraint with `IN_REVIEW`, `REVISION_REQUIRED`, `REVIEW_COMPLETED`; retain Review `RETURNED_FOR_REVISION`.
 
-Create a trigger function that raises `review submissions are immutable` on `UPDATE OR DELETE` by the application role. Downgrade drops trigger, FKs, columns and table in reverse dependency order and blocks if integrated Submission rows exist.
+Create a trigger function that raises `review submissions are immutable` on `UPDATE OR DELETE` when `pg_has_role(current_user, 'land_valuation_app', 'MEMBER')` is true. The migration-owner role is not a member, so downgrade and verified isolated cleanup can remove test history. Downgrade drops trigger, FKs, columns and table in reverse dependency order and blocks if integrated Submission rows exist.
 
 - [ ] **Step 4: Add matching ORM and Pydantic types**
 
