@@ -11,6 +11,12 @@ def _database_url(name: str) -> str:
     return os.environ[name]
 
 
+def _psycopg_connection_url(database_url: str) -> str:
+    return make_url(database_url).set(drivername="postgresql").render_as_string(
+        hide_password=False
+    )
+
+
 def _assert_separate_database_users() -> None:
     runtime_user = make_url(_database_url("DATABASE_URL")).username
     migration_user = make_url(_database_url("MIGRATION_DATABASE_URL")).username
@@ -20,7 +26,7 @@ def _assert_separate_database_users() -> None:
 @pytest.fixture
 def db_cursor():
     _assert_separate_database_users()
-    connection = psycopg.connect(_database_url("DATABASE_URL"))
+    connection = psycopg.connect(_psycopg_connection_url(_database_url("DATABASE_URL")))
     try:
         with connection.cursor() as cursor:
             yield cursor
@@ -32,7 +38,9 @@ def db_cursor():
 @pytest.fixture
 def admin_cursor():
     _assert_separate_database_users()
-    connection = psycopg.connect(_database_url("MIGRATION_DATABASE_URL"))
+    connection = psycopg.connect(
+        _psycopg_connection_url(_database_url("MIGRATION_DATABASE_URL"))
+    )
     try:
         with connection.cursor() as cursor:
             yield cursor
