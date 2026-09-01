@@ -1,0 +1,8 @@
+from app.main import create_app
+
+
+def test_valuation_and_review_routes_coexist():
+    paths = set(create_app().openapi()["paths"])
+    assert "/api/v1/valuation/cases" in paths
+    assert "/api/v1/review/workbench/cases" in paths
+    assert "/api/v1/ai-assistant/sessions" in paths

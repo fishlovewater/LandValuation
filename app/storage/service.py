@@ -85,6 +85,16 @@ class StorageService:
         except S3Error as exc:
             raise StorageError("MinIO 刪除失敗") from exc
 
+    async def object_exists(self, object_key: str) -> bool:
+        key = validate_object_key(object_key)
+        try:
+            await run_in_threadpool(self.client.stat_object, self.bucket, key)
+            return True
+        except S3Error as exc:
+            if exc.code in {"NoSuchKey", "NoSuchObject", "NotFound"}:
+                return False
+            raise StorageError("無法確認 MinIO 物件") from exc
+
     async def presigned_download_url(self, object_key: str) -> str:
         key = validate_object_key(object_key)
         try:

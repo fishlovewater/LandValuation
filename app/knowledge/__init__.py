@@ -1,0 +1,1 @@
+"""Knowledge document metadata models."""
