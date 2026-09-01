@@ -1,12 +1,16 @@
 import asyncio
+from decimal import Decimal
 from uuid import uuid4
 
+from app.core.exceptions import AppError
 from app.review.repository import ReviewRepository
 from app.review.service import ReviewService
 from app.review.trusted_inputs import (
     TrustedField,
+    prepare_trusted_rules,
     required_field_problems,
     trusted_fields_by_code,
+    validate_rule_contracts,
 )
 import pytest
 
@@ -48,6 +52,43 @@ def test_duplicate_applied_fields_are_not_trusted_in_either_form(ordered_fields)
     fields = trusted_fields_by_code(ordered_fields)
 
     assert required_field_problems({"adjustment_rate"}, fields)[0].code == "TRUSTED_INPUT_MISSING"
+
+
+def test_float_confirmed_value_is_not_a_trusted_decimal():
+    contracts = validate_rule_contracts(
+        [
+            {
+                "rule_code": "ADJUSTMENT_RATE",
+                "target_field_code": "adjustment_rate",
+                "rule_expression": '{"system_rate": "0.3", "tolerance": "0.1"}',
+            }
+        ]
+    )
+
+    with pytest.raises(AppError) as raised:
+        prepare_trusted_rules(contracts, {"adjustment_rate": field(value=0.1 + 0.2)})
+
+    assert raised.value.code == "TRUSTED_INPUT_UNVERIFIED"
+
+
+def test_rule_json_numbers_are_parsed_as_exact_decimals():
+    contracts = validate_rule_contracts(
+        [
+            {
+                "rule_code": "ADJUSTMENT_RATE",
+                "target_field_code": "adjustment_rate",
+                "rule_expression": '{"system_rate": 0.1, "tolerance": 0.2}',
+            }
+        ]
+    )
+
+    contract = contracts[0]
+    assert contract.system_rate == Decimal("0.1")
+    assert contract.tolerance == Decimal("0.2")
+    assert contract.configuration == {
+        "system_rate": Decimal("0.1"),
+        "tolerance": Decimal("0.2"),
+    }
 
 
 class _MappingsResult:

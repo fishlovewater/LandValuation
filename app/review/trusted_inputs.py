@@ -167,7 +167,7 @@ def _unverified_value_error(field: TrustedField) -> AppError:
 
 
 def _finite_decimal(value: object) -> Decimal | None:
-    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
+    if isinstance(value, bool) or not isinstance(value, (str, int, Decimal)):
         return None
     try:
         decimal_value = Decimal(str(value))
@@ -195,7 +195,7 @@ def validate_rule_contracts(validation_rules) -> tuple[RuleContract, ...]:
                 f"規則 {rule_code} 的 target_field_code 不正確", rule
             )
         try:
-            configuration = json.loads(rule["rule_expression"])
+            configuration = json.loads(rule["rule_expression"], parse_float=Decimal)
         except (KeyError, TypeError, ValueError) as exc:
             raise _configuration_error("正式規則設定不是有效 JSON", rule) from exc
         if not isinstance(configuration, dict):

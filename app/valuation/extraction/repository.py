@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -75,3 +76,28 @@ class ExtractionRepository:
     async def save_candidate(self, record: ExtractedFieldRecord) -> None:
         await self.session.flush()
         await self.session.refresh(record)
+
+    async def apply_candidate(
+        self, record: ExtractedFieldRecord, form_instance_id: UUID
+    ) -> None:
+        related_records = await self.session.scalars(
+            select(ExtractedFieldRecord)
+            .where(
+                ExtractedFieldRecord.case_id == record.case_id,
+                ExtractedFieldRecord.field_name == record.field_name,
+            )
+            .with_for_update()
+        )
+        for related_record in related_records.all():
+            if (
+                related_record.extracted_field_id != record.extracted_field_id
+                and related_record.field_status == "APPLIED"
+            ):
+                related_record.field_status = "CONFIRMED"
+                related_record.applied_form_instance_id = None
+                related_record.applied_at = None
+
+        record.field_status = "APPLIED"
+        record.applied_form_instance_id = form_instance_id
+        record.applied_at = datetime.now(UTC)
+        await self.session.flush()

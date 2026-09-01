@@ -564,9 +564,9 @@ class AutomatedWorkflowService:
                     if warning not in warnings:
                         warnings.append(warning)
                     continue
-                candidate.field_status = "APPLIED"
-                candidate.applied_form_instance_id = form.form_instance_id
-                candidate.applied_at = datetime.now(UTC)
+                await self.extraction_repository.apply_candidate(
+                    candidate, form.form_instance_id
+                )
                 applied_any = True
             if applied_any:
                 applied_form_ids.append(form.form_instance_id)
@@ -795,9 +795,7 @@ class AutomatedWorkflowService:
             warnings.append("CONFIRMED_F03_VALUE_INVALID_REQUIRES_CORRECTION")
             return
         for candidate in used:
-            candidate.field_status = "APPLIED"
-            candidate.applied_form_instance_id = form_id
-            candidate.applied_at = datetime.now(UTC)
+            await self.extraction_repository.apply_candidate(candidate, form_id)
 
     async def _form_guidance(
         self,

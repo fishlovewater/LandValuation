@@ -3,6 +3,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.valuation.extraction.repository import ExtractionRepository
 from app.valuation.models import (
     AssistantMessageRecord,
     AssistantSessionRecord,
@@ -164,9 +165,4 @@ class AssistantRepository:
         record: ExtractedFieldRecord,
         form_instance_id: UUID,
     ) -> None:
-        from datetime import UTC, datetime
-
-        record.field_status = "APPLIED"
-        record.applied_form_instance_id = form_instance_id
-        record.applied_at = datetime.now(UTC)
-        await self.session.flush()
+        await ExtractionRepository(self.session).apply_candidate(record, form_instance_id)

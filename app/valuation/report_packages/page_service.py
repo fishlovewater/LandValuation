@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.models import User
 from app.core.config import get_settings
 from app.core.exceptions import AppError, ResourceNotFoundError
+from app.valuation.extraction.repository import ExtractionRepository
 from app.valuation.models import (
     CaseRecord,
     DocumentExtractionRecord,
@@ -73,6 +74,7 @@ class ReportPageService:
         valuation: ValuationService | None = None,
     ) -> None:
         self.repository = repository or ReportPackageRepository(session)
+        self.extraction_repository = ExtractionRepository(session)
         self.valuation = valuation or ValuationService(session)
         self.packages = ReportPackageService(
             session,
@@ -235,12 +237,11 @@ class ReportPageService:
         self._validate_cross_page_ids(current, f02_data)
         await self._save_data(record, current, user)
 
-        # Mark candidates as APPLIED
-        from datetime import UTC, datetime
+        # Apply candidates through the case-wide replacement operation.
         for candidate in candidates:
-            candidate.field_status = "APPLIED"
-            candidate.applied_form_instance_id = record.form_instance_id
-            candidate.applied_at = datetime.now(UTC)
+            await self.extraction_repository.apply_candidate(
+                candidate, record.form_instance_id
+            )
 
         await self.repository.session.flush()
         return await self._f02_rf_response(case, report_id, record)
