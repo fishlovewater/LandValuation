@@ -63,7 +63,7 @@ FORMAL_REQUIRED_SOURCE_ROLES = frozenset(
 )
 from app.valuation.extraction.provider import build_document_extraction_provider
 from app.valuation.rule_packs.ai_extraction import (
-    GEMINI_TEMPORARY_MODEL_ID,
+    GEMINI_MODEL_ID,
     build_rule_extractor,
 )
 
@@ -125,7 +125,7 @@ class RulePackService:
             source_document_id=selected.document_id,
             status="NEEDS_CONFIRMATION",
             provider=settings.ai_provider.upper(),
-            model_id=GEMINI_TEMPORARY_MODEL_ID,
+            model_id=GEMINI_MODEL_ID,
             prompt_version=settings.ai_rule_extraction_prompt_version,
             extraction_provider=extraction_provider,
             factor_definitions=result.factor_definitions,

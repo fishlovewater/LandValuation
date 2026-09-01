@@ -14,7 +14,7 @@ from app.valuation.rule_packs.schemas import (
     RuleEvidenceInput,
 )
 
-GEMINI_TEMPORARY_MODEL_ID = "gemini-2.5-flash"
+GEMINI_MODEL_ID = "gemini-2.5-flash"
 
 
 class RuleAIResult(BaseModel):
@@ -49,7 +49,7 @@ class GeminiRuleExtractor:
         schema = RuleAIResult.model_json_schema()
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{GEMINI_TEMPORARY_MODEL_ID}:generateContent"
+            f"{GEMINI_MODEL_ID}:generateContent"
         )
         body = {
             "contents": [{"role": "user", "parts": [{"text": _prompt(source_text, land_use_types)}]}],
@@ -64,7 +64,7 @@ class GeminiRuleExtractor:
                 response = await client.post(
                     url,
                     headers={
-                        "x-goog-api-key": self.settings.aws_access_key_id.get_secret_value(),
+                        "x-goog-api-key": self.settings.gemini_api_key.get_secret_value(),
                         "content-type": "application/json",
                     },
                     json=body,
@@ -91,7 +91,7 @@ def build_rule_extractor(settings: Settings) -> GeminiRuleExtractor:
         raise AppError(
             "RULE_AI_NOT_CONFIGURED",
             "尚未設定 AI；暫用 Gemini 時請將 AI_PROVIDER 設為 gemini，"
-            "並將替代金鑰放在 AWS_ACCESS_KEY_ID",
+            "並設定 GEMINI_API_KEY",
             503,
         )
     if settings.ai_provider != "gemini":

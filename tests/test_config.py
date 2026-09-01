@@ -34,3 +34,8 @@ def test_non_test_environment_rejects_run_scoped_minio_bucket():
             app_env="development",
             minio_bucket="land-valuation-test-vr-abc123-def456",
         )
+
+
+def test_gemini_provider_requires_dedicated_api_key():
+    with pytest.raises(ValidationError, match="GEMINI_API_KEY"):
+        Settings(ai_provider="gemini")

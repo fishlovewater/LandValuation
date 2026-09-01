@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     bedrock_region: str | None = None
     bedrock_model_id: str | None = None
     aws_access_key_id: SecretStr | None = None
+    gemini_api_key: SecretStr | None = None
     google_maps_api_key: SecretStr | None = None
 
     @field_validator("minio_bucket")
@@ -117,9 +118,9 @@ class Settings(BaseSettings):
             raise ValueError(
                 "BEDROCK_REGION and BEDROCK_MODEL_ID are required for AI_PROVIDER=bedrock"
             )
-        if self.ai_provider == "gemini" and self.aws_access_key_id is None:
+        if self.ai_provider == "gemini" and self.gemini_api_key is None:
             raise ValueError(
-                "AWS_ACCESS_KEY_ID is required while AI_PROVIDER=gemini"
+                "GEMINI_API_KEY is required while AI_PROVIDER=gemini"
             )
         return self
 
