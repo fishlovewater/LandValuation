@@ -1,6 +1,8 @@
 from functools import lru_cache
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+import re
+
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -45,10 +47,15 @@ class Settings(BaseSettings):
 
     @field_validator("minio_bucket")
     @classmethod
-    def validate_bucket(cls, value: str) -> str:
-        if value != "land-valuation":
-            raise ValueError("MINIO_BUCKET must be land-valuation")
-        return value
+    def validate_bucket(cls, value: str, info: ValidationInfo) -> str:
+        if value == "land-valuation":
+            return value
+        if (
+            info.data.get("app_env", "development").lower() == "test"
+            and re.fullmatch(r"land-valuation-test-[a-z0-9-]+", value)
+        ):
+            return value
+        raise ValueError("MINIO_BUCKET must be land-valuation outside test")
 
     @model_validator(mode="after")
     def reject_development_secret_outside_development(self):

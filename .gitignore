@@ -22,3 +22,6 @@ Thumbs.db
 # 資料庫備份
 *.backup
 *.dump
+
+# Controller scratch artifacts
+.superpowers/
