@@ -14,6 +14,7 @@
 - 不修改、merge、rebase、刪除或 push `feature/review`、`origin/feature/valuation`、`main`；未經使用者明確同意不 push 或 merge 整合分支。
 - Review Alembic `20260823_0001` 至 `20260830_0008` 不得改寫。
 - 共用 schema、欄位、provider、狀態及 constraint 以 Valuation 最終演進為準；不得保留第二套 Review extraction source of truth。
+- Valuation Operations routes 在 Task 4 的 `request_id` schema/mapping 完成前不得公開；Task 4 驗證後才註冊。
 - PostgreSQL 只存結構化資料、metadata、法規文字、向量及 object key；PDF、圖片、附件和原始法規文件本體只存 MinIO。
 - MinIO object key 必須是 versioned relative key，不得保存固定 localhost URL，不得覆寫歷史物件。
 - 正式數值使用 `Decimal`；Snapshot 以固定十進位字串序列化，不得經 float。
@@ -241,13 +242,14 @@ api_router.include_router(valuation_router, prefix="/valuation", tags=["valuatio
 api_router.include_router(document_router, prefix="/valuation", tags=["valuation-documents"])
 api_router.include_router(extraction_router, prefix="/valuation", tags=["valuation-extraction"])
 api_router.include_router(report_package_router, prefix="/valuation", tags=["valuation-report-packages"])
-api_router.include_router(operations_router, prefix="/valuation", tags=["valuation-operations"])
 api_router.include_router(rule_pack_router, prefix="/valuation", tags=["valuation-rule-packs"])
 api_router.include_router(facilities_router, prefix="/valuation", tags=["valuation-facilities"])
 api_router.include_router(automation_router, prefix="/valuation", tags=["valuation-auto-workflow"])
 api_router.include_router(ai_assistant_router, prefix="/ai-assistant", tags=["ai-assistant"])
 api_router.include_router(review_router)
 ```
+
+Task 2 匯入 `app/valuation/operations/**` 原始碼但不 import/register `operations_router`，避免在 `request_id` migration 尚未完成時公開不可用 API；Task 4 會在 schema 與 mapping 驗證通過後註冊。
 
 - [ ] **Step 5: Merge dependencies and configuration**
 
@@ -391,10 +393,12 @@ git commit -m "feat(db): add canonical valuation extraction schema"
 - Create: `migrations/versions/20260901_0010_valuation_forms_calculation_reports.py`
 - Create: `tests/integration/test_migration_0010_forms_reports.py`
 - Modify: `app/valuation/models.py`
+- Modify: `app/api/router.py`
+- Modify: `tests/test_integration_surface.py`
 
 **Interfaces:**
 - Consumes: `20260901_0009`; upstream final DDL from Valuation `0009`, `0010`, and `75dcc9441ca7`.
-- Produces: request-correlated calculation/validation events, complete report schema, expanded form codes, benchmark latitude/longitude.
+- Produces: request-correlated calculation/validation events, complete report schema, expanded form codes, benchmark latitude/longitude, and enabled Valuation Operations routes.
 
 - [ ] **Step 1: Write failing final-schema tests**
 
@@ -426,6 +430,18 @@ Do not copy their old revision IDs. Preserve all FK, check, unique index, JSON o
 
 - [ ] **Step 4: Run focused Valuation calculation/report tests**
 
+After the migration and ORM mappings exist, register the deferred router:
+
+```python
+api_router.include_router(
+    operations_router,
+    prefix="/valuation",
+    tags=["valuation-operations"],
+)
+```
+
+Update `tests/test_integration_surface.py` so the previously absent known Operations endpoint is now required in OpenAPI.
+
 Run: `python -m pytest tests/test_day4_day5_operations.py tests/test_f01_f04.py tests/test_formal_report_calculation.py tests/test_report_packages.py tests/test_official_pdf_builder.py -q`
 
 Expected: all selected tests PASS.
@@ -439,7 +455,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit 0010**
 
 ```bash
-git add migrations/versions/20260901_0010_valuation_forms_calculation_reports.py app/valuation/models.py tests/integration/test_migration_0010_forms_reports.py
+git add migrations/versions/20260901_0010_valuation_forms_calculation_reports.py app/valuation/models.py app/api/router.py tests/test_integration_surface.py tests/integration/test_migration_0010_forms_reports.py
 git commit -m "feat(db): add valuation forms calculations and reports"
 ```
 
