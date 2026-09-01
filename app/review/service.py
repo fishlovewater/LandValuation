@@ -196,40 +196,35 @@ class ReviewService:
         await self.repository.session.flush()
         return result, review, items
 
+    @staticmethod
+    def _trusted_field(row: dict) -> TrustedField:
+        return TrustedField(
+            extracted_field_id=str(row["extracted_field_id"]),
+            form_code=row["form_code"],
+            field_name=row["field_name"],
+            confirmed_value=row["confirmed_value"],
+            source_page=row["source_page"],
+            source_text=row["source_text"],
+            confidence=row["confidence"],
+            field_status=row["field_status"],
+            confirmed_by_user_id=(
+                str(row["confirmed_by_user_id"])
+                if row["confirmed_by_user_id"] is not None
+                else None
+            ),
+            confirmed_at=row["confirmed_at"],
+        )
+
     async def _trusted_completeness_missing_items(self, case_id):
         document = await self.repository.get_latest_original_document(case_id)
         if document is None:
             return (trusted_context_missing_requirement(),)
 
-        extraction = await self.repository.get_latest_completed_extraction(
-            document["document_id"], document["version_no"]
-        )
-        if extraction is None:
-            return (trusted_context_missing_requirement(),)
-
-        field_rows = await self.repository.list_official_extracted_fields(
-            extraction["extraction_run_id"]
+        field_rows = await self.repository.list_applied_confirmed_extracted_fields(
+            case_id
         )
         fields = trusted_fields_by_code(
-            TrustedField(
-                extracted_field_id=str(row["extracted_field_id"]),
-                field_code=row["field_code"],
-                field_path=row["field_path"],
-                raw_text=row["raw_text"],
-                normalized_value=row["normalized_value"],
-                value_type=row["value_type"],
-                page_number=row["page_number"],
-                bounding_box=row["bounding_box"],
-                confidence=row["confidence"],
-                verification_status=row["verification_status"],
-                verified_by_user_id=(
-                    str(row["verified_by_user_id"])
-                    if row["verified_by_user_id"] is not None
-                    else None
-                ),
-                verified_at=row["verified_at"],
-                is_official=row["is_official"],
-            )
+            self._trusted_field(row)
             for row in field_rows
         )
         case_context = await self.repository.get_case_rule_context(case_id)
@@ -328,39 +323,11 @@ class ReviewService:
                 409,
             )
 
-        extraction_run = await self.repository.get_latest_completed_extraction(
-            document["document_id"], document["version_no"]
-        )
-        if extraction_run is None:
-            raise AppError(
-                "TRUSTED_INPUT_MISSING",
-                "正式原始估價報告尚無完成的欄位抽取結果",
-                409,
-            )
-
-        field_rows = await self.repository.list_official_extracted_fields(
-            extraction_run["extraction_run_id"]
+        field_rows = await self.repository.list_applied_confirmed_extracted_fields(
+            review.case_id
         )
         official_fields = tuple(
-            TrustedField(
-                extracted_field_id=str(row["extracted_field_id"]),
-                field_code=row["field_code"],
-                field_path=row["field_path"],
-                raw_text=row["raw_text"],
-                normalized_value=row["normalized_value"],
-                value_type=row["value_type"],
-                page_number=row["page_number"],
-                bounding_box=row["bounding_box"],
-                confidence=row["confidence"],
-                verification_status=row["verification_status"],
-                verified_by_user_id=(
-                    str(row["verified_by_user_id"])
-                    if row["verified_by_user_id"] is not None
-                    else None
-                ),
-                verified_at=row["verified_at"],
-                is_official=row["is_official"],
-            )
+            self._trusted_field(row)
             for row in field_rows
         )
         fields = trusted_fields_by_code(official_fields)
@@ -439,7 +406,6 @@ class ReviewService:
 
         return TrustedRunContext(
             document=document,
-            extraction_run=extraction_run,
             fields=fields,
             official_fields=official_fields,
             rule_version=rule_version,
@@ -561,12 +527,23 @@ class ReviewService:
                 ),
                 "checksum_sha256": context.document["checksum_sha256"],
             },
-            "extraction_run": {
-                "extraction_run_id": str(context.extraction_run["extraction_run_id"]),
-                "run_no": context.extraction_run["run_no"],
-                "extractor_name": context.extraction_run["extractor_name"],
-                "extractor_version": context.extraction_run["extractor_version"],
-            },
+            **(
+                {
+                    "extraction_run": {
+                        "extraction_run_id": str(context.extraction_run["extraction_run_id"]),
+                        "run_no": context.extraction_run["run_no"],
+                        "extractor_name": context.extraction_run["extractor_name"],
+                        "extractor_version": context.extraction_run["extractor_version"],
+                    }
+                }
+                if context.extraction_run is not None
+                else {
+                    "trusted_input_source": {
+                        "field_status": "APPLIED",
+                        "value_column": "confirmed_value",
+                    }
+                }
+            ),
             "field_snapshots": ReviewService._official_field_snapshots(
                 context.official_fields
             ),

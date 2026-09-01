@@ -21,18 +21,61 @@ HIGH_IMPACT_FIELD_CODES = frozenset(
 @dataclass(frozen=True)
 class TrustedField:
     extracted_field_id: str
-    field_code: str
-    field_path: str
-    raw_text: str
-    normalized_value: object
-    value_type: str
-    page_number: int
-    bounding_box: object
+    form_code: str
+    field_name: str
+    confirmed_value: object
+    source_page: int | None
+    source_text: str | None
     confidence: object | None
-    verification_status: str
-    verified_by_user_id: str | None
-    verified_at: object | None
-    is_official: bool
+    field_status: str
+    confirmed_by_user_id: str | None
+    confirmed_at: object | None
+
+    @property
+    def field_code(self) -> str:
+        return self.field_name
+
+    @property
+    def field_path(self) -> str:
+        return f"{self.form_code}.{self.field_name}"
+
+    @property
+    def raw_text(self) -> str:
+        return self.source_text or ""
+
+    @property
+    def normalized_value(self) -> object:
+        return self.confirmed_value
+
+    @property
+    def value_type(self) -> str:
+        if _finite_decimal(self.confirmed_value) is not None:
+            return "DECIMAL"
+        return "TEXT" if isinstance(self.confirmed_value, str) else "JSON"
+
+    @property
+    def page_number(self) -> int | None:
+        return self.source_page
+
+    @property
+    def bounding_box(self) -> None:
+        return None
+
+    @property
+    def verification_status(self) -> str:
+        return self.field_status
+
+    @property
+    def verified_by_user_id(self) -> str | None:
+        return self.confirmed_by_user_id
+
+    @property
+    def verified_at(self) -> object | None:
+        return self.confirmed_at
+
+    @property
+    def is_official(self) -> bool:
+        return self.field_status == "APPLIED"
 
 
 @dataclass(frozen=True)
@@ -44,13 +87,13 @@ class TrustedInputProblem:
 @dataclass(frozen=True)
 class TrustedRunContext:
     document: dict
-    extraction_run: dict
     fields: dict[str, TrustedField]
     official_fields: tuple[TrustedField, ...]
     rule_version: dict
     validation_rules: tuple[dict, ...]
     rule_source: dict
     prepared_rules: tuple["PreparedRule", ...]
+    extraction_run: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -78,16 +121,21 @@ class RuleContract:
 
 
 def trusted_fields_by_code(fields):
-    official_counts = {}
-    official_fields = {}
+    applied_counts = {}
+    applied_fields = {}
     for item in fields:
-        if item.is_official:
-            official_counts[item.field_code] = official_counts.get(item.field_code, 0) + 1
-            official_fields[item.field_code] = item
+        if (
+            item.field_status == "APPLIED"
+            and item.confirmed_value is not None
+            and item.confirmed_by_user_id is not None
+            and item.confirmed_at is not None
+        ):
+            applied_counts[item.field_name] = applied_counts.get(item.field_name, 0) + 1
+            applied_fields[item.field_name] = item
     return {
         code: item
-        for code, item in official_fields.items()
-        if official_counts[code] == 1
+        for code, item in applied_fields.items()
+        if applied_counts[code] == 1
     }
 
 
@@ -95,15 +143,8 @@ def required_field_problems(required_codes, fields):
     problems = []
     for code in sorted(required_codes):
         item = fields.get(code)
-        if item is None or item.verification_status == "REJECTED":
+        if item is None:
             problems.append(TrustedInputProblem("TRUSTED_INPUT_MISSING", code))
-        elif (
-            code in HIGH_IMPACT_FIELD_CODES
-            and item.verification_status != "VERIFIED"
-        ):
-            problems.append(TrustedInputProblem("TRUSTED_INPUT_UNVERIFIED", code))
-        elif item.verification_status not in {"AUTO_EXTRACTED", "VERIFIED"}:
-            problems.append(TrustedInputProblem("TRUSTED_INPUT_UNVERIFIED", code))
     return tuple(problems)
 
 
@@ -119,9 +160,9 @@ def _configuration_error(message: str, rule: dict) -> AppError:
 def _unverified_value_error(field: TrustedField) -> AppError:
     return AppError(
         "TRUSTED_INPUT_UNVERIFIED",
-        f"正式抽取欄位格式無法用於檢核：{field.field_code}",
+        f"正式採用欄位格式無法用於檢核：{field.field_name}",
         409,
-        {"field_code": field.field_code},
+        {"field_code": field.field_name},
     )
 
 
@@ -215,10 +256,8 @@ def prepare_trusted_rules(
                 409,
                 {"field_code": contract.target_field_code},
             )
-        if field.value_type != contract.expected_value_type:
-            raise _unverified_value_error(field)
         if contract.rule["rule_code"] == "ADJUSTMENT_RATE":
-            reported_rate = _finite_decimal(field.normalized_value)
+            reported_rate = _finite_decimal(field.confirmed_value)
             if reported_rate is None:
                 raise _unverified_value_error(field)
             try:
@@ -239,14 +278,14 @@ def prepare_trusted_rules(
                 )
             )
         else:
-            if not isinstance(field.normalized_value, str) or not field.normalized_value.strip():
+            if not isinstance(field.confirmed_value, str) or not field.confirmed_value.strip():
                 raise _unverified_value_error(field)
             prepared.append(
                 PreparedRule(
                     rule=contract.rule,
                     field=field,
                     configuration=contract.configuration,
-                    reported_grade=field.normalized_value,
+                    reported_grade=field.confirmed_value,
                     system_grade=contract.system_grade,
                 )
             )
