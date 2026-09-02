@@ -230,3 +230,58 @@ def test_downgrade_refuses_real_f02_rf_report_page_data(admin_cursor):
     admin_cursor.connection.commit()
     _run_alembic("downgrade", "20260901_0009")
     _run_alembic("upgrade", "head")
+
+
+def test_display_order_constraints_are_per_analysis(admin_cursor):
+    admin_cursor.execute("SET session_replication_role = replica")
+    try:
+        first_analysis, second_analysis = uuid4(), uuid4()
+        values = (uuid4(), uuid4(), first_analysis, uuid4(), "100", "2026-01-01", 1)
+        admin_cursor.execute(
+            "INSERT INTO valuation.comparison_targets (comparison_target_id, case_id, comparison_analysis_id, transaction_id, normal_unit_price_snapshot, transaction_date_snapshot, display_order) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            values,
+        )
+        with pytest.raises(Exception):
+            admin_cursor.execute(
+                "INSERT INTO valuation.comparison_targets (comparison_target_id, case_id, comparison_analysis_id, transaction_id, normal_unit_price_snapshot, transaction_date_snapshot, display_order) VALUES (%s, %s, %s, %s, %s, %s, 0)",
+                (uuid4(), uuid4(), first_analysis, uuid4(), "100", "2026-01-01"),
+            )
+        admin_cursor.connection.rollback()
+    finally:
+        admin_cursor.execute("SET session_replication_role = origin")
+
+
+def test_upgrade_backfills_existing_targets_by_stable_target_id(admin_cursor):
+    _run_alembic("downgrade", "20260901_0009")
+    admin_cursor.execute("SET session_replication_role = replica")
+    analysis_id, case_id = uuid4(), uuid4()
+    target_ids = sorted((uuid4(), uuid4(), uuid4()), key=str)
+    for target_id in reversed(target_ids):
+        admin_cursor.execute(
+            "INSERT INTO valuation.comparison_targets (comparison_target_id, case_id, comparison_analysis_id, transaction_id, normal_unit_price_snapshot, transaction_date_snapshot) VALUES (%s, %s, %s, %s, %s, %s)",
+            (target_id, case_id, analysis_id, uuid4(), "100", "2026-01-01"),
+        )
+    admin_cursor.execute("SET session_replication_role = origin")
+    admin_cursor.connection.commit()
+    _run_alembic("upgrade", "head")
+    admin_cursor.execute(
+        "SELECT comparison_target_id, display_order, normal_unit_price_snapshot FROM valuation.comparison_targets WHERE comparison_analysis_id = %s ORDER BY display_order",
+        (analysis_id,),
+    )
+    assert admin_cursor.fetchall() == [(target_id, index, 100) for index, target_id in enumerate(target_ids, 1)]
+
+
+def test_downgrade_blocks_f02_rf_validation_rule_before_schema_drop(admin_cursor):
+    rule_id = uuid4()
+    admin_cursor.execute("SET session_replication_role = replica")
+    admin_cursor.execute(
+        "INSERT INTO valuation.validation_rules (validation_rule_id, rule_version_id, rule_code, rule_name, target_form_code, target_table, severity, rule_expression, message_template, is_active) VALUES (%s, %s, %s, 'rule', 'F02-RF', 'forms', 'HIGH', 'true', 'blocked', true)",
+        (rule_id, uuid4(), f"MIG-{uuid4().hex[:12]}"),
+    )
+    admin_cursor.execute("SET session_replication_role = origin")
+    admin_cursor.connection.commit()
+    result = _run_alembic("downgrade", "20260901_0009", expect_success=False)
+    assert "cannot downgrade while complete-report workflow references exist" in (result.stdout + result.stderr)
+    assert "form_content" in column_names(admin_cursor, "form_instances", "valuation")
+    admin_cursor.execute("DELETE FROM valuation.validation_rules WHERE validation_rule_id = %s", (rule_id,))
+    admin_cursor.connection.commit()

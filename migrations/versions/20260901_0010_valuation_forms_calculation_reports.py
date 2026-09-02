@@ -100,19 +100,27 @@ def upgrade() -> None:
         f"ADD CONSTRAINT ck_extracted_fields_form_code CHECK (form_code IN ({FORM_CODES}))"
     )
 
+    # 0009 has no user-defined target order.  UUID is the only stable existing
+    # ordering key, so it deterministically preserves every target and assigns
+    # 1..N within each analysis without inventing or rewriting business values.
+    op.execute("ALTER TABLE valuation.comparison_targets ADD COLUMN display_order integer")
     op.execute(
         """
-        DO $$
-        BEGIN
-            IF EXISTS (SELECT 1 FROM valuation.comparison_targets) THEN
-                RAISE EXCEPTION
-                    'comparison_targets contains rows; assign an explicit display order before upgrade';
-            END IF;
-        END
-        $$
+        WITH ordered_targets AS (
+            SELECT comparison_target_id,
+                   row_number() OVER (
+                       PARTITION BY comparison_analysis_id
+                       ORDER BY comparison_target_id
+                   )::integer AS display_order
+            FROM valuation.comparison_targets
+        )
+        UPDATE valuation.comparison_targets target
+        SET display_order = ordered_targets.display_order
+        FROM ordered_targets
+        WHERE target.comparison_target_id = ordered_targets.comparison_target_id
         """
     )
-    op.execute("ALTER TABLE valuation.comparison_targets ADD COLUMN display_order integer NOT NULL")
+    op.execute("ALTER TABLE valuation.comparison_targets ALTER COLUMN display_order SET NOT NULL")
     op.execute(
         "ALTER TABLE valuation.comparison_targets "
         "ADD CONSTRAINT ck_comparison_targets_display_order CHECK (display_order > 0)"
@@ -254,7 +262,10 @@ def downgrade() -> None:
                 RAISE EXCEPTION 'cannot downgrade while comparison calculation evidence exists';
             END IF;
             IF EXISTS (SELECT 1 FROM valuation.extracted_fields WHERE form_code = 'S01')
-               OR EXISTS (SELECT 1 FROM valuation.validation_rules WHERE target_form_code = 'S01')
+               OR EXISTS (
+                    SELECT 1 FROM valuation.validation_rules
+                    WHERE target_form_code IN ('S01', 'F02-RF')
+               )
                OR EXISTS (
                     SELECT 1 FROM valuation.assistant_sessions
                     WHERE selected_form_type = 'REPORT_COMPARISON_COMMERCIAL'
