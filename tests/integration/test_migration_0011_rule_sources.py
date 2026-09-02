@@ -74,7 +74,20 @@ def _partial_unique_index(cursor, schema: str, name: str) -> tuple[bool, str, li
     )
     row = cursor.fetchone()
     assert row is not None, f"missing index {schema}.{name}"
-    return row[0]
+    return bool(row[0]), str(row[1]), list(row[2])
+
+
+def test_partial_unique_index_returns_catalog_tuple() -> None:
+    class Cursor:
+        def execute(self, *_args) -> None:
+            pass
+
+        def fetchone(self) -> tuple[bool, str, list[str]]:
+            return True, "is_primary", ["rule_version_id"]
+
+    assert _partial_unique_index(
+        Cursor(), "valuation", "uq_rule_version_sources_primary"
+    ) == (True, "is_primary", ["rule_version_id"])
 
 
 def _create_rule_version(cursor) -> object:
