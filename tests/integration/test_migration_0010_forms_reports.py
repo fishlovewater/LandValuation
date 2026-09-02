@@ -236,17 +236,29 @@ def test_display_order_constraints_are_per_analysis(admin_cursor):
     admin_cursor.execute("SET session_replication_role = replica")
     try:
         first_analysis, second_analysis = uuid4(), uuid4()
-        values = (uuid4(), uuid4(), first_analysis, uuid4(), "100", "2026-01-01", 1)
+        first_case, second_case = uuid4(), uuid4()
+        first_transaction, second_transaction, third_transaction = uuid4(), uuid4(), uuid4()
+        values = (uuid4(), first_case, first_analysis, first_transaction, "100", "2026-01-01", 1)
         admin_cursor.execute(
             "INSERT INTO valuation.comparison_targets (comparison_target_id, case_id, comparison_analysis_id, transaction_id, normal_unit_price_snapshot, transaction_date_snapshot, display_order) VALUES (%s, %s, %s, %s, %s, %s, %s)",
             values,
         )
+        admin_cursor.execute("SAVEPOINT duplicate_display_order")
         with pytest.raises(Exception):
             admin_cursor.execute(
-                "INSERT INTO valuation.comparison_targets (comparison_target_id, case_id, comparison_analysis_id, transaction_id, normal_unit_price_snapshot, transaction_date_snapshot, display_order) VALUES (%s, %s, %s, %s, %s, %s, 0)",
-                (uuid4(), uuid4(), first_analysis, uuid4(), "100", "2026-01-01"),
+                "INSERT INTO valuation.comparison_targets (comparison_target_id, case_id, comparison_analysis_id, transaction_id, normal_unit_price_snapshot, transaction_date_snapshot, display_order) VALUES (%s, %s, %s, %s, %s, %s, 1)",
+                (uuid4(), first_case, first_analysis, second_transaction, "100", "2026-01-01"),
             )
-        admin_cursor.connection.rollback()
+        admin_cursor.execute("ROLLBACK TO SAVEPOINT duplicate_display_order")
+        admin_cursor.execute(
+            "INSERT INTO valuation.comparison_targets (comparison_target_id, case_id, comparison_analysis_id, transaction_id, normal_unit_price_snapshot, transaction_date_snapshot, display_order) VALUES (%s, %s, %s, %s, %s, %s, 1)",
+            (uuid4(), second_case, second_analysis, third_transaction, "100", "2026-01-01"),
+        )
+        admin_cursor.execute(
+            "SELECT count(*) FROM valuation.comparison_targets WHERE (comparison_analysis_id, display_order) IN ((%s, 1), (%s, 1))",
+            (first_analysis, second_analysis),
+        )
+        assert admin_cursor.fetchone()[0] == 2
     finally:
         admin_cursor.execute("SET session_replication_role = origin")
 
