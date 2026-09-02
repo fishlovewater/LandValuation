@@ -86,6 +86,7 @@ class ExtractionRepository:
                 ExtractedFieldRecord.case_id == record.case_id,
                 ExtractedFieldRecord.field_name == record.field_name,
             )
+            .order_by(ExtractedFieldRecord.extracted_field_id)
             .with_for_update()
         )
         for related_record in related_records.all():

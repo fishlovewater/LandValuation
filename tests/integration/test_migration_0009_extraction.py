@@ -217,6 +217,68 @@ def test_extracted_field_unique_key_is_scoped_by_form(admin_cursor):
     admin_cursor.connection.rollback()
 
 
+def test_canonical_extracted_fields_accept_f02_rf_candidates(admin_cursor):
+    user_id, case_id, document_id = create_user_case_document(admin_cursor)
+    extraction_id = create_extraction(admin_cursor, user_id, case_id, document_id)
+
+    admin_cursor.execute(
+        """
+        INSERT INTO valuation.extracted_fields (
+            case_id, extraction_id, document_id, form_code, field_name,
+            extracted_value, confidence
+        ) VALUES (%s, %s, %s, 'F02-RF', 'road_access', %s, 0.9000)
+        RETURNING form_code
+        """,
+        (case_id, extraction_id, document_id, Jsonb({"value": "LEVEL_1"})),
+    )
+
+    assert admin_cursor.fetchone()[0] == "F02-RF"
+
+
+def test_demo_legacy_extraction_is_cleaned_during_upgrade(admin_cursor):
+    run_alembic("downgrade", "20260830_0008")
+    user_id, case_id, document_id = create_user_case_document(
+        admin_cursor, case_no="DEMO-REVIEW-001"
+    )
+    admin_cursor.execute(
+        """
+        INSERT INTO valuation.extraction_runs (
+            case_id, document_id, document_version, run_no, status, extractor_name
+        ) VALUES (%s, %s, 1, 1, 'PENDING', 'demo-migration-test')
+        RETURNING extraction_run_id
+        """,
+        (case_id, document_id),
+    )
+    extraction_run_id = admin_cursor.fetchone()[0]
+    admin_cursor.execute(
+        """
+        INSERT INTO valuation.extracted_fields (
+            extraction_run_id, field_code, field_path, value_type, raw_text,
+            normalized_value, page_number
+        ) VALUES (%s, 'road_access', '$.road_access', 'TEXT', 'LEVEL_1', %s, 1)
+        """,
+        (extraction_run_id, Jsonb("LEVEL_1")),
+    )
+    admin_cursor.connection.commit()
+
+    run_alembic("upgrade", "head")
+    admin_cursor.execute(
+        "SELECT count(*) FROM valuation.document_extractions WHERE case_id = %s",
+        (case_id,),
+    )
+    assert admin_cursor.fetchone()[0] == 0
+    admin_cursor.execute(
+        "SELECT count(*) FROM valuation.extracted_fields WHERE case_id = %s",
+        (case_id,),
+    )
+    assert admin_cursor.fetchone()[0] == 0
+
+    admin_cursor.execute("DELETE FROM valuation.documents WHERE case_id = %s", (case_id,))
+    admin_cursor.execute("DELETE FROM valuation.cases WHERE case_id = %s", (case_id,))
+    admin_cursor.execute("DELETE FROM auth.users WHERE user_id = %s", (user_id,))
+    admin_cursor.connection.commit()
+
+
 def test_non_demo_legacy_extraction_blocks_upgrade(admin_cursor):
     run_alembic("downgrade", "20260830_0008")
     user_id, case_id, document_id = create_user_case_document(admin_cursor)

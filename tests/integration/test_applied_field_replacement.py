@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date
 import os
 from uuid import uuid4
@@ -107,7 +108,7 @@ async def test_applying_new_document_version_replaces_case_wide_review_field(
                     Jsonb(value),
                     user_id,
                 ),
-            )
+        )
         admin_cursor.connection.commit()
 
         engine = create_async_engine(os.environ["MIGRATION_DATABASE_URL"])
@@ -147,6 +148,270 @@ async def test_applying_new_document_version_replaces_case_wide_review_field(
             assert [row["extracted_field_id"] for row in applied_fields] == [new_field_id]
             assert [row["confirmed_value"] for row in applied_fields] == ["-8"]
             await session.commit()
+        await engine.dispose()
+    finally:
+        admin_cursor.connection.rollback()
+        cursor.execute("DELETE FROM valuation.extracted_fields WHERE case_id = %s", (case_id,))
+        cursor.execute("DELETE FROM valuation.document_extractions WHERE case_id = %s", (case_id,))
+        cursor.execute("DELETE FROM valuation.form_instances WHERE case_id = %s", (case_id,))
+        cursor.execute("DELETE FROM valuation.documents WHERE case_id = %s", (case_id,))
+        cursor.execute("DELETE FROM valuation.cases WHERE case_id = %s", (case_id,))
+        cursor.execute("DELETE FROM auth.users WHERE user_id = %s", (user_id,))
+        admin_cursor.connection.commit()
+
+
+@pytest.mark.asyncio
+async def test_f02_rf_candidate_can_be_applied_in_canonical_schema(admin_cursor):
+    user_id, case_id = uuid4(), uuid4()
+    document_id, extraction_id, form_id, field_id = uuid4(), uuid4(), uuid4(), uuid4()
+    cursor = admin_cursor
+    try:
+        cursor.execute(
+            """
+            INSERT INTO auth.users (
+                user_id, username, email, password_hash, display_name, is_active
+            ) VALUES (%s, %s, %s, 'hash', 'F02-RF Tester', true)
+            """,
+            (user_id, f"user_{uuid4().hex[:10]}", f"{uuid4().hex[:12]}@example.test"),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.cases (
+                case_id, case_no, case_title, case_type, valuation_base_date,
+                city_code, district_code, created_by_user_id, updated_by_user_id
+            ) VALUES (%s, %s, 'F02-RF candidate case', 'LAND', %s,
+                      'TP', 'BANQIAO', %s, %s)
+            """,
+            (case_id, f"F02RF-{uuid4().hex[:10]}", date(2026, 9, 2), user_id, user_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.documents (
+                document_id, case_id, document_type, original_filename, mime_type,
+                bucket_name, object_key, checksum_sha256, file_size_bytes, uploaded_by_user_id
+            ) VALUES (%s, %s, 'APPRAISAL_REPORT', 'f02-rf.pdf', 'application/pdf',
+                      'land-valuation', %s, %s, 1, %s)
+            """,
+            (document_id, case_id, f"cases/{case_id}/{document_id}.pdf", "f" * 64, user_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.form_instances (
+                form_instance_id, case_id, form_code, version_no, form_status,
+                created_by_user_id, updated_by_user_id
+            ) VALUES (%s, %s, 'F03', 1, 'DRAFT', %s, %s)
+            """,
+            (form_id, case_id, user_id, user_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.document_extractions (
+                extraction_id, case_id, document_id, provider, extraction_status,
+                created_by_user_id, completed_at
+            ) VALUES (%s, %s, %s, 'LOCAL_PDF', 'COMPLETED', %s, now())
+            """,
+            (extraction_id, case_id, document_id, user_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.extracted_fields (
+                extracted_field_id, case_id, extraction_id, document_id, form_code,
+                field_name, extracted_value, confidence, field_status, confirmed_value,
+                confirmed_by_user_id, confirmed_at
+            ) VALUES (%s, %s, %s, %s, 'F02-RF', 'road_access',
+                      %s, 0.9000, 'CONFIRMED', %s, %s, now())
+            """,
+            (field_id, case_id, extraction_id, document_id, Jsonb({"value": "LEVEL_1"}), Jsonb("LEVEL_1"), user_id),
+        )
+        admin_cursor.connection.commit()
+
+        engine = create_async_engine(os.environ["MIGRATION_DATABASE_URL"])
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with session_factory() as session:
+            field = await session.scalar(
+                select(ExtractedFieldRecord).where(
+                    ExtractedFieldRecord.extracted_field_id == field_id
+                )
+            )
+            await ExtractionRepository(session).apply_candidate(field, form_id)
+            await session.commit()
+
+        async with session_factory() as session:
+            applied = await session.scalar(
+                select(ExtractedFieldRecord).where(
+                    ExtractedFieldRecord.extracted_field_id == field_id
+                )
+            )
+            assert applied.form_code == "F02-RF"
+            assert applied.field_status == "APPLIED"
+            assert applied.applied_form_instance_id == form_id
+        await engine.dispose()
+    finally:
+        admin_cursor.connection.rollback()
+        cursor.execute("DELETE FROM valuation.extracted_fields WHERE case_id = %s", (case_id,))
+        cursor.execute("DELETE FROM valuation.document_extractions WHERE case_id = %s", (case_id,))
+        cursor.execute("DELETE FROM valuation.form_instances WHERE case_id = %s", (case_id,))
+        cursor.execute("DELETE FROM valuation.documents WHERE case_id = %s", (case_id,))
+        cursor.execute("DELETE FROM valuation.cases WHERE case_id = %s", (case_id,))
+        cursor.execute("DELETE FROM auth.users WHERE user_id = %s", (user_id,))
+        admin_cursor.connection.commit()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_candidate_applications_keep_one_applied_and_preserve_confirmation(
+    admin_cursor,
+):
+    user_id, case_id = uuid4(), uuid4()
+    old_document_id, new_document_id = uuid4(), uuid4()
+    old_extraction_id, new_extraction_id = uuid4(), uuid4()
+    old_form_id, new_form_id = uuid4(), uuid4()
+    old_field_id, new_field_id = uuid4(), uuid4()
+    cursor = admin_cursor
+    try:
+        cursor.execute(
+            """
+            INSERT INTO auth.users (
+                user_id, username, email, password_hash, display_name, is_active
+            ) VALUES (%s, %s, %s, 'hash', 'Concurrency Tester', true)
+            """,
+            (user_id, f"user_{uuid4().hex[:10]}", f"{uuid4().hex[:12]}@example.test"),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.cases (
+                case_id, case_no, case_title, case_type, valuation_base_date,
+                city_code, district_code, created_by_user_id, updated_by_user_id
+            ) VALUES (%s, %s, 'Concurrent application case', 'LAND', %s,
+                      'TP', 'BANQIAO', %s, %s)
+            """,
+            (case_id, f"CONCURRENT-{uuid4().hex[:10]}", date(2026, 9, 2), user_id, user_id),
+        )
+        for document_id, version_no in ((old_document_id, 1), (new_document_id, 2)):
+            cursor.execute(
+                """
+                INSERT INTO valuation.documents (
+                    document_id, case_id, document_type, original_filename, mime_type,
+                    bucket_name, object_key, checksum_sha256, file_size_bytes, version_no,
+                    uploaded_by_user_id
+                ) VALUES (%s, %s, 'APPRAISAL_REPORT', %s, 'application/pdf',
+                          'land-valuation', %s, %s, 1, %s, %s)
+                """,
+                (
+                    document_id,
+                    case_id,
+                    f"concurrency-v{version_no}.pdf",
+                    f"cases/{case_id}/{document_id}.pdf",
+                    f"{version_no}".ljust(64, "c"),
+                    version_no,
+                    user_id,
+                ),
+            )
+        for form_id, version_no in ((old_form_id, 1), (new_form_id, 2)):
+            cursor.execute(
+                """
+                INSERT INTO valuation.form_instances (
+                    form_instance_id, case_id, form_code, version_no, form_status,
+                    created_by_user_id, updated_by_user_id
+                ) VALUES (%s, %s, 'F03', %s, 'DRAFT', %s, %s)
+                """,
+                (form_id, case_id, version_no, user_id, user_id),
+            )
+        for extraction_id, document_id in (
+            (old_extraction_id, old_document_id),
+            (new_extraction_id, new_document_id),
+        ):
+            cursor.execute(
+                """
+                INSERT INTO valuation.document_extractions (
+                    extraction_id, case_id, document_id, provider, extraction_status,
+                    created_by_user_id, completed_at
+                ) VALUES (%s, %s, %s, 'LOCAL_PDF', 'COMPLETED', %s, now())
+                """,
+                (extraction_id, case_id, document_id, user_id),
+            )
+        for field_id, extraction_id, document_id, value in (
+            (old_field_id, old_extraction_id, old_document_id, "-12"),
+            (new_field_id, new_extraction_id, new_document_id, "-8"),
+        ):
+            cursor.execute(
+                """
+                INSERT INTO valuation.extracted_fields (
+                    extracted_field_id, case_id, extraction_id, document_id, form_code,
+                    field_name, extracted_value, confidence, field_status, confirmed_value,
+                    confirmed_by_user_id, confirmed_at
+                ) VALUES (%s, %s, %s, %s, 'F03', 'adjustment_rate',
+                          %s, 0.9000, 'CONFIRMED', %s, %s, now())
+                """,
+                (
+                    field_id,
+                    case_id,
+                    extraction_id,
+                    document_id,
+                    Jsonb({"value": value}),
+                    Jsonb(value),
+                    user_id,
+                ),
+            )
+        admin_cursor.connection.commit()
+
+        engine = create_async_engine(os.environ["MIGRATION_DATABASE_URL"])
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        first_lock_acquired = asyncio.Event()
+        second_transaction_started = asyncio.Event()
+
+        async def apply_first_candidate() -> None:
+            async with session_factory() as session:
+                async with session.begin():
+                    candidate = await session.scalar(
+                        select(ExtractedFieldRecord).where(
+                            ExtractedFieldRecord.extracted_field_id == old_field_id
+                        )
+                    )
+                    await ExtractionRepository(session).apply_candidate(candidate, old_form_id)
+                    first_lock_acquired.set()
+                    await second_transaction_started.wait()
+
+        async def apply_second_candidate() -> None:
+            await first_lock_acquired.wait()
+            async with session_factory() as session:
+                async with session.begin():
+                    candidate = await session.scalar(
+                        select(ExtractedFieldRecord).where(
+                            ExtractedFieldRecord.extracted_field_id == new_field_id
+                        )
+                    )
+                    second_transaction_started.set()
+                    await ExtractionRepository(session).apply_candidate(candidate, new_form_id)
+
+        await asyncio.wait_for(
+            asyncio.gather(apply_first_candidate(), apply_second_candidate()), timeout=5
+        )
+
+        async with session_factory() as session:
+            fields = list(
+                (
+                    await session.scalars(
+                        select(ExtractedFieldRecord)
+                        .where(
+                            ExtractedFieldRecord.extracted_field_id.in_(
+                                (old_field_id, new_field_id)
+                            )
+                        )
+                        .order_by(ExtractedFieldRecord.extracted_field_id)
+                    )
+                ).all()
+            )
+            old_field = next(field for field in fields if field.extracted_field_id == old_field_id)
+            new_field = next(field for field in fields if field.extracted_field_id == new_field_id)
+            assert sum(field.field_status == "APPLIED" for field in fields) == 1
+            assert old_field.field_status == "CONFIRMED"
+            assert old_field.applied_form_instance_id is None
+            assert old_field.applied_at is None
+            assert old_field.confirmed_value == "-12"
+            assert old_field.confirmed_by_user_id == user_id
+            assert old_field.confirmed_at is not None
+            assert new_field.field_status == "APPLIED"
+            assert new_field.applied_form_instance_id == new_form_id
         await engine.dispose()
     finally:
         admin_cursor.connection.rollback()

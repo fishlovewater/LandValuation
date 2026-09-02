@@ -216,7 +216,7 @@ def upgrade() -> None:
             CONSTRAINT uq_extracted_fields_extraction_form_field
                 UNIQUE (extraction_id, form_code, field_name),
             CONSTRAINT ck_extracted_fields_form_code
-                CHECK (form_code IN ('F01', 'F02', 'F03', 'F04')),
+                CHECK (form_code IN ('F01', 'F02', 'F02-RF', 'F03', 'F04')),
             CONSTRAINT ck_extracted_fields_name CHECK (length(btrim(field_name)) > 0),
             CONSTRAINT ck_extracted_fields_confidence CHECK (confidence BETWEEN 0 AND 1),
             CONSTRAINT ck_extracted_fields_page CHECK (source_page IS NULL OR source_page > 0),
