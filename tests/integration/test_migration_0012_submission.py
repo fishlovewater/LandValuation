@@ -17,6 +17,9 @@ MIGRATION_PATH = (
     / "versions"
     / "20260901_0012_valuation_review_submission_handoff.py"
 )
+RUNTIME_ROLE_SQL_PATH = (
+    PROJECT_ROOT / "tests" / "integration" / "sql" / "001_runtime_role.sql"
+)
 
 
 def _run_alembic(command: str, revision: str, *, expect_success: bool = True):
@@ -140,6 +143,30 @@ def _seed_submission_graph(cursor) -> dict[str, object]:
         "document_id": document_id,
         "submission_id": submission_id,
     }
+
+
+def _insert_submission(cursor, ids: dict[str, object], **overrides: object) -> None:
+    values = {
+        "submission_id": uuid4(),
+        "review_id": ids["review_id"],
+        "case_id": ids["case_id"],
+        "submission_no": 2,
+        "submitted_by_user_id": ids["user_id"],
+        "source_validation_run_id": ids["validation_run_id"],
+        "source_report_document_id": ids["document_id"],
+        "input_snapshot": Jsonb({"schema_version": 1}),
+        "input_fingerprint": "b" * 64,
+        "supersedes_submission_id": None,
+        "request_id": uuid4(),
+    }
+    values.update(overrides)
+    columns = ", ".join(values)
+    placeholders = ", ".join("%s" for _ in values)
+    cursor.execute(
+        f"INSERT INTO valuation.review_submissions ({columns}) "
+        f"VALUES ({placeholders})",
+        tuple(values.values()),
+    )
 
 
 def test_submission_schema(db_cursor):
@@ -271,16 +298,11 @@ def test_submission_checks_and_handoff_statuses(admin_cursor):
     ):
         admin_cursor.execute("SAVEPOINT invalid_submission")
         try:
-            assignments = ", ".join(f"{column} = %s" for column in values)
             with pytest.raises(Exception) as raised:
-                admin_cursor.execute(
-                    f"UPDATE valuation.review_submissions SET {assignments} "
-                    "WHERE submission_id = %s",
-                    (*values.values(), ids["submission_id"]),
-                )
+                _insert_submission(admin_cursor, ids, **values)
             assert expected_constraint in str(raised.value)
-            admin_cursor.execute("ROLLBACK TO SAVEPOINT invalid_submission")
         finally:
+            admin_cursor.execute("ROLLBACK TO SAVEPOINT invalid_submission")
             admin_cursor.execute("RELEASE SAVEPOINT invalid_submission")
 
     case_status = _constraint_definition(
@@ -301,18 +323,46 @@ def test_composite_supersedes_fk_rejects_submission_from_another_review(admin_cu
     admin_cursor.execute("SAVEPOINT cross_review_supersedes")
     try:
         with pytest.raises(Exception) as raised:
-            admin_cursor.execute(
-                """
-                UPDATE valuation.review_submissions
-                SET supersedes_submission_id = %s
-                WHERE submission_id = %s
-                """,
-                (first["submission_id"], second["submission_id"]),
+            _insert_submission(
+                admin_cursor,
+                second,
+                supersedes_submission_id=first["submission_id"],
             )
         assert "fk_review_submissions_supersedes" in str(raised.value)
-        admin_cursor.execute("ROLLBACK TO SAVEPOINT cross_review_supersedes")
     finally:
+        admin_cursor.execute("ROLLBACK TO SAVEPOINT cross_review_supersedes")
         admin_cursor.execute("RELEASE SAVEPOINT cross_review_supersedes")
+
+
+def test_migration_owner_is_nonmember_and_can_run_migrations(
+    admin_cursor, db_cursor
+):
+    admin_cursor.execute(
+        "SELECT current_user, "
+        "pg_has_role(current_user, 'land_valuation_app', 'MEMBER'), "
+        "(SELECT rolsuper FROM pg_roles WHERE rolname = current_user)"
+    )
+    migration_user, migration_is_app_member, migration_is_superuser = (
+        admin_cursor.fetchone()
+    )
+    db_cursor.execute(
+        "SELECT current_user, pg_has_role(current_user, 'land_valuation_app', 'MEMBER')"
+    )
+    runtime_user, runtime_is_app_member = db_cursor.fetchone()
+
+    assert migration_user != runtime_user
+    assert migration_is_app_member is False
+    assert migration_is_superuser is False
+    assert runtime_is_app_member is True
+    _run_alembic("upgrade", "head")
+
+
+def test_runtime_role_harness_demotes_the_migration_owner_after_setup():
+    source = RUNTIME_ROLE_SQL_PATH.read_text(encoding="utf-8")
+
+    demotion = source.index("ALTER ROLE land_valuation_migrator NOSUPERUSER")
+    privileges = source.index("ALTER DEFAULT PRIVILEGES")
+    assert privileges < demotion
 
 
 @pytest.mark.parametrize("statement", ["UPDATE", "DELETE"])
@@ -340,8 +390,8 @@ def test_runtime_role_cannot_mutate_review_submissions(
                     (ids["submission_id"],),
                 )
         assert "review submissions are immutable" in str(raised.value).lower()
-        db_cursor.execute("ROLLBACK TO SAVEPOINT immutable_submission")
     finally:
+        db_cursor.execute("ROLLBACK TO SAVEPOINT immutable_submission")
         db_cursor.execute("RELEASE SAVEPOINT immutable_submission")
 
     assert os.environ["POSTGRES_DB"].startswith("land_valuation_test_vr_")
