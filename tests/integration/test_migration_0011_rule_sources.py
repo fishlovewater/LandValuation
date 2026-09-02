@@ -51,9 +51,25 @@ def _constraint_definition(cursor, schema: str, table: str, name: str) -> str:
     return row[0]
 
 
-def _index_definition(cursor, schema: str, name: str) -> str:
+def _partial_unique_index(cursor, schema: str, name: str) -> tuple[bool, str, list[str]]:
     cursor.execute(
-        "SELECT indexdef FROM pg_indexes WHERE schemaname = %s AND indexname = %s",
+        """
+        SELECT index_row.indisunique,
+               pg_get_expr(index_row.indpred, index_row.indrelid),
+               array_agg(attribute.attname ORDER BY key.ordinality)
+        FROM pg_index AS index_row
+        JOIN pg_class AS index_relation ON index_relation.oid = index_row.indexrelid
+        JOIN pg_class AS table_relation ON table_relation.oid = index_row.indrelid
+        JOIN pg_namespace AS namespace ON namespace.oid = table_relation.relnamespace
+        CROSS JOIN LATERAL unnest(index_row.indkey) WITH ORDINALITY
+            AS key(attribute_number, ordinality)
+        JOIN pg_attribute AS attribute
+            ON attribute.attrelid = table_relation.oid
+           AND attribute.attnum = key.attribute_number
+        WHERE namespace.nspname = %s AND index_relation.relname = %s
+        GROUP BY index_row.indexrelid, index_row.indisunique,
+                 index_row.indpred, index_row.indrelid
+        """,
         (schema, name),
     )
     row = cursor.fetchone()
@@ -127,9 +143,12 @@ def test_rule_source_contract_uses_database_catalogs(admin_cursor):
         ("rule_version_id", "source_document_id"),
         ("rule_version_id", "source_order"),
     } <= unique_columns(admin_cursor, "rule_version_sources", "valuation")
-    assert "WHERE (is_primary)" in _index_definition(
+    is_unique, predicate, index_columns = _partial_unique_index(
         admin_cursor, "valuation", "uq_rule_version_sources_primary"
     )
+    assert is_unique is True
+    assert index_columns == ["rule_version_id"]
+    assert predicate.replace("(", "").replace(")", "").strip() == "is_primary"
     assert "EXAMPLE_REFERENCE" in _constraint_definition(
         admin_cursor, "knowledge", "documents", "ck_knowledge_document_type"
     )
