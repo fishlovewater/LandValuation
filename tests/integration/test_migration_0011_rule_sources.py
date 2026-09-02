@@ -104,6 +104,29 @@ def _create_rule_version(cursor) -> object:
     return rule_version_id
 
 
+def _create_knowledge_document(
+    cursor, *, document_type: str = "STANDARD", storage_etag: str | None = None
+) -> object:
+    document_id = uuid4()
+    cursor.execute(
+        """
+        INSERT INTO knowledge.documents (
+            document_id, document_code, title, document_type,
+            original_filename, object_key, checksum_sha256, storage_etag
+        ) VALUES (%s, %s, 'Migration source', %s, 'source.pdf', %s, %s, %s)
+        """,
+        (
+            document_id,
+            f"MIG-0011-DOC-{uuid4().hex[:10]}",
+            document_type,
+            f"knowledge/{document_id}/source.pdf",
+            "a" * 64,
+            storage_etag,
+        ),
+    )
+    return document_id
+
+
 def test_rule_source_contract_uses_database_catalogs(admin_cursor):
     assert table_exists(admin_cursor, "rule_version_sources", "valuation")
     assert set(column_names(admin_cursor, "rule_versions", "valuation")) >= {
@@ -263,29 +286,86 @@ def test_rule_source_constraints_reject_invalid_json_and_duplicate_primary(admin
         admin_cursor.execute("SET session_replication_role = origin")
 
 
-def test_downgrade_refuses_rule_source_and_draft_date_data(admin_cursor):
-    rule_version_id = _create_rule_version(admin_cursor)
-    admin_cursor.execute(
-        """
-        UPDATE valuation.rule_versions
-        SET jurisdiction_code = 'NEW_TAIPEI_CITY',
-            effective_date_status = 'UNKNOWN',
-            effective_from = NULL
-        WHERE rule_version_id = %s
-        """,
-        (rule_version_id,),
-    )
-    admin_cursor.connection.commit()
+@pytest.mark.parametrize(
+    "fixture_kind",
+    [
+        "source_link",
+        "rule_metadata",
+        "storage_etag",
+        "example_reference",
+        "unknown_effective_date",
+    ],
+)
+def test_downgrade_refuses_each_0011_data_shape_then_succeeds_after_cleanup(
+    admin_cursor, fixture_kind: str
+):
+    rule_version_id = None
+    document_id = None
+    source_link_id = None
 
+    if fixture_kind == "source_link":
+        rule_version_id = _create_rule_version(admin_cursor)
+        document_id = _create_knowledge_document(admin_cursor)
+        source_link_id = uuid4()
+        admin_cursor.execute(
+            """
+            INSERT INTO valuation.rule_version_sources (
+                rule_version_source_id, rule_version_id, source_document_id,
+                source_role, source_order, is_primary
+            ) VALUES (%s, %s, %s, 'PRIMARY', 1, true)
+            """,
+            (source_link_id, rule_version_id, document_id),
+        )
+    elif fixture_kind == "rule_metadata":
+        rule_version_id = _create_rule_version(admin_cursor)
+        admin_cursor.execute(
+            "UPDATE valuation.rule_versions SET formula_code = 'F03' "
+            "WHERE rule_version_id = %s",
+            (rule_version_id,),
+        )
+    elif fixture_kind == "storage_etag":
+        document_id = _create_knowledge_document(admin_cursor, storage_etag="etag-0011")
+    elif fixture_kind == "example_reference":
+        document_id = _create_knowledge_document(
+            admin_cursor, document_type="EXAMPLE_REFERENCE"
+        )
+    elif fixture_kind == "unknown_effective_date":
+        rule_version_id = _create_rule_version(admin_cursor)
+        admin_cursor.execute(
+            """
+            UPDATE valuation.rule_versions
+            SET jurisdiction_code = 'NEW_TAIPEI_CITY',
+                effective_date_status = 'UNKNOWN',
+                effective_from = NULL
+            WHERE rule_version_id = %s
+            """,
+            (rule_version_id,),
+        )
+    else:
+        raise AssertionError(f"unhandled fixture kind: {fixture_kind}")
+
+    admin_cursor.connection.commit()
     result = _run_alembic("downgrade", "20260901_0010", expect_success=False)
     assert "cannot downgrade while rule-source migration data exists" in (
         result.stdout + result.stderr
     ).lower()
 
-    admin_cursor.execute(
-        "DELETE FROM valuation.rule_versions WHERE rule_version_id = %s",
-        (rule_version_id,),
-    )
+    if source_link_id is not None:
+        admin_cursor.execute(
+            "DELETE FROM valuation.rule_version_sources "
+            "WHERE rule_version_source_id = %s",
+            (source_link_id,),
+        )
+    if rule_version_id is not None:
+        admin_cursor.execute(
+            "DELETE FROM valuation.rule_versions WHERE rule_version_id = %s",
+            (rule_version_id,),
+        )
+    if document_id is not None:
+        admin_cursor.execute(
+            "DELETE FROM knowledge.documents WHERE document_id = %s",
+            (document_id,),
+        )
     admin_cursor.connection.commit()
     _run_alembic("downgrade", "20260901_0010")
     _run_alembic("upgrade", "head")
@@ -299,3 +379,13 @@ def test_migration_is_schema_only_without_fixed_business_data():
     assert "update knowledge.documents" not in source
     assert "delete from valuation." not in source
     assert "評價基準明細表範例.pdf" not in source
+
+
+def test_downgrade_locks_all_0011_data_tables_before_guard_queries():
+    source = MIGRATION_PATH.read_text(encoding="utf-8")
+
+    lock_start = source.index(
+        "LOCK TABLE valuation.rule_version_sources, valuation.rule_versions,"
+    )
+    assert "knowledge.documents IN SHARE ROW EXCLUSIVE MODE" in source
+    assert lock_start < source.index("DO $$", source.index("def downgrade"))

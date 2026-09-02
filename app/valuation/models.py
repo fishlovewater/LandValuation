@@ -596,7 +596,10 @@ class RuleVersionSourceRecord(Base):
     )
 
     rule_version_source_id: Mapped[UUID] = mapped_column(
-        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+        server_default=text("gen_random_uuid()"),
     )
     rule_version_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
@@ -621,7 +624,13 @@ class RuleVersionSourceRecord(Base):
         Boolean, default=True, server_default=text("true")
     )
     source_reference: Mapped[str | None] = mapped_column(String(1000))
-    page_reference: Mapped[str | None] = mapped_column(String(500))
+    page_reference: Mapped[str | None] = mapped_column(
+        String(500),
+        comment=(
+            "User-confirmed page, chapter, article, or section reference; "
+            "never inferred by the system"
+        ),
+    )
     notes: Mapped[str | None] = mapped_column(Text)
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),

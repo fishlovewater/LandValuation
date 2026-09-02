@@ -172,6 +172,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # This migration removes columns and a table.  Acquire locks before every
+    # guard query so concurrent writes cannot commit between the preflight and
+    # the destructive DDL below; Alembic keeps them for this transaction.
+    op.execute(
+        "LOCK TABLE valuation.rule_version_sources, valuation.rule_versions, "
+        "knowledge.documents IN SHARE ROW EXCLUSIVE MODE"
+    )
     op.execute(
         """
         DO $$
