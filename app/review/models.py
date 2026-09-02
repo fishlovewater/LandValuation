@@ -42,6 +42,7 @@ class Review(Base):
     low_count: Mapped[int] = mapped_column(Integer, server_default="0")
     missing_item_count: Mapped[int] = mapped_column(Integer, server_default="0")
     latest_validation_run_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    latest_submission_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
 
 
 class MissingItem(Base):
@@ -100,6 +101,7 @@ class ValidationRun(Base):
     prompt_version: Mapped[str | None] = mapped_column(String(100))
     error_code: Mapped[str | None] = mapped_column(String(100))
     error_message: Mapped[str | None] = mapped_column(Text)
+    submission_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
 
 
 class ValidationFinding(Base):

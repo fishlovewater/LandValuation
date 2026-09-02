@@ -5,10 +5,12 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CHAR,
     CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -70,6 +72,71 @@ class CaseRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class ReviewSubmissionRecord(Base):
+    __tablename__ = "review_submissions"
+    __table_args__ = (
+        UniqueConstraint(
+            "review_id", "submission_no", name="uq_review_submissions_review_no"
+        ),
+        UniqueConstraint(
+            "case_id", "request_id", name="uq_review_submissions_case_request"
+        ),
+        UniqueConstraint(
+            "review_id", "submission_id", name="uq_review_submissions_review_id"
+        ),
+        CheckConstraint(
+            "submission_no > 0", name="ck_review_submissions_submission_no"
+        ),
+        CheckConstraint(
+            "input_fingerprint ~ '^[0-9a-f]{64}$'",
+            name="ck_review_submissions_fingerprint",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(input_snapshot) = 'object'",
+            name="ck_review_submissions_input_snapshot",
+        ),
+        ForeignKeyConstraint(
+            ("review_id", "supersedes_submission_id"),
+            (
+                "valuation.review_submissions.review_id",
+                "valuation.review_submissions.submission_id",
+            ),
+            name="fk_review_submissions_supersedes",
+        ),
+        {"schema": "valuation"},
+    )
+
+    submission_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    review_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("review.reviews.review_id")
+    )
+    case_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("valuation.cases.case_id")
+    )
+    submission_no: Mapped[int] = mapped_column(Integer)
+    submitted_by_user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("auth.users.user_id")
+    )
+    submitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    source_validation_run_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("valuation.validation_runs.validation_run_id"),
+    )
+    source_report_document_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("valuation.documents.document_id")
+    )
+    input_snapshot: Mapped[dict] = mapped_column(JSONB)
+    input_fingerprint: Mapped[str] = mapped_column(CHAR(64))
+    supersedes_submission_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True)
+    )
+    request_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True))
 
 
 class ParcelRecord(Base):

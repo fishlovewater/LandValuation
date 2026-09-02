@@ -84,6 +84,7 @@ class ReviewRead(BaseModel):
     low_count: int
     missing_item_count: int
     latest_validation_run_id: UUID | None
+    latest_submission_id: UUID | None = None
 
 
 class ReviewList(BaseModel):
@@ -155,6 +156,7 @@ class ValidationRunRead(BaseModel):
     prompt_version: str | None
     error_code: str | None
     error_message: str | None
+    submission_id: UUID | None = None
 
 
 class FindingRead(BaseModel):
