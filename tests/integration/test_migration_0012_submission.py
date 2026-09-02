@@ -1,4 +1,6 @@
+import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -392,24 +394,58 @@ def test_integration_harness_separates_bootstrap_migration_and_runtime_roles():
     assert "postgresql+psycopg://postgres:" not in compose
 
 
+@pytest.mark.skipif(
+    shutil.which("docker") is None, reason="requires Docker Compose CLI"
+)
 def test_primary_compose_provisions_idempotent_app_group_before_migrations():
-    compose = PRIMARY_COMPOSE_PATH.read_text(encoding="utf-8")
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--env-file",
+            ".env.example",
+            "-f",
+            str(PRIMARY_COMPOSE_PATH),
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    primary_config = json.loads(result.stdout)
+    role_init = primary_config["services"]["db-role-init"]
+    db_environment = primary_config["services"]["db"]["environment"]
     assert PRIMARY_ROLE_INIT_SQL_PATH.is_file()
     role_sql = PRIMARY_ROLE_INIT_SQL_PATH.read_text(encoding="utf-8")
-    role_init = compose.split("  db-role-init:\n", maxsplit=1)[1].split(
-        "\n  migrate:\n", maxsplit=1
-    )[0]
-    migrate = compose.split("  migrate:\n", maxsplit=1)[1].split(
-        "\n  minio:\n", maxsplit=1
-    )[0]
 
-    assert "db:\n        condition: service_healthy" in role_init
-    assert "POSTGRES_USER: ${POSTGRES_USER}" in role_init
-    assert "POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}" in role_init
-    assert "PGPASSWORD: ${POSTGRES_PASSWORD}" in role_init
-    assert "/role-init/001_land_valuation_app.sql" in role_init
-    assert '-v app_login_role="$$POSTGRES_USER"' in role_init
-    assert "db-role-init:\n        condition: service_completed_successfully" in migrate
+    assert role_init["depends_on"]["db"]["condition"] == "service_healthy"
+    assert (
+        primary_config["services"]["migrate"]["depends_on"]["db-role-init"][
+            "condition"
+        ]
+        == "service_completed_successfully"
+    )
+    assert role_init["entrypoint"] == ["psql"]
+    assert role_init["environment"] == {
+        "PGHOST": "db",
+        "PGDATABASE": db_environment["POSTGRES_DB"],
+        "PGUSER": db_environment["POSTGRES_USER"],
+        "PGPASSWORD": db_environment["POSTGRES_PASSWORD"],
+    }
+    assert role_init["command"] == [
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-v",
+        "app_group_role=land_valuation_app",
+        "-v",
+        f"app_login_role={role_init['environment']['PGUSER']}",
+        "-f",
+        "/role-init/001_land_valuation_app.sql",
+    ]
     assert "CREATE ROLE %I NOLOGIN" in role_sql
     assert "WHERE NOT EXISTS" in role_sql
     assert "GRANT %I TO %I" in role_sql

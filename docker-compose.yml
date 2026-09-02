@@ -31,17 +31,22 @@ services:
       db:
         condition: service_healthy
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGHOST: db
+      PGDATABASE: ${POSTGRES_DB}
+      PGUSER: ${POSTGRES_USER}
       PGPASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - ./database/role-init/001_land_valuation_app.sql:/role-init/001_land_valuation_app.sql:ro
-    entrypoint: ["/bin/sh", "-c"]
-    command: >-
-      exec psql -v ON_ERROR_STOP=1 -v app_group_role=land_valuation_app
-      -v app_login_role="$$POSTGRES_USER" -h db -U "$$POSTGRES_USER"
-      -d "$$POSTGRES_DB" -f /role-init/001_land_valuation_app.sql
+    entrypoint: ["psql"]
+    command:
+      - -v
+      - ON_ERROR_STOP=1
+      - -v
+      - app_group_role=land_valuation_app
+      - -v
+      - app_login_role=${POSTGRES_USER}
+      - -f
+      - /role-init/001_land_valuation_app.sql
     restart: "no"
 
   migrate:
