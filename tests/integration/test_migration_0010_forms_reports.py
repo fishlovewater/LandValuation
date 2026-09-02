@@ -15,6 +15,12 @@ from tests.integration.schema_assertions import (
 
 FORM_CODES = {"F01", "F02", "F03", "F04", "S01", "F02-RF"}
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MIGRATION_PATH = (
+    PROJECT_ROOT
+    / "migrations"
+    / "versions"
+    / "20260901_0010_valuation_forms_calculation_reports.py"
+)
 
 
 def _run_alembic(command: str, revision: str, *, expect_success: bool = True):
@@ -31,6 +37,14 @@ def _run_alembic(command: str, revision: str, *, expect_success: bool = True):
     )
     assert (result.returncode == 0) is expect_success, result.stdout + result.stderr
     return result
+
+
+def test_migration_contains_schema_only_and_no_fixed_business_rule_data():
+    source = MIGRATION_PATH.read_text(encoding="utf-8").lower()
+
+    assert "insert into valuation." not in source
+    assert "delete from valuation." not in source
+    assert "d4000000-0000-4000-8000-000000000001" not in source
 
 
 def _check_expression(cursor, schema: str, table: str, constraint: str) -> str:
