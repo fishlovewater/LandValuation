@@ -449,7 +449,12 @@ def test_primary_compose_provisions_idempotent_app_group_before_migrations():
     assert "CREATE ROLE %I NOLOGIN" in role_sql
     assert "WHERE NOT EXISTS" in role_sql
     assert "GRANT %I TO %I" in role_sql
-    assert "WHERE NOT pg_has_role" in role_sql
+    assert "pg_has_role" not in role_sql
+    assert "FROM pg_auth_members AS membership" in role_sql
+    assert "group_role.oid = membership.roleid" in role_sql
+    assert "login_role.oid = membership.member" in role_sql
+    assert "group_role.rolname = :'app_group_role'" in role_sql
+    assert "login_role.rolname = :'app_login_role'" in role_sql
     assert ":'app_group_role'" in role_sql
     assert ":'app_login_role'" in role_sql
 
