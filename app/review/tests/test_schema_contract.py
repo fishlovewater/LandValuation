@@ -19,12 +19,19 @@ EXPECTED_COLUMNS = {
 }
 
 TRUSTED_INPUT_COLUMNS = {
-    ("valuation", "extraction_runs", "extraction_run_id"),
-    ("valuation", "extraction_runs", "document_version"),
-    ("valuation", "extraction_runs", "status"),
+    ("valuation", "document_extractions", "extraction_id"),
+    ("valuation", "document_extractions", "case_id"),
+    ("valuation", "document_extractions", "document_id"),
+    ("valuation", "document_extractions", "extraction_status"),
     ("valuation", "extracted_fields", "extracted_field_id"),
-    ("valuation", "extracted_fields", "normalized_value"),
-    ("valuation", "extracted_fields", "verification_status"),
+    ("valuation", "extracted_fields", "case_id"),
+    ("valuation", "extracted_fields", "extraction_id"),
+    ("valuation", "extracted_fields", "form_code"),
+    ("valuation", "extracted_fields", "field_name"),
+    ("valuation", "extracted_fields", "confirmed_value"),
+    ("valuation", "extracted_fields", "field_status"),
+    ("valuation", "extracted_fields", "source_page"),
+    ("valuation", "extracted_fields", "source_text"),
     ("valuation", "rule_versions", "applicable_case_type"),
     ("valuation", "rule_versions", "applicable_district_code"),
     ("valuation", "rule_versions", "selection_priority"),
@@ -58,6 +65,12 @@ def test_trusted_input_schema_contract(postgres_connection):
         actual = set(cursor.fetchall())
 
     assert TRUSTED_INPUT_COLUMNS <= actual
+    assert not any(
+        schema == "valuation" and table == "extraction_runs"
+        for schema, table, _column in actual
+    )
+    assert ("valuation", "extracted_fields", "normalized_value") not in actual
+    assert ("valuation", "extracted_fields", "verification_status") not in actual
 
 
 import uuid
