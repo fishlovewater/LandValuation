@@ -5,14 +5,18 @@ from uuid import UUID, uuid4
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, add_mapped_attribute, mapped_column
@@ -472,7 +476,52 @@ class ValuationResultRecord(Base):
 
 class RuleVersionRecord(Base):
     __tablename__ = "rule_versions"
-    __table_args__ = {"schema": "valuation"}
+    __table_args__ = (
+        CheckConstraint(
+            "jurisdiction_code IS NULL OR jurisdiction_code = 'NEW_TAIPEI_CITY'",
+            name="ck_rule_versions_jurisdiction",
+        ),
+        CheckConstraint(
+            "district_scope IS NULL OR jsonb_typeof(district_scope) = 'object'",
+            name="ck_rule_versions_district_scope",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(land_use_types) = 'array' AND land_use_types <@ "
+            "'[\"RESIDENTIAL\",\"COMMERCIAL\",\"INDUSTRIAL\",\"AGRICULTURAL\",\"OTHER\"]'::jsonb",
+            name="ck_rule_versions_land_use_types",
+        ),
+        CheckConstraint(
+            "import_status IN ('LEGACY','SOURCE_UPLOADED','IMPORTED','VERIFIED')",
+            name="ck_rule_versions_import_status",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(import_summary) = 'object'",
+            name="ck_rule_versions_import_summary",
+        ),
+        CheckConstraint(
+            "(verified_by_user_id IS NULL AND verified_at IS NULL) OR "
+            "(verified_by_user_id IS NOT NULL AND verified_at IS NOT NULL)",
+            name="ck_rule_versions_verification",
+        ),
+        CheckConstraint(
+            "effective_date_status IN ('CONFIRMED','UNKNOWN')",
+            name="ck_rule_versions_effective_date_status",
+        ),
+        CheckConstraint(
+            "jurisdiction_code IS NULL OR "
+            "(effective_date_status = 'CONFIRMED' AND effective_from IS NOT NULL) OR "
+            "(effective_date_status = 'UNKNOWN' AND effective_from IS NULL AND status = 'DRAFT')",
+            name="ck_rule_versions_effective_date_state",
+        ),
+        Index(
+            "idx_rule_versions_applicability",
+            "jurisdiction_code",
+            "status",
+            "effective_from",
+            postgresql_where=text("jurisdiction_code IS NOT NULL"),
+        ),
+        {"schema": "valuation"},
+    )
 
     rule_version_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), primary_key=True, default=uuid4
@@ -483,7 +532,7 @@ class RuleVersionRecord(Base):
     effective_from: Mapped[date | None] = mapped_column(Date)
     effective_to: Mapped[date | None] = mapped_column(Date)
     effective_date_status: Mapped[str] = mapped_column(
-        String(20), default="CONFIRMED"
+        String(20), default="CONFIRMED", server_default=text("'CONFIRMED'")
     )
     status: Mapped[str] = mapped_column(String(20))
     source_reference: Mapped[str | None] = mapped_column(String(1000))
@@ -492,12 +541,23 @@ class RuleVersionRecord(Base):
     source_document_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     jurisdiction_code: Mapped[str | None] = mapped_column(String(50))
     district_scope: Mapped[dict | None] = mapped_column(JSONB)
-    land_use_types: Mapped[list] = mapped_column(JSONB, default=list)
+    land_use_types: Mapped[list] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
     formula_code: Mapped[str | None] = mapped_column(String(100))
     rounding_code: Mapped[str | None] = mapped_column(String(100))
-    import_status: Mapped[str] = mapped_column(String(30), default="LEGACY")
-    import_summary: Mapped[dict] = mapped_column(JSONB, default=dict)
-    verified_by_user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    import_status: Mapped[str] = mapped_column(
+        String(30), default="LEGACY", server_default=text("'LEGACY'")
+    )
+    import_summary: Mapped[dict] = mapped_column(
+        JSONB, default=dict, server_default=text("'{}'::jsonb")
+    )
+    verified_by_user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey(
+            "auth.users.user_id", onupdate="RESTRICT", ondelete="RESTRICT"
+        ),
+    )
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -506,29 +566,66 @@ class RuleVersionRecord(Base):
 
 class RuleVersionSourceRecord(Base):
     __tablename__ = "rule_version_sources"
-    __table_args__ = {"schema": "valuation"}
+    __table_args__ = (
+        UniqueConstraint(
+            "rule_version_id",
+            "source_document_id",
+            name="uq_rule_version_sources_document",
+        ),
+        UniqueConstraint(
+            "rule_version_id", "source_order", name="uq_rule_version_sources_order"
+        ),
+        CheckConstraint(
+            "source_role IN ('PRIMARY','LEGAL_BASIS','NATIONAL_MANUAL','LOCAL_MANUAL',"
+            "'FACTOR_STANDARD','FORM_TEMPLATE','CASE_EXAMPLE','OTHER')",
+            name="ck_rule_version_sources_role",
+        ),
+        CheckConstraint("source_order > 0", name="ck_rule_version_sources_order"),
+        Index(
+            "uq_rule_version_sources_primary",
+            "rule_version_id",
+            unique=True,
+            postgresql_where=text("is_primary"),
+        ),
+        Index("idx_rule_version_sources_rule_order", "rule_version_id", "source_order"),
+        Index("idx_rule_version_sources_document", "source_document_id"),
+        {
+            "schema": "valuation",
+            "comment": "Traceable ordered source documents used by one valuation rule version",
+        },
+    )
 
     rule_version_source_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), primary_key=True, default=uuid4
     )
     rule_version_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
-        ForeignKey("valuation.rule_versions.rule_version_id", ondelete="RESTRICT"),
+        ForeignKey(
+            "valuation.rule_versions.rule_version_id",
+            onupdate="RESTRICT",
+            ondelete="RESTRICT",
+        ),
     )
     source_document_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True),
-        ForeignKey("knowledge.documents.document_id", ondelete="RESTRICT"),
+        ForeignKey(
+            "knowledge.documents.document_id", onupdate="RESTRICT", ondelete="RESTRICT"
+        ),
     )
     source_role: Mapped[str] = mapped_column(String(40))
     source_order: Mapped[int] = mapped_column(Integer)
-    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
-    is_required: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_primary: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    is_required: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true")
+    )
     source_reference: Mapped[str | None] = mapped_column(String(1000))
     page_reference: Mapped[str | None] = mapped_column(String(500))
     notes: Mapped[str | None] = mapped_column(Text)
     created_by_user_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True),
-        ForeignKey("auth.users.user_id", ondelete="RESTRICT"),
+        ForeignKey("auth.users.user_id", onupdate="RESTRICT", ondelete="RESTRICT"),
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
