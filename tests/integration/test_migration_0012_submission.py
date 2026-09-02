@@ -20,6 +20,7 @@ MIGRATION_PATH = (
 RUNTIME_ROLE_SQL_PATH = (
     PROJECT_ROOT / "tests" / "integration" / "sql" / "001_runtime_role.sql"
 )
+INTEGRATION_COMPOSE_PATH = PROJECT_ROOT / "docker-compose.integration.yml"
 
 
 def _run_alembic(command: str, revision: str, *, expect_success: bool = True):
@@ -357,12 +358,34 @@ def test_migration_owner_is_nonmember_and_can_run_migrations(
     _run_alembic("upgrade", "head")
 
 
-def test_runtime_role_harness_demotes_the_migration_owner_after_setup():
-    source = RUNTIME_ROLE_SQL_PATH.read_text(encoding="utf-8")
+def test_integration_harness_separates_bootstrap_migration_and_runtime_roles():
+    role_sql = RUNTIME_ROLE_SQL_PATH.read_text(encoding="utf-8")
+    compose = INTEGRATION_COMPOSE_PATH.read_text(encoding="utf-8")
 
-    demotion = source.index("ALTER ROLE land_valuation_migrator NOSUPERUSER")
-    privileges = source.index("ALTER DEFAULT PRIVILEGES")
-    assert privileges < demotion
+    assert (
+        "CREATE ROLE land_valuation_migrator LOGIN PASSWORD "
+        "'integration-migration-owner'" in role_sql
+    )
+    assert "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION" in role_sql
+    assert (
+        "ALTER DATABASE :\"database_name\" OWNER TO land_valuation_migrator"
+        in role_sql
+    )
+    assert "REVOKE land_valuation_app FROM land_valuation_migrator" in role_sql
+    assert "ALTER DEFAULT PRIVILEGES FOR ROLE land_valuation_migrator" in role_sql
+    assert "ALTER ROLE land_valuation_migrator NOSUPERUSER" not in role_sql
+    assert "POSTGRES_USER: postgres" in compose
+    assert "POSTGRES_PASSWORD: integration-bootstrap-owner" in compose
+    assert "pg_isready -U postgres" in compose
+    assert "POSTGRES_HOST: db" in compose
+    assert 'POSTGRES_PORT: "5432"' in compose
+    assert "POSTGRES_USER: land_valuation_migrator" in compose
+    assert "POSTGRES_PASSWORD: integration-migration-owner" in compose
+    assert (
+        "postgresql+psycopg://land_valuation_migrator:"
+        "integration-migration-owner@db:5432/${POSTGRES_DB}" in compose
+    )
+    assert "postgresql+psycopg://postgres:" not in compose
 
 
 @pytest.mark.parametrize("statement", ["UPDATE", "DELETE"])
