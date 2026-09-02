@@ -165,6 +165,7 @@ def test_rule_source_contract_uses_database_catalogs(admin_cursor):
     assert "EXAMPLE_REFERENCE" in _constraint_definition(
         admin_cursor, "knowledge", "documents", "ck_knowledge_document_type"
     )
+    document_id = uuid4()
     admin_cursor.execute("SAVEPOINT example_reference_document")
     try:
         admin_cursor.execute(
@@ -177,15 +178,15 @@ def test_rule_source_contract_uses_database_catalogs(admin_cursor):
             RETURNING document_type
             """,
             (
-                uuid4(),
+                document_id,
                 f"MIG-0011-{uuid4().hex[:10]}",
-                f"examples/{uuid4()}/example.pdf",
+                f"knowledge/{document_id}/example.pdf",
                 "a" * 64,
             ),
         )
         assert admin_cursor.fetchone() == ("EXAMPLE_REFERENCE",)
-        admin_cursor.execute("ROLLBACK TO SAVEPOINT example_reference_document")
     finally:
+        admin_cursor.execute("ROLLBACK TO SAVEPOINT example_reference_document")
         admin_cursor.execute("RELEASE SAVEPOINT example_reference_document")
 
 
