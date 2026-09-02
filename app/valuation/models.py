@@ -15,14 +15,31 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, add_mapped_attribute, mapped_column
 
 from app.db.base import Base
-# The Review subsystem owns these shared tables until the Task 4 schema
-# migration makes Valuation's fuller mapping valid.  Re-export the current
-# mappings so both runtimes use exactly one SQLAlchemy table definition.
+# Review owns the shared table declarations.  Extend those single mappings
+# instead of declaring the same SQLAlchemy tables twice when the 0010 schema
+# introduces the Operations request-correlation fields.
 from app.review.models import ValidationFinding as ValidationFindingRecord
 from app.review.models import ValidationRun as ValidationRunRecord
+
+
+add_mapped_attribute(
+    ValidationRunRecord,
+    "request_id",
+    mapped_column(PGUUID(as_uuid=True)),
+)
+add_mapped_attribute(
+    ValidationFindingRecord,
+    "request_id",
+    mapped_column(PGUUID(as_uuid=True)),
+)
+add_mapped_attribute(
+    ValidationFindingRecord,
+    "created_at",
+    mapped_column(DateTime(timezone=True), server_default=func.now()),
+)
 
 
 class CaseRecord(Base):
