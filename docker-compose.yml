@@ -24,6 +24,26 @@ services:
       timeout: 5s
       retries: 10
 
+  db-role-init:
+    image: pgvector/pgvector:pg16
+    container_name: land_valuation_db_role_init
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./database/role-init/001_land_valuation_app.sql:/role-init/001_land_valuation_app.sql:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command: >-
+      exec psql -v ON_ERROR_STOP=1 -v app_group_role=land_valuation_app
+      -v app_login_role="$$POSTGRES_USER" -h db -U "$$POSTGRES_USER"
+      -d "$$POSTGRES_DB" -f /role-init/001_land_valuation_app.sql
+    restart: "no"
+
   migrate:
     build:
       context: .
@@ -32,6 +52,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      db-role-init:
+        condition: service_completed_successfully
     environment:
       POSTGRES_HOST: db
       POSTGRES_PORT: 5432
