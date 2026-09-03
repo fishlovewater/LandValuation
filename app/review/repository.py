@@ -80,7 +80,11 @@ class ReviewRepository:
         }
 
     async def get_submission_provenance_by_id(
-        self, submission_id: UUID
+        self,
+        submission_id: UUID,
+        *,
+        review_id: UUID,
+        case_id: UUID,
     ) -> dict | None:
         row = (
             await self.session.execute(
@@ -89,10 +93,42 @@ class ReviewRepository:
                     ReviewSubmissionRecord.submission_no,
                     ReviewSubmissionRecord.submitted_at,
                     ReviewSubmissionRecord.input_fingerprint,
-                ).where(ReviewSubmissionRecord.submission_id == submission_id)
+                ).where(
+                    ReviewSubmissionRecord.submission_id == submission_id,
+                    ReviewSubmissionRecord.review_id == review_id,
+                    ReviewSubmissionRecord.case_id == case_id,
+                )
             )
         ).mappings().one_or_none()
         return dict(row) if row else None
+
+    async def get_submission_provenance_by_ids(
+        self,
+        submission_ids: set[UUID],
+        *,
+        review_id: UUID,
+        case_id: UUID,
+    ) -> dict[UUID, dict]:
+        if not submission_ids:
+            return {}
+        rows = (
+            await self.session.execute(
+                select(
+                    ReviewSubmissionRecord.submission_id,
+                    ReviewSubmissionRecord.submission_no,
+                    ReviewSubmissionRecord.submitted_at,
+                    ReviewSubmissionRecord.input_fingerprint,
+                ).where(
+                    ReviewSubmissionRecord.submission_id.in_(submission_ids),
+                    ReviewSubmissionRecord.review_id == review_id,
+                    ReviewSubmissionRecord.case_id == case_id,
+                )
+            )
+        ).mappings()
+        return {
+            row["submission_id"]: dict(row)
+            for row in rows
+        }
 
     async def list(self, query: ReviewListQuery) -> tuple[list[Review], int]:
         filters = []

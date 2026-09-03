@@ -130,15 +130,15 @@ class WorkbenchService:
             )
         return diffs
 
-    async def _run_projection(
-        self, run, latest_submission: dict | None
+    def _run_projection(
+        self, run, provenance_by_submission_id: dict[UUID, dict]
     ) -> WorkbenchRunRead:
         run_submission_id = getattr(run, "submission_id", None)
-        submission = None
-        if run_submission_id is not None:
-            submission = await self.review_repository.get_submission_provenance_by_id(
-                run_submission_id
-            )
+        submission = (
+            provenance_by_submission_id.get(run_submission_id)
+            if run_submission_id is not None
+            else None
+        )
         values = {
             field: getattr(run, field)
             for field in (
@@ -200,6 +200,17 @@ class WorkbenchService:
         submission = await self.repository.get_submission_provenance(review_id)
         submitted_snapshot = await self._submitted_snapshot(review)
         raw_runs = await self.review_repository.list_runs(review_id)
+        provenance_by_submission_id = (
+            await self.review_repository.get_submission_provenance_by_ids(
+                {
+                    run.submission_id
+                    for run in raw_runs
+                    if run.submission_id is not None
+                },
+                review_id=review.review_id,
+                case_id=review.case_id,
+            )
+        )
         missing_items = await self.review_repository.list_missing_items(
             review_id, open_only=False
         )
@@ -248,7 +259,7 @@ class WorkbenchService:
                     )
                 )
         runs = [
-            await self._run_projection(run, submission)
+            self._run_projection(run, provenance_by_submission_id)
             for run in raw_runs
         ]
         return WorkbenchCaseDetailRead(
@@ -299,10 +310,13 @@ class WorkbenchService:
             run, risk_summary = await review_service.create_run(review_id, actor_id)
         findings = await review_service.list_findings(run.validation_run_id)
         submission = await self.repository.get_submission_provenance(review_id)
+        provenance_by_submission_id = (
+            {} if submission is None else {submission["submission_id"]: submission}
+        )
         return WorkbenchStartRead(
             outcome="COMPLETED",
             completeness=preflight.completeness,
-            run=await self._run_projection(run, submission),
+            run=self._run_projection(run, provenance_by_submission_id),
             findings=findings,
             risk_summary=risk_summary,
         )

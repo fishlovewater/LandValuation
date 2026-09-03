@@ -174,10 +174,21 @@ class ReviewService:
                 {"current": review.review_status},
             )
 
-        snapshot = await self.repository.load_case_snapshot(review.case_id)
-        result = evaluate_completeness(snapshot)
+        submitted_inputs = None
+        if review.latest_submission_id is not None:
+            submitted_inputs = await self._load_submitted_snapshot(review)
+            result = CompletenessResult(
+                ready=True,
+                items=(),
+                blocked_rule_codes=frozenset(),
+            )
+        else:
+            snapshot = await self.repository.load_case_snapshot(review.case_id)
+            result = evaluate_completeness(snapshot)
         if result.ready:
-            trusted_items = await self._trusted_completeness_missing_items(review)
+            trusted_items = await self._trusted_completeness_missing_items(
+                review, submitted_inputs
+            )
             if trusted_items:
                 result = CompletenessResult(
                     ready=False,
@@ -476,19 +487,28 @@ class ReviewService:
         document = dict(documents_by_id[applied_fields[0]["document_id"]])
         return document, tuple(trusted_fields)
 
-    async def _trusted_completeness_missing_items(self, review):
+    async def _load_submitted_snapshot(self, review):
+        submission = await self.repository.get_submission_snapshot_record(
+            review.latest_submission_id,
+            review_id=review.review_id,
+            case_id=review.case_id,
+        )
+        if submission is None:
+            raise self._invalid_submission_snapshot()
+        snapshot = submission.get("input_snapshot")
+        document, official_fields = self._snapshot_trusted_inputs(
+            snapshot,
+            input_fingerprint=submission.get("input_fingerprint"),
+        )
+        return snapshot, document, official_fields
+
+    async def _trusted_completeness_missing_items(
+        self, review, submitted_inputs=None
+    ):
         if review.latest_submission_id is not None:
-            submission = await self.repository.get_submission_snapshot_record(
-                review.latest_submission_id,
-                review_id=review.review_id,
-                case_id=review.case_id,
-            )
-            if submission is None:
-                raise self._invalid_submission_snapshot()
-            document, official_fields = self._snapshot_trusted_inputs(
-                submission.get("input_snapshot"),
-                input_fingerprint=submission.get("input_fingerprint"),
-            )
+            if submitted_inputs is None:
+                submitted_inputs = await self._load_submitted_snapshot(review)
+            _, document, official_fields = submitted_inputs
         else:
             document = await self.repository.get_latest_original_document(review.case_id)
             official_fields = tuple(
@@ -590,17 +610,8 @@ class ReviewService:
     async def _resolve_trusted_run_context(self, review) -> TrustedRunContext:
         documents = {}
         if review.latest_submission_id is not None:
-            submission = await self.repository.get_submission_snapshot_record(
-                review.latest_submission_id,
-                review_id=review.review_id,
-                case_id=review.case_id,
-            )
-            if submission is None:
-                raise self._invalid_submission_snapshot()
-            snapshot = submission.get("input_snapshot")
-            document, official_fields = self._snapshot_trusted_inputs(
-                snapshot,
-                input_fingerprint=submission.get("input_fingerprint"),
+            snapshot, document, official_fields = await self._load_submitted_snapshot(
+                review
             )
             documents = {
                 str(item["document_id"]): dict(item)

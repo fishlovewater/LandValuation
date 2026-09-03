@@ -809,6 +809,18 @@ def test_submitted_preflight_uses_snapshot_after_live_field_is_invalidated(
             """,
             (workbench_records.reviewed_case_id,),
         )
+        cursor.execute(
+            "UPDATE valuation.documents SET is_active = false WHERE case_id = %s",
+            (workbench_records.reviewed_case_id,),
+        )
+        cursor.execute(
+            "DELETE FROM valuation.parcels WHERE parcel_id = %s",
+            (parcel_id,),
+        )
+        cursor.execute(
+            "UPDATE valuation.cases SET case_no = '' WHERE case_id = %s",
+            (workbench_records.reviewed_case_id,),
+        )
     postgres_connection.commit()
 
     try:
@@ -864,6 +876,100 @@ def test_submitted_preflight_uses_snapshot_after_live_field_is_invalidated(
             cursor.execute(
                 "DELETE FROM knowledge.documents WHERE document_id = %s",
                 (source_document_id,),
+            )
+        postgres_connection.commit()
+
+
+def test_submitted_preflight_rejects_invalid_snapshot_before_live_completeness(
+    workbench_client, workbench_records, workbench_submission, postgres_connection
+):
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT input_snapshot FROM valuation.review_submissions "
+            "WHERE submission_id = %s",
+            (workbench_submission.submission_id,),
+        )
+        original_snapshot = cursor.fetchone()[0]
+        cursor.execute(
+            "UPDATE valuation.review_submissions SET input_snapshot = '{}'::jsonb "
+            "WHERE submission_id = %s",
+            (workbench_submission.submission_id,),
+        )
+    postgres_connection.commit()
+
+    try:
+        response = workbench_client.post(
+            f"/api/v1/review/workbench/cases/{workbench_records.review_id}/start/preflight"
+        )
+
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "SUBMISSION_SNAPSHOT_INVALID"
+    finally:
+        with postgres_connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE valuation.review_submissions SET input_snapshot = %s::jsonb "
+                "WHERE submission_id = %s",
+                (json.dumps(original_snapshot), workbench_submission.submission_id),
+            )
+        postgres_connection.commit()
+
+
+def test_run_provenance_does_not_cross_review_or_case(
+    workbench_client, workbench_records, workbench_submission, postgres_connection
+):
+    scenarios = (
+        ("review_id", workbench_records.completed_review_id),
+        ("case_id", workbench_records.completed_case_id),
+    )
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE review.reviews SET latest_submission_id = NULL WHERE review_id = %s",
+            (workbench_records.review_id,),
+        )
+    postgres_connection.commit()
+
+    try:
+        for owner_column, foreign_value in scenarios:
+            with postgres_connection.cursor() as cursor:
+                cursor.execute(
+                    f"UPDATE valuation.review_submissions SET {owner_column} = %s "
+                    "WHERE submission_id = %s",
+                    (foreign_value, workbench_submission.submission_id),
+                )
+            postgres_connection.commit()
+
+            detail = workbench_client.get(
+                f"/api/v1/review/workbench/cases/{workbench_records.review_id}"
+            )
+
+            assert detail.status_code == 200
+            run = detail.json()["runs"][0]
+            assert run["submission_no"] is None
+            assert run["submitted_at"] is None
+            assert run["input_fingerprint"] is None
+
+            with postgres_connection.cursor() as cursor:
+                cursor.execute(
+                    f"UPDATE valuation.review_submissions SET {owner_column} = %s "
+                    "WHERE submission_id = %s",
+                    (
+                        workbench_records.review_id
+                        if owner_column == "review_id"
+                        else workbench_records.reviewed_case_id,
+                        workbench_submission.submission_id,
+                    ),
+                )
+            postgres_connection.commit()
+    finally:
+        with postgres_connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE valuation.review_submissions SET review_id = %s, case_id = %s "
+                "WHERE submission_id = %s",
+                (
+                    workbench_records.review_id,
+                    workbench_records.reviewed_case_id,
+                    workbench_submission.submission_id,
+                ),
             )
         postgres_connection.commit()
 
