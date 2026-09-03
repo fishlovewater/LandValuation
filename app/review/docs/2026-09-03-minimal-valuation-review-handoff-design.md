@@ -105,6 +105,18 @@ POST /api/v1/valuation/cases/{case_id}/submit-for-review
 
 自動測試通過後，使用兩個真實角色完成瀏覽器人工驗收；Node 靜態 UI 測試不能代替瀏覽器驗收。
 
+本次最小 handoff 的實作驗證紀錄：
+
+- 公開送審端點為 `POST /api/v1/valuation/cases/{case_id}/submit-for-review`。
+- 資料庫 migration head 為 `20260903_0013`。
+- 可執行的跨模組驗收測試為
+  `tests/integration/test_valuation_review_handoff.py`；路由共存檢查在
+  `tests/test_integration_surface.py`。
+- 首次送審後的退回／重送流程仍刻意不提供重送 UI；本次只驗證退回狀態與既有
+  `submission_no`／`supersedes_submission_id` 延伸邊界。
+- 本文件不宣稱瀏覽器驗收；瀏覽器角色流程仍由使用者依 APPRAISER／REVIEWER
+  checklist 親自確認。
+
 ## 9. 非目標
 
 - 不新增自動送審、通知、批次送審或新的前端框架。

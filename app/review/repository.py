@@ -18,7 +18,7 @@ from app.review.models import (
 )
 from app.review.schemas import ReviewCreate, ReviewListQuery
 from app.review.risks import EXPERT_MINIMUM_MEDIUM_TYPE, HIGH_RISK_FINDING_TYPES
-from app.valuation.models import ReviewSubmissionRecord
+from app.valuation.models import CaseRecord, ReviewSubmissionRecord
 
 
 class ReviewRepository:
@@ -39,6 +39,14 @@ class ReviewRepository:
 
     async def get(self, review_id: UUID, for_update: bool = False) -> Review | None:
         statement = select(Review).where(Review.review_id == review_id)
+        if for_update:
+            statement = statement.with_for_update()
+        return await self.session.scalar(statement)
+
+    async def get_case(
+        self, case_id: UUID, for_update: bool = False
+    ) -> CaseRecord | None:
+        statement = select(CaseRecord).where(CaseRecord.case_id == case_id)
         if for_update:
             statement = statement.with_for_update()
         return await self.session.scalar(statement)

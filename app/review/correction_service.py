@@ -101,6 +101,11 @@ class CorrectionService:
         review = await self.review_repository.get(request.review_id, for_update=True)
         if review is None:
             raise ResourceNotFoundError("審查案件")
+        case = await self.review_repository.get_case(
+            review.case_id, for_update=True
+        )
+        if case is None:
+            raise ResourceNotFoundError("估價案件")
         if request.status != "DRAFT":
             raise AppError("CORRECTION_REQUEST_STATE_CONFLICT", "只有草稿可送出", 409)
         if request.based_on_validation_run_id != review.latest_validation_run_id:
@@ -130,6 +135,7 @@ class CorrectionService:
         review.review_status = ensure_transition(
             before_status, "RETURNED_FOR_REVISION"
         )
+        case.case_status = "REVISION_REQUIRED"
         await self.review_repository.create_decision(
             review_id=review.review_id,
             finding_id=None,
@@ -287,6 +293,11 @@ class CorrectionService:
             raise ResourceNotFoundError("審查案件")
         summary = await self._completion_summary(review)
         validate_review_completion(reason, summary)
+        case = await self.review_repository.get_case(
+            review.case_id, for_update=True
+        )
+        if case is None:
+            raise ResourceNotFoundError("估價案件")
         before_status = review.review_status
         decision = await self.review_repository.create_decision(
             review_id=review.review_id,
@@ -302,6 +313,7 @@ class CorrectionService:
             },
         )
         review.review_status = "REVIEW_COMPLETED"
+        case.case_status = "REVIEW_COMPLETED"
         review.completed_at = datetime.now(UTC)
         await self.review_repository.session.flush()
         return decision
