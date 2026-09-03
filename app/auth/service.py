@@ -34,9 +34,15 @@ def role_codes(user: User) -> set[str]:
 
 
 def permission_codes(user: User) -> set[str]:
-    return {
+    codes = {
         permission.permission_code
         for role in user.roles
         if role.is_active
         for permission in role.permissions
     }
+    # Task 7 adds the appraiser-only submit command before the next seed
+    # migration.  Keep the application policy explicit so API authorization
+    # matches the APPRAISER role contract without granting Review-only users.
+    if "APPRAISER" in role_codes(user):
+        codes.add("valuation.submit_review")
+    return codes
