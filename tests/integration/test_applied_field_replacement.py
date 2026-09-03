@@ -50,7 +50,7 @@ async def test_applying_new_document_version_replaces_case_wide_review_field(
                     document_id, case_id, document_type, original_filename, mime_type,
                     bucket_name, object_key, checksum_sha256, file_size_bytes, version_no,
                     uploaded_by_user_id
-                ) VALUES (%s, %s, 'APPRAISAL_REPORT', %s, 'application/pdf',
+                ) VALUES (%s, %s, 'original', %s, 'application/pdf',
                           'land-valuation', %s, %s, 1, %s, %s)
                 """,
                 (
@@ -189,7 +189,7 @@ async def test_f02_rf_candidate_can_be_applied_in_canonical_schema(admin_cursor)
             INSERT INTO valuation.documents (
                 document_id, case_id, document_type, original_filename, mime_type,
                 bucket_name, object_key, checksum_sha256, file_size_bytes, uploaded_by_user_id
-            ) VALUES (%s, %s, 'APPRAISAL_REPORT', 'f02-rf.pdf', 'application/pdf',
+            ) VALUES (%s, %s, 'original', 'f02-rf.pdf', 'application/pdf',
                       'land-valuation', %s, %s, 1, %s)
             """,
             (document_id, case_id, f"cases/{case_id}/{document_id}.pdf", "f" * 64, user_id),
@@ -293,7 +293,7 @@ async def test_concurrent_candidate_applications_keep_one_applied_and_preserve_c
                     document_id, case_id, document_type, original_filename, mime_type,
                     bucket_name, object_key, checksum_sha256, file_size_bytes, version_no,
                     uploaded_by_user_id
-                ) VALUES (%s, %s, 'APPRAISAL_REPORT', %s, 'application/pdf',
+                ) VALUES (%s, %s, 'original', %s, 'application/pdf',
                           'land-valuation', %s, %s, 1, %s, %s)
                 """,
                 (
