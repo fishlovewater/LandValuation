@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from io import BytesIO
 
 from docx import Document
@@ -173,6 +174,8 @@ def test_demo_seed_is_idempotent_and_real_api_workflow_completes(postgres_connec
                 headers=headers,
             ).json()
             assert len(findings2) == 1
+            assert Decimal(findings2[0]["reported_value"]) == Decimal("-7")
+            assert findings2[0]["document_version"] == 2
             assert findings2[0]["supersedes_finding_id"] == high["finding_id"]
             assert client.get(
                 f"/api/v1/review/runs/{run2_id}/report", headers=headers
