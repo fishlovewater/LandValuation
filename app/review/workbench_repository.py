@@ -204,6 +204,25 @@ class WorkbenchRepository:
         ).mappings().one_or_none()
         return dict(row) if row else None
 
+    async def get_submission_provenance(self, review_id: UUID) -> dict | None:
+        row = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT s.submission_id, s.submission_no,
+                           s.submitted_at, s.input_fingerprint
+                    FROM review.reviews r
+                    JOIN valuation.review_submissions s
+                      ON s.submission_id = r.latest_submission_id
+                     AND s.review_id = r.review_id
+                    WHERE r.review_id = :review_id
+                    """
+                ),
+                {"review_id": review_id},
+            )
+        ).mappings().one_or_none()
+        return dict(row) if row else None
+
     async def list_documents(self, case_id: UUID) -> list[dict]:
         rows = (
             await self.session.execute(

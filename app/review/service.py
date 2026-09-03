@@ -49,6 +49,7 @@ from app.review.trusted_inputs import (
     prepare_trusted_rules,
     validate_rule_contracts,
 )
+from app.valuation.submissions.snapshot import SNAPSHOT_SCHEMA_VERSION
 
 
 def _first_present(*values):
@@ -215,6 +216,114 @@ class ReviewService:
             confirmed_at=row["confirmed_at"],
         )
 
+    @staticmethod
+    def _trusted_field_from_submission(item: dict) -> TrustedField:
+        """Adapt one server-built Submission Snapshot field to Review input."""
+        return TrustedField(
+            extracted_field_id=str(item["extracted_field_id"]),
+            form_code=item["form_code"],
+            field_name=item["field_name"],
+            confirmed_value=item["confirmed_value"],
+            source_page=item.get("source_page"),
+            source_text=item.get("source_text"),
+            confidence=item.get("confidence"),
+            field_status="APPLIED",
+            confirmed_by_user_id=(
+                str(item["confirmed_by_user_id"])
+                if item.get("confirmed_by_user_id") is not None
+                else None
+            ),
+            confirmed_at=item.get("confirmed_at"),
+        )
+
+    @staticmethod
+    def _invalid_submission_snapshot() -> AppError:
+        return AppError(
+            "SUBMISSION_SNAPSHOT_INVALID",
+            "送審快照缺少可供審查的完整欄位證據",
+            409,
+        )
+
+    @classmethod
+    def _snapshot_trusted_inputs(
+        cls, snapshot: dict | None
+    ) -> tuple[dict, tuple[TrustedField, ...]]:
+        """Validate and extract the immutable document/field input boundary."""
+        invalid = cls._invalid_submission_snapshot
+        if not isinstance(snapshot, dict):
+            raise invalid()
+        if snapshot.get("schema_version") != SNAPSHOT_SCHEMA_VERSION:
+            raise invalid()
+
+        applied_fields = snapshot.get("applied_fields")
+        documents = snapshot.get("documents")
+        if not isinstance(applied_fields, list) or not applied_fields:
+            raise invalid()
+        if not isinstance(documents, list) or not documents:
+            raise invalid()
+
+        documents_by_id = {}
+        for document in documents:
+            if not isinstance(document, dict):
+                raise invalid()
+            document_id = document.get("document_id")
+            if not isinstance(document_id, str) or not document_id:
+                raise invalid()
+            if any(
+                document.get(key) in (None, "")
+                for key in (
+                    "document_type",
+                    "version_no",
+                    "document_group_id",
+                    "checksum_sha256",
+                )
+            ):
+                raise invalid()
+            if document_id in documents_by_id:
+                raise invalid()
+            documents_by_id[document_id] = document
+
+        trusted_fields = []
+        for item in applied_fields:
+            if not isinstance(item, dict):
+                raise invalid()
+            required_keys = {
+                "extracted_field_id",
+                "document_id",
+                "form_code",
+                "field_name",
+                "confirmed_value",
+                "confidence",
+                "field_status",
+                "confirmed_by_user_id",
+                "confirmed_at",
+            }
+            if not required_keys.issubset(item):
+                raise invalid()
+            if (
+                not isinstance(item["extracted_field_id"], str)
+                or not item["extracted_field_id"]
+                or not isinstance(item["document_id"], str)
+                or not item["document_id"]
+                or not isinstance(item["form_code"], str)
+                or not item["form_code"]
+                or not isinstance(item["field_name"], str)
+                or not item["field_name"]
+                or item["confirmed_value"] is None
+                or item["confidence"] is None
+                or item["field_status"] != "APPLIED"
+                or not isinstance(item["confirmed_by_user_id"], str)
+                or not item["confirmed_by_user_id"]
+                or not isinstance(item["confirmed_at"], str)
+                or not item["confirmed_at"]
+                or item["document_id"] not in documents_by_id
+            ):
+                raise invalid()
+            trusted_fields.append(cls._trusted_field_from_submission(item))
+
+        document = dict(documents_by_id[applied_fields[0]["document_id"]])
+        return document, tuple(trusted_fields)
+
     async def _trusted_completeness_missing_items(self, case_id):
         document = await self.repository.get_latest_original_document(case_id)
         if document is None:
@@ -315,21 +424,29 @@ class ReviewService:
         return await self.repository.request_supplement(review_id, due_at)
 
     async def _resolve_trusted_run_context(self, review) -> TrustedRunContext:
-        document = await self.repository.get_latest_original_document(review.case_id)
-        if document is None:
-            raise AppError(
-                "TRUSTED_INPUT_MISSING",
-                "案件沒有可用的正式原始估價報告",
-                409,
+        if review.latest_submission_id is not None:
+            snapshot = await self.repository.get_submission_snapshot(
+                review.latest_submission_id
             )
+            document, official_fields = self._snapshot_trusted_inputs(snapshot)
+        else:
+            document = await self.repository.get_latest_original_document(
+                review.case_id
+            )
+            if document is None:
+                raise AppError(
+                    "TRUSTED_INPUT_MISSING",
+                    "案件沒有可用的正式原始估價報告",
+                    409,
+                )
 
-        field_rows = await self.repository.list_applied_confirmed_extracted_fields(
-            review.case_id
-        )
-        official_fields = tuple(
-            self._trusted_field(row)
-            for row in field_rows
-        )
+            field_rows = await self.repository.list_applied_confirmed_extracted_fields(
+                review.case_id
+            )
+            official_fields = tuple(
+                self._trusted_field(row)
+                for row in field_rows
+            )
         fields = trusted_fields_by_code(official_fields)
 
         case_context = await self.repository.get_case_rule_context(review.case_id)
@@ -626,6 +743,7 @@ class ReviewService:
             actor_id,
             UUID(str(context.rule_version["rule_version_id"])),
             input_snapshot,
+            submission_id=review.latest_submission_id,
         )
         findings = []
         for prepared_rule in context.prepared_rules:

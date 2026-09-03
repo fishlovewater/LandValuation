@@ -112,6 +112,99 @@ def workbench_records(postgres_connection):
 
 
 @pytest.fixture
+def workbench_submission(workbench_records, postgres_connection):
+    submission_id = uuid4()
+    validation_run_id = uuid4()
+    document_id = uuid4()
+    request_id = uuid4()
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO valuation.documents (
+                document_id, case_id, document_type, original_filename,
+                mime_type, bucket_name, object_key, checksum_sha256,
+                file_size_bytes, version_no, uploaded_by_user_id,
+                is_active, document_group_id
+            ) VALUES (%s, %s, 'original', 'submitted.pdf', 'application/pdf',
+                      'land-valuation', %s, %s, 100, 1, %s, true, %s)
+            """,
+            (
+                document_id,
+                workbench_records.reviewed_case_id,
+                f"cases/{workbench_records.reviewed_case_id}/submitted.pdf",
+                "f" * 64,
+                workbench_records.user_id,
+                uuid4(),
+            ),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.validation_runs (
+                validation_run_id, case_id, review_id, run_status,
+                input_snapshot, ruleset_snapshot
+            ) VALUES (%s, %s, %s, 'COMPLETED', '{}'::jsonb,
+                      '{"fixture": true}'::jsonb)
+            """,
+            (
+                validation_run_id,
+                workbench_records.reviewed_case_id,
+                workbench_records.review_id,
+            ),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.review_submissions (
+                submission_id, review_id, case_id, submission_no,
+                submitted_by_user_id, submitted_at, source_validation_run_id,
+                source_report_document_id, input_snapshot, input_fingerprint,
+                request_id
+            ) VALUES (%s, %s, %s, 1, %s, '2026-09-03T01:02:03+00:00',
+                      %s, %s, '{}'::jsonb, %s, %s)
+            """,
+            (
+                submission_id,
+                workbench_records.review_id,
+                workbench_records.reviewed_case_id,
+                workbench_records.user_id,
+                validation_run_id,
+                document_id,
+                "c" * 64,
+                request_id,
+            ),
+        )
+        cursor.execute(
+            "UPDATE review.reviews SET latest_submission_id = %s WHERE review_id = %s",
+            (submission_id, workbench_records.review_id),
+        )
+    postgres_connection.commit()
+
+    yield SimpleNamespace(
+        submission_id=submission_id,
+        validation_run_id=validation_run_id,
+        document_id=document_id,
+    )
+
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE review.reviews SET latest_submission_id = NULL WHERE review_id = %s",
+            (workbench_records.review_id,),
+        )
+        cursor.execute(
+            "DELETE FROM valuation.review_submissions WHERE submission_id = %s",
+            (submission_id,),
+        )
+        cursor.execute(
+            "DELETE FROM valuation.validation_runs WHERE validation_run_id = %s",
+            (validation_run_id,),
+        )
+        cursor.execute(
+            "DELETE FROM valuation.documents WHERE document_id = %s",
+            (document_id,),
+        )
+    postgres_connection.commit()
+
+
+@pytest.fixture
 def workbench_client(workbench_records):
     permission = SimpleNamespace(permission_code="review.execute")
     role = SimpleNamespace(role_code="REVIEWER", is_active=True, permissions=[permission])
@@ -223,6 +316,23 @@ def test_workbench_summary_list_eligible_and_detail(
     assert detail.json()["documents"] == []
     assert detail.json()["runs"] == []
     assert detail.json()["version_diffs"] == []
+
+
+def test_workbench_detail_exposes_submission_provenance_without_snapshot_or_object_key(
+    workbench_client, workbench_records, workbench_submission
+):
+    detail = workbench_client.get(
+        f"/api/v1/review/workbench/cases/{workbench_records.review_id}"
+    )
+
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["submission_id"] == str(workbench_submission.submission_id)
+    assert body["submission_no"] == 1
+    assert body["submitted_at"] == "2026-09-03T01:02:03Z"
+    assert body["input_fingerprint"] == "c" * 64
+    assert "input_snapshot" not in body
+    assert "object_key" not in body
 
 
 def test_workbench_start_blocked_does_not_create_run(

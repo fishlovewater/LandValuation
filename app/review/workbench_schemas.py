@@ -114,6 +114,11 @@ class FieldVersionDiffRead(BaseModel):
 class WorkbenchCaseDetailRead(BaseModel):
     case: WorkbenchCaseSummaryRead
     review: ReviewRead
+    # Safe Submission metadata only; the immutable input body stays server-side.
+    submission_id: UUID | None = None
+    submission_no: int | None = None
+    submitted_at: datetime | None = None
+    input_fingerprint: str | None = None
     documents: list[WorkbenchDocumentRead]
     missing_items: list[MissingItemRead]
     runs: list[ValidationRunRead]

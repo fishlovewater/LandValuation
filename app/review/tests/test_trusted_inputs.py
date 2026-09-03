@@ -138,6 +138,11 @@ def test_repository_reads_only_applied_confirmed_canonical_fields():
     assert session.parameters == {"case_id": case_id}
     assert "ef.field_status = 'APPLIED'" in session.statement
     assert "ef.confirmed_value IS NOT NULL" in session.statement
+    assert "JOIN valuation.documents AS d" in session.statement
+    assert "d.document_type = 'original'" in session.statement
+    assert "d.is_active = true" in session.statement
+    assert "valuation.document_extractions" in session.statement
+    assert "extraction_status = 'COMPLETED'" in session.statement
     assert "extraction_run_id" not in session.statement
     assert "field_code" not in session.statement
     assert "normalized_value" not in session.statement

@@ -18,6 +18,7 @@ from app.review.models import (
 )
 from app.review.schemas import ReviewCreate, ReviewListQuery
 from app.review.risks import EXPERT_MINIMUM_MEDIUM_TYPE, HIGH_RISK_FINDING_TYPES
+from app.valuation.models import ReviewSubmissionRecord
 
 
 class ReviewRepository:
@@ -41,6 +42,14 @@ class ReviewRepository:
         if for_update:
             statement = statement.with_for_update()
         return await self.session.scalar(statement)
+
+    async def get_submission_snapshot(self, submission_id: UUID) -> dict | None:
+        snapshot = await self.session.scalar(
+            select(ReviewSubmissionRecord.input_snapshot).where(
+                ReviewSubmissionRecord.submission_id == submission_id
+            )
+        )
+        return dict(snapshot) if isinstance(snapshot, dict) else None
 
     async def list(self, query: ReviewListQuery) -> tuple[list[Review], int]:
         filters = []
@@ -221,8 +230,35 @@ class ReviewRepository:
                            ef.confirmed_value, ef.source_page, ef.source_text,
                            ef.confidence, ef.field_status,
                            ef.confirmed_by_user_id, ef.confirmed_at
-                    FROM valuation.extracted_fields ef
+                    FROM valuation.extracted_fields AS ef
+                    JOIN valuation.documents AS d
+                      ON d.case_id = ef.case_id
+                     AND d.document_id = ef.document_id
                     WHERE ef.case_id = :case_id
+                      AND d.document_type = 'original'
+                      AND d.is_active = true
+                      AND d.document_id = (
+                          SELECT current_document.document_id
+                          FROM valuation.documents AS current_document
+                          WHERE current_document.case_id = :case_id
+                            AND current_document.document_type = 'original'
+                            AND current_document.is_active = true
+                          ORDER BY current_document.version_no DESC,
+                                   current_document.uploaded_at DESC,
+                                   current_document.document_id DESC
+                          LIMIT 1
+                      )
+                      AND ef.extraction_id = (
+                          SELECT de.extraction_id
+                          FROM valuation.document_extractions AS de
+                          WHERE de.case_id = ef.case_id
+                            AND de.document_id = ef.document_id
+                            AND de.extraction_status = 'COMPLETED'
+                          ORDER BY de.completed_at DESC NULLS LAST,
+                                   de.created_at DESC,
+                                   de.extraction_id DESC
+                          LIMIT 1
+                      )
                       AND ef.field_status = 'APPLIED'
                       AND ef.confirmed_value IS NOT NULL
                     ORDER BY ef.form_code, ef.field_name, ef.extracted_field_id
@@ -417,6 +453,7 @@ class ReviewRepository:
         actor_id: UUID,
         rule_version_id: UUID,
         input_snapshot: dict,
+        submission_id: UUID | None = None,
     ) -> ValidationRun:
         run_no = (
             await self.session.scalar(
@@ -437,6 +474,7 @@ class ReviewRepository:
                 "validation_rule_ids": input_snapshot["validation_rule_ids"],
             },
             input_snapshot=input_snapshot,
+            submission_id=submission_id,
         )
         self.session.add(run)
         await self.session.flush()

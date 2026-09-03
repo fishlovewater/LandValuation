@@ -143,9 +143,16 @@ class SubmissionRepository:
         applied_fields = [
             {
                 "extracted_field_id": row.extracted_field_id,
+                "document_id": row.document_id,
                 "form_code": row.form_code,
                 "field_name": row.field_name,
                 "confirmed_value": row.confirmed_value,
+                "source_page": row.source_page,
+                "source_text": row.source_text,
+                "confidence": row.confidence,
+                "field_status": row.field_status,
+                "confirmed_by_user_id": row.confirmed_by_user_id,
+                "confirmed_at": row.confirmed_at,
             }
             for row in applied_rows
         ]
@@ -174,16 +181,46 @@ class SubmissionRepository:
                         "calculated_at": form_data.get("calculated_at"),
                     }
                 }
-        documents = []
+        document_ids = {
+            row.document_id
+            for row in applied_rows
+            if row.document_id is not None
+        }
         if report_document is not None:
-            documents.append(
-                {
-                    "document_id": report_document.document_id,
-                    "document_type": report_document.document_type,
-                    "version_no": report_document.version_no,
-                    "checksum_sha256": report_document.checksum_sha256,
-                }
+            document_ids.add(report_document.document_id)
+        referenced_documents = []
+        if document_ids:
+            referenced_documents = list(
+                (
+                    await self.session.scalars(
+                        select(DocumentRecord)
+                        .where(
+                            DocumentRecord.case_id == case_id,
+                            DocumentRecord.document_id.in_(document_ids),
+                        )
+                        .order_by(
+                            DocumentRecord.document_type,
+                            DocumentRecord.version_no,
+                            DocumentRecord.document_id,
+                        )
+                    )
+                ).all()
             )
+        documents = [
+            {
+                "document_id": document.document_id,
+                "document_type": document.document_type,
+                "original_filename": document.original_filename,
+                "mime_type": document.mime_type,
+                "version_no": document.version_no,
+                "document_group_id": document.document_group_id,
+                "checksum_sha256": document.checksum_sha256,
+                "file_size_bytes": document.file_size_bytes,
+                "uploaded_at": document.uploaded_at,
+                "is_active": document.is_active,
+            }
+            for document in referenced_documents
+        ]
         validation = {}
         if validation_run is not None:
             validation = {

@@ -133,6 +133,7 @@ class WorkbenchService:
         case = await self.repository.get_case_summary(review_id)
         if review is None or case is None:
             raise ResourceNotFoundError("審查案件")
+        submission = await self.repository.get_submission_provenance(review_id)
         runs = await self.review_repository.list_runs(review_id)
         missing_items = await self.review_repository.list_missing_items(
             review_id, open_only=False
@@ -176,6 +177,18 @@ class WorkbenchService:
         return WorkbenchCaseDetailRead(
             case=case,
             review=review,
+            submission_id=(
+                None if submission is None else submission["submission_id"]
+            ),
+            submission_no=(
+                None if submission is None else submission["submission_no"]
+            ),
+            submitted_at=(
+                None if submission is None else submission["submitted_at"]
+            ),
+            input_fingerprint=(
+                None if submission is None else submission["input_fingerprint"]
+            ),
             documents=documents,
             missing_items=missing_items,
             runs=runs,

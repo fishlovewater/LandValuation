@@ -13,6 +13,7 @@ from app.main import app
 from app.review.repository import ReviewRepository
 from app.review.service import ReviewService
 from app.review.trusted_inputs import PreparedRule, TrustedField, TrustedRunContext
+from app.valuation.submissions.snapshot import SNAPSHOT_SCHEMA_VERSION
 
 
 @pytest.fixture
@@ -37,6 +38,7 @@ def runnable_review(request, postgres_connection):
         expert_rule_id=uuid4(),
         unsupported_rule_id=uuid4(),
         extraction_run_id=uuid4(),
+        form_instance_id=uuid4(),
         adjustment_field_id=uuid4(),
         expert_grade_field_id=uuid4(),
         unrelated_field_id=uuid4(),
@@ -93,7 +95,7 @@ def runnable_review(request, postgres_connection):
                 form_instance_id, case_id, form_code, version_no, form_status
             ) VALUES (%s, %s, 'F01', 1, 'READY')
             """,
-            (uuid4(), ids.case_id),
+            (ids.form_instance_id, ids.case_id),
         )
         approved = source_publication_status == "PUBLISHED"
         cursor.execute(
@@ -193,13 +195,19 @@ def runnable_review(request, postgres_connection):
         if with_extraction:
             cursor.execute(
                 """
-                INSERT INTO valuation.extraction_runs (
-                    extraction_run_id, case_id, document_id, document_version,
-                    run_no, status, extractor_name, started_at, completed_at
-                ) VALUES (%s, %s, %s, 1, 1, 'COMPLETED', 'fixture',
+                INSERT INTO valuation.document_extractions (
+                    extraction_id, case_id, document_id, provider,
+                    extraction_status, created_by_user_id,
+                    started_at, completed_at
+                ) VALUES (%s, %s, %s, 'LOCAL_PDF', 'COMPLETED', %s,
                           now() - interval '1 minute', now())
                 """,
-                (ids.extraction_run_id, ids.case_id, ids.original_document_id),
+                (
+                    ids.extraction_run_id,
+                    ids.case_id,
+                    ids.original_document_id,
+                    ids.user_id,
+                ),
             )
             for field_id, field_code, value_type, raw_text, normalized_value, status in (
                 (
@@ -227,27 +235,35 @@ def runnable_review(request, postgres_connection):
                     "VERIFIED",
                 ),
             ):
-                verified = status == "VERIFIED"
+                field_status = "APPLIED" if status == "VERIFIED" else "NEEDS_CONFIRMATION"
+                confirmed_value = normalized_value if field_status == "APPLIED" else None
+                verified = field_status == "APPLIED"
+                confirmed_at = datetime.now(UTC) if verified else None
                 cursor.execute(
                     """
                     INSERT INTO valuation.extracted_fields (
-                        extracted_field_id, extraction_run_id, field_code, field_path,
-                        value_type, raw_text, normalized_value, page_number,
-                        verification_status, verified_by_user_id, verified_at,
-                        is_official
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, 3, %s, %s, %s, true)
+                        extracted_field_id, case_id, extraction_id, document_id,
+                        form_code, field_name, extracted_value, confidence,
+                        source_page, source_text, field_status, confirmed_value,
+                        confirmed_by_user_id, confirmed_at, applied_form_instance_id,
+                        applied_at
+                    ) VALUES (%s, %s, %s, %s, 'F01', %s, %s::jsonb, 0.9500,
+                              3, %s, %s, %s::jsonb, %s, %s, %s, %s)
                     """,
                     (
                         field_id,
+                        ids.case_id,
                         ids.extraction_run_id,
+                        ids.original_document_id,
                         field_code,
-                        f"report.{field_code}",
-                        value_type,
-                        raw_text,
                         normalized_value,
-                        status,
+                        raw_text,
+                        field_status,
+                        confirmed_value,
                         ids.user_id if verified else None,
-                        datetime.now(UTC) if verified else None,
+                        confirmed_at,
+                        ids.form_instance_id if verified else None,
+                        confirmed_at,
                     ),
                 )
     postgres_connection.commit()
@@ -278,19 +294,28 @@ def runnable_review(request, postgres_connection):
             (ids.review_id,),
         )
         cursor.execute(
-            "UPDATE review.reviews SET latest_validation_run_id = NULL WHERE review_id = %s",
+            "UPDATE review.reviews SET latest_validation_run_id = NULL, latest_submission_id = NULL WHERE review_id = %s",
             (ids.review_id,),
         )
         cursor.execute(
-            "DELETE FROM valuation.validation_runs WHERE review_id = %s", (ids.review_id,)
+            "UPDATE valuation.validation_runs SET submission_id = NULL WHERE review_id = %s",
+            (ids.review_id,),
+        )
+        cursor.execute(
+            "DELETE FROM valuation.review_submissions WHERE review_id = %s",
+            (ids.review_id,),
+        )
+        cursor.execute(
+            "DELETE FROM valuation.validation_runs WHERE review_id = %s",
+            (ids.review_id,),
         )
         cursor.execute("DELETE FROM review.reviews WHERE review_id = %s", (ids.review_id,))
         cursor.execute(
-            "DELETE FROM valuation.extracted_fields WHERE extraction_run_id = %s",
+            "DELETE FROM valuation.extracted_fields WHERE extraction_id = %s",
             (ids.extraction_run_id,),
         )
         cursor.execute(
-            "DELETE FROM valuation.extraction_runs WHERE extraction_run_id = %s",
+            "DELETE FROM valuation.document_extractions WHERE extraction_id = %s",
             (ids.extraction_run_id,),
         )
         cursor.execute(
@@ -343,6 +368,104 @@ def run_count(connection, review_id):
             (review_id,),
         )
         return cursor.fetchone()[0]
+
+
+def attach_submission_snapshot(connection, review, snapshot):
+    submission_id = uuid4()
+    source_validation_run_id = uuid4()
+    request_id = uuid4()
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO valuation.validation_runs (
+                validation_run_id, case_id, review_id, run_status,
+                input_snapshot, ruleset_snapshot
+            ) VALUES (%s, %s, %s, 'COMPLETED', '{}'::jsonb,
+                      '{"fixture": true}'::jsonb)
+            """,
+            (source_validation_run_id, review.case_id, review.review_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.review_submissions (
+                submission_id, review_id, case_id, submission_no,
+                submitted_by_user_id, submitted_at, source_validation_run_id,
+                source_report_document_id, input_snapshot, input_fingerprint,
+                request_id
+            ) VALUES (%s, %s, %s, 1, %s, %s, %s, %s, %s::jsonb, %s, %s)
+            """,
+            (
+                submission_id,
+                review.review_id,
+                review.case_id,
+                review.user_id,
+                "2026-09-03T01:02:03+00:00",
+                source_validation_run_id,
+                review.original_document_id,
+                json.dumps(snapshot, ensure_ascii=False),
+                "b" * 64,
+                request_id,
+            ),
+        )
+        cursor.execute(
+            "UPDATE review.reviews SET latest_submission_id = %s WHERE review_id = %s",
+            (submission_id, review.review_id),
+        )
+    connection.commit()
+    return submission_id
+
+
+def valid_submission_snapshot(review):
+    return {
+        "schema_version": SNAPSHOT_SCHEMA_VERSION,
+        "case_version": 1,
+        "submitted_by_user_id": str(review.user_id),
+        "request_id": str(uuid4()),
+        "applied_fields": [
+            {
+                "extracted_field_id": str(review.adjustment_field_id),
+                "document_id": str(review.original_document_id),
+                "form_code": "F01",
+                "field_name": "adjustment_rate",
+                "confirmed_value": "-12",
+                "source_page": 3,
+                "source_text": "報告記載調整率 -12%",
+                "confidence": "0.9500",
+                "field_status": "APPLIED",
+                "confirmed_by_user_id": str(review.user_id),
+                "confirmed_at": "2026-09-03T00:00:00+00:00",
+            },
+            {
+                "extracted_field_id": str(review.expert_grade_field_id),
+                "document_id": str(review.original_document_id),
+                "form_code": "F01",
+                "field_name": "expert_grade",
+                "confirmed_value": "A",
+                "source_page": 4,
+                "source_text": "報告評定 A 級",
+                "confidence": "0.9500",
+                "field_status": "APPLIED",
+                "confirmed_by_user_id": str(review.user_id),
+                "confirmed_at": "2026-09-03T00:00:00+00:00",
+            },
+        ],
+        "calculations": {},
+        "documents": [
+            {
+                "document_id": str(review.original_document_id),
+                "document_type": "original",
+                "original_filename": "run-source.pdf",
+                "mime_type": "application/pdf",
+                "version_no": 1,
+                "document_group_id": str(uuid4()),
+                "checksum_sha256": "e" * 64,
+                "file_size_bytes": 100,
+                "uploaded_at": "2026-09-03T00:00:00+00:00",
+                "is_active": True,
+            }
+        ],
+        "validation": {},
+    }
 
 
 def test_run_executes_every_server_selected_rule_and_preserves_server_evidence(
@@ -404,6 +527,60 @@ def test_run_executes_every_server_selected_rule_and_preserves_server_evidence(
     assert risk.json()["high_count"] == 1
 
 
+def test_submitted_review_run_uses_immutable_snapshot_after_live_field_mutation(
+    authorized_client, runnable_review, postgres_connection
+):
+    submission_id = attach_submission_snapshot(
+        postgres_connection,
+        runnable_review,
+        valid_submission_snapshot(runnable_review),
+    )
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE valuation.extracted_fields
+            SET confirmed_value = '"-99"'::jsonb,
+                source_text = '報告記載調整率 -99%%'
+            WHERE extracted_field_id = %s
+            """,
+            (runnable_review.adjustment_field_id,),
+        )
+    postgres_connection.commit()
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
+    )
+
+    assert response.status_code == 200
+    run = response.json()
+    assert run["submission_id"] == str(submission_id)
+    adjustment_check = next(
+        check
+        for check in run["input_snapshot"]["checks"]
+        if check["rule_code"] == "ADJUSTMENT_RATE"
+    )
+    assert adjustment_check["reported_value"] == "-12"
+    findings = authorized_client.get(
+        f"/api/v1/review/runs/{run['validation_run_id']}/findings"
+    )
+    assert findings.status_code == 200
+    assert findings.json()[0]["reported_adjustment_rate"] == "-12.000000"
+
+
+def test_submitted_review_run_rejects_malformed_snapshot(
+    authorized_client, runnable_review, postgres_connection
+):
+    attach_submission_snapshot(postgres_connection, runnable_review, {})
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "SUBMISSION_SNAPSHOT_INVALID"
+    assert run_count(postgres_connection, runnable_review.review_id) == 1
+
+
 def test_run_snapshot_preserves_complete_trusted_audit_context(
     authorized_client, runnable_review
 ):
@@ -417,7 +594,7 @@ def test_run_snapshot_preserves_complete_trusted_audit_context(
         "case",
         "report_context",
         "document",
-        "extraction_run",
+        "trusted_input_source",
         "field_snapshots",
         "rule_version",
         "rule_source",
@@ -428,12 +605,10 @@ def test_run_snapshot_preserves_complete_trusted_audit_context(
         "version_no",
         "document_group_id",
     } <= snapshot["document"].keys()
-    assert {
-        "extraction_run_id",
-        "run_no",
-        "extractor_name",
-        "extractor_version",
-    } <= snapshot["extraction_run"].keys()
+    assert snapshot["trusted_input_source"] == {
+        "field_status": "APPLIED",
+        "value_column": "confirmed_value",
+    }
     field = next(
         item
         for item in snapshot["field_snapshots"]
@@ -488,48 +663,39 @@ def test_run_snapshot_preserves_complete_trusted_audit_context(
 def test_snapshot_deduplicates_shared_prepared_field_but_keeps_all_official_fields():
     adjustment_field = TrustedField(
         extracted_field_id="field-adjustment",
-        field_code="adjustment_rate",
-        field_path="report.adjustment_rate",
-        raw_text="調整率 -12%",
-        normalized_value="-12",
-        value_type="DECIMAL",
-        page_number=3,
-        bounding_box={"left": 0.1},
-        confidence=0.99,
-        verification_status="VERIFIED",
-        verified_by_user_id="verifier-1",
-        verified_at=datetime(2026, 8, 26, tzinfo=UTC),
-        is_official=True,
+        form_code="F01",
+        field_name="adjustment_rate",
+        confirmed_value="-12",
+        source_page=3,
+        source_text="調整率 -12%",
+        confidence="0.9900",
+        field_status="APPLIED",
+        confirmed_by_user_id="verifier-1",
+        confirmed_at=datetime(2026, 8, 26, tzinfo=UTC),
     )
     grade_field = TrustedField(
         extracted_field_id="field-grade",
-        field_code="expert_grade",
-        field_path="report.grade",
-        raw_text="A 級",
-        normalized_value="A",
-        value_type="TEXT",
-        page_number=4,
-        bounding_box=None,
-        confidence=0.99,
-        verification_status="VERIFIED",
-        verified_by_user_id="verifier-1",
-        verified_at=datetime(2026, 8, 26, tzinfo=UTC),
-        is_official=True,
+        form_code="F01",
+        field_name="expert_grade",
+        confirmed_value="A",
+        source_page=4,
+        source_text="A 級",
+        confidence="0.9900",
+        field_status="APPLIED",
+        confirmed_by_user_id="verifier-1",
+        confirmed_at=datetime(2026, 8, 26, tzinfo=UTC),
     )
     unrelated_field = TrustedField(
         extracted_field_id="field-description",
-        field_code="property_description",
-        field_path="report.description",
-        raw_text="郊區住宅用地",
-        normalized_value="郊區住宅用地",
-        value_type="TEXT",
-        page_number=5,
-        bounding_box=None,
-        confidence=0.99,
-        verification_status="VERIFIED",
-        verified_by_user_id="verifier-1",
-        verified_at=datetime(2026, 8, 26, tzinfo=UTC),
-        is_official=True,
+        form_code="F01",
+        field_name="property_description",
+        confirmed_value="郊區住宅用地",
+        source_page=5,
+        source_text="郊區住宅用地",
+        confidence="0.9900",
+        field_status="APPLIED",
+        confirmed_by_user_id="verifier-1",
+        confirmed_at=datetime(2026, 8, 26, tzinfo=UTC),
     )
     rule_version_id = uuid4()
     adjustment_rule = {
@@ -683,7 +849,7 @@ def test_machine_finding_uses_field_code_not_field_path(
         field_code, field_path = cursor.fetchone()
 
     assert field_code == "adjustment_rate"
-    assert field_path == "report.adjustment_rate"
+    assert field_path == "F01.adjustment_rate"
 
 
 def test_second_running_run_returns_conflict(
@@ -746,7 +912,7 @@ def test_run_rejects_caller_owned_authoritative_fields(
     "runnable_review, expected_code",
     [
         ({"with_extraction": False}, "TRUSTED_INPUT_MISSING"),
-        ({"adjustment_status": "AUTO_EXTRACTED"}, "TRUSTED_INPUT_UNVERIFIED"),
+        ({"adjustment_status": "AUTO_EXTRACTED"}, "TRUSTED_INPUT_MISSING"),
         ({"source_publication_status": "DRAFT"}, "RULE_SOURCE_UNAVAILABLE"),
         ({"source_extraction_status": "PENDING"}, "RULE_SOURCE_UNAVAILABLE"),
         ({"tied_rule_versions": True}, "RULE_SELECTION_CONFLICT"),
@@ -777,8 +943,8 @@ def test_run_snapshot_preserves_zero_server_extracted_value(
         cursor.execute(
             """
             UPDATE valuation.extracted_fields
-            SET normalized_value = '"0"'::jsonb, raw_text = '調整率 0%%'
-            WHERE extraction_run_id = %s AND field_code = 'adjustment_rate'
+            SET confirmed_value = '"0"'::jsonb, source_text = '調整率 0%%'
+            WHERE extraction_id = %s AND field_name = 'adjustment_rate'
             """,
             (runnable_review.extraction_run_id,),
         )
@@ -807,7 +973,7 @@ def test_run_snapshot_serializes_database_decimal_confidence_exactly(
             SET confidence = %s
             WHERE extracted_field_id = %s
             """,
-            (Decimal("0.987654"), runnable_review.adjustment_field_id),
+            (Decimal("0.9876"), runnable_review.adjustment_field_id),
         )
     postgres_connection.commit()
 
@@ -822,7 +988,7 @@ def test_run_snapshot_serializes_database_decimal_confidence_exactly(
         for field in snapshot["field_snapshots"]
         if field["extracted_field_id"] == str(runnable_review.adjustment_field_id)
     )
-    assert response_confidence == "0.987654"
+    assert response_confidence == "0.9876"
     with postgres_connection.cursor() as cursor:
         cursor.execute(
             """
@@ -838,20 +1004,18 @@ def test_run_snapshot_serializes_database_decimal_confidence_exactly(
         for field in stored_snapshot["field_snapshots"]
         if field["extracted_field_id"] == str(runnable_review.adjustment_field_id)
     )
-    assert stored_confidence == "0.987654"
+    assert stored_confidence == "0.9876"
 
 
 @pytest.mark.parametrize(
-    ("field_code", "value_type", "normalized_value"),
+    ("field_code", "confirmed_value"),
     [
-        ("adjustment_rate", "DECIMAL", None),
-        ("adjustment_rate", "DECIMAL", True),
-        ("adjustment_rate", "DECIMAL", ["-5"]),
-        ("adjustment_rate", "DECIMAL", "NaN"),
-        ("adjustment_rate", "DECIMAL", "Infinity"),
-        ("adjustment_rate", "DECIMAL", "1E+999999"),
-        ("adjustment_rate", "TEXT", "-5"),
-        ("expert_grade", "TEXT", ["A"]),
+        ("adjustment_rate", True),
+        ("adjustment_rate", ["-5"]),
+        ("adjustment_rate", "NaN"),
+        ("adjustment_rate", "Infinity"),
+        ("adjustment_rate", "1E+999999"),
+        ("expert_grade", ["A"]),
     ],
 )
 def test_run_rejects_invalid_trusted_normalized_value_before_mutation(
@@ -859,19 +1023,17 @@ def test_run_rejects_invalid_trusted_normalized_value_before_mutation(
     runnable_review,
     postgres_connection,
     field_code,
-    value_type,
-    normalized_value,
+    confirmed_value,
 ):
     with postgres_connection.cursor() as cursor:
         cursor.execute(
             """
             UPDATE valuation.extracted_fields
-            SET value_type = %s, normalized_value = %s::jsonb
-            WHERE extraction_run_id = %s AND field_code = %s
+            SET confirmed_value = %s::jsonb
+            WHERE extraction_id = %s AND field_name = %s
             """,
             (
-                value_type,
-                json.dumps(normalized_value),
+                json.dumps(confirmed_value),
                 runnable_review.extraction_run_id,
                 field_code,
             ),
@@ -959,8 +1121,8 @@ def test_second_finding_persistence_failure_rolls_back_the_entire_run(
         cursor.execute(
             """
             UPDATE valuation.extracted_fields
-            SET normalized_value = '"B"'::jsonb
-            WHERE extraction_run_id = %s AND field_code = 'expert_grade'
+            SET confirmed_value = '"B"'::jsonb
+            WHERE extraction_id = %s AND field_name = 'expert_grade'
             """,
             (runnable_review.extraction_run_id,),
         )

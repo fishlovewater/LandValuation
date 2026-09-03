@@ -1,5 +1,6 @@
 import asyncio
 from datetime import UTC, datetime
+from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -91,9 +92,16 @@ class SubmissionState:
             applied_fields=[
                 {
                     "extracted_field_id": uuid4(),
+                    "document_id": command_value.source_report_document_id,
                     "form_code": "F03",
                     "field_name": "unit_price",
                     "confirmed_value": "123.4500",
+                    "source_page": 3,
+                    "source_text": "單價 123.4500",
+                    "confidence": Decimal("0.9500"),
+                    "field_status": "APPLIED",
+                    "confirmed_by_user_id": owner_id,
+                    "confirmed_at": datetime(2026, 9, 3, tzinfo=UTC),
                 }
             ],
             calculations={"F02": {"total": "246.9000"}},
@@ -335,6 +343,42 @@ async def test_first_submit_creates_review_submission_pointer_and_event() -> Non
         "lock_case",
         "find_by_request",
         "lock_review_for_case",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_submit_snapshot_contains_immutable_applied_field_evidence() -> None:
+    service, state, owner, command_value = setup_service()
+    field_id = state.inputs.applied_fields[0]["extracted_field_id"]
+    confirmed_at = datetime(2026, 9, 3, 12, 34, 56, tzinfo=UTC)
+    state.inputs.applied_fields[0].update(
+        {
+            "document_id": state.inputs.source_report_document.document_id,
+            "source_page": 3,
+            "source_text": "調整率 -12%",
+            "confidence": Decimal("0.9500"),
+            "field_status": "APPLIED",
+            "confirmed_by_user_id": owner.user_id,
+            "confirmed_at": confirmed_at,
+        }
+    )
+
+    await service.submit(state.case.case_id, command_value, owner)
+
+    assert state.submissions[0].input_snapshot["applied_fields"] == [
+        {
+            "extracted_field_id": str(field_id),
+            "document_id": str(state.inputs.source_report_document.document_id),
+            "form_code": "F03",
+            "field_name": "unit_price",
+            "confirmed_value": "123.4500",
+            "source_page": 3,
+            "source_text": "調整率 -12%",
+            "confidence": "0.9500",
+            "field_status": "APPLIED",
+            "confirmed_by_user_id": str(owner.user_id),
+            "confirmed_at": confirmed_at.isoformat(),
+        }
     ]
 
 
