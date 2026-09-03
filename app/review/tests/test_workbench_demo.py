@@ -72,6 +72,22 @@ def test_seed_creates_received_review_and_start_completes(postgres_connection):
                 (seeded["review_id"], seeded["case_id"]),
             )
             assert cursor.fetchone()[0] == "RECEIVED"
+            cursor.execute(
+                """
+                SELECT de.extraction_status, ef.form_code, ef.field_name,
+                       ef.confirmed_value, ef.field_status
+                FROM valuation.document_extractions AS de
+                JOIN valuation.extracted_fields AS ef
+                  ON ef.extraction_id = de.extraction_id
+                WHERE de.case_id = %s
+                ORDER BY ef.field_name
+                """,
+                (seeded["case_id"],),
+            )
+            assert cursor.fetchall() == [
+                ("COMPLETED", "F01", "adjustment_rate", "-12", "APPLIED"),
+                ("COMPLETED", "F01", "expert_grade", "B", "APPLIED"),
+            ]
 
         with TestClient(app) as client:
             login = client.post(

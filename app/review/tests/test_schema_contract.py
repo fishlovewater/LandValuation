@@ -1,3 +1,6 @@
+from pathlib import Path
+
+
 EXPECTED_COLUMNS = {
     ("review", "reviews", "received_at"),
     ("review", "reviews", "due_at"),
@@ -71,6 +74,17 @@ def test_trusted_input_schema_contract(postgres_connection):
     )
     assert ("valuation", "extracted_fields", "normalized_value") not in actual
     assert ("valuation", "extracted_fields", "verification_status") not in actual
+
+
+def test_review_runtime_does_not_reference_legacy_extraction_schema():
+    sources = [
+        Path("app/review/demo.py").read_text(encoding="utf-8"),
+        Path("app/review/workbench_repository.py").read_text(encoding="utf-8"),
+    ]
+    joined = "\n".join(sources)
+
+    assert "valuation.extraction_runs" not in joined
+    assert "extraction_run_id" not in joined
 
 
 import uuid

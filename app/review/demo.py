@@ -207,10 +207,13 @@ def _reset_database(connection) -> tuple[dict[str, UUID | None], list[str]]:
             cursor.execute("DELETE FROM valuation.validation_runs WHERE case_id = %s", (case_id,))
             cursor.execute("DELETE FROM review.reviews WHERE case_id = %s", (case_id,))
             cursor.execute(
-                "DELETE FROM valuation.extracted_fields WHERE extraction_run_id IN (SELECT extraction_run_id FROM valuation.extraction_runs WHERE case_id = %s)",
+                "DELETE FROM valuation.extracted_fields WHERE case_id = %s",
                 (case_id,),
             )
-            cursor.execute("DELETE FROM valuation.extraction_runs WHERE case_id = %s", (case_id,))
+            cursor.execute(
+                "DELETE FROM valuation.document_extractions WHERE case_id = %s",
+                (case_id,),
+            )
             for table in (
                 "history.access_logs",
                 "history.change_logs",
@@ -267,59 +270,68 @@ def reset_demo() -> dict[str, Any]:
     }
 
 
-def _insert_extraction(cursor, *, case_id: UUID, document_id: UUID, version: int, user_id: UUID, adjustment_rate: str, expert_grade: str) -> UUID:
-    extraction_run_id = uuid4()
+def _insert_extraction(
+    cursor,
+    *,
+    case_id: UUID,
+    document_id: UUID,
+    user_id: UUID,
+    form_instance_id: UUID,
+    adjustment_rate: str,
+    expert_grade: str,
+) -> UUID:
+    """Create one COMPLETED canonical extraction and two APPLIED fields."""
+    extraction_id = uuid4()
     cursor.execute(
         """
-        INSERT INTO valuation.extraction_runs (
-            extraction_run_id, case_id, document_id, document_version, run_no,
-            status, extractor_name, extractor_version, started_at, completed_at
-        ) VALUES (%s, %s, %s, %s, 1, 'COMPLETED',
-                  'review-demo-fixture', '1.0', now() - interval '1 minute', now())
+        INSERT INTO valuation.document_extractions (
+            extraction_id, case_id, document_id, provider, extraction_status,
+            created_by_user_id, started_at, completed_at
+        ) VALUES (%s, %s, %s, 'LOCAL_PDF', 'COMPLETED', %s,
+                  now() - interval '1 minute', now())
         """,
-        (extraction_run_id, case_id, document_id, version),
+        (extraction_id, case_id, document_id, user_id),
     )
     fields = (
         (
             "adjustment_rate",
-            "comparables[0].adjustment_rate",
-            "DECIMAL",
             f"Adjustment rate {adjustment_rate}%",
             adjustment_rate,
             3,
         ),
         (
             "expert_grade",
-            "comparables[0].grade",
-            "TEXT",
             f"Expert grade {expert_grade}",
             expert_grade,
             4,
         ),
     )
-    for field_code, field_path, value_type, raw_text, normalized, page_number in fields:
+    for field_name, source_text, confirmed_value, source_page in fields:
         cursor.execute(
             """
             INSERT INTO valuation.extracted_fields (
-                extracted_field_id, extraction_run_id, field_code, field_path,
-                value_type, raw_text, normalized_value, page_number, confidence,
-                verification_status, verified_by_user_id, verified_at, is_official
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0.990000,
-                      'VERIFIED', %s, now(), true)
+                extracted_field_id, case_id, extraction_id, document_id, form_code,
+                field_name, extracted_value, confidence, source_page, source_text,
+                field_status, confirmed_value, confirmed_by_user_id, confirmed_at,
+                applied_form_instance_id, applied_at
+            ) VALUES (%s, %s, %s, %s, 'F01', %s, %s, 0.9900, %s, %s,
+                      'APPLIED', %s, %s, now(), %s, now())
             """,
             (
                 uuid4(),
-                extraction_run_id,
-                field_code,
-                field_path,
-                value_type,
-                raw_text,
-                Jsonb(normalized),
-                page_number,
+                case_id,
+                extraction_id,
+                document_id,
+                field_name,
+                Jsonb(confirmed_value),
+                source_page,
+                source_text,
+                Jsonb(confirmed_value),
                 user_id,
+                form_instance_id,
             ),
         )
-    return extraction_run_id
+    return extraction_id
 
 
 def seed_demo() -> dict[str, Any]:
@@ -331,6 +343,7 @@ def seed_demo() -> dict[str, Any]:
     review_id = uuid4()
     original_document_id = uuid4()
     original_group_id = uuid4()
+    form_instance_id = uuid4()
     knowledge_document_id = uuid4()
     rule_version_id = uuid4()
     uploads: list[dict[str, Any]] = []
@@ -441,7 +454,7 @@ def seed_demo() -> dict[str, Any]:
                             form_status, created_by_user_id, updated_by_user_id
                         ) VALUES (%s, %s, 'F01', 1, 'READY', %s, %s)
                         """,
-                        (uuid4(), case_id, user_id, user_id),
+                        (form_instance_id, case_id, user_id, user_id),
                     )
                     cursor.execute(
                         """
@@ -517,8 +530,8 @@ def seed_demo() -> dict[str, Any]:
                         cursor,
                         case_id=case_id,
                         document_id=original_document_id,
-                        version=1,
                         user_id=user_id,
+                        form_instance_id=form_instance_id,
                         adjustment_rate="-12",
                         expert_grade="B",
                     )
@@ -551,6 +564,19 @@ def revise_demo() -> dict[str, Any]:
                 user_id = ids["user_id"]
                 if case_id is None or user_id is None:
                     raise DemoError("DEMO_NOT_FOUND: run seed before revise")
+                cursor.execute(
+                    """
+                    SELECT form_instance_id
+                    FROM valuation.form_instances
+                    WHERE case_id = %s AND form_code = 'F01'
+                    ORDER BY version_no DESC, form_instance_id DESC
+                    LIMIT 1
+                    """,
+                    (case_id,),
+                )
+                form_instance = cursor.fetchone()
+                if form_instance is None:
+                    raise DemoError("DEMO_FORM_MISSING: run seed before revise")
                 cursor.execute(
                     """
                     SELECT document_id FROM valuation.documents
@@ -611,8 +637,8 @@ def revise_demo() -> dict[str, Any]:
                     cursor,
                     case_id=case_id,
                     document_id=document_id,
-                    version=2,
                     user_id=user_id,
+                    form_instance_id=form_instance[0],
                     adjustment_rate="-7",
                     expert_grade="A",
                 )

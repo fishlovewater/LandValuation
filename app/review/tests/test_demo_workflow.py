@@ -25,6 +25,34 @@ def test_demo_seed_is_idempotent_and_real_api_workflow_completes(postgres_connec
         assert cursor.fetchone()[0] == 1
         cursor.execute("SELECT count(*) FROM auth.users WHERE username = %s", (DEMO_USERNAME,))
         assert cursor.fetchone()[0] == 1
+        cursor.execute(
+            """
+            SELECT extraction_status, document_id
+            FROM valuation.document_extractions
+            WHERE case_id = %s
+            """,
+            (second["case_id"],),
+        )
+        extraction_rows = cursor.fetchall()
+        assert len(extraction_rows) == 1
+        assert extraction_rows[0][0] == "COMPLETED"
+        cursor.execute(
+            """
+            SELECT ef.form_code, ef.field_name, ef.confirmed_value,
+                   ef.field_status, ef.confirmed_by_user_id,
+                   ef.confirmed_at, ef.applied_form_instance_id, ef.applied_at
+            FROM valuation.extracted_fields AS ef
+            WHERE ef.case_id = %s
+            ORDER BY ef.field_name
+            """,
+            (second["case_id"],),
+        )
+        field_rows = cursor.fetchall()
+        assert [(row[0], row[1], row[2], row[3]) for row in field_rows] == [
+            ("F01", "adjustment_rate", "-12", "APPLIED"),
+            ("F01", "expert_grade", "B", "APPLIED"),
+        ]
+        assert all(row[4] and row[5] and row[6] and row[7] for row in field_rows)
 
     try:
         with TestClient(app) as client:
@@ -211,6 +239,16 @@ def test_demo_seed_is_idempotent_and_real_api_workflow_completes(postgres_connec
         cursor.execute("SELECT count(*) FROM valuation.cases WHERE case_no = %s", (DEMO_CASE_NO,))
         assert cursor.fetchone()[0] == 0
         cursor.execute("SELECT count(*) FROM auth.users WHERE username = %s", (DEMO_USERNAME,))
+        assert cursor.fetchone()[0] == 0
+        cursor.execute(
+            "SELECT count(*) FROM valuation.document_extractions WHERE case_id = %s",
+            (second["case_id"],),
+        )
+        assert cursor.fetchone()[0] == 0
+        cursor.execute(
+            "SELECT count(*) FROM valuation.extracted_fields WHERE case_id = %s",
+            (second["case_id"],),
+        )
         assert cursor.fetchone()[0] == 0
 
 

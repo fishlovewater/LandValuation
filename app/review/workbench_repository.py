@@ -246,29 +246,27 @@ class WorkbenchRepository:
             await self.session.execute(
                 text(
                     """
-                    SELECT d.document_id, d.document_group_id,
-                           d.version_no AS document_version,
-                           ef.field_code, ef.field_path, ef.normalized_value,
-                           ef.raw_text, ef.page_number
-                    FROM valuation.documents d
+                    SELECT d.document_id, d.document_group_id, d.version_no AS document_version,
+                           ef.field_name AS field_code,
+                           concat(ef.form_code, '.', ef.field_name) AS field_path,
+                           ef.confirmed_value AS normalized_value,
+                           coalesce(ef.source_text, '') AS raw_text,
+                           ef.source_page AS page_number
+                    FROM valuation.documents AS d
                     JOIN LATERAL (
-                        SELECT extraction_run_id
-                        FROM valuation.extraction_runs
-                        WHERE document_id = d.document_id
-                          AND document_version = d.version_no
-                          AND status = 'COMPLETED'
-                        ORDER BY run_no DESC, completed_at DESC,
-                                 extraction_run_id DESC
+                        SELECT extraction_id
+                        FROM valuation.document_extractions
+                        WHERE case_id = d.case_id
+                          AND document_id = d.document_id
+                          AND extraction_status = 'COMPLETED'
+                        ORDER BY completed_at DESC NULLS LAST, created_at DESC, extraction_id DESC
                         LIMIT 1
-                    ) er ON true
-                    JOIN valuation.extracted_fields ef
-                      ON ef.extraction_run_id = er.extraction_run_id
-                     AND ef.is_official = true
+                    ) AS de ON true
+                    JOIN valuation.extracted_fields AS ef
+                      ON ef.extraction_id = de.extraction_id
+                     AND ef.field_status = 'APPLIED'
                     WHERE d.case_id = :case_id
-                      AND d.document_type = 'original'
-                    ORDER BY d.document_group_id, ef.field_code, ef.field_path,
-                             d.version_no,
-                             ef.extracted_field_id
+                    ORDER BY d.document_group_id, ef.field_name, d.version_no;
                     """
                 ),
                 {"case_id": case_id},
