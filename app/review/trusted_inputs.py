@@ -1,5 +1,5 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, DecimalException, InvalidOperation
 
 from app.core.exceptions import AppError
@@ -30,6 +30,9 @@ class TrustedField:
     field_status: str
     confirmed_by_user_id: str | None
     confirmed_at: object | None
+    # Canonical extraction provenance.  Legacy Review rows may not have this
+    # value, so keep it optional while submitted snapshots must provide it.
+    document_id: str | None = None
 
     @property
     def field_code(self) -> str:
@@ -94,6 +97,7 @@ class TrustedRunContext:
     rule_source: dict
     prepared_rules: tuple["PreparedRule", ...]
     extraction_run: dict | None = None
+    documents: dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

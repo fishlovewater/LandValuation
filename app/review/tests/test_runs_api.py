@@ -13,7 +13,7 @@ from app.main import app
 from app.review.repository import ReviewRepository
 from app.review.service import ReviewService
 from app.review.trusted_inputs import PreparedRule, TrustedField, TrustedRunContext
-from app.valuation.submissions.snapshot import SNAPSHOT_SCHEMA_VERSION
+from app.valuation.submissions.snapshot import SNAPSHOT_SCHEMA_VERSION, snapshot_fingerprint
 
 
 @pytest.fixture
@@ -374,6 +374,7 @@ def attach_submission_snapshot(connection, review, snapshot):
     submission_id = uuid4()
     source_validation_run_id = uuid4()
     request_id = uuid4()
+    fingerprint = snapshot_fingerprint(snapshot)
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -403,7 +404,7 @@ def attach_submission_snapshot(connection, review, snapshot):
                 source_validation_run_id,
                 review.original_document_id,
                 json.dumps(snapshot, ensure_ascii=False),
-                "b" * 64,
+                fingerprint,
                 request_id,
             ),
         )
@@ -579,6 +580,102 @@ def test_submitted_review_run_rejects_malformed_snapshot(
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "SUBMISSION_SNAPSHOT_INVALID"
     assert run_count(postgres_connection, runnable_review.review_id) == 1
+
+
+def test_submitted_review_run_rejects_snapshot_fingerprint_mismatch(
+    authorized_client, runnable_review, postgres_connection
+):
+    submission_id = attach_submission_snapshot(
+        postgres_connection,
+        runnable_review,
+        valid_submission_snapshot(runnable_review),
+    )
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE valuation.review_submissions SET input_fingerprint = %s "
+            "WHERE submission_id = %s",
+            ("0" * 64, submission_id),
+        )
+    postgres_connection.commit()
+
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "SUBMISSION_SNAPSHOT_INVALID"
+    assert run_count(postgres_connection, runnable_review.review_id) == 1
+
+
+def test_submitted_review_finding_uses_each_field_document_provenance(
+    authorized_client, runnable_review, postgres_connection
+):
+    snapshot = valid_submission_snapshot(runnable_review)
+    second_document_id = str(uuid4())
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO valuation.documents (
+                document_id, case_id, document_type, original_filename,
+                mime_type, bucket_name, object_key, checksum_sha256,
+                file_size_bytes, version_no, is_active
+            ) VALUES (%s, %s, 'original', 'run-source-second.pdf',
+                      'application/pdf', 'land-valuation', %s, %s,
+                      100, 1, true)
+            """,
+            (
+                second_document_id,
+                runnable_review.case_id,
+                f"cases/{runnable_review.case_id}/run-source-second.pdf",
+                "f" * 64,
+            ),
+        )
+    postgres_connection.commit()
+    snapshot["documents"].append(
+        {
+            **snapshot["documents"][0],
+            "document_id": second_document_id,
+            "document_group_id": str(uuid4()),
+            "checksum_sha256": "f" * 64,
+        }
+    )
+    snapshot["applied_fields"][1]["document_id"] = second_document_id
+    snapshot["applied_fields"][1]["confirmed_value"] = "B"
+    attach_submission_snapshot(postgres_connection, runnable_review, snapshot)
+
+    try:
+        response = authorized_client.post(
+            f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
+        )
+
+        assert response.status_code == 200
+        findings = response.json()
+        finding_response = authorized_client.get(
+            f"/api/v1/review/runs/{findings['validation_run_id']}/findings"
+        )
+        assert finding_response.status_code == 200
+        finding_by_path = {
+            finding["field_path"]: finding
+            for finding in finding_response.json()
+        }
+        assert finding_by_path["F01.adjustment_rate"]["document_id"] == str(
+            runnable_review.original_document_id
+        )
+        assert finding_by_path["F01.expert_grade"]["document_id"] == second_document_id
+        assert finding_by_path["F01.expert_grade"]["source_evidence"][0][
+            "document_id"
+        ] == second_document_id
+    finally:
+        with postgres_connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE review.findings SET document_id = NULL WHERE document_id = %s",
+                (second_document_id,),
+            )
+            cursor.execute(
+                "DELETE FROM valuation.documents WHERE document_id = %s",
+                (second_document_id,),
+            )
+        postgres_connection.commit()
 
 
 def test_run_snapshot_preserves_complete_trusted_audit_context(

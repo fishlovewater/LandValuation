@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from uuid import uuid4
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -7,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.auth.dependencies import get_current_user
 from app.main import app
 from app.storage.dependencies import get_storage_service
+from app.valuation.submissions.snapshot import SNAPSHOT_SCHEMA_VERSION, snapshot_fingerprint
 
 
 class DownloadObject:
@@ -117,6 +119,45 @@ def workbench_submission(workbench_records, postgres_connection):
     validation_run_id = uuid4()
     document_id = uuid4()
     request_id = uuid4()
+    document_group_id = uuid4()
+    snapshot = {
+        "schema_version": SNAPSHOT_SCHEMA_VERSION,
+        "case_version": 1,
+        "submitted_by_user_id": str(workbench_records.user_id),
+        "request_id": str(request_id),
+        "applied_fields": [
+            {
+                "extracted_field_id": str(uuid4()),
+                "document_id": str(document_id),
+                "form_code": "F03",
+                "field_name": "adjustment_rate",
+                "confirmed_value": "-12",
+                "source_page": 3,
+                "source_text": "送審調整率 -12%",
+                "confidence": "0.9500",
+                "field_status": "APPLIED",
+                "confirmed_by_user_id": str(workbench_records.user_id),
+                "confirmed_at": "2026-09-03T01:00:00+00:00",
+            }
+        ],
+        "calculations": {},
+        "documents": [
+            {
+                "document_id": str(document_id),
+                "document_type": "original",
+                "original_filename": "submitted.pdf",
+                "mime_type": "application/pdf",
+                "version_no": 1,
+                "document_group_id": str(document_group_id),
+                "checksum_sha256": "f" * 64,
+                "file_size_bytes": 100,
+                "uploaded_at": "2026-09-03T01:00:00+00:00",
+                "is_active": True,
+            }
+        ],
+        "validation": {},
+    }
+    input_fingerprint = snapshot_fingerprint(snapshot)
     with postgres_connection.cursor() as cursor:
         cursor.execute(
             """
@@ -134,7 +175,7 @@ def workbench_submission(workbench_records, postgres_connection):
                 f"cases/{workbench_records.reviewed_case_id}/submitted.pdf",
                 "f" * 64,
                 workbench_records.user_id,
-                uuid4(),
+                document_group_id,
             ),
         )
         cursor.execute(
@@ -159,7 +200,7 @@ def workbench_submission(workbench_records, postgres_connection):
                 source_report_document_id, input_snapshot, input_fingerprint,
                 request_id
             ) VALUES (%s, %s, %s, 1, %s, '2026-09-03T01:02:03+00:00',
-                      %s, %s, '{}'::jsonb, %s, %s)
+                      %s, %s, %s::jsonb, %s, %s)
             """,
             (
                 submission_id,
@@ -168,9 +209,15 @@ def workbench_submission(workbench_records, postgres_connection):
                 workbench_records.user_id,
                 validation_run_id,
                 document_id,
-                "c" * 64,
+                json.dumps(snapshot),
+                input_fingerprint,
                 request_id,
             ),
+        )
+        cursor.execute(
+            "UPDATE valuation.validation_runs SET submission_id = %s "
+            "WHERE validation_run_id = %s",
+            (submission_id, validation_run_id),
         )
         cursor.execute(
             "UPDATE review.reviews SET latest_submission_id = %s WHERE review_id = %s",
@@ -182,12 +229,18 @@ def workbench_submission(workbench_records, postgres_connection):
         submission_id=submission_id,
         validation_run_id=validation_run_id,
         document_id=document_id,
+        input_fingerprint=input_fingerprint,
     )
 
     with postgres_connection.cursor() as cursor:
         cursor.execute(
             "UPDATE review.reviews SET latest_submission_id = NULL WHERE review_id = %s",
             (workbench_records.review_id,),
+        )
+        cursor.execute(
+            "UPDATE valuation.validation_runs SET submission_id = NULL "
+            "WHERE validation_run_id = %s",
+            (validation_run_id,),
         )
         cursor.execute(
             "DELETE FROM valuation.review_submissions WHERE submission_id = %s",
@@ -330,9 +383,489 @@ def test_workbench_detail_exposes_submission_provenance_without_snapshot_or_obje
     assert body["submission_id"] == str(workbench_submission.submission_id)
     assert body["submission_no"] == 1
     assert body["submitted_at"] == "2026-09-03T01:02:03Z"
-    assert body["input_fingerprint"] == "c" * 64
+    assert body["input_fingerprint"] == workbench_submission.input_fingerprint
     assert "input_snapshot" not in body
     assert "object_key" not in body
+
+
+def test_workbench_detail_projects_runs_without_nested_raw_snapshot(
+    workbench_client, workbench_records, workbench_submission
+):
+    detail = workbench_client.get(
+        f"/api/v1/review/workbench/cases/{workbench_records.review_id}"
+    )
+
+    assert detail.status_code == 200
+    runs = detail.json()["runs"]
+    assert runs
+    assert all("input_snapshot" not in run for run in runs)
+    assert all("object_key" not in run for run in runs)
+    assert all("bucket_name" not in run for run in runs)
+    assert runs[0]["submission_id"] == str(workbench_submission.submission_id)
+    assert runs[0]["submission_no"] == 1
+    assert runs[0]["input_fingerprint"] == workbench_submission.input_fingerprint
+
+
+def test_submitted_workbench_detail_uses_snapshot_documents_after_live_change(
+    workbench_client, workbench_records, workbench_submission, postgres_connection
+):
+    snapshot = {
+        "schema_version": SNAPSHOT_SCHEMA_VERSION,
+        "case_version": 1,
+        "submitted_by_user_id": str(workbench_records.user_id),
+        "request_id": str(uuid4()),
+        "applied_fields": [
+            {
+                "extracted_field_id": str(uuid4()),
+                "document_id": str(workbench_submission.document_id),
+                "form_code": "F03",
+                "field_name": "adjustment_rate",
+                "confirmed_value": "-12",
+                "source_page": 3,
+                "source_text": "送審調整率 -12%",
+                "confidence": "0.9500",
+                "field_status": "APPLIED",
+                "confirmed_by_user_id": str(workbench_records.user_id),
+                "confirmed_at": "2026-09-03T01:00:00+00:00",
+            }
+        ],
+        "calculations": {},
+        "documents": [
+            {
+                "document_id": str(workbench_submission.document_id),
+                "document_type": "original",
+                "original_filename": "submitted.pdf",
+                "mime_type": "application/pdf",
+                "version_no": 1,
+                "document_group_id": str(uuid4()),
+                "checksum_sha256": "f" * 64,
+                "file_size_bytes": 100,
+                "uploaded_at": "2026-09-03T01:00:00+00:00",
+                "is_active": True,
+            }
+        ],
+        "validation": {},
+    }
+    post_submission_document_id = uuid4()
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE valuation.review_submissions "
+            "SET input_snapshot = %s::jsonb, input_fingerprint = %s "
+            "WHERE submission_id = %s",
+            (json.dumps(snapshot), snapshot_fingerprint(snapshot), workbench_submission.submission_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.documents (
+                document_id, case_id, document_type, original_filename,
+                mime_type, bucket_name, object_key, checksum_sha256,
+                file_size_bytes, version_no, uploaded_by_user_id,
+                is_active, document_group_id
+            ) VALUES (%s, %s, 'original', 'post-submit.pdf', 'application/pdf',
+                      'land-valuation', %s, %s, 100, 1, %s, true, %s)
+            """,
+            (
+                post_submission_document_id,
+                workbench_records.reviewed_case_id,
+                f"cases/{workbench_records.reviewed_case_id}/post-submit.pdf",
+                "e" * 64,
+                workbench_records.user_id,
+                uuid4(),
+            ),
+        )
+    postgres_connection.commit()
+
+    try:
+        detail = workbench_client.get(
+            f"/api/v1/review/workbench/cases/{workbench_records.review_id}"
+        )
+
+        assert detail.status_code == 200
+        assert [item["document_id"] for item in detail.json()["documents"]] == [
+            str(workbench_submission.document_id)
+        ]
+    finally:
+        with postgres_connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM valuation.documents WHERE document_id = %s",
+                (post_submission_document_id,),
+            )
+        postgres_connection.commit()
+
+
+def test_workbench_detail_does_not_project_latest_submission_onto_legacy_run(
+    workbench_client, workbench_records, workbench_submission, postgres_connection
+):
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE valuation.validation_runs SET submission_id = NULL "
+            "WHERE validation_run_id = %s",
+            (workbench_submission.validation_run_id,),
+        )
+    postgres_connection.commit()
+
+    detail = workbench_client.get(
+        f"/api/v1/review/workbench/cases/{workbench_records.review_id}"
+    )
+
+    assert detail.status_code == 200
+    legacy_run = detail.json()["runs"][0]
+    assert legacy_run["submission_id"] is None
+    assert legacy_run["submission_no"] is None
+    assert legacy_run["submitted_at"] is None
+    assert legacy_run["input_fingerprint"] is None
+
+
+def test_submitted_preflight_uses_snapshot_after_live_field_is_invalidated(
+    workbench_client, workbench_records, postgres_connection
+):
+    # This fixture starts without valuation inputs; create a complete submitted
+    # snapshot and then make the live canonical fields unavailable to prove
+    # preflight does not fall back.
+    with postgres_connection.cursor() as cursor:
+        document_id = uuid4()
+        document_group_id = uuid4()
+        land_register_id = uuid4()
+        cadastral_map_id = uuid4()
+        parcel_id = uuid4()
+        extraction_id = uuid4()
+        validation_run_id = uuid4()
+        form_instance_id = uuid4()
+        source_document_id = uuid4()
+        rule_version_id = uuid4()
+        adjustment_rule_id = uuid4()
+        expert_rule_id = uuid4()
+        adjustment_id = uuid4()
+        grade_id = uuid4()
+        cursor.execute(
+            """
+            INSERT INTO valuation.documents (
+                document_id, case_id, document_type, original_filename,
+                mime_type, bucket_name, object_key, checksum_sha256,
+                file_size_bytes, version_no, is_active, document_group_id
+            ) VALUES (%s, %s, 'original', 'preflight.pdf', 'application/pdf',
+                      'land-valuation', %s, %s, 100, 1, true, %s)
+            """,
+            (
+                document_id,
+                workbench_records.reviewed_case_id,
+                f"cases/{workbench_records.reviewed_case_id}/preflight.pdf",
+                "d" * 64,
+                document_group_id,
+            ),
+        )
+        for extra_document_id, document_type, filename, checksum in (
+            (land_register_id, "land-register", "land-register.pdf", "e" * 64),
+            (cadastral_map_id, "cadastral-map", "cadastral-map.pdf", "f" * 64),
+        ):
+            cursor.execute(
+                """
+                INSERT INTO valuation.documents (
+                    document_id, case_id, document_type, original_filename,
+                    mime_type, bucket_name, object_key, checksum_sha256,
+                    file_size_bytes, version_no, is_active, document_group_id
+                ) VALUES (%s, %s, %s, %s, 'application/pdf', 'land-valuation',
+                          %s, %s, 100, 1, true, %s)
+                """,
+                (
+                    extra_document_id,
+                    workbench_records.reviewed_case_id,
+                    document_type,
+                    filename,
+                    f"cases/{workbench_records.reviewed_case_id}/{filename}",
+                    checksum,
+                    uuid4(),
+                ),
+            )
+        cursor.execute(
+            """
+            INSERT INTO valuation.parcels (
+                parcel_id, case_id, district_code, section_name,
+                subsection_name, land_no, area_sqm
+            ) VALUES (%s, %s, 'F01', '測試段', '', '1', 100)
+            """,
+            (parcel_id, workbench_records.reviewed_case_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.form_instances (
+                form_instance_id, case_id, form_code, version_no, form_status
+            ) VALUES (%s, %s, 'F01', 1, 'READY')
+            """,
+            (form_instance_id, workbench_records.reviewed_case_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.document_extractions (
+                extraction_id, case_id, document_id, provider,
+                extraction_status, created_by_user_id, completed_at
+            ) VALUES (%s, %s, %s, 'LOCAL_PDF', 'COMPLETED', %s, now())
+            """,
+            (extraction_id, workbench_records.reviewed_case_id, document_id, workbench_records.user_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.validation_runs (
+                validation_run_id, case_id, review_id, run_status,
+                input_snapshot, ruleset_snapshot
+            ) VALUES (%s, %s, %s, 'COMPLETED', '{}'::jsonb,
+                      '{"fixture": true}'::jsonb)
+            """,
+            (
+                validation_run_id,
+                workbench_records.reviewed_case_id,
+                workbench_records.review_id,
+            ),
+        )
+        cursor.execute(
+            """
+            INSERT INTO knowledge.documents (
+                document_id, document_code, title, document_type,
+                original_filename, mime_type, bucket_name, object_key,
+                checksum_sha256, file_size_bytes, version_no, effective_from,
+                extraction_status, publication_status, approved_by_user_id,
+                approved_at
+            ) VALUES (%s, %s, 'Preflight Source', 'REGULATION', 'source.pdf',
+                      'application/pdf', 'land-valuation', %s, %s, 100, 1,
+                      CURRENT_DATE, 'COMPLETED', 'PUBLISHED', %s, now())
+            """,
+            (
+                source_document_id,
+                f"PREFLIGHT-SOURCE-{str(source_document_id)[:8]}",
+                f"knowledge/{source_document_id}/source.pdf",
+                "a" * 64,
+                workbench_records.user_id,
+            ),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.rule_versions (
+                rule_version_id, rule_set_code, version_no, version_name,
+                effective_from, status, applicable_case_type,
+                applicable_district_code, selection_priority, source_document_id
+            ) VALUES (%s, %s, 1, 'Preflight Rules', CURRENT_DATE, 'PUBLISHED',
+                      'LAND', 'F01', 10, %s)
+            """,
+            (
+                rule_version_id,
+                f"PREFLIGHT-RULES-{str(rule_version_id)[:8]}",
+                source_document_id,
+            ),
+        )
+        for rule_id, rule_code, field_name, expression in (
+            (
+                adjustment_rule_id,
+                "ADJUSTMENT_RATE",
+                "adjustment_rate",
+                '{"system_rate":"-5","tolerance":"0"}',
+            ),
+            (
+                expert_rule_id,
+                "EXPERT_GRADE",
+                "expert_grade",
+                '{"system_grade":"A"}',
+            ),
+        ):
+            cursor.execute(
+                """
+                INSERT INTO valuation.validation_rules (
+                    validation_rule_id, rule_version_id, rule_code, rule_name,
+                    target_form_code, target_table, target_field_code, severity,
+                    rule_expression, message_template, is_active
+                ) VALUES (%s, %s, %s, %s, 'F01', 'comparison', %s, 'HIGH',
+                          %s, %s, true)
+                """,
+                (
+                    rule_id,
+                    rule_version_id,
+                    rule_code,
+                    rule_code,
+                    field_name,
+                    expression,
+                    rule_code,
+                ),
+            )
+        for field_id, name, value in (
+            (adjustment_id, "adjustment_rate", "-12"),
+            (grade_id, "expert_grade", "A"),
+        ):
+            cursor.execute(
+                """
+                INSERT INTO valuation.extracted_fields (
+                    extracted_field_id, case_id, extraction_id, document_id,
+                    form_code, field_name, extracted_value, confidence,
+                    source_page, source_text, field_status, confirmed_value,
+                    confirmed_by_user_id, confirmed_at, applied_form_instance_id,
+                    applied_at
+                ) VALUES (%s, %s, %s, %s, 'F01', %s, %s::jsonb, 0.9500,
+                          3, '原文', 'APPLIED', %s::jsonb, %s, now(), %s, now())
+                """,
+                (
+                    field_id,
+                    workbench_records.reviewed_case_id,
+                    extraction_id,
+                    document_id,
+                    name,
+                    json.dumps(value),
+                    json.dumps(value),
+                    workbench_records.user_id,
+                    form_instance_id,
+                ),
+            )
+        cursor.execute(
+            "UPDATE review.reviews SET latest_submission_id = NULL WHERE review_id = %s",
+            (workbench_records.review_id,),
+        )
+    postgres_connection.commit()
+
+    # The API fixture's helper expects runnable-review ids, so use a minimal
+    # direct snapshot through the submission table below.
+    snapshot = {
+        "schema_version": "valuation-review-submission-v1",
+        "case_version": 1,
+        "submitted_by_user_id": str(workbench_records.user_id),
+        "request_id": str(uuid4()),
+        "applied_fields": [
+            {
+                "extracted_field_id": str(adjustment_id),
+                "document_id": str(document_id),
+                "form_code": "F01",
+                "field_name": "adjustment_rate",
+                "confirmed_value": "-12",
+                "source_page": 3,
+                "source_text": "原文",
+                "confidence": "0.9500",
+                "field_status": "APPLIED",
+                "confirmed_by_user_id": str(workbench_records.user_id),
+                "confirmed_at": "2026-09-03T00:00:00+00:00",
+            },
+            {
+                "extracted_field_id": str(grade_id),
+                "document_id": str(document_id),
+                "form_code": "F01",
+                "field_name": "expert_grade",
+                "confirmed_value": "A",
+                "source_page": 3,
+                "source_text": "原文",
+                "confidence": "0.9500",
+                "field_status": "APPLIED",
+                "confirmed_by_user_id": str(workbench_records.user_id),
+                "confirmed_at": "2026-09-03T00:00:00+00:00",
+            },
+        ],
+        "calculations": {},
+        "documents": [
+            {
+                "document_id": str(document_id),
+                "document_type": "original",
+                "original_filename": "preflight.pdf",
+                "mime_type": "application/pdf",
+                "version_no": 1,
+                "document_group_id": str(document_group_id),
+                "checksum_sha256": "d" * 64,
+                "file_size_bytes": 100,
+                "uploaded_at": "2026-09-03T00:00:00+00:00",
+                "is_active": True,
+            }
+        ],
+        "validation": {},
+    }
+    submission_id = uuid4()
+    from app.valuation.submissions.snapshot import snapshot_fingerprint
+
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO valuation.review_submissions (
+                submission_id, review_id, case_id, submission_no,
+                submitted_by_user_id, source_validation_run_id,
+                source_report_document_id, input_snapshot, input_fingerprint,
+                request_id
+            ) VALUES (%s, %s, %s, 1, %s, %s, %s, %s::jsonb, %s, %s)
+            """,
+            (
+                submission_id,
+                workbench_records.review_id,
+                workbench_records.reviewed_case_id,
+                workbench_records.user_id,
+                validation_run_id,
+                document_id,
+                json.dumps(snapshot),
+                snapshot_fingerprint(snapshot),
+                uuid4(),
+            ),
+        )
+        cursor.execute(
+            "UPDATE review.reviews SET latest_submission_id = %s WHERE review_id = %s",
+            (submission_id, workbench_records.review_id),
+        )
+        cursor.execute(
+            """
+            UPDATE valuation.extracted_fields
+            SET field_status = 'NEEDS_CONFIRMATION', confirmed_value = NULL,
+                confirmed_by_user_id = NULL, confirmed_at = NULL,
+                applied_form_instance_id = NULL, applied_at = NULL
+            WHERE case_id = %s
+            """,
+            (workbench_records.reviewed_case_id,),
+        )
+    postgres_connection.commit()
+
+    try:
+        response = workbench_client.post(
+            f"/api/v1/review/workbench/cases/{workbench_records.review_id}/start/preflight"
+        )
+
+        assert response.status_code == 200
+        assert response.json()["outcome"] == "READY"
+    finally:
+        with postgres_connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE review.reviews SET latest_submission_id = NULL "
+                "WHERE review_id = %s",
+                (workbench_records.review_id,),
+            )
+            cursor.execute(
+                "DELETE FROM valuation.review_submissions WHERE submission_id = %s",
+                (submission_id,),
+            )
+            cursor.execute(
+                "DELETE FROM valuation.validation_runs WHERE validation_run_id = %s",
+                (validation_run_id,),
+            )
+            cursor.execute(
+                "DELETE FROM valuation.extracted_fields WHERE extraction_id = %s",
+                (extraction_id,),
+            )
+            cursor.execute(
+                "DELETE FROM valuation.document_extractions WHERE extraction_id = %s",
+                (extraction_id,),
+            )
+            cursor.execute(
+                "DELETE FROM valuation.form_instances WHERE form_instance_id = %s",
+                (form_instance_id,),
+            )
+            cursor.execute(
+                "DELETE FROM valuation.parcels WHERE parcel_id = %s",
+                (parcel_id,),
+            )
+            cursor.execute(
+                "DELETE FROM valuation.documents WHERE document_id IN (%s, %s, %s)",
+                (document_id, land_register_id, cadastral_map_id),
+            )
+            cursor.execute(
+                "DELETE FROM valuation.validation_rules WHERE rule_version_id = %s",
+                (rule_version_id,),
+            )
+            cursor.execute(
+                "DELETE FROM valuation.rule_versions WHERE rule_version_id = %s",
+                (rule_version_id,),
+            )
+            cursor.execute(
+                "DELETE FROM knowledge.documents WHERE document_id = %s",
+                (source_document_id,),
+            )
+        postgres_connection.commit()
 
 
 def test_workbench_start_blocked_does_not_create_run(

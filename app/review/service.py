@@ -1,5 +1,6 @@
 from datetime import UTC, date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+import re
 from uuid import UUID
 
 from app.core.exceptions import AppError
@@ -49,7 +50,13 @@ from app.review.trusted_inputs import (
     prepare_trusted_rules,
     validate_rule_contracts,
 )
-from app.valuation.submissions.snapshot import SNAPSHOT_SCHEMA_VERSION
+from app.valuation.submissions.snapshot import (
+    SNAPSHOT_SCHEMA_VERSION,
+    snapshot_fingerprint,
+)
+
+
+_MISSING_FINGERPRINT = object()
 
 
 def _first_present(*values):
@@ -170,9 +177,7 @@ class ReviewService:
         snapshot = await self.repository.load_case_snapshot(review.case_id)
         result = evaluate_completeness(snapshot)
         if result.ready:
-            trusted_items = await self._trusted_completeness_missing_items(
-                review.case_id
-            )
+            trusted_items = await self._trusted_completeness_missing_items(review)
             if trusted_items:
                 result = CompletenessResult(
                     ready=False,
@@ -201,6 +206,11 @@ class ReviewService:
     def _trusted_field(row: dict) -> TrustedField:
         return TrustedField(
             extracted_field_id=str(row["extracted_field_id"]),
+            document_id=(
+                str(row["document_id"])
+                if row.get("document_id") is not None
+                else None
+            ),
             form_code=row["form_code"],
             field_name=row["field_name"],
             confirmed_value=row["confirmed_value"],
@@ -221,6 +231,7 @@ class ReviewService:
         """Adapt one server-built Submission Snapshot field to Review input."""
         return TrustedField(
             extracted_field_id=str(item["extracted_field_id"]),
+            document_id=str(item["document_id"]),
             form_code=item["form_code"],
             field_name=item["field_name"],
             confirmed_value=item["confirmed_value"],
@@ -246,14 +257,101 @@ class ReviewService:
 
     @classmethod
     def _snapshot_trusted_inputs(
-        cls, snapshot: dict | None
+        cls,
+        snapshot: dict | None,
+        input_fingerprint: str | None | object = _MISSING_FINGERPRINT,
     ) -> tuple[dict, tuple[TrustedField, ...]]:
         """Validate and extract the immutable document/field input boundary."""
         invalid = cls._invalid_submission_snapshot
         if not isinstance(snapshot, dict):
             raise invalid()
+
+        top_level_keys = {
+            "schema_version",
+            "case_version",
+            "submitted_by_user_id",
+            "request_id",
+            "applied_fields",
+            "calculations",
+            "documents",
+            "validation",
+        }
+        if set(snapshot) != top_level_keys:
+            raise invalid()
         if snapshot.get("schema_version") != SNAPSHOT_SCHEMA_VERSION:
             raise invalid()
+
+        case_version = snapshot.get("case_version")
+        if isinstance(case_version, bool) or not isinstance(case_version, int):
+            raise invalid()
+        if case_version < 1:
+            raise invalid()
+
+        def valid_uuid(value) -> bool:
+            if not isinstance(value, str) or not value.strip():
+                return False
+            try:
+                UUID(value)
+            except (AttributeError, TypeError, ValueError):
+                return False
+            return True
+
+        def valid_timestamp(value) -> bool:
+            if not isinstance(value, str) or not value.strip():
+                return False
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                return False
+            return parsed.tzinfo is not None and parsed.utcoffset() is not None
+
+        def valid_json_value(value) -> bool:
+            if isinstance(value, float):
+                return False
+            if isinstance(value, dict):
+                return all(
+                    isinstance(key, str) and valid_json_value(item)
+                    for key, item in value.items()
+                )
+            if isinstance(value, list):
+                return all(valid_json_value(item) for item in value)
+            return value is None or isinstance(value, (str, int, bool, Decimal))
+
+        def valid_confidence(value) -> bool:
+            if isinstance(value, bool) or isinstance(value, float):
+                return False
+            if not isinstance(value, (str, int, Decimal)):
+                return False
+            try:
+                parsed = Decimal(str(value))
+            except (InvalidOperation, ValueError):
+                return False
+            return parsed.is_finite() and Decimal("0") <= parsed <= Decimal("1")
+
+        if not valid_uuid(snapshot.get("submitted_by_user_id")):
+            raise invalid()
+        if not valid_uuid(snapshot.get("request_id")):
+            raise invalid()
+        if not isinstance(snapshot.get("calculations"), dict):
+            raise invalid()
+        if not isinstance(snapshot.get("validation"), dict):
+            raise invalid()
+        if not valid_json_value(snapshot["calculations"]):
+            raise invalid()
+        if not valid_json_value(snapshot["validation"]):
+            raise invalid()
+
+        if input_fingerprint is not _MISSING_FINGERPRINT:
+            if not isinstance(input_fingerprint, str) or not re.fullmatch(
+                r"[0-9a-f]{64}", input_fingerprint
+            ):
+                raise invalid()
+            try:
+                calculated_fingerprint = snapshot_fingerprint(snapshot)
+            except (TypeError, ValueError, OverflowError):
+                raise invalid()
+            if calculated_fingerprint != input_fingerprint:
+                raise invalid()
 
         applied_fields = snapshot.get("applied_fields")
         documents = snapshot.get("documents")
@@ -262,81 +360,147 @@ class ReviewService:
         if not isinstance(documents, list) or not documents:
             raise invalid()
 
+        document_keys = {
+            "document_id",
+            "document_type",
+            "original_filename",
+            "mime_type",
+            "version_no",
+            "document_group_id",
+            "checksum_sha256",
+            "file_size_bytes",
+            "uploaded_at",
+            "is_active",
+        }
         documents_by_id = {}
         for document in documents:
             if not isinstance(document, dict):
                 raise invalid()
-            document_id = document.get("document_id")
-            if not isinstance(document_id, str) or not document_id:
+            if set(document) != document_keys:
                 raise invalid()
-            if any(
-                document.get(key) in (None, "")
-                for key in (
-                    "document_type",
-                    "version_no",
-                    "document_group_id",
-                    "checksum_sha256",
-                )
+            document_id = document.get("document_id")
+            if not valid_uuid(document_id):
+                raise invalid()
+            if not isinstance(document.get("document_type"), str) or not document[
+                "document_type"
+            ].strip():
+                raise invalid()
+            if not isinstance(document.get("original_filename"), str) or not document[
+                "original_filename"
+            ].strip():
+                raise invalid()
+            if not isinstance(document.get("mime_type"), str) or not document[
+                "mime_type"
+            ].strip():
+                raise invalid()
+            version_no = document.get("version_no")
+            if isinstance(version_no, bool) or not isinstance(version_no, int):
+                raise invalid()
+            if version_no < 1:
+                raise invalid()
+            if not valid_uuid(document.get("document_group_id")):
+                raise invalid()
+            if not isinstance(document.get("checksum_sha256"), str) or not re.fullmatch(
+                r"[0-9a-f]{64}", document["checksum_sha256"]
             ):
+                raise invalid()
+            file_size_bytes = document.get("file_size_bytes")
+            if (
+                isinstance(file_size_bytes, bool)
+                or not isinstance(file_size_bytes, int)
+                or file_size_bytes < 0
+            ):
+                raise invalid()
+            if not valid_timestamp(document.get("uploaded_at")):
+                raise invalid()
+            if not isinstance(document.get("is_active"), bool):
                 raise invalid()
             if document_id in documents_by_id:
                 raise invalid()
             documents_by_id[document_id] = document
 
         trusted_fields = []
+        field_keys = {
+            "extracted_field_id",
+            "document_id",
+            "form_code",
+            "field_name",
+            "confirmed_value",
+            "source_page",
+            "source_text",
+            "confidence",
+            "field_status",
+            "confirmed_by_user_id",
+            "confirmed_at",
+        }
+        field_ids = set()
         for item in applied_fields:
             if not isinstance(item, dict):
                 raise invalid()
-            required_keys = {
-                "extracted_field_id",
-                "document_id",
-                "form_code",
-                "field_name",
-                "confirmed_value",
-                "confidence",
-                "field_status",
-                "confirmed_by_user_id",
-                "confirmed_at",
-            }
-            if not required_keys.issubset(item):
+            if set(item) != field_keys:
                 raise invalid()
+            extracted_field_id = item.get("extracted_field_id")
+            document_id = item.get("document_id")
             if (
-                not isinstance(item["extracted_field_id"], str)
-                or not item["extracted_field_id"]
-                or not isinstance(item["document_id"], str)
-                or not item["document_id"]
+                not valid_uuid(extracted_field_id)
+                or extracted_field_id in field_ids
+                or not valid_uuid(document_id)
+                or document_id not in documents_by_id
                 or not isinstance(item["form_code"], str)
-                or not item["form_code"]
+                or not item["form_code"].strip()
                 or not isinstance(item["field_name"], str)
-                or not item["field_name"]
+                or not item["field_name"].strip()
                 or item["confirmed_value"] is None
-                or item["confidence"] is None
+                or not valid_json_value(item["confirmed_value"])
+                or (
+                    item["source_page"] is not None
+                    and (
+                        isinstance(item["source_page"], bool)
+                        or not isinstance(item["source_page"], int)
+                        or item["source_page"] < 1
+                    )
+                )
+                or (
+                    item["source_text"] is not None
+                    and not isinstance(item["source_text"], str)
+                )
+                or not valid_confidence(item["confidence"])
                 or item["field_status"] != "APPLIED"
-                or not isinstance(item["confirmed_by_user_id"], str)
-                or not item["confirmed_by_user_id"]
-                or not isinstance(item["confirmed_at"], str)
-                or not item["confirmed_at"]
-                or item["document_id"] not in documents_by_id
+                or not valid_uuid(item["confirmed_by_user_id"])
+                or not valid_timestamp(item["confirmed_at"])
             ):
                 raise invalid()
+            field_ids.add(extracted_field_id)
             trusted_fields.append(cls._trusted_field_from_submission(item))
 
         document = dict(documents_by_id[applied_fields[0]["document_id"]])
         return document, tuple(trusted_fields)
 
-    async def _trusted_completeness_missing_items(self, case_id):
-        document = await self.repository.get_latest_original_document(case_id)
+    async def _trusted_completeness_missing_items(self, review):
+        if review.latest_submission_id is not None:
+            submission = await self.repository.get_submission_snapshot_record(
+                review.latest_submission_id,
+                review_id=review.review_id,
+                case_id=review.case_id,
+            )
+            if submission is None:
+                raise self._invalid_submission_snapshot()
+            document, official_fields = self._snapshot_trusted_inputs(
+                submission.get("input_snapshot"),
+                input_fingerprint=submission.get("input_fingerprint"),
+            )
+        else:
+            document = await self.repository.get_latest_original_document(review.case_id)
+            official_fields = tuple(
+                self._trusted_field(row)
+                for row in await self.repository.list_applied_confirmed_extracted_fields(
+                    review.case_id
+                )
+            )
         if document is None:
             return (trusted_context_missing_requirement(),)
-
-        field_rows = await self.repository.list_applied_confirmed_extracted_fields(
-            case_id
-        )
-        fields = trusted_fields_by_code(
-            self._trusted_field(row)
-            for row in field_rows
-        )
-        case_context = await self.repository.get_case_rule_context(case_id)
+        fields = trusted_fields_by_code(official_fields)
+        case_context = await self.repository.get_case_rule_context(review.case_id)
         if case_context is None:
             return (trusted_context_missing_requirement(),)
         candidates = await self.repository.list_rule_candidates()
@@ -424,11 +588,24 @@ class ReviewService:
         return await self.repository.request_supplement(review_id, due_at)
 
     async def _resolve_trusted_run_context(self, review) -> TrustedRunContext:
+        documents = {}
         if review.latest_submission_id is not None:
-            snapshot = await self.repository.get_submission_snapshot(
-                review.latest_submission_id
+            submission = await self.repository.get_submission_snapshot_record(
+                review.latest_submission_id,
+                review_id=review.review_id,
+                case_id=review.case_id,
             )
-            document, official_fields = self._snapshot_trusted_inputs(snapshot)
+            if submission is None:
+                raise self._invalid_submission_snapshot()
+            snapshot = submission.get("input_snapshot")
+            document, official_fields = self._snapshot_trusted_inputs(
+                snapshot,
+                input_fingerprint=submission.get("input_fingerprint"),
+            )
+            documents = {
+                str(item["document_id"]): dict(item)
+                for item in snapshot["documents"]
+            }
         else:
             document = await self.repository.get_latest_original_document(
                 review.case_id
@@ -447,6 +624,7 @@ class ReviewService:
                 self._trusted_field(row)
                 for row in field_rows
             )
+            documents = {str(document["document_id"]): document}
         fields = trusted_fields_by_code(official_fields)
 
         case_context = await self.repository.get_case_rule_context(review.case_id)
@@ -529,6 +707,7 @@ class ReviewService:
             validation_rules=validation_rules,
             rule_source=rule_source,
             prepared_rules=prepared_rules,
+            documents=documents,
         )
 
     @staticmethod
@@ -547,6 +726,14 @@ class ReviewService:
                 "verification_status": field.verification_status,
             }
         ]
+
+    @staticmethod
+    def _field_document(context: TrustedRunContext, field: TrustedField) -> dict:
+        if field.document_id is not None:
+            document = context.documents.get(str(field.document_id))
+            if document is not None:
+                return document
+        return context.document
 
     @staticmethod
     def _finding_code(rule: dict) -> str:
@@ -595,6 +782,7 @@ class ReviewService:
     def _field_snapshot(field: TrustedField) -> dict:
         return {
             "extracted_field_id": field.extracted_field_id,
+            "document_id": field.document_id,
             "field_code": field.field_code,
             "raw_value": field.raw_text,
             "normalized_value": ReviewService._json_value(field.normalized_value),
@@ -749,6 +937,7 @@ class ReviewService:
         for prepared_rule in context.prepared_rules:
             rule = prepared_rule.rule
             field = prepared_rule.field
+            field_document = self._field_document(context, field)
             finding_code = self._finding_code(rule)
             if rule["rule_code"] == "ADJUSTMENT_RATE":
                 result = prepared_rule.adjustment_result
@@ -776,11 +965,11 @@ class ReviewService:
                     title="調整率超出允許差異",
                     description="報告調整率與確定性重算結果不一致，需人工核對。",
                     status="OPEN",
-                    document_id=context.document["document_id"],
-                    document_version=context.document["version_no"],
+                    document_id=field_document["document_id"],
+                    document_version=field_document["version_no"],
                     page_number=field.page_number,
                     field_path=field.field_path,
-                    source_evidence=self._source_evidence(context.document, field),
+                    source_evidence=self._source_evidence(field_document, field),
                     reported_text=field.raw_text,
                     reported_value=str(result.reported_rate),
                     legal_basis=self._legal_basis(context, rule),
@@ -825,11 +1014,11 @@ class ReviewService:
                     title="級距判定需專業覆核",
                     description="報告級距與規則建議級距不同，系統不自行取代估價專業判斷。",
                     status="OPEN",
-                    document_id=context.document["document_id"],
-                    document_version=context.document["version_no"],
+                    document_id=field_document["document_id"],
+                    document_version=field_document["version_no"],
                     page_number=field.page_number,
                     field_path=field.field_path,
-                    source_evidence=self._source_evidence(context.document, field),
+                    source_evidence=self._source_evidence(field_document, field),
                     reported_text=field.raw_text,
                     reported_value=reported_grade,
                     legal_basis=self._legal_basis(context, rule),

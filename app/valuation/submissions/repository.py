@@ -12,6 +12,7 @@ from app.valuation.models import (
     CaseEventRecord,
     CaseRecord,
     DocumentRecord,
+    DocumentExtractionRecord,
     ExtractedFieldRecord,
     FormInstanceRecord,
     ReviewSubmissionRecord,
@@ -107,6 +108,11 @@ class SubmissionRepository:
                     FormInstanceRecord.form_content["report_id"].astext
                     == str(validation_run.form_instance_id)
                 )
+            statement = statement.order_by(
+                FormInstanceRecord.version_no.desc(),
+                FormInstanceRecord.created_at.desc(),
+                FormInstanceRecord.form_instance_id.desc(),
+            ).limit(1)
             report_form = await self.session.scalar(statement)
 
         authoritative_report_form = await self.session.scalar(
@@ -120,26 +126,88 @@ class SubmissionRepository:
             .order_by(
                 FormInstanceRecord.version_no.desc(),
                 FormInstanceRecord.created_at.desc(),
+                FormInstanceRecord.form_instance_id.desc(),
             )
             .limit(1)
         )
 
-        applied_rows = list(
+        active_document_rows = list(
             (
                 await self.session.scalars(
-                    select(ExtractedFieldRecord)
+                    select(DocumentRecord)
                     .where(
-                        ExtractedFieldRecord.case_id == case_id,
-                        ExtractedFieldRecord.field_status == "APPLIED",
+                        DocumentRecord.case_id == case_id,
+                        DocumentRecord.is_active.is_(True),
                     )
                     .order_by(
-                        ExtractedFieldRecord.form_code,
-                        ExtractedFieldRecord.field_name,
-                        ExtractedFieldRecord.extracted_field_id,
+                        DocumentRecord.document_group_id,
+                        DocumentRecord.version_no.desc(),
+                        DocumentRecord.uploaded_at.desc(),
+                        DocumentRecord.document_id.desc(),
                     )
                 )
             ).all()
         )
+        active_documents_by_group = {}
+        for document in active_document_rows:
+            active_documents_by_group.setdefault(document.document_group_id, document)
+        active_documents = list(active_documents_by_group.values())
+        active_documents_by_id = {
+            document.document_id: document for document in active_documents
+        }
+
+        latest_extractions_by_document = {}
+        if active_documents:
+            latest_extraction_rows = list(
+                (
+                    await self.session.scalars(
+                        select(DocumentExtractionRecord)
+                        .where(
+                            DocumentExtractionRecord.case_id == case_id,
+                            DocumentExtractionRecord.document_id.in_(
+                                list(active_documents_by_id)
+                            ),
+                            DocumentExtractionRecord.extraction_status == "COMPLETED",
+                        )
+                        .order_by(
+                            DocumentExtractionRecord.document_id,
+                            DocumentExtractionRecord.completed_at.desc().nulls_last(),
+                            DocumentExtractionRecord.created_at.desc(),
+                            DocumentExtractionRecord.extraction_id.desc(),
+                        )
+                    )
+                ).all()
+            )
+            for extraction in latest_extraction_rows:
+                latest_extractions_by_document.setdefault(
+                    extraction.document_id, extraction
+                )
+
+        latest_extraction_ids = [
+            extraction.extraction_id
+            for extraction in latest_extractions_by_document.values()
+        ]
+        applied_rows = []
+        if latest_extraction_ids:
+            applied_rows = list(
+                (
+                    await self.session.scalars(
+                        select(ExtractedFieldRecord)
+                        .where(
+                            ExtractedFieldRecord.case_id == case_id,
+                            ExtractedFieldRecord.extraction_id.in_(
+                                latest_extraction_ids
+                            ),
+                            ExtractedFieldRecord.field_status == "APPLIED",
+                        )
+                        .order_by(
+                            ExtractedFieldRecord.form_code,
+                            ExtractedFieldRecord.field_name,
+                            ExtractedFieldRecord.extracted_field_id,
+                        )
+                    )
+                ).all()
+            )
         applied_fields = [
             {
                 "extracted_field_id": row.extracted_field_id,
@@ -190,21 +258,30 @@ class SubmissionRepository:
             document_ids.add(report_document.document_id)
         referenced_documents = []
         if document_ids:
-            referenced_documents = list(
-                (
-                    await self.session.scalars(
-                        select(DocumentRecord)
-                        .where(
-                            DocumentRecord.case_id == case_id,
-                            DocumentRecord.document_id.in_(document_ids),
-                        )
-                        .order_by(
-                            DocumentRecord.document_type,
-                            DocumentRecord.version_no,
-                            DocumentRecord.document_id,
-                        )
-                    )
-                ).all()
+            referenced_documents = [
+                document
+                for document in active_documents
+                if document.document_id in document_ids
+            ]
+            missing_document_ids = document_ids - {
+                document.document_id for document in referenced_documents
+            }
+            if missing_document_ids:
+                # The explicitly selected report document may be active but not
+                # part of the latest-per-group set when old data has multiple
+                # active rows.  Keep its metadata in the immutable Snapshot.
+                referenced_documents.extend(
+                    document
+                    for document in active_document_rows
+                    if document.document_id in missing_document_ids
+                )
+            referenced_documents.sort(
+                key=lambda document: (
+                    document.document_type,
+                    str(document.document_group_id),
+                    document.version_no,
+                    str(document.document_id),
+                )
             )
         documents = [
             {

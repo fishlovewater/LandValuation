@@ -16,9 +16,11 @@ from app.review.workbench_schemas import (
     WorkbenchCaseList,
     WorkbenchCaseListItem,
     WorkbenchCompletenessRead,
+    WorkbenchDocumentRead,
     WorkbenchFieldVersionRead,
     WorkbenchLatestRunRead,
     WorkbenchPreflightRead,
+    WorkbenchRunRead,
     WorkbenchStartRead,
     WorkbenchSummaryRead,
 )
@@ -128,13 +130,76 @@ class WorkbenchService:
             )
         return diffs
 
+    async def _run_projection(
+        self, run, latest_submission: dict | None
+    ) -> WorkbenchRunRead:
+        run_submission_id = getattr(run, "submission_id", None)
+        submission = None
+        if run_submission_id is not None:
+            submission = await self.review_repository.get_submission_provenance_by_id(
+                run_submission_id
+            )
+        values = {
+            field: getattr(run, field)
+            for field in (
+                "validation_run_id",
+                "case_id",
+                "review_id",
+                "run_no",
+                "run_status",
+                "passed_count",
+                "warning_count",
+                "failed_count",
+                "started_at",
+                "completed_at",
+                "triggered_by_user_id",
+                "rule_version_id",
+                "model_id",
+                "prompt_version",
+                "error_code",
+                "error_message",
+            )
+        }
+        if run_submission_id is not None:
+            values["submission_id"] = run_submission_id
+        if submission is not None:
+            values.update(
+                {
+                    "submission_id": submission["submission_id"],
+                    "submission_no": submission["submission_no"],
+                    "submitted_at": submission["submitted_at"],
+                    "input_fingerprint": submission["input_fingerprint"],
+                }
+            )
+        return WorkbenchRunRead(**values)
+
+    async def _submitted_snapshot(self, review) -> dict | None:
+        if review.latest_submission_id is None:
+            return None
+        from app.review.service import ReviewService
+
+        submission = await self.review_repository.get_submission_snapshot_record(
+            review.latest_submission_id,
+            review_id=review.review_id,
+            case_id=review.case_id,
+        )
+        if submission is None:
+            raise ReviewService._invalid_submission_snapshot()
+        snapshot = submission.get("input_snapshot")
+        ReviewService._snapshot_trusted_inputs(
+            snapshot,
+            input_fingerprint=submission.get("input_fingerprint"),
+        )
+        return snapshot
+
     async def detail(self, review_id: UUID) -> WorkbenchCaseDetailRead:
         review = await self.review_repository.get(review_id)
         case = await self.repository.get_case_summary(review_id)
         if review is None or case is None:
             raise ResourceNotFoundError("審查案件")
         submission = await self.repository.get_submission_provenance(review_id)
-        runs = await self.review_repository.list_runs(review_id)
+        submitted_snapshot = await self._submitted_snapshot(review)
+        raw_runs = await self.review_repository.list_runs(review_id)
         missing_items = await self.review_repository.list_missing_items(
             review_id, open_only=False
         )
@@ -152,10 +217,18 @@ class WorkbenchService:
             report_document = await self.review_repository.get_report_document(
                 review.latest_validation_run_id
             )
-        documents = await self.repository.list_documents(review.case_id)
-        field_versions = await self.repository.list_official_field_versions(
-            review.case_id
-        )
+        if submitted_snapshot is None:
+            documents = await self.repository.list_documents(review.case_id)
+            field_versions = await self.repository.list_official_field_versions(
+                review.case_id
+            )
+            version_diffs = self._version_diffs(field_versions)
+        else:
+            documents = [
+                WorkbenchDocumentRead(**document)
+                for document in submitted_snapshot["documents"]
+            ]
+            version_diffs = []
         correction_requests = []
         if self.corrections is not None:
             for request in await self.corrections.list_requests(review_id):
@@ -174,6 +247,10 @@ class WorkbenchService:
                         ],
                     )
                 )
+        runs = [
+            await self._run_projection(run, submission)
+            for run in raw_runs
+        ]
         return WorkbenchCaseDetailRead(
             case=case,
             review=review,
@@ -195,7 +272,7 @@ class WorkbenchService:
             findings=findings,
             risk_summary=risk_summary,
             decisions=decisions,
-            version_diffs=self._version_diffs(field_versions),
+            version_diffs=version_diffs,
             report_document=report_document,
             generated_reports=await self.review_repository.list_generated_reports(
                 review.case_id
@@ -221,10 +298,11 @@ class WorkbenchService:
         else:
             run, risk_summary = await review_service.create_run(review_id, actor_id)
         findings = await review_service.list_findings(run.validation_run_id)
+        submission = await self.repository.get_submission_provenance(review_id)
         return WorkbenchStartRead(
             outcome="COMPLETED",
             completeness=preflight.completeness,
-            run=run,
+            run=await self._run_projection(run, submission),
             findings=findings,
             risk_summary=risk_summary,
         )

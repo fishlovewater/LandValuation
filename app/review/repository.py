@@ -51,6 +51,49 @@ class ReviewRepository:
         )
         return dict(snapshot) if isinstance(snapshot, dict) else None
 
+    async def get_submission_snapshot_record(
+        self,
+        submission_id: UUID,
+        *,
+        review_id: UUID | None = None,
+        case_id: UUID | None = None,
+    ) -> dict | None:
+        """Load the immutable snapshot together with its stored fingerprint.
+
+        The optional ownership filters let Review fail closed if a corrupted
+        pointer ever targets a submission belonging to another Review/case.
+        """
+        statement = select(
+            ReviewSubmissionRecord.input_snapshot,
+            ReviewSubmissionRecord.input_fingerprint,
+        ).where(ReviewSubmissionRecord.submission_id == submission_id)
+        if review_id is not None:
+            statement = statement.where(ReviewSubmissionRecord.review_id == review_id)
+        if case_id is not None:
+            statement = statement.where(ReviewSubmissionRecord.case_id == case_id)
+        row = (await self.session.execute(statement)).mappings().one_or_none()
+        if row is None:
+            return None
+        return {
+            "input_snapshot": row["input_snapshot"],
+            "input_fingerprint": row["input_fingerprint"],
+        }
+
+    async def get_submission_provenance_by_id(
+        self, submission_id: UUID
+    ) -> dict | None:
+        row = (
+            await self.session.execute(
+                select(
+                    ReviewSubmissionRecord.submission_id,
+                    ReviewSubmissionRecord.submission_no,
+                    ReviewSubmissionRecord.submitted_at,
+                    ReviewSubmissionRecord.input_fingerprint,
+                ).where(ReviewSubmissionRecord.submission_id == submission_id)
+            )
+        ).mappings().one_or_none()
+        return dict(row) if row else None
+
     async def list(self, query: ReviewListQuery) -> tuple[list[Review], int]:
         filters = []
         if query.status is not None:
@@ -226,7 +269,8 @@ class ReviewRepository:
             await self.session.execute(
                 text(
                     """
-                    SELECT ef.extracted_field_id, ef.form_code, ef.field_name,
+                    SELECT ef.extracted_field_id, ef.document_id,
+                           ef.form_code, ef.field_name,
                            ef.confirmed_value, ef.source_page, ef.source_text,
                            ef.confidence, ef.field_status,
                            ef.confirmed_by_user_id, ef.confirmed_at

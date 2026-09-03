@@ -13,7 +13,6 @@ from app.review.schemas import (
     ReportDocumentRead,
     ReviewRead,
     RiskSummaryRead,
-    ValidationRunRead,
 )
 
 WorkbenchStatusGroup = Literal[
@@ -82,6 +81,38 @@ class WorkbenchCaseSummaryRead(BaseModel):
     case_status: str
 
 
+class WorkbenchRunRead(BaseModel):
+    """Safe Run projection for the product-facing workbench.
+
+    The immutable input snapshot remains available from the dedicated Run API
+    for authorized technical consumers, but is intentionally not nested in the
+    workbench payload.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    validation_run_id: UUID
+    case_id: UUID
+    review_id: UUID | None
+    run_no: int | None
+    run_status: str
+    passed_count: int
+    warning_count: int
+    failed_count: int
+    started_at: datetime
+    completed_at: datetime | None
+    triggered_by_user_id: UUID | None
+    rule_version_id: UUID | None
+    model_id: str | None
+    prompt_version: str | None
+    error_code: str | None
+    error_message: str | None
+    submission_id: UUID | None = None
+    submission_no: int | None = None
+    submitted_at: datetime | None = None
+    input_fingerprint: str | None = None
+
+
 class WorkbenchDocumentRead(BaseModel):
     document_id: UUID
     document_type: str
@@ -121,7 +152,7 @@ class WorkbenchCaseDetailRead(BaseModel):
     input_fingerprint: str | None = None
     documents: list[WorkbenchDocumentRead]
     missing_items: list[MissingItemRead]
-    runs: list[ValidationRunRead]
+    runs: list[WorkbenchRunRead]
     findings: list[FindingRead]
     risk_summary: RiskSummaryRead | None
     decisions: list[DecisionRead]
@@ -154,6 +185,6 @@ class WorkbenchStartRead(BaseModel):
 
     outcome: Literal["BLOCKED", "COMPLETED"]
     completeness: WorkbenchCompletenessRead
-    run: ValidationRunRead | None = None
+    run: WorkbenchRunRead | None = None
     findings: list[FindingRead] = Field(default_factory=list)
     risk_summary: RiskSummaryRead | None = None

@@ -12,6 +12,10 @@ from app.review.trusted_inputs import (
     trusted_fields_by_code,
     validate_rule_contracts,
 )
+from app.valuation.submissions.snapshot import (
+    SNAPSHOT_SCHEMA_VERSION,
+    snapshot_fingerprint,
+)
 import pytest
 
 
@@ -167,3 +171,145 @@ def test_service_maps_canonical_applied_field_to_trusted_field():
     assert trusted.field_name == "adjustment_rate"
     assert trusted.confirmed_value == "-12"
     assert trusted.source_page == 3
+
+
+def _valid_submission_snapshot():
+    document_id = uuid4()
+    field_id = uuid4()
+    submitted_by = uuid4()
+    request_id = uuid4()
+    return {
+        "schema_version": SNAPSHOT_SCHEMA_VERSION,
+        "case_version": 3,
+        "submitted_by_user_id": str(submitted_by),
+        "request_id": str(request_id),
+        "applied_fields": [
+            {
+                "extracted_field_id": str(field_id),
+                "document_id": str(document_id),
+                "form_code": "F03",
+                "field_name": "adjustment_rate",
+                "confirmed_value": "-12.0000",
+                "source_page": 3,
+                "source_text": "調整率 -12%",
+                "confidence": "0.9500",
+                "field_status": "APPLIED",
+                "confirmed_by_user_id": str(submitted_by),
+                "confirmed_at": "2026-09-03T12:34:56+00:00",
+            }
+        ],
+        "calculations": {},
+        "documents": [
+            {
+                "document_id": str(document_id),
+                "document_type": "original",
+                "original_filename": "source.pdf",
+                "mime_type": "application/pdf",
+                "version_no": 1,
+                "document_group_id": str(uuid4()),
+                "checksum_sha256": "a" * 64,
+                "file_size_bytes": 100,
+                "uploaded_at": "2026-09-03T12:00:00+00:00",
+                "is_active": True,
+            }
+        ],
+        "validation": {},
+    }
+
+
+@pytest.mark.parametrize(
+    "missing_key",
+    [
+        "schema_version",
+        "case_version",
+        "submitted_by_user_id",
+        "request_id",
+        "applied_fields",
+        "calculations",
+        "documents",
+        "validation",
+    ],
+)
+def test_submission_snapshot_requires_every_top_level_key(missing_key):
+    snapshot = _valid_submission_snapshot()
+    del snapshot[missing_key]
+
+    with pytest.raises(AppError) as raised:
+        ReviewService._snapshot_trusted_inputs(snapshot)
+
+    assert raised.value.code == "SUBMISSION_SNAPSHOT_INVALID"
+    assert raised.value.status_code == 409
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("case_version",), True),
+        (("submitted_by_user_id",), "not-a-uuid"),
+        (("request_id",), "not-a-uuid"),
+        (("applied_fields", 0, "extracted_field_id"), 17),
+        (("applied_fields", 0, "document_id"), "not-a-uuid"),
+        (("applied_fields", 0, "form_code"), 17),
+        (("applied_fields", 0, "field_name"), 17),
+        (("applied_fields", 0, "confirmed_value"), None),
+        (("applied_fields", 0, "source_page"), "3"),
+        (("applied_fields", 0, "source_text"), 3),
+        (("applied_fields", 0, "confidence"), 0.95),
+        (("applied_fields", 0, "field_status"), "CONFIRMED"),
+        (("applied_fields", 0, "confirmed_by_user_id"), "not-a-uuid"),
+        (("applied_fields", 0, "confirmed_at"), "not-a-timestamp"),
+        (("documents", 0, "document_id"), "not-a-uuid"),
+        (("documents", 0, "document_type"), 17),
+        (("documents", 0, "version_no"), "1"),
+        (("documents", 0, "document_group_id"), "not-a-uuid"),
+        (("documents", 0, "checksum_sha256"), "bad-checksum"),
+        (("documents", 0, "file_size_bytes"), -1),
+        (("documents", 0, "uploaded_at"), "not-a-timestamp"),
+        (("documents", 0, "is_active"), "true"),
+    ],
+)
+def test_submission_snapshot_rejects_malformed_values(path, value):
+    snapshot = _valid_submission_snapshot()
+    target = snapshot
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+    with pytest.raises(AppError) as raised:
+        ReviewService._snapshot_trusted_inputs(snapshot)
+
+    assert raised.value.code == "SUBMISSION_SNAPSHOT_INVALID"
+    assert raised.value.status_code == 409
+
+
+def test_submission_snapshot_requires_field_evidence_keys():
+    snapshot = _valid_submission_snapshot()
+    del snapshot["applied_fields"][0]["source_page"]
+    del snapshot["applied_fields"][0]["source_text"]
+
+    with pytest.raises(AppError) as raised:
+        ReviewService._snapshot_trusted_inputs(snapshot)
+
+    assert raised.value.code == "SUBMISSION_SNAPSHOT_INVALID"
+
+
+def test_submission_snapshot_rejects_mismatched_input_fingerprint():
+    snapshot = _valid_submission_snapshot()
+
+    with pytest.raises(AppError) as raised:
+        ReviewService._snapshot_trusted_inputs(
+            snapshot, input_fingerprint="0" * 64
+        )
+
+    assert raised.value.code == "SUBMISSION_SNAPSHOT_INVALID"
+
+
+def test_submission_snapshot_accepts_its_canonical_input_fingerprint():
+    snapshot = _valid_submission_snapshot()
+
+    document, fields = ReviewService._snapshot_trusted_inputs(
+        snapshot, input_fingerprint=snapshot_fingerprint(snapshot)
+    )
+
+    assert document["document_id"] == snapshot["documents"][0]["document_id"]
+    assert fields[0].document_id == snapshot["applied_fields"][0]["document_id"]
