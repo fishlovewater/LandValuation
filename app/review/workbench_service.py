@@ -160,8 +160,6 @@ class WorkbenchService:
                 "error_message",
             )
         }
-        if run_submission_id is not None:
-            values["submission_id"] = run_submission_id
         if submission is not None:
             values.update(
                 {

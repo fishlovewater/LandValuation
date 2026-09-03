@@ -133,3 +133,59 @@ session, so equivalent native PowerShell/Git commands were used.
 
 - Commit message: `fix(review): close snapshot preflight gaps`.
 - The pre-existing untracked `.serena/` directory was not staged or modified.
+
+## Final Task 4 re-review fixes
+
+The workbench latest-submission provenance join now requires both the owning
+Review and its case. Run projections expose submission metadata only when the
+ownership-scoped provenance map contains the Run's submission; an unverified
+raw `ValidationRun.submission_id` is no longer returned.
+
+### TDD evidence
+
+1. Added a mismatched-case regression for
+   `WorkbenchRepository.get_submission_provenance()` and extended the
+   cross-review/cross-case Run regression to assert that all submission
+   provenance fields, including `submission_id`, are `null` when ownership
+   validation fails.
+2. RED command:
+
+   ```powershell
+   pwsh -File .\scripts\run-integration-tests.ps1 -PytestArgs "app/review/tests/test_workbench_api.py"
+   ```
+
+   Result: the two new/extended regressions failed as intended (`2 failed,
+   18 passed in 11.39s`, test container exit code `1`).
+3. GREEN focused command:
+
+   ```powershell
+   pwsh -File .\scripts\run-integration-tests.ps1 -PytestArgs "app/review/tests/test_workbench_api.py"
+   ```
+
+   Result: `20 passed in 6.92s`, test container exit code `0`.
+
+### Validation
+
+Required Task 4 selector:
+
+```powershell
+pwsh -File .\scripts\run-integration-tests.ps1 -PytestArgs "tests/test_submission_snapshot.py tests/test_submission_service.py app/review/tests/test_trusted_inputs.py app/review/tests/test_runs_api.py app/review/tests/test_workbench_api.py"
+```
+
+Result: `134 passed in 12.34s`, test container exit code `0`. The isolated
+Docker Compose database, MinIO service, containers, and network were cleaned
+up by the test script.
+
+Additional checks:
+
+```powershell
+git diff --check
+```
+
+Passed before the follow-up commit. `rtk` was unavailable in this Windows
+session, so equivalent native PowerShell/Git commands were used.
+
+### Commit
+
+- Commit message: `fix(review): scope workbench submission provenance`.
+- The pre-existing untracked `.serena/` directory was not staged or modified.

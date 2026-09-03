@@ -944,6 +944,7 @@ def test_run_provenance_does_not_cross_review_or_case(
 
             assert detail.status_code == 200
             run = detail.json()["runs"][0]
+            assert run["submission_id"] is None
             assert run["submission_no"] is None
             assert run["submitted_at"] is None
             assert run["input_fingerprint"] is None
@@ -970,6 +971,38 @@ def test_run_provenance_does_not_cross_review_or_case(
                     workbench_records.reviewed_case_id,
                     workbench_submission.submission_id,
                 ),
+            )
+        postgres_connection.commit()
+
+
+@pytest.mark.asyncio
+async def test_workbench_latest_submission_provenance_rejects_mismatched_case(
+    workbench_records, workbench_submission, postgres_connection
+):
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            "UPDATE valuation.review_submissions SET case_id = %s "
+            "WHERE submission_id = %s",
+            (workbench_records.completed_case_id, workbench_submission.submission_id),
+        )
+    postgres_connection.commit()
+
+    try:
+        from app.db.session import AsyncSessionFactory
+        from app.review.workbench_repository import WorkbenchRepository
+
+        async with AsyncSessionFactory() as session:
+            repository = WorkbenchRepository(session)
+            assert (
+                await repository.get_submission_provenance(workbench_records.review_id)
+                is None
+            )
+    finally:
+        with postgres_connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE valuation.review_submissions SET case_id = %s "
+                "WHERE submission_id = %s",
+                (workbench_records.reviewed_case_id, workbench_submission.submission_id),
             )
         postgres_connection.commit()
 

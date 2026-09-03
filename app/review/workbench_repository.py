@@ -215,6 +215,7 @@ class WorkbenchRepository:
                     JOIN valuation.review_submissions s
                       ON s.submission_id = r.latest_submission_id
                      AND s.review_id = r.review_id
+                     AND s.case_id = r.case_id
                     WHERE r.review_id = :review_id
                     """
                 ),
