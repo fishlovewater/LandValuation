@@ -32,11 +32,13 @@ def payload():
     }
 
 
-def test_appraiser_seed_includes_submit_permission_only_for_appraiser() -> None:
-    appraiser = user_with_role("APPRAISER")
+def test_submit_permission_is_association_based_not_role_name_based() -> None:
+    appraiser = user_with_role("APPRAISER", ("valuation.submit_review",))
+    appraiser_without_grant = user_with_role("APPRAISER")
     reviewer = user_with_role("REVIEWER", ("review.execute", "review.decide"))
 
     assert "valuation.submit_review" in permission_codes(appraiser)
+    assert "valuation.submit_review" not in permission_codes(appraiser_without_grant)
     assert "valuation.submit_review" not in permission_codes(reviewer)
 
 
@@ -56,7 +58,7 @@ def test_submit_route_creates_submission_for_appraiser(monkeypatch) -> None:
         return expected
 
     monkeypatch.setattr(SubmissionService, "submit", submit)
-    appraiser = user_with_role("APPRAISER")
+    appraiser = user_with_role("APPRAISER", ("valuation.submit_review",))
     app.dependency_overrides[get_current_user] = lambda: appraiser
     try:
         with TestClient(app) as client:
@@ -90,7 +92,7 @@ def test_submit_route_forbids_review_only_user() -> None:
 
 
 def test_submit_route_rejects_client_owned_snapshot() -> None:
-    appraiser = user_with_role("APPRAISER")
+    appraiser = user_with_role("APPRAISER", ("valuation.submit_review",))
     app.dependency_overrides[get_current_user] = lambda: appraiser
     forged = {**payload(), "snapshot": {"applied_fields": []}}
     try:

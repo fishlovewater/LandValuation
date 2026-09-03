@@ -16,6 +16,10 @@ from app.valuation.models import (
     FormInstanceRecord,
     ReviewSubmissionRecord,
 )
+from app.valuation.report_packages.requirements import (
+    REPORT_COMPARISON_COMMERCIAL,
+    REPORT_ROOT_FORM_CODE,
+)
 from app.valuation.submissions.schemas import SubmitForReviewCommand
 
 
@@ -28,6 +32,7 @@ class LockedReview:
 @dataclass(frozen=True)
 class SubmissionInputs:
     case_version: int | None
+    authoritative_report_form: FormInstanceRecord | None
     source_validation_run: ValidationRun | None
     source_report_document: DocumentRecord | None
     report_form: FormInstanceRecord | None
@@ -94,7 +99,7 @@ class SubmissionRepository:
         if report_document is not None:
             statement = select(FormInstanceRecord).where(
                 FormInstanceRecord.case_id == case_id,
-                FormInstanceRecord.form_code == "F02",
+                FormInstanceRecord.form_code == REPORT_ROOT_FORM_CODE,
                 FormInstanceRecord.output_document_id == report_document.document_id,
             )
             if validation_run is not None:
@@ -104,6 +109,21 @@ class SubmissionRepository:
                 )
             report_form = await self.session.scalar(statement)
 
+        authoritative_report_form = await self.session.scalar(
+            select(FormInstanceRecord)
+            .where(
+                FormInstanceRecord.case_id == case_id,
+                FormInstanceRecord.form_code == REPORT_ROOT_FORM_CODE,
+                FormInstanceRecord.form_content["report_type"].astext
+                == REPORT_COMPARISON_COMMERCIAL,
+            )
+            .order_by(
+                FormInstanceRecord.version_no.desc(),
+                FormInstanceRecord.created_at.desc(),
+            )
+            .limit(1)
+        )
+
         applied_rows = list(
             (
                 await self.session.scalars(
@@ -111,7 +131,6 @@ class SubmissionRepository:
                     .where(
                         ExtractedFieldRecord.case_id == case_id,
                         ExtractedFieldRecord.field_status == "APPLIED",
-                        ExtractedFieldRecord.confirmed_value.is_not(None),
                     )
                     .order_by(
                         ExtractedFieldRecord.form_code,
@@ -179,7 +198,12 @@ class SubmissionRepository:
                 "completed_at": validation_run.completed_at,
             }
         return SubmissionInputs(
-            case_version=None if report_form is None else report_form.version_no,
+            case_version=(
+                None
+                if authoritative_report_form is None
+                else authoritative_report_form.version_no
+            ),
+            authoritative_report_form=authoritative_report_form,
             source_validation_run=validation_run,
             source_report_document=report_document,
             report_form=report_form,

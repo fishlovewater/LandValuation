@@ -12,8 +12,12 @@ from app.valuation.submissions.snapshot import (
 
 
 def test_snapshot_decimal_is_stable_string() -> None:
+    actor_id = uuid4()
+    request_id = uuid4()
     snapshot = build_submission_snapshot(
         case_version=3,
+        submitted_by_user_id=actor_id,
+        request_id=request_id,
         applied_fields=[
             {
                 "form_code": "F03",
@@ -28,7 +32,24 @@ def test_snapshot_decimal_is_stable_string() -> None:
 
     assert snapshot["applied_fields"][0]["confirmed_value"] == "123.4500"
     assert snapshot["calculations"]["total"] == "246.9000"
+    assert snapshot["submitted_by_user_id"] == str(actor_id)
+    assert snapshot["request_id"] == str(request_id)
     assert snapshot_fingerprint(snapshot) == snapshot_fingerprint(snapshot)
+
+
+def test_snapshot_fingerprint_covers_submission_provenance() -> None:
+    first = build_submission_snapshot(
+        case_version=3,
+        submitted_by_user_id=uuid4(),
+        request_id=uuid4(),
+        applied_fields=[],
+        calculations={},
+        documents=[],
+        validation={},
+    )
+    second = {**first, "request_id": str(uuid4())}
+
+    assert snapshot_fingerprint(first) != snapshot_fingerprint(second)
 
 
 def test_snapshot_fingerprint_ignores_dictionary_input_order() -> None:

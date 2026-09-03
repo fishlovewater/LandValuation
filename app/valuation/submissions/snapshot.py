@@ -33,6 +33,8 @@ def normalize_snapshot_value(value: Any) -> Any:
 def build_submission_snapshot(
     *,
     case_version: int,
+    submitted_by_user_id: UUID,
+    request_id: UUID,
     applied_fields: list[dict],
     calculations: dict,
     documents: list[dict],
@@ -42,6 +44,8 @@ def build_submission_snapshot(
         {
             "schema_version": SNAPSHOT_SCHEMA_VERSION,
             "case_version": case_version,
+            "submitted_by_user_id": submitted_by_user_id,
+            "request_id": request_id,
             "applied_fields": applied_fields,
             "calculations": calculations,
             "documents": documents,

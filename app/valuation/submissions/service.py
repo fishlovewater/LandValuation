@@ -58,6 +58,8 @@ class SubmissionService:
 
         snapshot = build_submission_snapshot(
             case_version=inputs.case_version,
+            submitted_by_user_id=actor.user_id,
+            request_id=command.request_id,
             applied_fields=inputs.applied_fields,
             calculations=inputs.calculations,
             documents=inputs.documents,
@@ -89,7 +91,7 @@ class SubmissionService:
             request_id=command.request_id,
         )
         await self.repository.create_submission(submission)
-        review.latest_submission_id = submission.submission_id
+        review.latest_submission = submission
         review.review_status = "RECEIVED"
         case.case_status = "IN_REVIEW"
         await self.repository.record_case_event(
@@ -134,6 +136,8 @@ class SubmissionService:
 
     @staticmethod
     def _validate_readiness(inputs, command: SubmitForReviewCommand) -> None:
+        if inputs.authoritative_report_form is None:
+            raise ResourceNotFoundError("完整估價報告")
         if inputs.case_version != command.expected_case_version:
             raise AppError("CASE_VERSION_CONFLICT", "案件版本已變更", 409)
         if inputs.source_validation_run is None:
@@ -153,6 +157,10 @@ class SubmissionService:
         if (
             inputs.source_report_document is None
             or inputs.report_form is None
+            or inputs.report_form.form_instance_id
+            != inputs.authoritative_report_form.form_instance_id
+            or inputs.report_form.version_no
+            != inputs.authoritative_report_form.version_no
             or inputs.report_form.output_document_id
             != command.source_report_document_id
         ):
@@ -167,6 +175,12 @@ class SubmissionService:
             raise AppError(
                 "SUBMISSION_APPLIED_FIELDS_REQUIRED",
                 "送審前必須套用至少一筆已確認欄位",
+                422,
+            )
+        if any(field["confirmed_value"] is None for field in inputs.applied_fields):
+            raise AppError(
+                "SUBMISSION_APPLIED_VALUE_REQUIRED",
+                "送審前所有已套用欄位都必須有已確認值",
                 422,
             )
         if not inputs.calculations:

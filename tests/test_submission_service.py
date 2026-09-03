@@ -10,7 +10,12 @@ from app.valuation.submissions.schemas import SubmitForReviewCommand
 from app.valuation.submissions.service import SubmissionService
 
 
-def actor(*, user_id=None, role_code="APPRAISER", permissions=()):
+def actor(
+    *,
+    user_id=None,
+    role_code="APPRAISER",
+    permissions=("valuation.submit_review",),
+):
     permission_records = [
         SimpleNamespace(permission_code=permission_code)
         for permission_code in permissions
@@ -47,6 +52,11 @@ class SubmissionState:
         self.lock = asyncio.Lock()
         self.inputs = SimpleNamespace(
             case_version=command_value.expected_case_version,
+            authoritative_report_form=SimpleNamespace(
+                form_instance_id=uuid4(),
+                case_id=self.case.case_id,
+                version_no=command_value.expected_case_version,
+            ),
             source_validation_run=SimpleNamespace(
                 validation_run_id=command_value.source_validation_run_id,
                 case_id=self.case.case_id,
@@ -72,7 +82,7 @@ class SubmissionState:
                 is_active=True,
             ),
             report_form=SimpleNamespace(
-                form_instance_id=uuid4(),
+                form_instance_id=None,
                 case_id=self.case.case_id,
                 version_no=command_value.expected_case_version,
                 form_status="FINAL",
@@ -99,6 +109,9 @@ class SubmissionState:
                 "validation_run_id": command_value.source_validation_run_id,
                 "run_status": "COMPLETED",
             },
+        )
+        self.inputs.report_form.form_instance_id = (
+            self.inputs.authoritative_report_form.form_instance_id
         )
 
 
@@ -148,6 +161,7 @@ class StatefulRepository:
             case_id=case_id,
             review_status="RECEIVED",
             latest_submission_id=None,
+            latest_submission=None,
         )
         return SimpleNamespace(review=self.state.review, latest_submission=None)
 
@@ -237,6 +251,21 @@ async def test_submit_hides_report_from_other_case_or_version_as_not_found() -> 
 
 
 @pytest.mark.asyncio
+async def test_submit_rejects_report_from_a_noncurrent_case_version() -> None:
+    command_value = command(case_version=2)
+    service, state, owner, _ = setup_service(command_value)
+    state.inputs.case_version = 2
+    state.inputs.authoritative_report_form.version_no = 2
+    state.inputs.report_form.version_no = 1
+
+    with pytest.raises(AppError) as raised:
+        await service.submit(state.case.case_id, command_value, owner)
+
+    assert raised.value.code == "RESOURCE_NOT_FOUND"
+    assert raised.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_submit_requires_applied_values() -> None:
     service, state, owner, command_value = setup_service()
     state.inputs.applied_fields = []
@@ -245,6 +274,25 @@ async def test_submit_requires_applied_values() -> None:
         await service.submit(state.case.case_id, command_value, owner)
 
     assert raised.value.code == "SUBMISSION_APPLIED_FIELDS_REQUIRED"
+    assert raised.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_submit_rejects_any_applied_field_without_confirmed_value() -> None:
+    service, state, owner, command_value = setup_service()
+    state.inputs.applied_fields.append(
+        {
+            "extracted_field_id": uuid4(),
+            "form_code": "F03",
+            "field_name": "missing_value",
+            "confirmed_value": None,
+        }
+    )
+
+    with pytest.raises(AppError) as raised:
+        await service.submit(state.case.case_id, command_value, owner)
+
+    assert raised.value.code == "SUBMISSION_APPLIED_VALUE_REQUIRED"
     assert raised.value.status_code == 422
 
 
@@ -270,10 +318,16 @@ async def test_first_submit_creates_review_submission_pointer_and_event() -> Non
     assert result.submission_id == state.submissions[0].submission_id
     assert result.submission_no == 1
     assert result.case_status == "IN_REVIEW"
-    assert state.review.latest_submission_id == result.submission_id
+    assert state.review.latest_submission.submission_id == result.submission_id
     assert state.review.review_status == "RECEIVED"
     assert state.case.case_status == "IN_REVIEW"
     assert state.submissions[0].input_snapshot["case_version"] == 1
+    assert state.submissions[0].input_snapshot["submitted_by_user_id"] == str(
+        owner.user_id
+    )
+    assert state.submissions[0].input_snapshot["request_id"] == str(
+        command_value.request_id
+    )
     assert state.submissions[0].supersedes_submission_id is None
     assert state.events[0][1] == "SUBMITTED_FOR_REVIEW"
     assert state.flush_count == 1
