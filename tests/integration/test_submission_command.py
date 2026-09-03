@@ -1,5 +1,6 @@
 import asyncio
 import os
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -14,6 +15,136 @@ from app.review.repository import ReviewRepository
 from app.valuation.submissions.repository import SubmissionRepository
 from app.valuation.submissions.schemas import SubmitForReviewCommand
 from app.valuation.submissions.service import SubmissionService
+
+
+@dataclass
+class _SubmissionFixtureGraph:
+    case_id: UUID
+    user_id: UUID
+    document_id: UUID
+    document_group_id: UUID
+    form_instance_id: UUID
+    extraction_id: UUID
+    extracted_field_id: UUID
+    validation_run_id: UUID
+    request_id: UUID
+    review_ids: set[UUID] = field(default_factory=set)
+    submission_ids: set[UUID] = field(default_factory=set)
+    finding_ids: set[UUID] = field(default_factory=set)
+    correction_request_ids: set[UUID] = field(default_factory=set)
+
+
+def _delete_submission_fixture_graph(admin_cursor, graph: _SubmissionFixtureGraph) -> None:
+    review_ids = tuple(graph.review_ids)
+    submission_ids = tuple(graph.submission_ids)
+    finding_ids = tuple(graph.finding_ids)
+    correction_request_ids = tuple(graph.correction_request_ids)
+
+    if correction_request_ids:
+        admin_cursor.execute(
+            "DELETE FROM review.correction_request_items "
+            "WHERE correction_request_id = ANY(%s)",
+            (list(correction_request_ids),),
+        )
+    if review_ids:
+        admin_cursor.execute(
+            "DELETE FROM review.decisions WHERE review_id = ANY(%s)",
+            (list(review_ids),),
+        )
+    if correction_request_ids:
+        admin_cursor.execute(
+            "DELETE FROM review.correction_requests "
+            "WHERE correction_request_id = ANY(%s)",
+            (list(correction_request_ids),),
+        )
+    if finding_ids:
+        admin_cursor.execute(
+            "DELETE FROM review.findings WHERE finding_id = ANY(%s)",
+            (list(finding_ids),),
+        )
+
+    if review_ids:
+        admin_cursor.execute(
+            """
+            UPDATE review.reviews
+            SET latest_submission_id = NULL,
+                latest_validation_run_id = NULL,
+                validation_run_id = NULL,
+                form_instance_id = NULL
+            WHERE review_id = ANY(%s)
+            """,
+            (list(review_ids),),
+        )
+    admin_cursor.execute(
+        """
+        UPDATE valuation.validation_runs
+        SET submission_id = NULL, review_id = NULL
+        WHERE validation_run_id = %s
+        """,
+        (graph.validation_run_id,),
+    )
+    if submission_ids:
+        admin_cursor.execute(
+            "DELETE FROM valuation.review_submissions "
+            "WHERE submission_id = ANY(%s)",
+            (list(submission_ids),),
+        )
+    if review_ids:
+        admin_cursor.execute(
+            "DELETE FROM review.reviews WHERE review_id = ANY(%s)",
+            (list(review_ids),),
+        )
+    admin_cursor.execute(
+        "DELETE FROM history.case_events WHERE case_id = %s AND request_id = %s",
+        (graph.case_id, graph.request_id),
+    )
+    admin_cursor.execute(
+        "DELETE FROM valuation.extracted_fields WHERE extracted_field_id = %s",
+        (graph.extracted_field_id,),
+    )
+    admin_cursor.execute(
+        "DELETE FROM valuation.document_extractions WHERE extraction_id = %s",
+        (graph.extraction_id,),
+    )
+    admin_cursor.execute(
+        "DELETE FROM valuation.validation_findings "
+        "WHERE validation_run_id = %s",
+        (graph.validation_run_id,),
+    )
+    admin_cursor.execute(
+        "DELETE FROM valuation.validation_runs WHERE validation_run_id = %s",
+        (graph.validation_run_id,),
+    )
+    admin_cursor.execute(
+        "DELETE FROM valuation.form_instances WHERE form_instance_id = %s",
+        (graph.form_instance_id,),
+    )
+    admin_cursor.execute(
+        "DELETE FROM valuation.documents WHERE document_id = %s",
+        (graph.document_id,),
+    )
+    admin_cursor.execute(
+        "DELETE FROM valuation.cases WHERE case_id = %s", (graph.case_id,)
+    )
+    admin_cursor.execute(
+        "DELETE FROM auth.users WHERE user_id = %s", (graph.user_id,)
+    )
+
+
+@pytest.fixture
+def submission_fixture_graphs(admin_cursor):
+    graphs: list[_SubmissionFixtureGraph] = []
+    try:
+        yield graphs
+    finally:
+        admin_cursor.connection.rollback()
+        try:
+            for graph in graphs:
+                _delete_submission_fixture_graph(admin_cursor, graph)
+            admin_cursor.connection.commit()
+        except Exception:
+            admin_cursor.connection.rollback()
+            raise
 
 
 def test_submit_review_permission_is_seeded_only_for_appraiser(admin_cursor) -> None:
@@ -147,12 +278,16 @@ def test_submit_permission_migration_downgrades_and_reupgrades(
 
 def _seed_submittable_case(
     admin_cursor,
+    *,
+    cleanup: list[_SubmissionFixtureGraph] | None = None,
 ) -> tuple[UUID, SimpleNamespace, SubmitForReviewCommand]:
     case_id = uuid4()
     user_id = uuid4()
     report_id = uuid4()
     document_id = uuid4()
+    document_group_id = uuid4()
     extraction_id = uuid4()
+    extracted_field_id = uuid4()
     validation_run_id = uuid4()
     request_id = uuid4()
     admin_cursor.execute(
@@ -193,7 +328,7 @@ def _seed_submittable_case(
             f"cases/{case_id}/submission-report.pdf",
             "a" * 64,
             user_id,
-            uuid4(),
+            document_group_id,
         ),
     )
     admin_cursor.execute(
@@ -251,9 +386,31 @@ def _seed_submittable_case(
                 to_jsonb('123.4500'::text), 1.0000, 'RULE', 'APPLIED',
                 to_jsonb('123.4500'::text), %s, now(), %s, now())
         """,
-        (uuid4(), case_id, extraction_id, document_id, user_id, report_id),
+        (
+            extracted_field_id,
+            case_id,
+            extraction_id,
+            document_id,
+            user_id,
+            report_id,
+        ),
     )
     admin_cursor.connection.commit()
+
+    if cleanup is not None:
+        cleanup.append(
+            _SubmissionFixtureGraph(
+                case_id=case_id,
+                user_id=user_id,
+                document_id=document_id,
+                document_group_id=document_group_id,
+                form_instance_id=report_id,
+                extraction_id=extraction_id,
+                extracted_field_id=extracted_field_id,
+                validation_run_id=validation_run_id,
+                request_id=request_id,
+            )
+        )
 
     return (
         case_id,
@@ -279,9 +436,14 @@ def _seed_submittable_case(
 
 
 def _seed_review_race_case(
-    admin_cursor, *, with_correction: bool
+    admin_cursor,
+    *,
+    with_correction: bool,
+    cleanup: list[_SubmissionFixtureGraph] | None = None,
 ) -> tuple[UUID, UUID, SimpleNamespace, SubmitForReviewCommand, UUID | None]:
-    case_id, actor, command_value = _seed_submittable_case(admin_cursor)
+    case_id, actor, command_value = _seed_submittable_case(
+        admin_cursor, cleanup=cleanup
+    )
     review_id = uuid4()
     admin_cursor.execute(
         """
@@ -338,6 +500,13 @@ def _seed_review_race_case(
                 actor.user_id,
             ),
         )
+    if cleanup is not None:
+        graph = cleanup[-1]
+        graph.review_ids.add(review_id)
+        if with_correction:
+            assert request_id is not None
+            graph.finding_ids.add(finding_id)
+            graph.correction_request_ids.add(request_id)
     admin_cursor.connection.commit()
     return case_id, review_id, actor, command_value, request_id
 
@@ -422,10 +591,13 @@ async def _run_correction_with_probe(
 
 
 async def _run_lock_order_race(
-    admin_cursor, *, complete: bool
+    admin_cursor,
+    *,
+    complete: bool,
+    cleanup: list[_SubmissionFixtureGraph] | None = None,
 ) -> tuple[UUID, UUID, list[object]]:
     case_id, review_id, actor, command_value, request_id = _seed_review_race_case(
-        admin_cursor, with_correction=not complete
+        admin_cursor, with_correction=not complete, cleanup=cleanup
     )
     case_locked = asyncio.Event()
     correction_next_lock = asyncio.Event()
@@ -458,13 +630,19 @@ async def _run_lock_order_race(
             task.cancel()
         await asyncio.gather(submit_task, correction_task, return_exceptions=True)
         raise AssertionError("submission/correction lock-order race deadlocked") from exc
+    if cleanup is not None:
+        graph = cleanup[-1]
+        if not isinstance(outcomes[0], Exception):
+            graph.submission_ids.add(outcomes[0].submission_id)
     return case_id, review_id, outcomes
 
 
 @pytest.mark.asyncio
-async def test_real_sessions_submit_vs_send_have_no_deadlock(admin_cursor) -> None:
+async def test_real_sessions_submit_vs_send_have_no_deadlock(
+    admin_cursor, submission_fixture_graphs
+) -> None:
     case_id, review_id, outcomes = await _run_lock_order_race(
-        admin_cursor, complete=False
+        admin_cursor, complete=False, cleanup=submission_fixture_graphs
     )
 
     assert not isinstance(outcomes[0], Exception)
@@ -485,9 +663,11 @@ async def test_real_sessions_submit_vs_send_have_no_deadlock(admin_cursor) -> No
 
 
 @pytest.mark.asyncio
-async def test_real_sessions_submit_vs_complete_have_no_deadlock(admin_cursor) -> None:
+async def test_real_sessions_submit_vs_complete_have_no_deadlock(
+    admin_cursor, submission_fixture_graphs
+) -> None:
     case_id, review_id, outcomes = await _run_lock_order_race(
-        admin_cursor, complete=True
+        admin_cursor, complete=True, cleanup=submission_fixture_graphs
     )
 
     assert not isinstance(outcomes[0], Exception)
@@ -509,8 +689,12 @@ async def test_real_sessions_submit_vs_complete_have_no_deadlock(admin_cursor) -
 
 
 @pytest.mark.asyncio
-async def test_real_sessions_submit_same_request_once(admin_cursor) -> None:
-    case_id, actor, command = _seed_submittable_case(admin_cursor)
+async def test_real_sessions_submit_same_request_once(
+    admin_cursor, submission_fixture_graphs
+) -> None:
+    case_id, actor, command = _seed_submittable_case(
+        admin_cursor, cleanup=submission_fixture_graphs
+    )
 
     async def submit_once():
         async with AsyncSessionFactory() as session:
@@ -519,6 +703,10 @@ async def test_real_sessions_submit_same_request_once(admin_cursor) -> None:
             return result
 
     first, second = await asyncio.gather(submit_once(), submit_once())
+
+    graph = submission_fixture_graphs[-1]
+    graph.review_ids.add(first.review_id)
+    graph.submission_ids.add(first.submission_id)
 
     assert first.submission_id == second.submission_id
     assert first.review_id == second.review_id

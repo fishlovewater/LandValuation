@@ -567,6 +567,13 @@ async def test_appraiser_submission_handoff_is_reviewable_and_statuses_pair(
         assert detail.submission_no == 1
         assert detail.documents[0].original_filename == approval_case.original_filename
 
+        return_submission = submissions[1]
+        return_case = handoff_data.cases[1]
+        return_detail = await workbench.detail(return_submission.review_id)
+        assert return_detail.submission_id == return_submission.submission_id
+        assert return_detail.submission_no == 1
+        assert return_detail.documents[0].original_filename == return_case.original_filename
+
         # Change the authoritative Valuation rows after handoff. Review must
         # continue to read the immutable Submission Snapshot.
         admin_cursor.execute(
@@ -626,8 +633,6 @@ async def test_appraiser_submission_handoff_is_reviewable_and_statuses_pair(
             session, approval_case.case_id, approval_submission.review_id
         ) == ("REVIEW_COMPLETED", "REVIEW_COMPLETED")
 
-        return_submission = submissions[1]
-        return_case = handoff_data.cases[1]
         return_run, return_summary, confirmed_finding_id = await _run_and_triage(
             session,
             review_service,
