@@ -510,10 +510,15 @@ The test must create real database rows and use application services/API to asse
 submission = await SubmissionService(session).submit(case_id, command, appraiser)
 await session.commit()
 
-queue = await WorkbenchService(session).list_cases(query)
+workbench = WorkbenchService(
+    WorkbenchRepository(session),
+    ReviewRepository(session),
+    CorrectionRepository(session),
+)
+queue = await workbench.list_cases(None, None, None, None, 100, 0)
 assert submission.review_id in {item.review_id for item in queue.items}
 
-detail = await WorkbenchService(session).detail(submission.review_id)
+detail = await workbench.detail(submission.review_id)
 assert detail.submission_id == submission.submission_id
 assert detail.submission_no == 1
 
