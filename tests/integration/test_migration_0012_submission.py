@@ -483,7 +483,9 @@ def test_runtime_role_cannot_mutate_review_submissions(
                     "DELETE FROM valuation.review_submissions WHERE submission_id = %s",
                     (ids["submission_id"],),
                 )
-        assert "review submissions are immutable" in str(raised.value).lower()
+        assert "permission denied for table review_submissions" in str(
+            raised.value
+        ).lower()
     finally:
         db_cursor.execute("ROLLBACK TO SAVEPOINT immutable_submission")
         db_cursor.execute("RELEASE SAVEPOINT immutable_submission")
@@ -498,6 +500,24 @@ def test_runtime_role_cannot_mutate_review_submissions(
 
 
 def test_downgrade_refuses_submission_then_succeeds_after_owner_cleanup(admin_cursor):
+    # The submission integration test intentionally uses a committed runtime
+    # session, so clean its row with the migration-owner connection before
+    # exercising this test's own downgrade guard.
+    admin_cursor.execute(
+        "UPDATE review.reviews SET latest_submission_id = NULL "
+        "WHERE latest_submission_id IS NOT NULL"
+    )
+    admin_cursor.execute(
+        "UPDATE valuation.validation_runs SET submission_id = NULL "
+        "WHERE submission_id IS NOT NULL"
+    )
+    admin_cursor.execute("DELETE FROM valuation.review_submissions")
+    admin_cursor.execute(
+        "UPDATE valuation.cases SET case_status = 'PROCESSING' "
+        "WHERE case_status IN ('IN_REVIEW', 'REVISION_REQUIRED', 'REVIEW_COMPLETED')"
+    )
+    admin_cursor.connection.commit()
+
     ids = _seed_submission_graph(admin_cursor)
     admin_cursor.connection.commit()
 

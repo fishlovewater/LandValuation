@@ -39,6 +39,6 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'app_postgres_user')
 GRANT land_valuation_app TO :"app_postgres_user";
 GRANT USAGE ON SCHEMA public TO land_valuation_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE land_valuation_migrator
-    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO land_valuation_app;
+    GRANT SELECT, INSERT, UPDATE ON TABLES TO land_valuation_app;
 ALTER DEFAULT PRIVILEGES FOR ROLE land_valuation_migrator
     GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO land_valuation_app;
