@@ -7,6 +7,7 @@ from app.core.config import get_settings
 from app.core.error_handlers import register_error_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
+from app.core.swagger_docs import register_swagger_docs
 from app.db.session import dispose_engine
 from app.health.router import router as health_router
 
@@ -24,13 +25,15 @@ def create_app() -> FastAPI:
         title=settings.app_name,
         version="0.1.0",
         lifespan=lifespan,
-        docs_url="/docs" if settings.docs_enabled else None,
+        docs_url=None,
         redoc_url="/redoc" if settings.docs_enabled else None,
     )
     application.add_middleware(RequestContextMiddleware)
     register_error_handlers(application)
     application.include_router(health_router)
     application.include_router(api_router, prefix=settings.api_prefix)
+    if settings.docs_enabled:
+        register_swagger_docs(application, title=settings.app_name)
     return application
 
 
