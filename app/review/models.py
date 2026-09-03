@@ -3,18 +3,9 @@ from uuid import UUID
 
 from decimal import Decimal
 
-from sqlalchemy import (
-    DateTime,
-    ForeignKey,
-    Integer,
-    Numeric,
-    SmallInteger,
-    String,
-    Text,
-    text,
-)
+from sqlalchemy import DateTime, Integer, Numeric, SmallInteger, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
@@ -51,16 +42,7 @@ class Review(Base):
     low_count: Mapped[int] = mapped_column(Integer, server_default="0")
     missing_item_count: Mapped[int] = mapped_column(Integer, server_default="0")
     latest_validation_run_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
-    latest_submission_id: Mapped[UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("valuation.review_submissions.submission_id"),
-    )
-    latest_submission = relationship(
-        "ReviewSubmissionRecord",
-        foreign_keys=[latest_submission_id],
-        post_update=True,
-        uselist=False,
-    )
+    latest_submission_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
 
 
 class MissingItem(Base):

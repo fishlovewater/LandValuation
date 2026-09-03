@@ -11,7 +11,6 @@ from app.valuation.operations.router import router as operations_router
 from app.valuation.report_packages.router import router as report_package_router
 from app.valuation.router import router as valuation_router
 from app.valuation.rule_packs.router import router as rule_pack_router
-from app.valuation.submissions.router import router as submission_router
 
 api_router = APIRouter()
 api_router.include_router(auth_router, prefix="/auth", tags=["auth"])
@@ -31,6 +30,5 @@ api_router.include_router(
     tags=["valuation-operations"],
 )
 api_router.include_router(automation_router, prefix="/valuation", tags=["valuation-auto-workflow"])
-api_router.include_router(submission_router, prefix="/valuation", tags=["valuation-submissions"])
 api_router.include_router(ai_assistant_router, prefix="/ai-assistant", tags=["ai-assistant"])
 api_router.include_router(review_router)
