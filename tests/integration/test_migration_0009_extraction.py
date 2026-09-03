@@ -1,7 +1,3 @@
-import subprocess
-import sys
-import os
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -12,26 +8,6 @@ from tests.integration.schema_assertions import (
     table_exists,
     unique_columns,
 )
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-def run_alembic(command: str, revision: str, *, expect_success: bool = True):
-    env = os.environ.copy()
-    if env.get("MIGRATION_DATABASE_URL"):
-        env["DATABASE_URL"] = env["MIGRATION_DATABASE_URL"]
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", command, revision],
-        cwd=PROJECT_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert (result.returncode == 0) is expect_success, result.stdout + result.stderr
-    return result
-
 
 def create_user_case_document(cursor, *, case_no: str | None = None):
     user_id = uuid4()
@@ -235,8 +211,10 @@ def test_canonical_extracted_fields_accept_f02_rf_candidates(admin_cursor):
     assert admin_cursor.fetchone()[0] == "F02-RF"
 
 
-def test_demo_legacy_extraction_is_cleaned_during_upgrade(admin_cursor):
-    run_alembic("downgrade", "20260830_0008")
+def test_demo_legacy_extraction_is_cleaned_during_upgrade(
+    admin_cursor, migration_roundtrip
+):
+    migration_roundtrip("downgrade", "20260830_0008")
     user_id, case_id, document_id = create_user_case_document(
         admin_cursor, case_no="DEMO-REVIEW-001"
     )
@@ -261,7 +239,7 @@ def test_demo_legacy_extraction_is_cleaned_during_upgrade(admin_cursor):
     )
     admin_cursor.connection.commit()
 
-    run_alembic("upgrade", "head")
+    migration_roundtrip("upgrade", "head")
     admin_cursor.execute(
         "SELECT count(*) FROM valuation.document_extractions WHERE case_id = %s",
         (case_id,),
@@ -279,8 +257,10 @@ def test_demo_legacy_extraction_is_cleaned_during_upgrade(admin_cursor):
     admin_cursor.connection.commit()
 
 
-def test_non_demo_legacy_extraction_blocks_upgrade(admin_cursor):
-    run_alembic("downgrade", "20260830_0008")
+def test_non_demo_legacy_extraction_blocks_upgrade(
+    admin_cursor, migration_roundtrip
+):
+    migration_roundtrip("downgrade", "20260830_0008")
     user_id, case_id, document_id = create_user_case_document(admin_cursor)
     admin_cursor.execute(
         """
@@ -292,29 +272,36 @@ def test_non_demo_legacy_extraction_blocks_upgrade(admin_cursor):
     )
     admin_cursor.connection.commit()
 
-    result = run_alembic("upgrade", "head", expect_success=False)
+    result = migration_roundtrip("upgrade", "head", expect_success=False)
     assert "non-demo legacy extraction data prevents migration" in (
         result.stdout + result.stderr
     )
 
     admin_cursor.execute("DELETE FROM valuation.extraction_runs WHERE case_id = %s", (case_id,))
+    admin_cursor.execute("DELETE FROM valuation.documents WHERE case_id = %s", (case_id,))
+    admin_cursor.execute("DELETE FROM valuation.cases WHERE case_id = %s", (case_id,))
+    admin_cursor.execute("DELETE FROM auth.users WHERE user_id = %s", (user_id,))
     admin_cursor.connection.commit()
-    run_alembic("upgrade", "head")
+    migration_roundtrip("upgrade", "head")
 
 
-def test_downgrade_recreates_empty_legacy_schema_and_refuses_data(admin_cursor):
+def test_downgrade_recreates_empty_legacy_schema_and_refuses_data(
+    admin_cursor, migration_roundtrip
+):
     user_id, case_id, document_id = create_user_case_document(admin_cursor)
     create_extraction(admin_cursor, user_id, case_id, document_id)
     admin_cursor.connection.commit()
 
-    result = run_alembic("downgrade", "20260830_0008", expect_success=False)
+    result = migration_roundtrip(
+        "downgrade", "20260830_0008", expect_success=False
+    )
     assert "cannot downgrade canonical extraction schema while data exists" in (
         result.stdout + result.stderr
     )
 
     admin_cursor.execute("DELETE FROM valuation.document_extractions WHERE case_id = %s", (case_id,))
     admin_cursor.connection.commit()
-    run_alembic("downgrade", "20260830_0008")
+    migration_roundtrip("downgrade", "20260830_0008")
     assert set(column_names(admin_cursor, "extraction_runs", "valuation")) >= {
         "extraction_run_id",
         "document_version",
@@ -330,4 +317,8 @@ def test_downgrade_recreates_empty_legacy_schema_and_refuses_data(admin_cursor):
         "normalized_value",
         "verification_status",
     }
-    run_alembic("upgrade", "head")
+    admin_cursor.execute("DELETE FROM valuation.documents WHERE case_id = %s", (case_id,))
+    admin_cursor.execute("DELETE FROM valuation.cases WHERE case_id = %s", (case_id,))
+    admin_cursor.execute("DELETE FROM auth.users WHERE user_id = %s", (user_id,))
+    admin_cursor.connection.commit()
+    migration_roundtrip("upgrade", "head")
