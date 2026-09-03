@@ -24,7 +24,7 @@ def review_integration_prerequisites():
         from app.storage.client import get_minio_client
 
         client = get_minio_client()
-        bucket_name = os.environ["MINIO_BUCKET"]
+        bucket_name = "land-valuation"
         if not client.bucket_exists(bucket_name):
             client.make_bucket(bucket_name)
     yield
@@ -48,7 +48,7 @@ def development_only_demo_settings():
     development_settings = settings.model_copy(
         update={
             "app_env": "development",
-            "minio_bucket": os.environ["MINIO_BUCKET"],
+            "minio_bucket": "land-valuation",
         }
     )
     with patch.object(
