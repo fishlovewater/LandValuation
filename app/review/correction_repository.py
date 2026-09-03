@@ -34,7 +34,9 @@ class CorrectionRepository:
             CorrectionRequest.status != "RECHECKED",
         )
         if for_update:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update().execution_options(
+                populate_existing=True
+            )
         return await self.session.scalar(statement)
 
     async def create_request(self, **values) -> CorrectionRequest:
@@ -59,7 +61,9 @@ class CorrectionRepository:
             CorrectionRequest.correction_request_id == correction_request_id
         )
         if for_update:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update().execution_options(
+                populate_existing=True
+            )
         return await self.session.scalar(statement)
 
     async def list_items(
@@ -130,7 +134,9 @@ class CorrectionRepository:
     ) -> UrgencySettings | None:
         statement = select(UrgencySettings).where(UrgencySettings.settings_id == 1)
         if for_update:
-            statement = statement.with_for_update()
+            statement = statement.with_for_update().execution_options(
+                populate_existing=True
+            )
         return await self.session.scalar(statement)
 
     async def update_urgency_settings(

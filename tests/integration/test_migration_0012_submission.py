@@ -2,8 +2,9 @@ import json
 import os
 import shutil
 import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from psycopg.types.json import Jsonb
@@ -26,6 +27,80 @@ PRIMARY_COMPOSE_PATH = PROJECT_ROOT / "docker-compose.yml"
 PRIMARY_ROLE_INIT_SQL_PATH = (
     PROJECT_ROOT / "database" / "role-init" / "001_land_valuation_app.sql"
 )
+
+
+@dataclass
+class _SubmissionFixtureGraph:
+    user_id: UUID
+    case_id: UUID
+    review_id: UUID
+    validation_run_id: UUID
+    document_id: UUID
+    submission_ids: set[UUID] = field(default_factory=set)
+
+
+def _delete_submission_fixture_graph(cursor, graph: _SubmissionFixtureGraph) -> None:
+    submission_ids = tuple(graph.submission_ids)
+    if submission_ids:
+        cursor.execute(
+            """
+            UPDATE review.reviews
+            SET latest_submission_id = NULL
+            WHERE review_id = %s AND latest_submission_id = ANY(%s)
+            """,
+            (graph.review_id, list(submission_ids)),
+        )
+        cursor.execute(
+            """
+            UPDATE valuation.validation_runs
+            SET submission_id = NULL
+            WHERE validation_run_id = %s AND submission_id = ANY(%s)
+            """,
+            (graph.validation_run_id, list(submission_ids)),
+        )
+        cursor.execute(
+            "UPDATE valuation.review_submissions "
+            "SET supersedes_submission_id = NULL "
+            "WHERE submission_id = ANY(%s)",
+            (list(submission_ids),),
+        )
+        cursor.execute(
+            "DELETE FROM valuation.review_submissions "
+            "WHERE submission_id = ANY(%s)",
+            (list(submission_ids),),
+        )
+
+    cursor.execute(
+        "DELETE FROM valuation.validation_runs WHERE validation_run_id = %s",
+        (graph.validation_run_id,),
+    )
+    cursor.execute(
+        "DELETE FROM review.reviews WHERE review_id = %s", (graph.review_id,)
+    )
+    cursor.execute(
+        "DELETE FROM valuation.documents WHERE document_id = %s",
+        (graph.document_id,),
+    )
+    cursor.execute(
+        "DELETE FROM valuation.cases WHERE case_id = %s", (graph.case_id,)
+    )
+    cursor.execute("DELETE FROM auth.users WHERE user_id = %s", (graph.user_id,))
+
+
+@pytest.fixture
+def submission_fixture_graphs(admin_cursor):
+    graphs: list[_SubmissionFixtureGraph] = []
+    try:
+        yield graphs
+    finally:
+        admin_cursor.connection.rollback()
+        try:
+            for graph in graphs:
+                _delete_submission_fixture_graph(admin_cursor, graph)
+            admin_cursor.connection.commit()
+        except Exception:
+            admin_cursor.connection.rollback()
+            raise
 
 
 class TestMigrationRoundtripIsolation:
@@ -93,7 +168,11 @@ def _constraint_definition(cursor, schema: str, table: str, name: str) -> str:
     return row[0]
 
 
-def _seed_submission_graph(cursor) -> dict[str, object]:
+def _seed_submission_graph(
+    cursor,
+    *,
+    cleanup: list[_SubmissionFixtureGraph] | None = None,
+) -> dict[str, object]:
     user_id = uuid4()
     case_id = uuid4()
     review_id = uuid4()
@@ -174,6 +253,17 @@ def _seed_submission_graph(cursor) -> dict[str, object]:
             uuid4(),
         ),
     )
+    if cleanup is not None:
+        cleanup.append(
+            _SubmissionFixtureGraph(
+                user_id=user_id,
+                case_id=case_id,
+                review_id=review_id,
+                validation_run_id=validation_run_id,
+                document_id=document_id,
+                submission_ids={submission_id},
+            )
+        )
     return {
         "user_id": user_id,
         "case_id": case_id,
@@ -327,8 +417,10 @@ def test_submission_foreign_keys_and_handoff_columns(admin_cursor):
     assert "(submission_id)" in admin_cursor.fetchone()[0]
 
 
-def test_submission_checks_and_handoff_statuses(admin_cursor):
-    ids = _seed_submission_graph(admin_cursor)
+def test_submission_checks_and_handoff_statuses(
+    admin_cursor, submission_fixture_graphs
+):
+    ids = _seed_submission_graph(admin_cursor, cleanup=submission_fixture_graphs)
 
     for values, expected_constraint in (
         ({"submission_no": 0}, "ck_review_submissions_submission_no"),
@@ -355,9 +447,11 @@ def test_submission_checks_and_handoff_statuses(admin_cursor):
     assert "RETURNED_FOR_REVISION" in review_status
 
 
-def test_composite_supersedes_fk_rejects_submission_from_another_review(admin_cursor):
-    first = _seed_submission_graph(admin_cursor)
-    second = _seed_submission_graph(admin_cursor)
+def test_composite_supersedes_fk_rejects_submission_from_another_review(
+    admin_cursor, submission_fixture_graphs
+):
+    first = _seed_submission_graph(admin_cursor, cleanup=submission_fixture_graphs)
+    second = _seed_submission_graph(admin_cursor, cleanup=submission_fixture_graphs)
 
     admin_cursor.execute("SAVEPOINT cross_review_supersedes")
     try:
@@ -493,9 +587,9 @@ def test_primary_compose_provisions_idempotent_app_group_before_migrations():
 
 @pytest.mark.parametrize("statement", ["UPDATE", "DELETE"])
 def test_runtime_role_cannot_mutate_review_submissions(
-    admin_cursor, db_cursor, statement: str
+    admin_cursor, db_cursor, submission_fixture_graphs, statement: str
 ):
-    ids = _seed_submission_graph(admin_cursor)
+    ids = _seed_submission_graph(admin_cursor, cleanup=submission_fixture_graphs)
     admin_cursor.connection.commit()
 
     db_cursor.execute("SAVEPOINT immutable_submission")
@@ -532,27 +626,9 @@ def test_runtime_role_cannot_mutate_review_submissions(
 
 
 def test_downgrade_refuses_submission_then_succeeds_after_owner_cleanup(
-    admin_cursor, migration_roundtrip
+    admin_cursor, submission_fixture_graphs, migration_roundtrip
 ):
-    # The submission integration test intentionally uses a committed runtime
-    # session, so clean its row with the migration-owner connection before
-    # exercising this test's own downgrade guard.
-    admin_cursor.execute(
-        "UPDATE review.reviews SET latest_submission_id = NULL "
-        "WHERE latest_submission_id IS NOT NULL"
-    )
-    admin_cursor.execute(
-        "UPDATE valuation.validation_runs SET submission_id = NULL "
-        "WHERE submission_id IS NOT NULL"
-    )
-    admin_cursor.execute("DELETE FROM valuation.review_submissions")
-    admin_cursor.execute(
-        "UPDATE valuation.cases SET case_status = 'PROCESSING' "
-        "WHERE case_status IN ('IN_REVIEW', 'REVISION_REQUIRED', 'REVIEW_COMPLETED')"
-    )
-    admin_cursor.connection.commit()
-
-    ids = _seed_submission_graph(admin_cursor)
+    _seed_submission_graph(admin_cursor, cleanup=submission_fixture_graphs)
     admin_cursor.connection.commit()
 
     result = migration_roundtrip(
@@ -563,10 +639,7 @@ def test_downgrade_refuses_submission_then_succeeds_after_owner_cleanup(
     ).lower()
     assert table_exists(admin_cursor, "review_submissions", "valuation")
 
-    admin_cursor.execute(
-        "DELETE FROM valuation.review_submissions WHERE submission_id = %s",
-        (ids["submission_id"],),
-    )
+    _delete_submission_fixture_graph(admin_cursor, submission_fixture_graphs[-1])
     admin_cursor.connection.commit()
     migration_roundtrip("downgrade", "20260901_0011")
     migration_roundtrip("upgrade", "head")

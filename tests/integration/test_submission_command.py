@@ -544,6 +544,18 @@ class _CorrectionLockProbeRepository(ReviewRepository):
         return await super().get_case(case_id, for_update=for_update)
 
 
+class _InitialRequestReadBarrierRepository(CorrectionRepository):
+    def __init__(self, session, initial_reads):
+        super().__init__(session)
+        self.initial_reads = initial_reads
+
+    async def get_request(self, request_id, for_update=False):
+        request = await super().get_request(request_id, for_update=for_update)
+        if not for_update:
+            await self.initial_reads.wait()
+        return request
+
+
 async def _run_submission_with_probe(
     case_id, command_value, actor, case_locked, correction_next_lock
 ):
@@ -732,3 +744,59 @@ async def test_real_sessions_submit_same_request_once(
 
     assert submission_count == 1
     assert event_count == 1
+
+
+@pytest.mark.asyncio
+async def test_real_sessions_send_same_draft_once(
+    admin_cursor, submission_fixture_graphs
+) -> None:
+    case_id, review_id, actor, _command, request_id = _seed_review_race_case(
+        admin_cursor,
+        with_correction=True,
+        cleanup=submission_fixture_graphs,
+    )
+    assert request_id is not None
+    initial_reads = asyncio.Barrier(2)
+
+    async def send_once():
+        async with AsyncSessionFactory() as session:
+            corrections = _InitialRequestReadBarrierRepository(session, initial_reads)
+            service = CorrectionService(ReviewRepository(session), corrections)
+            try:
+                result = await service.send(request_id, actor.user_id, uuid4())
+                await session.commit()
+                return result
+            except Exception as exc:
+                await session.rollback()
+                return exc
+
+    first, second = await asyncio.gather(send_once(), send_once())
+    outcomes = (first, second)
+
+    assert sum(not isinstance(outcome, Exception) for outcome in outcomes) == 1
+    failed = next(outcome for outcome in outcomes if isinstance(outcome, Exception))
+    assert isinstance(failed, AppError)
+    assert failed.code == "CORRECTION_REQUEST_STATE_CONFLICT"
+
+    admin_cursor.execute(
+        "SELECT status FROM review.correction_requests "
+        "WHERE correction_request_id = %s",
+        (request_id,),
+    )
+    assert admin_cursor.fetchone() == ("SENT",)
+    admin_cursor.execute(
+        "SELECT review_status FROM review.reviews WHERE review_id = %s",
+        (review_id,),
+    )
+    assert admin_cursor.fetchone() == ("RETURNED_FOR_REVISION",)
+    admin_cursor.execute(
+        "SELECT case_status FROM valuation.cases WHERE case_id = %s",
+        (case_id,),
+    )
+    assert admin_cursor.fetchone() == ("REVISION_REQUIRED",)
+    admin_cursor.execute(
+        "SELECT count(*) FROM review.decisions "
+        "WHERE review_id = %s AND decision = 'RETURNED_FOR_REVISION'",
+        (review_id,),
+    )
+    assert admin_cursor.fetchone() == (1,)

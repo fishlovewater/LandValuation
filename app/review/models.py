@@ -19,6 +19,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 
+def _review_submission_record_class():
+    """Resolve the valuation handoff mapping only when SQLAlchemy configures it."""
+
+    from app.valuation.models import ReviewSubmissionRecord
+
+    return ReviewSubmissionRecord
+
+
 class Review(Base):
     """ORM mapping for the Alembic-managed review.reviews table."""
 
@@ -56,7 +64,7 @@ class Review(Base):
         ForeignKey("valuation.review_submissions.submission_id"),
     )
     latest_submission = relationship(
-        "ReviewSubmissionRecord",
+        _review_submission_record_class,
         foreign_keys=[latest_submission_id],
         post_update=True,
         uselist=False,
