@@ -1,6 +1,3 @@
-import os
-import subprocess
-import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -21,22 +18,6 @@ MIGRATION_PATH = (
     / "versions"
     / "20260901_0010_valuation_forms_calculation_reports.py"
 )
-
-
-def _run_alembic(command: str, revision: str, *, expect_success: bool = True):
-    env = os.environ.copy()
-    if env.get("MIGRATION_DATABASE_URL"):
-        env["DATABASE_URL"] = env["MIGRATION_DATABASE_URL"]
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", command, revision],
-        cwd=PROJECT_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert (result.returncode == 0) is expect_success, result.stdout + result.stderr
-    return result
 
 
 def test_migration_contains_schema_only_and_no_fixed_business_rule_data():
@@ -204,7 +185,9 @@ def test_complete_report_constraints_reject_invalid_json_and_display_order(admin
     admin_cursor.connection.rollback()
 
 
-def test_downgrade_refuses_real_f02_rf_report_page_data(admin_cursor):
+def test_downgrade_refuses_real_f02_rf_report_page_data(
+    admin_cursor, migration_roundtrip
+):
     user_id, case_id = _create_case_and_form(admin_cursor)
     form_id = uuid4()
     admin_cursor.execute(
@@ -217,7 +200,9 @@ def test_downgrade_refuses_real_f02_rf_report_page_data(admin_cursor):
     )
     admin_cursor.connection.commit()
 
-    result = _run_alembic("downgrade", "20260901_0009", expect_success=False)
+    result = migration_roundtrip(
+        "downgrade", "20260901_0009", expect_success=False
+    )
     assert "cannot downgrade while complete-report form data exists" in (
         result.stdout + result.stderr
     )
@@ -228,72 +213,196 @@ def test_downgrade_refuses_real_f02_rf_report_page_data(admin_cursor):
     admin_cursor.execute("DELETE FROM valuation.cases WHERE case_id = %s", (case_id,))
     admin_cursor.execute("DELETE FROM auth.users WHERE user_id = %s", (user_id,))
     admin_cursor.connection.commit()
-    _run_alembic("downgrade", "20260901_0009")
-    _run_alembic("upgrade", "head")
+    migration_roundtrip("downgrade", "20260901_0009")
+    migration_roundtrip("upgrade", "head")
 
 
 def test_display_order_constraints_are_per_analysis(admin_cursor):
-    admin_cursor.execute("SET session_replication_role = replica")
+    _, case_id = _create_case_and_form(admin_cursor)
+    parcel_id, benchmark_land_id = uuid4(), uuid4()
+    admin_cursor.execute(
+        """
+        INSERT INTO valuation.parcels (
+            parcel_id, case_id, district_code, section_name, land_no, area_sqm
+        ) VALUES (%s, %s, 'BANQIAO', 'Test Section', %s, 100)
+        """,
+        (parcel_id, case_id, f"{uuid4().hex[:8]}"),
+    )
+    admin_cursor.execute(
+        """
+        INSERT INTO valuation.benchmark_lands (
+            benchmark_land_id, case_id, parcel_id, benchmark_land_no, price_zone_no
+        ) VALUES (%s, %s, %s, %s, 'ZONE-1')
+        """,
+        (benchmark_land_id, case_id, parcel_id, f"B-{uuid4().hex[:8]}"),
+    )
+
+    first_analysis, second_analysis = uuid4(), uuid4()
+    admin_cursor.execute(
+        """
+        INSERT INTO valuation.comparison_analyses (
+            comparison_analysis_id, case_id, benchmark_land_id, valuation_base_date
+        ) VALUES (%s, %s, %s, '2026-01-01'), (%s, %s, %s, '2026-01-01')
+        """,
+        (
+            first_analysis,
+            case_id,
+            benchmark_land_id,
+            second_analysis,
+            case_id,
+            benchmark_land_id,
+        ),
+    )
+
+    transaction_ids = (uuid4(), uuid4(), uuid4())
+    for transaction_id in transaction_ids:
+        admin_cursor.execute(
+            """
+            INSERT INTO valuation.transaction_cases (
+                transaction_id, case_id, transaction_no, transaction_date,
+                transaction_total_price
+            ) VALUES (%s, %s, %s, '2026-01-01', 100)
+            """,
+            (transaction_id, case_id, f"T-{uuid4().hex[:8]}"),
+        )
+
+    def insert_target(analysis_id, transaction_id):
+        admin_cursor.execute(
+            """
+            INSERT INTO valuation.comparison_targets (
+                comparison_target_id, case_id, comparison_analysis_id,
+                transaction_id, normal_unit_price_snapshot,
+                transaction_date_snapshot, display_order
+            ) VALUES (%s, %s, %s, %s, '100', '2026-01-01', 1)
+            """,
+            (uuid4(), case_id, analysis_id, transaction_id),
+        )
+
+    insert_target(first_analysis, transaction_ids[0])
+    admin_cursor.execute("SAVEPOINT duplicate_display_order")
     try:
-        first_analysis, second_analysis = uuid4(), uuid4()
-        first_case, second_case = uuid4(), uuid4()
-        first_transaction, second_transaction, third_transaction = uuid4(), uuid4(), uuid4()
-        values = (uuid4(), first_case, first_analysis, first_transaction, "100", "2026-01-01", 1)
-        admin_cursor.execute(
-            "INSERT INTO valuation.comparison_targets (comparison_target_id, case_id, comparison_analysis_id, transaction_id, normal_unit_price_snapshot, transaction_date_snapshot, display_order) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            values,
-        )
-        admin_cursor.execute("SAVEPOINT duplicate_display_order")
         with pytest.raises(Exception):
-            admin_cursor.execute(
-                "INSERT INTO valuation.comparison_targets (comparison_target_id, case_id, comparison_analysis_id, transaction_id, normal_unit_price_snapshot, transaction_date_snapshot, display_order) VALUES (%s, %s, %s, %s, %s, %s, 1)",
-                (uuid4(), first_case, first_analysis, second_transaction, "100", "2026-01-01"),
-            )
-        admin_cursor.execute("ROLLBACK TO SAVEPOINT duplicate_display_order")
-        admin_cursor.execute(
-            "INSERT INTO valuation.comparison_targets (comparison_target_id, case_id, comparison_analysis_id, transaction_id, normal_unit_price_snapshot, transaction_date_snapshot, display_order) VALUES (%s, %s, %s, %s, %s, %s, 1)",
-            (uuid4(), second_case, second_analysis, third_transaction, "100", "2026-01-01"),
-        )
-        admin_cursor.execute(
-            "SELECT count(*) FROM valuation.comparison_targets WHERE (comparison_analysis_id, display_order) IN ((%s, 1), (%s, 1))",
-            (first_analysis, second_analysis),
-        )
-        assert admin_cursor.fetchone()[0] == 2
+            insert_target(first_analysis, transaction_ids[1])
     finally:
-        admin_cursor.execute("SET session_replication_role = origin")
+        admin_cursor.execute("ROLLBACK TO SAVEPOINT duplicate_display_order")
+        admin_cursor.execute("RELEASE SAVEPOINT duplicate_display_order")
+
+    insert_target(second_analysis, transaction_ids[2])
+    admin_cursor.execute(
+        "SELECT count(*) FROM valuation.comparison_targets "
+        "WHERE (comparison_analysis_id, display_order) IN ((%s, 1), (%s, 1))",
+        (first_analysis, second_analysis),
+    )
+    assert admin_cursor.fetchone()[0] == 2
 
 
-def test_upgrade_backfills_existing_targets_by_stable_target_id(admin_cursor):
-    _run_alembic("downgrade", "20260901_0009")
-    admin_cursor.execute("SET session_replication_role = replica")
-    analysis_id, case_id = uuid4(), uuid4()
+def test_upgrade_backfills_existing_targets_by_stable_target_id(
+    admin_cursor, migration_roundtrip
+):
+    migration_roundtrip("downgrade", "20260901_0009")
+
+    user_id, case_id = _create_case_and_form(admin_cursor)
+    parcel_id, benchmark_land_id, analysis_id = uuid4(), uuid4(), uuid4()
+    admin_cursor.execute(
+        """
+        INSERT INTO valuation.parcels (
+            parcel_id, case_id, district_code, section_name, land_no, area_sqm
+        ) VALUES (%s, %s, 'BANQIAO', 'Test Section', %s, 100)
+        """,
+        (parcel_id, case_id, f"{uuid4().hex[:8]}"),
+    )
+    admin_cursor.execute(
+        """
+        INSERT INTO valuation.benchmark_lands (
+            benchmark_land_id, case_id, parcel_id, benchmark_land_no, price_zone_no
+        ) VALUES (%s, %s, %s, %s, 'ZONE-1')
+        """,
+        (benchmark_land_id, case_id, parcel_id, f"B-{uuid4().hex[:8]}"),
+    )
+    admin_cursor.execute(
+        """
+        INSERT INTO valuation.comparison_analyses (
+            comparison_analysis_id, case_id, benchmark_land_id, valuation_base_date
+        ) VALUES (%s, %s, %s, '2026-01-01')
+        """,
+        (analysis_id, case_id, benchmark_land_id),
+    )
     target_ids = sorted((uuid4(), uuid4(), uuid4()), key=str)
-    for target_id in reversed(target_ids):
+    transaction_ids = (uuid4(), uuid4(), uuid4())
+    for target_id, transaction_id in zip(reversed(target_ids), transaction_ids):
+        admin_cursor.execute(
+            """
+            INSERT INTO valuation.transaction_cases (
+                transaction_id, case_id, transaction_no, transaction_date,
+                transaction_total_price
+            ) VALUES (%s, %s, %s, '2026-01-01', 100)
+            """,
+            (transaction_id, case_id, f"T-{uuid4().hex[:8]}"),
+        )
         admin_cursor.execute(
             "INSERT INTO valuation.comparison_targets (comparison_target_id, case_id, comparison_analysis_id, transaction_id, normal_unit_price_snapshot, transaction_date_snapshot) VALUES (%s, %s, %s, %s, %s, %s)",
-            (target_id, case_id, analysis_id, uuid4(), "100", "2026-01-01"),
+            (target_id, case_id, analysis_id, transaction_id, "100", "2026-01-01"),
         )
-    admin_cursor.execute("SET session_replication_role = origin")
     admin_cursor.connection.commit()
-    _run_alembic("upgrade", "head")
+    migration_roundtrip("upgrade", "head")
     admin_cursor.execute(
         "SELECT comparison_target_id, display_order, normal_unit_price_snapshot FROM valuation.comparison_targets WHERE comparison_analysis_id = %s ORDER BY display_order",
         (analysis_id,),
     )
     assert admin_cursor.fetchall() == [(target_id, index, 100) for index, target_id in enumerate(target_ids, 1)]
+    admin_cursor.execute(
+        "DELETE FROM valuation.comparison_targets WHERE comparison_analysis_id = %s",
+        (analysis_id,),
+    )
+    admin_cursor.execute(
+        "DELETE FROM valuation.comparison_analyses WHERE comparison_analysis_id = %s",
+        (analysis_id,),
+    )
+    admin_cursor.execute(
+        "DELETE FROM valuation.transaction_cases WHERE case_id = %s",
+        (case_id,),
+    )
+    admin_cursor.execute(
+        "DELETE FROM valuation.benchmark_lands WHERE benchmark_land_id = %s",
+        (benchmark_land_id,),
+    )
+    admin_cursor.execute(
+        "DELETE FROM valuation.parcels WHERE parcel_id = %s", (parcel_id,)
+    )
+    admin_cursor.execute("DELETE FROM valuation.cases WHERE case_id = %s", (case_id,))
+    admin_cursor.execute(
+        "DELETE FROM auth.users WHERE user_id = %s", (user_id,)
+    )
+    admin_cursor.connection.commit()
 
 
-def test_downgrade_blocks_f02_rf_validation_rule_before_schema_drop(admin_cursor):
+def test_downgrade_blocks_f02_rf_validation_rule_before_schema_drop(
+    admin_cursor, migration_roundtrip
+):
     rule_id = uuid4()
-    admin_cursor.execute("SET session_replication_role = replica")
+    rule_version_id = uuid4()
+    admin_cursor.execute(
+        """
+        INSERT INTO valuation.rule_versions (
+            rule_version_id, rule_set_code, version_no, version_name,
+            effective_from, status
+        ) VALUES (%s, %s, 1, 'Migration test', CURRENT_DATE, 'DRAFT')
+        """,
+        (rule_version_id, f"MIG-0010-{uuid4().hex[:12]}"),
+    )
     admin_cursor.execute(
         "INSERT INTO valuation.validation_rules (validation_rule_id, rule_version_id, rule_code, rule_name, target_form_code, target_table, severity, rule_expression, message_template, is_active) VALUES (%s, %s, %s, 'rule', 'F02-RF', 'forms', 'HIGH', 'true', 'blocked', true)",
-        (rule_id, uuid4(), f"MIG-{uuid4().hex[:12]}"),
+        (rule_id, rule_version_id, f"MIG-{uuid4().hex[:12]}"),
     )
-    admin_cursor.execute("SET session_replication_role = origin")
     admin_cursor.connection.commit()
-    result = _run_alembic("downgrade", "20260901_0009", expect_success=False)
+    result = migration_roundtrip(
+        "downgrade", "20260901_0009", expect_success=False
+    )
     assert "cannot downgrade while complete-report workflow references exist" in (result.stdout + result.stderr)
     assert "form_content" in column_names(admin_cursor, "form_instances", "valuation")
     admin_cursor.execute("DELETE FROM valuation.validation_rules WHERE validation_rule_id = %s", (rule_id,))
+    admin_cursor.execute(
+        "DELETE FROM valuation.rule_versions WHERE rule_version_id = %s",
+        (rule_version_id,),
+    )
     admin_cursor.connection.commit()

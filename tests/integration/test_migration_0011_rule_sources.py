@@ -1,6 +1,3 @@
-import os
-import subprocess
-import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,22 +14,6 @@ MIGRATION_PATH = (
     / "versions"
     / "20260901_0011_valuation_rule_pack_sources.py"
 )
-
-
-def _run_alembic(command: str, revision: str, *, expect_success: bool = True):
-    env = os.environ.copy()
-    if env.get("MIGRATION_DATABASE_URL"):
-        env["DATABASE_URL"] = env["MIGRATION_DATABASE_URL"]
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", command, revision],
-        cwd=PROJECT_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert (result.returncode == 0) is expect_success, result.stdout + result.stderr
-    return result
 
 
 def _constraint_definition(cursor, schema: str, table: str, name: str) -> str:
@@ -245,18 +226,20 @@ def test_rule_source_constraints_reject_invalid_json_and_duplicate_primary(admin
     finally:
         admin_cursor.execute("RELEASE SAVEPOINT invalid_verification_pair")
 
-    admin_cursor.execute("SET session_replication_role = replica")
+    primary_document_id = _create_knowledge_document(admin_cursor)
+    secondary_document_id = _create_knowledge_document(admin_cursor)
+    tertiary_document_id = _create_knowledge_document(admin_cursor)
+    admin_cursor.execute(
+        """
+        INSERT INTO valuation.rule_version_sources (
+            rule_version_source_id, rule_version_id, source_document_id,
+            source_role, source_order, is_primary
+        ) VALUES (%s, %s, %s, 'PRIMARY', 1, true)
+        """,
+        (uuid4(), rule_version_id, primary_document_id),
+    )
+    admin_cursor.execute("SAVEPOINT duplicate_primary")
     try:
-        admin_cursor.execute(
-            """
-            INSERT INTO valuation.rule_version_sources (
-                rule_version_source_id, rule_version_id, source_document_id,
-                source_role, source_order, is_primary
-            ) VALUES (%s, %s, %s, 'PRIMARY', 1, true)
-            """,
-            (uuid4(), rule_version_id, uuid4()),
-        )
-        admin_cursor.execute("SAVEPOINT duplicate_primary")
         with pytest.raises(Exception):
             admin_cursor.execute(
                 """
@@ -265,11 +248,14 @@ def test_rule_source_constraints_reject_invalid_json_and_duplicate_primary(admin
                     source_role, source_order, is_primary
                 ) VALUES (%s, %s, %s, 'LEGAL_BASIS', 2, true)
                 """,
-                (uuid4(), rule_version_id, uuid4()),
+                (uuid4(), rule_version_id, secondary_document_id),
             )
+    finally:
         admin_cursor.execute("ROLLBACK TO SAVEPOINT duplicate_primary")
         admin_cursor.execute("RELEASE SAVEPOINT duplicate_primary")
-        admin_cursor.execute("SAVEPOINT duplicate_source_order")
+
+    admin_cursor.execute("SAVEPOINT duplicate_source_order")
+    try:
         with pytest.raises(Exception):
             admin_cursor.execute(
                 """
@@ -278,12 +264,11 @@ def test_rule_source_constraints_reject_invalid_json_and_duplicate_primary(admin
                     source_role, source_order, is_primary
                 ) VALUES (%s, %s, %s, 'LEGAL_BASIS', 1, false)
                 """,
-                (uuid4(), rule_version_id, uuid4()),
+                (uuid4(), rule_version_id, tertiary_document_id),
             )
+    finally:
         admin_cursor.execute("ROLLBACK TO SAVEPOINT duplicate_source_order")
         admin_cursor.execute("RELEASE SAVEPOINT duplicate_source_order")
-    finally:
-        admin_cursor.execute("SET session_replication_role = origin")
 
 
 @pytest.mark.parametrize(
@@ -297,7 +282,7 @@ def test_rule_source_constraints_reject_invalid_json_and_duplicate_primary(admin
     ],
 )
 def test_downgrade_refuses_each_0011_data_shape_then_succeeds_after_cleanup(
-    admin_cursor, fixture_kind: str
+    admin_cursor, migration_roundtrip, fixture_kind: str
 ):
     rule_version_id = None
     document_id = None
@@ -345,7 +330,9 @@ def test_downgrade_refuses_each_0011_data_shape_then_succeeds_after_cleanup(
         raise AssertionError(f"unhandled fixture kind: {fixture_kind}")
 
     admin_cursor.connection.commit()
-    result = _run_alembic("downgrade", "20260901_0010", expect_success=False)
+    result = migration_roundtrip(
+        "downgrade", "20260901_0010", expect_success=False
+    )
     assert "cannot downgrade while rule-source migration data exists" in (
         result.stdout + result.stderr
     ).lower()
@@ -367,8 +354,8 @@ def test_downgrade_refuses_each_0011_data_shape_then_succeeds_after_cleanup(
             (document_id,),
         )
     admin_cursor.connection.commit()
-    _run_alembic("downgrade", "20260901_0010")
-    _run_alembic("upgrade", "head")
+    migration_roundtrip("downgrade", "20260901_0010")
+    migration_roundtrip("upgrade", "head")
 
 
 def test_migration_is_schema_only_without_fixed_business_data():

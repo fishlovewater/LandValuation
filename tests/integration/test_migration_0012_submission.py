@@ -2,7 +2,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from uuid import uuid4
 
@@ -29,20 +28,53 @@ PRIMARY_ROLE_INIT_SQL_PATH = (
 )
 
 
-def _run_alembic(command: str, revision: str, *, expect_success: bool = True):
-    env = os.environ.copy()
-    if env.get("MIGRATION_DATABASE_URL"):
-        env["DATABASE_URL"] = env["MIGRATION_DATABASE_URL"]
-    result = subprocess.run(
-        [sys.executable, "-m", "alembic", command, revision],
-        cwd=PROJECT_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert (result.returncode == 0) is expect_success, result.stdout + result.stderr
-    return result
+class TestMigrationRoundtripIsolation:
+    def test_01_downgrade_can_exit_before_reupgrade(self, migration_roundtrip):
+        migration_roundtrip("downgrade", "20260901_0009")
+        return
+
+    def test_02_successor_starts_at_alembic_head(self, admin_cursor):
+        admin_cursor.execute("SELECT version_num FROM alembic_version")
+        assert admin_cursor.fetchone() == ("20260903_0013",)
+
+        required_columns = {
+            ("valuation", "valuations"): {"request_id"},
+            ("valuation", "validation_runs"): {"request_id", "submission_id"},
+            ("valuation", "validation_findings"): {"request_id"},
+            ("history", "case_events"): {"request_id"},
+            ("valuation", "form_instances"): {"form_content"},
+            ("valuation", "comparison_targets"): {"display_order"},
+            ("valuation", "comparison_factor_values"): {
+                "benchmark_factor_level_id",
+                "comparable_factor_level_id",
+            },
+            ("valuation", "comparison_analyses"): {
+                "rule_version_id",
+                "calculation_snapshot",
+                "calculated_by_user_id",
+                "calculated_at",
+            },
+            ("valuation", "benchmark_lands"): {"latitude", "longitude"},
+            ("knowledge", "documents"): {"storage_etag"},
+            ("valuation", "rule_versions"): {
+                "jurisdiction_code",
+                "district_scope",
+                "land_use_types",
+                "formula_code",
+                "rounding_code",
+                "import_status",
+                "import_summary",
+                "verified_by_user_id",
+                "verified_at",
+                "effective_date_status",
+            },
+            ("review", "reviews"): {"latest_submission_id"},
+        }
+        for (schema, table), columns in required_columns.items():
+            assert columns <= set(column_names(admin_cursor, table, schema))
+
+        assert table_exists(admin_cursor, "rule_version_sources", "valuation")
+        assert table_exists(admin_cursor, "review_submissions", "valuation")
 
 
 def _constraint_definition(cursor, schema: str, table: str, name: str) -> str:
@@ -342,7 +374,7 @@ def test_composite_supersedes_fk_rejects_submission_from_another_review(admin_cu
 
 
 def test_migration_owner_is_nonmember_and_can_run_migrations(
-    admin_cursor, db_cursor
+    admin_cursor, db_cursor, migration_roundtrip
 ):
     admin_cursor.execute(
         "SELECT current_user, "
@@ -361,7 +393,7 @@ def test_migration_owner_is_nonmember_and_can_run_migrations(
     assert migration_is_app_member is False
     assert migration_is_superuser is False
     assert runtime_is_app_member is True
-    _run_alembic("upgrade", "head")
+    migration_roundtrip("upgrade", "head")
 
 
 def test_integration_harness_separates_bootstrap_migration_and_runtime_roles():
@@ -499,7 +531,9 @@ def test_runtime_role_cannot_mutate_review_submissions(
     admin_cursor.connection.commit()
 
 
-def test_downgrade_refuses_submission_then_succeeds_after_owner_cleanup(admin_cursor):
+def test_downgrade_refuses_submission_then_succeeds_after_owner_cleanup(
+    admin_cursor, migration_roundtrip
+):
     # The submission integration test intentionally uses a committed runtime
     # session, so clean its row with the migration-owner connection before
     # exercising this test's own downgrade guard.
@@ -521,7 +555,9 @@ def test_downgrade_refuses_submission_then_succeeds_after_owner_cleanup(admin_cu
     ids = _seed_submission_graph(admin_cursor)
     admin_cursor.connection.commit()
 
-    result = _run_alembic("downgrade", "20260901_0011", expect_success=False)
+    result = migration_roundtrip(
+        "downgrade", "20260901_0011", expect_success=False
+    )
     assert "cannot downgrade while review submissions exist" in (
         result.stdout + result.stderr
     ).lower()
@@ -532,8 +568,8 @@ def test_downgrade_refuses_submission_then_succeeds_after_owner_cleanup(admin_cu
         (ids["submission_id"],),
     )
     admin_cursor.connection.commit()
-    _run_alembic("downgrade", "20260901_0011")
-    _run_alembic("upgrade", "head")
+    migration_roundtrip("downgrade", "20260901_0011")
+    migration_roundtrip("upgrade", "head")
 
 
 def test_downgrade_locks_submission_dependencies_before_guard_queries():

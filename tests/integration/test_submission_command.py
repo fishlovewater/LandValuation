@@ -1,7 +1,5 @@
 import asyncio
 import os
-import subprocess
-import sys
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -11,20 +9,6 @@ from sqlalchemy.engine import make_url
 from app.db.session import AsyncSessionFactory
 from app.valuation.submissions.schemas import SubmitForReviewCommand
 from app.valuation.submissions.service import SubmissionService
-
-
-def _alembic_downgrade(revision: str) -> None:
-    previous_database_url = os.environ["DATABASE_URL"]
-    os.environ["DATABASE_URL"] = os.environ["MIGRATION_DATABASE_URL"]
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "alembic", "downgrade", revision],
-            capture_output=True,
-            text=True,
-        )
-    finally:
-        os.environ["DATABASE_URL"] = previous_database_url
-    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_submit_review_permission_is_seeded_only_for_appraiser(admin_cursor) -> None:
@@ -89,11 +73,13 @@ def test_submit_runtime_acl_is_limited_to_the_submit_transaction(admin_cursor) -
     assert admin_cursor.fetchone() == (True,)
 
 
-def test_submit_permission_migration_downgrades_and_reupgrades(alembic_to, admin_cursor) -> None:
+def test_submit_permission_migration_downgrades_and_reupgrades(
+    migration_roundtrip, admin_cursor
+) -> None:
     runtime_role = make_url(os.environ["DATABASE_URL"]).username
     assert runtime_role is not None
 
-    _alembic_downgrade("20260901_0012")
+    migration_roundtrip("downgrade", "20260901_0012")
     admin_cursor.execute(
         "SELECT count(*) FROM auth.permissions WHERE permission_code = 'valuation.submit_review'"
     )
@@ -105,7 +91,7 @@ def test_submit_permission_migration_downgrades_and_reupgrades(alembic_to, admin
     assert admin_cursor.fetchone() == (False,)
     admin_cursor.connection.commit()
 
-    alembic_to("head")
+    migration_roundtrip("upgrade", "head")
     admin_cursor.execute(
         """
         SELECT count(*)

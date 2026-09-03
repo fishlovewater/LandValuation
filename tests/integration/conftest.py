@@ -50,25 +50,28 @@ def admin_cursor():
 
 
 @pytest.fixture
-def alembic_to():
+def migration_roundtrip():
     migration_database_url = _database_url("MIGRATION_DATABASE_URL")
-    _assert_separate_database_users()
 
-    def migrate(revision: str, *, expect_success: bool = True):
-        previous_database_url = os.environ.get("DATABASE_URL")
-        os.environ["DATABASE_URL"] = migration_database_url
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "alembic", "upgrade", revision],
-                capture_output=True,
-                text=True,
-            )
-            assert (result.returncode == 0) is expect_success, result.stdout + result.stderr
-            return result
-        finally:
-            if previous_database_url is None:
-                os.environ.pop("DATABASE_URL", None)
-            else:
-                os.environ["DATABASE_URL"] = previous_database_url
+    def run(command: str, revision: str, *, expect_success: bool = True):
+        env = {**os.environ, "DATABASE_URL": migration_database_url}
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", command, revision],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert (result.returncode == 0) is expect_success, result.stdout + result.stderr
+        return result
 
-    return migrate
+    try:
+        yield run
+    finally:
+        env = {**os.environ, "DATABASE_URL": migration_database_url}
+        subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
