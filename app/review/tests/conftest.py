@@ -3,24 +3,12 @@ from unittest.mock import patch
 
 import psycopg
 import pytest
-from sqlalchemy.engine import make_url
 
 
 @pytest.fixture(scope="session", autouse=True)
 def review_integration_prerequisites():
     """Prepare only the cross-schema access needed by Review API tests."""
-    migration_url = os.environ.get("MIGRATION_DATABASE_URL")
-    if migration_url and os.environ.get("TEST_RUN_ID"):
-        connection_url = make_url(migration_url).set(
-            drivername="postgresql"
-        ).render_as_string(hide_password=False)
-        with psycopg.connect(connection_url) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    "GRANT USAGE ON SCHEMA auth, knowledge "
-                    "TO land_valuation_app"
-                )
-            connection.commit()
+    if os.environ.get("TEST_RUN_ID"):
         from app.storage.client import get_minio_client
 
         client = get_minio_client()

@@ -19,6 +19,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # The submit command resolves qualified workflow tables as the runtime
     # role. Keep access limited to the reads/writes in this transaction.
+    op.execute("GRANT USAGE ON SCHEMA auth, knowledge TO land_valuation_app")
     op.execute("GRANT USAGE ON SCHEMA review, history TO land_valuation_app")
     op.execute("REVOKE DELETE ON review.reviews FROM land_valuation_app")
     op.execute(
@@ -85,6 +86,7 @@ def downgrade() -> None:
         "GRANT SELECT, INSERT, UPDATE, DELETE ON review.reviews, "
         "history.case_events, valuation.review_submissions TO land_valuation_app"
     )
+    op.execute("REVOKE USAGE ON SCHEMA auth, knowledge FROM land_valuation_app")
     op.execute("REVOKE USAGE ON SCHEMA review, history FROM land_valuation_app")
     op.execute(
         """

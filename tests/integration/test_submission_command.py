@@ -7,6 +7,11 @@ import pytest
 from sqlalchemy.engine import make_url
 
 from app.db.session import AsyncSessionFactory
+from app.core.exceptions import AppError
+from app.review.correction_repository import CorrectionRepository
+from app.review.correction_service import CorrectionService
+from app.review.repository import ReviewRepository
+from app.valuation.submissions.repository import SubmissionRepository
 from app.valuation.submissions.schemas import SubmitForReviewCommand
 from app.valuation.submissions.service import SubmissionService
 
@@ -73,6 +78,32 @@ def test_submit_runtime_acl_is_limited_to_the_submit_transaction(admin_cursor) -
     assert admin_cursor.fetchone() == (True,)
 
 
+def test_review_runtime_acl_can_read_cross_schema_inputs(admin_cursor) -> None:
+    runtime_role = make_url(os.environ["DATABASE_URL"]).username
+    assert runtime_role is not None
+    admin_cursor.execute(
+        """
+        SELECT
+            has_schema_privilege(%s, 'auth', 'USAGE'),
+            has_schema_privilege(%s, 'knowledge', 'USAGE'),
+            has_table_privilege(%s, 'auth.users', 'SELECT'),
+            has_table_privilege(%s, 'knowledge.documents', 'SELECT')
+        """,
+        (runtime_role,) * 4,
+    )
+    assert admin_cursor.fetchone() == (True, True, True, True)
+
+    admin_cursor.execute(
+        """
+        SELECT
+            has_table_privilege(%s, 'auth.users', 'DELETE'),
+            has_table_privilege(%s, 'knowledge.documents', 'DELETE')
+        """,
+        (runtime_role,) * 2,
+    )
+    assert admin_cursor.fetchone() == (False, False)
+
+
 def test_submit_permission_migration_downgrades_and_reupgrades(
     migration_roundtrip, admin_cursor
 ) -> None:
@@ -89,6 +120,15 @@ def test_submit_permission_migration_downgrades_and_reupgrades(
         (runtime_role,),
     )
     assert admin_cursor.fetchone() == (False,)
+    admin_cursor.execute(
+        """
+        SELECT
+            has_schema_privilege(%s, 'auth', 'USAGE'),
+            has_schema_privilege(%s, 'knowledge', 'USAGE')
+        """,
+        (runtime_role,) * 2,
+    )
+    assert admin_cursor.fetchone() == (False, False)
     admin_cursor.connection.commit()
 
     migration_roundtrip("upgrade", "head")
@@ -236,6 +276,236 @@ def _seed_submittable_case(
             source_report_document_id=document_id,
         ),
     )
+
+
+def _seed_review_race_case(
+    admin_cursor, *, with_correction: bool
+) -> tuple[UUID, UUID, SimpleNamespace, SubmitForReviewCommand, UUID | None]:
+    case_id, actor, command_value = _seed_submittable_case(admin_cursor)
+    review_id = uuid4()
+    admin_cursor.execute(
+        """
+        INSERT INTO review.reviews
+            (review_id, case_id, review_type, review_status,
+             latest_validation_run_id)
+        VALUES (%s, %s, 'SMART_REVIEW', 'REVIEW_REQUIRED', %s)
+        """,
+        (review_id, case_id, command_value.source_validation_run_id),
+    )
+    admin_cursor.execute(
+        """
+        UPDATE valuation.validation_runs
+        SET review_id = %s
+        WHERE validation_run_id = %s
+        """,
+        (review_id, command_value.source_validation_run_id),
+    )
+    request_id = None
+    if with_correction:
+        finding_id = uuid4()
+        admin_cursor.execute(
+            """
+            INSERT INTO review.findings
+                (finding_id, review_id, finding_code, finding_type, severity,
+                 title, description, status, validation_run_id,
+                 document_id, document_version, page_number)
+            VALUES (%s, %s, 'RACE:CONFIRMED', 'RATE_OUT_OF_RANGE', 'HIGH',
+                    '需修正', '並行鎖定測試', 'CONFIRMED_ISSUE', %s,
+                    %s, 1, 1)
+            """,
+            (
+                finding_id,
+                review_id,
+                command_value.source_validation_run_id,
+                command_value.source_report_document_id,
+            ),
+        )
+        request_id = uuid4()
+        admin_cursor.execute(
+            """
+            INSERT INTO review.correction_requests
+                (correction_request_id, review_id, request_no,
+                 based_on_validation_run_id, status, due_at, message,
+                 base_document_id, base_document_version, created_by_user_id)
+            VALUES (%s, %s, 1, %s, 'DRAFT', now() + interval '5 days',
+                    '並行鎖定測試', %s, 1, %s)
+            """,
+            (
+                request_id,
+                review_id,
+                command_value.source_validation_run_id,
+                command_value.source_report_document_id,
+                actor.user_id,
+            ),
+        )
+    admin_cursor.connection.commit()
+    return case_id, review_id, actor, command_value, request_id
+
+
+class _SubmitLockProbeRepository(SubmissionRepository):
+    def __init__(self, session, case_locked, correction_next_lock):
+        super().__init__(session)
+        self.case_locked = case_locked
+        self.correction_next_lock = correction_next_lock
+
+    async def lock_case(self, case_id):
+        case = await super().lock_case(case_id)
+        self.case_locked.set()
+        await self.correction_next_lock.wait()
+        return case
+
+
+class _CorrectionLockProbeRepository(ReviewRepository):
+    def __init__(self, session, correction_next_lock):
+        super().__init__(session)
+        self.correction_next_lock = correction_next_lock
+
+    async def get(self, review_id, for_update=False):
+        review = await super().get(review_id, for_update=for_update)
+        if for_update:
+            self.correction_next_lock.set()
+        return review
+
+    async def get_case(self, case_id, for_update=False):
+        if for_update:
+            # Signal before the FOR UPDATE query.  With a case-first lock
+            # order the submission can proceed while this session waits on
+            # the case; the old Review-first order deadlocks deterministically.
+            self.correction_next_lock.set()
+        return await super().get_case(case_id, for_update=for_update)
+
+
+async def _run_submission_with_probe(
+    case_id, command_value, actor, case_locked, correction_next_lock
+):
+    async with AsyncSessionFactory() as session:
+        repository = _SubmitLockProbeRepository(
+            session, case_locked, correction_next_lock
+        )
+        try:
+            result = await SubmissionService(
+                session, repository=repository
+            ).submit(case_id, command_value, actor)
+            await session.commit()
+            return result
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def _run_correction_with_probe(
+    review_id,
+    request_id,
+    actor_id,
+    *,
+    complete: bool,
+    correction_next_lock,
+):
+    async with AsyncSessionFactory() as session:
+        repository = _CorrectionLockProbeRepository(session, correction_next_lock)
+        corrections = CorrectionService(
+            repository,
+            CorrectionRepository(session),
+        )
+        try:
+            if complete:
+                result = await corrections.complete_review(
+                    review_id, "並行完成測試", actor_id, uuid4()
+                )
+            else:
+                result = await corrections.send(request_id, actor_id, uuid4())
+            await session.commit()
+            return result
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def _run_lock_order_race(
+    admin_cursor, *, complete: bool
+) -> tuple[UUID, UUID, list[object]]:
+    case_id, review_id, actor, command_value, request_id = _seed_review_race_case(
+        admin_cursor, with_correction=not complete
+    )
+    case_locked = asyncio.Event()
+    correction_next_lock = asyncio.Event()
+    submit_task = asyncio.create_task(
+        _run_submission_with_probe(
+            case_id,
+            command_value,
+            actor,
+            case_locked,
+            correction_next_lock,
+        )
+    )
+    await asyncio.wait_for(case_locked.wait(), timeout=5)
+    correction_task = asyncio.create_task(
+        _run_correction_with_probe(
+            review_id,
+            request_id,
+            actor.user_id,
+            complete=complete,
+            correction_next_lock=correction_next_lock,
+        )
+    )
+    try:
+        outcomes = await asyncio.wait_for(
+            asyncio.gather(submit_task, correction_task, return_exceptions=True),
+            timeout=10,
+        )
+    except asyncio.TimeoutError as exc:
+        for task in (submit_task, correction_task):
+            task.cancel()
+        await asyncio.gather(submit_task, correction_task, return_exceptions=True)
+        raise AssertionError("submission/correction lock-order race deadlocked") from exc
+    return case_id, review_id, outcomes
+
+
+@pytest.mark.asyncio
+async def test_real_sessions_submit_vs_send_have_no_deadlock(admin_cursor) -> None:
+    case_id, review_id, outcomes = await _run_lock_order_race(
+        admin_cursor, complete=False
+    )
+
+    assert not isinstance(outcomes[0], Exception)
+    assert isinstance(outcomes[1], AppError)
+    assert outcomes[1].code == "REVIEW_STATE_CONFLICT"
+    admin_cursor.execute(
+        """
+        SELECT r.review_status, c.case_status,
+               (SELECT count(*) FROM valuation.review_submissions s
+                WHERE s.case_id = c.case_id)
+        FROM review.reviews r
+        JOIN valuation.cases c ON c.case_id = r.case_id
+        WHERE r.review_id = %s AND c.case_id = %s
+        """,
+        (review_id, case_id),
+    )
+    assert admin_cursor.fetchone() == ("RECEIVED", "IN_REVIEW", 1)
+
+
+@pytest.mark.asyncio
+async def test_real_sessions_submit_vs_complete_have_no_deadlock(admin_cursor) -> None:
+    case_id, review_id, outcomes = await _run_lock_order_race(
+        admin_cursor, complete=True
+    )
+
+    assert not isinstance(outcomes[0], Exception)
+    assert not isinstance(outcomes[1], Exception)
+    admin_cursor.execute(
+        """
+        SELECT r.review_status, c.case_status,
+               (SELECT count(*) FROM valuation.review_submissions s
+                WHERE s.case_id = c.case_id),
+               (SELECT count(*) FROM review.decisions d
+                WHERE d.review_id = r.review_id AND d.decision = 'APPROVED')
+        FROM review.reviews r
+        JOIN valuation.cases c ON c.case_id = r.case_id
+        WHERE r.review_id = %s AND c.case_id = %s
+        """,
+        (review_id, case_id),
+    )
+    assert admin_cursor.fetchone() == ("REVIEW_COMPLETED", "REVIEW_COMPLETED", 1, 1)
 
 
 @pytest.mark.asyncio

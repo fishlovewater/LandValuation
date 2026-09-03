@@ -40,7 +40,12 @@ class ReviewRepository:
     async def get(self, review_id: UUID, for_update: bool = False) -> Review | None:
         statement = select(Review).where(Review.review_id == review_id)
         if for_update:
-            statement = statement.with_for_update()
+            # A caller may have read the row without a lock to discover its
+            # case_id.  Populate the identity-map instance again while taking
+            # the lock so state checks use the current database row.
+            statement = statement.with_for_update().execution_options(
+                populate_existing=True
+            )
         return await self.session.scalar(statement)
 
     async def get_case(

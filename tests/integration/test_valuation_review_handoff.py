@@ -329,13 +329,6 @@ def handoff_data(admin_cursor) -> _HandoffData:
         index=2,
     )
 
-    # The canonical Review queries join auth.users and resolve published rule
-    # sources in knowledge.documents. Those schemas are intentionally not
-    # exposed by the submission-only ACL migration, so grant this ephemeral
-    # acceptance fixture the read boundary needed by the reviewer flow.
-    admin_cursor.execute(
-        "GRANT USAGE ON SCHEMA auth, knowledge TO land_valuation_app"
-    )
     admin_cursor.connection.commit()
     data = _HandoffData(
         cases=(first, second),
@@ -454,9 +447,6 @@ def handoff_data(admin_cursor) -> _HandoffData:
         admin_cursor.execute(
             "DELETE FROM auth.users WHERE user_id = ANY(%s)",
             (list(data.user_ids),),
-        )
-        admin_cursor.execute(
-            "REVOKE USAGE ON SCHEMA auth, knowledge FROM land_valuation_app"
         )
         admin_cursor.connection.commit()
 

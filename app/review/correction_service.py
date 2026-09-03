@@ -95,17 +95,31 @@ class CorrectionService:
         return request
 
     async def send(self, request_id, actor_id, audit_request_id):
-        request = await self.corrections.get_request(request_id, for_update=True)
-        if request is None:
+        request_probe = await self.corrections.get_request(request_id)
+        if request_probe is None:
             raise ResourceNotFoundError("修正通知")
-        review = await self.review_repository.get(request.review_id, for_update=True)
-        if review is None:
+        review_probe = await self.review_repository.get(request_probe.review_id)
+        if review_probe is None:
             raise ResourceNotFoundError("審查案件")
         case = await self.review_repository.get_case(
-            review.case_id, for_update=True
+            review_probe.case_id, for_update=True
         )
         if case is None:
             raise ResourceNotFoundError("估價案件")
+        review = await self.review_repository.get(
+            request_probe.review_id, for_update=True
+        )
+        if review is None:
+            raise ResourceNotFoundError("審查案件")
+        request = await self.corrections.get_request(request_id, for_update=True)
+        if request is None:
+            raise ResourceNotFoundError("修正通知")
+        if review.case_id != case.case_id or request.review_id != review.review_id:
+            raise AppError(
+                "CORRECTION_REQUEST_OWNERSHIP_CONFLICT",
+                "修正通知與審查案件關聯已變更",
+                409,
+            )
         if request.status != "DRAFT":
             raise AppError("CORRECTION_REQUEST_STATE_CONFLICT", "只有草稿可送出", 409)
         if request.based_on_validation_run_id != review.latest_validation_run_id:
@@ -288,16 +302,25 @@ class CorrectionService:
         )
 
     async def complete_review(self, review_id, reason, actor_id, audit_request_id):
-        review = await self.review_repository.get(review_id, for_update=True)
-        if review is None:
+        review_probe = await self.review_repository.get(review_id)
+        if review_probe is None:
             raise ResourceNotFoundError("審查案件")
-        summary = await self._completion_summary(review)
-        validate_review_completion(reason, summary)
         case = await self.review_repository.get_case(
-            review.case_id, for_update=True
+            review_probe.case_id, for_update=True
         )
         if case is None:
             raise ResourceNotFoundError("估價案件")
+        review = await self.review_repository.get(review_id, for_update=True)
+        if review is None:
+            raise ResourceNotFoundError("審查案件")
+        if review.case_id != case.case_id:
+            raise AppError(
+                "REVIEW_CASE_OWNERSHIP_CONFLICT",
+                "審查案件與估價案件關聯已變更",
+                409,
+            )
+        summary = await self._completion_summary(review)
+        validate_review_completion(reason, summary)
         before_status = review.review_status
         decision = await self.review_repository.create_decision(
             review_id=review.review_id,
