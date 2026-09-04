@@ -172,6 +172,25 @@ def trusted_repository_data(postgres_connection):
                     ids.form_instance_id,
                 ),
             )
+        cursor.execute(
+            """
+            INSERT INTO valuation.extracted_fields (
+                extracted_field_id, case_id, extraction_id, document_id,
+                form_code, field_name, extracted_value, confidence,
+                source_page, source_text, field_status,
+                confirmed_value, confirmed_by_user_id, confirmed_at,
+                applied_form_instance_id, applied_at
+            ) VALUES (%s, %s, %s, %s, 'F01', 'pending_field',
+                      '"candidate"'::jsonb, 0.7500, 1, '待確認欄位',
+                      'NEEDS_CONFIRMATION', NULL, NULL, NULL, NULL, NULL)
+            """,
+            (
+                uuid4(),
+                ids.case_id,
+                ids.extraction_v2_id,
+                ids.original_v2_id,
+            ),
+        )
         for document_id, document_code, filename, checksum, extraction_status, publication_status in (
             (
                 ids.source_document_id,
