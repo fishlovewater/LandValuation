@@ -86,3 +86,45 @@ async def test_formal_validation_locks_case_before_reading_writable_records():
         await service.validate(uuid4(), uuid4(), SimpleNamespace(), None)
 
     assert calls == [True]
+
+
+@pytest.mark.asyncio
+async def test_formal_validation_rechecks_request_after_case_lock():
+    calls = []
+    case_id = uuid4()
+    report_id = uuid4()
+    request_id = uuid4()
+    existing = SimpleNamespace(
+        validation_run_id=uuid4(),
+        case_id=case_id,
+        passed_count=12,
+        warning_count=0,
+        failed_count=0,
+        completed_at=datetime.now(UTC),
+        ruleset_snapshot={},
+    )
+
+    class _Repository:
+        def __init__(self):
+            self.lookup_count = 0
+
+        async def validation_for_request(self, case, report, request):
+            calls.append("request_lookup")
+            self.lookup_count += 1
+            return None if self.lookup_count == 1 else existing
+
+    class _Pages:
+        async def _read_records(self, case, report, user, *, for_update=False):
+            calls.append(("case_lock", for_update))
+            return SimpleNamespace(), {}
+
+    repository = _Repository()
+    service = FormalReportService(None, pages=_Pages(), repository=repository)
+    response = await service.validate(case_id, report_id, SimpleNamespace(), request_id)
+
+    assert response.validation_run_id == existing.validation_run_id
+    assert calls == [
+        "request_lookup",
+        ("case_lock", True),
+        "request_lookup",
+    ]

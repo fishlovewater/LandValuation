@@ -215,6 +215,29 @@ class CorrectionService:
         if review is None:
             raise ResourceNotFoundError("審查案件")
 
+        # Registering a response document does not create the immutable
+        # Valuation submission that Review must execute.  For submitted
+        # Reviews, refuse to rerun the same snapshot; the Valuation submit
+        # flow must first create a newer Submission and update this pointer.
+        previous_run = await self.review_repository.get_run(
+            request.based_on_validation_run_id
+        )
+        previous_submission_id = (
+            None
+            if previous_run is None
+            else getattr(previous_run, "submission_id", None)
+        )
+        latest_submission_id = getattr(review, "latest_submission_id", None)
+        if previous_submission_id is not None and (
+            latest_submission_id is None
+            or latest_submission_id == previous_submission_id
+        ):
+            raise AppError(
+                "REVIEW_RESUBMISSION_REQUIRED",
+                "回件後必須先由估價流程建立較新的送審版本",
+                409,
+            )
+
         request.status = "RECHECKING"
         await self.corrections.session.flush()
 

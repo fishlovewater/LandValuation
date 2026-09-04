@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.exceptions import AppError
 from app.review.correction_service import CorrectionService
 
 
@@ -156,13 +157,43 @@ async def test_complete_review_rejects_a_run_from_an_older_submission():
     run.submission_id = uuid4()
     repository = _ReviewRepository(calls, review, case, run)
 
-    with pytest.raises(Exception) as raised:
+    with pytest.raises(AppError) as raised:
         await CorrectionService(repository, _CorrectionRepository(calls)).complete_review(
             review.review_id, "確認無誤", uuid4(), uuid4()
         )
 
     assert getattr(raised.value, "code", None) == "REVIEW_SUBMISSION_STALE"
     assert review.review_status == "REVIEW_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_recheck_requires_a_newer_valuation_submission():
+    calls = []
+    review, case, run, _ = _records(review_status="RETURNED_FOR_REVISION")
+    previous_submission_id = uuid4()
+    review.latest_submission_id = previous_submission_id
+    run.submission_id = previous_submission_id
+    request = SimpleNamespace(
+        correction_request_id=uuid4(),
+        review_id=review.review_id,
+        based_on_validation_run_id=run.validation_run_id,
+        status="RESUBMITTED",
+        response_document_id=uuid4(),
+        response_document_version=2,
+    )
+    repository = _ReviewRepository(calls, review, case, run)
+    corrections = _CorrectionRepository(calls, request)
+
+    with pytest.raises(AppError) as raised:
+        await CorrectionService(
+            repository,
+            corrections,
+            review_service=SimpleNamespace(),
+        ).recheck(request.correction_request_id, uuid4())
+
+    assert getattr(raised.value, "code", None) == "REVIEW_RESUBMISSION_REQUIRED"
+    assert getattr(raised.value, "status_code", None) == 409
+    assert request.status == "RESUBMITTED"
 
 
 @pytest.mark.asyncio

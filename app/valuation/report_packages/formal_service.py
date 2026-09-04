@@ -393,6 +393,12 @@ class FormalReportService:
         case, records = await self.pages._read_records(
             case_id, report_id, user, for_update=True
         )
+        if request_id is not None:
+            existing = await self.repository.validation_for_request(
+                case_id, report_id, request_id
+            )
+            if existing is not None:
+                return self._validation_response(existing, report_id)
         regional = self.pages._read_data(records["F02-RF"], F02RFDraftData)
         comparison = self.pages._read_data(records["F02"], F02DraftData)
         s01 = self.pages._read_data(records["S01"], S01DraftData)
