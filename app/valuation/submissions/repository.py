@@ -466,6 +466,8 @@ class SubmissionRepository:
             "schema_version": "valuation-review-execution-v1",
             "case": {
                 "case_id": case_id,
+                "case_no": case_context["case_no"],
+                "case_title": case_context["case_title"],
                 "case_type": case_context["case_type"],
                 "district_code": case_context["district_code"],
                 "valuation_base_date": case_context["valuation_base_date"],

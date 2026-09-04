@@ -98,6 +98,10 @@ class TrustedRunContext:
     prepared_rules: tuple["PreparedRule", ...]
     extraction_run: dict | None = None
     documents: dict[str, dict] = field(default_factory=dict)
+    # Submitted Reviews carry the immutable case projection needed to build a
+    # Run without consulting the mutable valuation case row.  Legacy Reviews
+    # leave this unset and continue using the explicit live-data fallback.
+    case: dict | None = None
 
 
 @dataclass(frozen=True)

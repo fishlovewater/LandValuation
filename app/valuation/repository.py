@@ -23,10 +23,17 @@ class ValuationRepository:
         await self.session.refresh(record)
         return record
 
-    async def get_case(self, case_id: UUID) -> CaseRecord | None:
-        return await self.session.scalar(
-            select(CaseRecord).where(CaseRecord.case_id == case_id)
-        )
+    async def get_case(
+        self, case_id: UUID, for_update: bool = False
+    ) -> CaseRecord | None:
+        statement = select(CaseRecord).where(CaseRecord.case_id == case_id)
+        if for_update:
+            # Refresh a previously loaded identity-map instance before using
+            # it for a state check or a write under the row lock.
+            statement = statement.with_for_update().execution_options(
+                populate_existing=True
+            )
+        return await self.session.scalar(statement)
 
     async def list_cases(
         self,

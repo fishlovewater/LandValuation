@@ -320,7 +320,8 @@ class ReviewRepository:
             await self.session.execute(
                 text(
                     """
-                    SELECT c.case_type, c.district_code, c.valuation_base_date,
+                    SELECT c.case_id, c.case_no, c.case_title,
+                           c.case_type, c.district_code, c.valuation_base_date,
                            coalesce(
                                array_agg(DISTINCT fi.form_code)
                                    FILTER (
@@ -332,7 +333,7 @@ class ReviewRepository:
                     FROM valuation.cases c
                     LEFT JOIN valuation.form_instances fi ON fi.case_id = c.case_id
                     WHERE c.case_id = :case_id
-                    GROUP BY c.case_id
+                    GROUP BY c.case_id, c.case_no, c.case_title
                     """
                 ),
                 {"case_id": case_id},

@@ -30,7 +30,9 @@ def runnable_review(request, postgres_connection):
         case_id=uuid4(),
         review_id=uuid4(),
         original_document_id=uuid4(),
+        document_group_id=uuid4(),
         source_document_id=uuid4(),
+        source_validation_run_id=uuid4(),
         rule_version_id=uuid4(),
         tied_rule_version_id=uuid4(),
         adjustment_rule_id=uuid4(),
@@ -77,25 +79,30 @@ def runnable_review(request, postgres_connection):
             INSERT INTO valuation.documents (
                 document_id, case_id, document_type, original_filename,
                 mime_type, bucket_name, object_key, checksum_sha256,
-                file_size_bytes, version_no, is_active
+                file_size_bytes, version_no, is_active, document_group_id
             ) VALUES (%s, %s, 'original', 'run-source.pdf',
                       'application/pdf', 'land-valuation', %s, %s,
-                      100, 1, true)
+                      100, 1, true, %s)
             """,
             (
                 ids.original_document_id,
                 ids.case_id,
                 f"cases/{ids.case_id}/run-source.pdf",
                 "e" * 64,
+                ids.document_group_id,
             ),
         )
         cursor.execute(
             """
             INSERT INTO valuation.form_instances (
-                form_instance_id, case_id, form_code, version_no, form_status
-            ) VALUES (%s, %s, 'F01', 1, 'READY')
+                form_instance_id, case_id, form_code, version_no, form_status,
+                form_content, output_document_id
+            ) VALUES (
+                %s, %s, 'F01', 1, 'FINAL',
+                '{"report_type": "REPORT_COMPARISON_COMMERCIAL"}'::jsonb, %s
+            )
             """,
-            (ids.form_instance_id, ids.case_id),
+            (ids.form_instance_id, ids.case_id, ids.original_document_id),
         )
         approved = source_publication_status == "PUBLISHED"
         cursor.execute(
@@ -369,7 +376,7 @@ def run_count(connection, review_id):
 
 def attach_submission_snapshot(connection, review, snapshot):
     submission_id = uuid4()
-    source_validation_run_id = uuid4()
+    source_validation_run_id = review.source_validation_run_id
     request_id = uuid4()
     fingerprint = snapshot_fingerprint(snapshot)
     with connection.cursor() as cursor:
@@ -377,11 +384,21 @@ def attach_submission_snapshot(connection, review, snapshot):
             """
             INSERT INTO valuation.validation_runs (
                 validation_run_id, case_id, review_id, run_status,
-                input_snapshot, ruleset_snapshot
-            ) VALUES (%s, %s, %s, 'COMPLETED', '{}'::jsonb,
-                      '{"fixture": true}'::jsonb)
+                form_instance_id, passed_count, warning_count, failed_count,
+                rule_version_id, completed_at, input_snapshot, ruleset_snapshot
+            ) VALUES (
+                %s, %s, %s, 'COMPLETED', %s, 2, 0, 0, %s, now(),
+                '{"case_version": 1}'::jsonb,
+                '{"fixture": true}'::jsonb
+            )
             """,
-            (source_validation_run_id, review.case_id, review.review_id),
+            (
+                source_validation_run_id,
+                review.case_id,
+                review.review_id,
+                review.form_instance_id,
+                review.rule_version_id,
+            ),
         )
         cursor.execute(
             """
@@ -414,6 +431,114 @@ def attach_submission_snapshot(connection, review, snapshot):
 
 
 def valid_submission_snapshot(review):
+    execution_context = {
+        "schema_version": "valuation-review-execution-v1",
+        "case": {
+            "case_id": str(review.case_id),
+            "case_no": f"RUN-{str(review.case_id)[:8]}",
+            "case_title": "Run API Case",
+            "case_type": "LAND",
+            "district_code": "F01",
+            "valuation_base_date": "2026-09-03",
+            "form_codes": ["F01"],
+        },
+        "source_validation_run": {
+            "validation_run_id": str(review.source_validation_run_id),
+            "case_id": str(review.case_id),
+            "form_instance_id": str(review.form_instance_id),
+            "run_status": "COMPLETED",
+            "passed_count": 2,
+            "warning_count": 0,
+            "failed_count": 0,
+            "rule_version_id": str(review.rule_version_id),
+            "input_snapshot": {"case_version": 1},
+            "ruleset_snapshot": {"fixture": True},
+            "completed_at": "2026-09-03T01:00:00+00:00",
+        },
+        "report": {
+            "form": {
+                "form_instance_id": str(review.form_instance_id),
+                "case_id": str(review.case_id),
+                "form_code": "F01",
+                "version_no": 1,
+                "form_status": "FINAL",
+                "output_document_id": str(review.original_document_id),
+                "form_content": {"report_type": "REPORT_COMPARISON_COMMERCIAL"},
+            },
+            "authoritative_form": {
+                "form_instance_id": str(review.form_instance_id),
+                "case_id": str(review.case_id),
+                "form_code": "F01",
+                "version_no": 1,
+                "form_status": "FINAL",
+                "output_document_id": str(review.original_document_id),
+                "form_content": {"report_type": "REPORT_COMPARISON_COMMERCIAL"},
+            },
+            "document": {
+                "document_id": str(review.original_document_id),
+                "case_id": str(review.case_id),
+                "document_type": "original",
+                "original_filename": "run-source.pdf",
+                "mime_type": "application/pdf",
+                "version_no": 1,
+                "document_group_id": str(review.document_group_id),
+                "checksum_sha256": "e" * 64,
+                "file_size_bytes": 100,
+                "uploaded_at": "2026-09-03T00:00:00+00:00",
+                "is_active": True,
+            },
+        },
+        "rule_selection": {
+            "rule_version": {
+                "rule_version_id": str(review.rule_version_id),
+                "rule_set_code": f"RUN_RULES_{str(review.rule_version_id)[:8]}",
+                "version_no": 1,
+                "version_name": "Run Test Rules",
+                "status": "PUBLISHED",
+                "effective_from": "2026-09-03",
+                "effective_to": None,
+                "applicable_case_type": "LAND",
+                "applicable_district_code": "F01",
+                "selection_priority": 10,
+                "source_document_id": str(review.source_document_id),
+            },
+            "rule_source": {
+                "document_id": str(review.source_document_id),
+                "checksum_sha256": "a" * 64,
+                "version_no": 1,
+                "effective_from": "2026-09-03",
+                "effective_to": None,
+            },
+            "validation_rules": [
+                {
+                    "validation_rule_id": str(review.adjustment_rule_id),
+                    "rule_version_id": str(review.rule_version_id),
+                    "rule_code": "ADJUSTMENT_RATE",
+                    "rule_name": "調整率一致性檢核",
+                    "target_form_code": None,
+                    "target_table": "comparison",
+                    "target_field_code": "adjustment_rate",
+                    "severity": "HIGH",
+                    "rule_expression": '{"system_rate":"-5","tolerance":"0"}',
+                    "message_template": "調整率一致性檢核",
+                    "is_active": True,
+                },
+                {
+                    "validation_rule_id": str(review.expert_rule_id),
+                    "rule_version_id": str(review.rule_version_id),
+                    "rule_code": "EXPERT_GRADE",
+                    "rule_name": "級距一致性檢核",
+                    "target_form_code": None,
+                    "target_table": "comparison",
+                    "target_field_code": "expert_grade",
+                    "severity": "MEDIUM",
+                    "rule_expression": '{"system_grade":"A"}',
+                    "message_template": "級距一致性檢核",
+                    "is_active": True,
+                },
+            ],
+        },
+    }
     return {
         "schema_version": SNAPSHOT_SCHEMA_VERSION,
         "case_version": 1,
@@ -455,14 +580,19 @@ def valid_submission_snapshot(review):
                 "original_filename": "run-source.pdf",
                 "mime_type": "application/pdf",
                 "version_no": 1,
-                "document_group_id": str(uuid4()),
+                "document_group_id": str(review.document_group_id),
                 "checksum_sha256": "e" * 64,
                 "file_size_bytes": 100,
                 "uploaded_at": "2026-09-03T00:00:00+00:00",
                 "is_active": True,
             }
         ],
-        "validation": {},
+        "validation": {
+            "validation_run_id": str(review.source_validation_run_id),
+            "form_instance_id": str(review.form_instance_id),
+            "rule_version_id": str(review.rule_version_id),
+        },
+        "execution_context": execution_context,
     }
 
 

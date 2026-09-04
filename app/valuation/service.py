@@ -105,7 +105,7 @@ class ValuationService:
         return await self.repository.save_case(record)
 
     async def archive_case(self, case_id: UUID, user: User) -> CaseRecord:
-        record = await self._case_or_404(case_id)
+        record = await self._case_or_404(case_id, for_update=True)
         self._require_case_owner(record, user)
         if record.case_status == CaseStatus.ARCHIVED.value:
             return record
@@ -260,14 +260,16 @@ class ValuationService:
         record.updated_by_user_id = user.user_id
         return await self.repository.save_form(record)
 
-    async def _case_or_404(self, case_id: UUID) -> CaseRecord:
-        record = await self.repository.get_case(case_id)
+    async def _case_or_404(
+        self, case_id: UUID, *, for_update: bool = False
+    ) -> CaseRecord:
+        record = await self.repository.get_case(case_id, for_update=for_update)
         if record is None:
             raise ResourceNotFoundError("案件")
         return record
 
     async def _owned_editable_case(self, case_id: UUID, user: User) -> CaseRecord:
-        record = await self._case_or_404(case_id)
+        record = await self._case_or_404(case_id, for_update=True)
         self._require_case_owner(record, user)
         if record.case_status not in EDITABLE_CASE_STATUSES:
             raise AppError(

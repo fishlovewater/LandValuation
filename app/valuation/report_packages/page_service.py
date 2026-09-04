@@ -531,9 +531,18 @@ class ReportPageService:
         )
 
     async def _read_records(
-        self, case_id: UUID, report_id: UUID, user: User
+        self,
+        case_id: UUID,
+        report_id: UUID,
+        user: User,
+        *,
+        for_update: bool = False,
     ) -> tuple[CaseRecord, dict[str, FormInstanceRecord]]:
-        case = await self.valuation.get_case(case_id, user)
+        if for_update:
+            case = await self.valuation._case_or_404(case_id, for_update=True)
+            self.valuation._require_case_read(case, user)
+        else:
+            case = await self.valuation.get_case(case_id, user)
         root = await self.repository.get_form(case_id, report_id)
         if root is None:
             raise ResourceNotFoundError("完整查估書")

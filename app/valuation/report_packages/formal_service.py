@@ -388,7 +388,11 @@ class FormalReportService:
             )
             if existing is not None:
                 return self._validation_response(existing, report_id)
-        case, records = await self.pages._read_records(case_id, report_id, user)
+        # Validation creates a run and may transition all report forms to
+        # CHECKED; acquire the shared Case writer lock before reading them.
+        case, records = await self.pages._read_records(
+            case_id, report_id, user, for_update=True
+        )
         regional = self.pages._read_data(records["F02-RF"], F02RFDraftData)
         comparison = self.pages._read_data(records["F02"], F02DraftData)
         s01 = self.pages._read_data(records["S01"], S01DraftData)

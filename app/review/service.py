@@ -57,6 +57,7 @@ from app.valuation.submissions.snapshot import (
 
 
 _MISSING_FINGERPRINT = object()
+_EXECUTION_CONTEXT_SCHEMA_VERSION = "valuation-review-execution-v1"
 
 
 def _first_present(*values):
@@ -358,7 +359,7 @@ class ReviewService:
             if (
                 not isinstance(execution_context, dict)
                 or execution_context.get("schema_version")
-                != "valuation-review-execution-v1"
+                != _EXECUTION_CONTEXT_SCHEMA_VERSION
                 or not valid_json_value(execution_context)
             ):
                 raise invalid()
@@ -498,6 +499,368 @@ class ReviewService:
         document = dict(documents_by_id[applied_fields[0]["document_id"]])
         return document, tuple(trusted_fields)
 
+    @classmethod
+    def _snapshot_trusted_run_context(
+        cls,
+        review,
+        snapshot: dict,
+        official_fields: tuple[TrustedField, ...],
+    ) -> TrustedRunContext:
+        """Adapt a submitted Snapshot into the Review execution boundary.
+
+        A Review with ``latest_submission_id`` is deliberately isolated from
+        the mutable Valuation tables.  The handoff builder stores all values
+        needed by deterministic Review execution under ``execution_context``;
+        this adapter validates that shape and then prepares rules from those
+        copied values only.
+        """
+        invalid = cls._invalid_submission_snapshot
+        context = snapshot.get("execution_context")
+        if not isinstance(context, dict):
+            raise invalid()
+        context_keys = {
+            "schema_version",
+            "case",
+            "source_validation_run",
+            "report",
+            "rule_selection",
+        }
+        if set(context) != context_keys or context.get("schema_version") != _EXECUTION_CONTEXT_SCHEMA_VERSION:
+            raise invalid()
+
+        def require_dict(parent: dict, key: str, keys: set[str]) -> dict:
+            value = parent.get(key)
+            if not isinstance(value, dict) or set(value) != keys:
+                raise invalid()
+            return value
+
+        def require_uuid(value) -> str:
+            if not isinstance(value, str) or not value.strip():
+                raise invalid()
+            try:
+                return str(UUID(value))
+            except (AttributeError, TypeError, ValueError):
+                raise invalid()
+
+        def require_text(value, *, allow_empty: bool = False) -> str:
+            if not isinstance(value, str) or (not allow_empty and not value.strip()):
+                raise invalid()
+            return value
+
+        def require_int(value, *, minimum: int = 0) -> int:
+            if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                raise invalid()
+            return value
+
+        def require_date(value, *, allow_none: bool = True):
+            if value is None and allow_none:
+                return None
+            if not isinstance(value, str) or not value.strip():
+                raise invalid()
+            try:
+                date.fromisoformat(value)
+            except (TypeError, ValueError):
+                raise invalid()
+            return value
+
+        def require_timestamp(value, *, allow_none: bool = True):
+            if value is None and allow_none:
+                return None
+            if not isinstance(value, str) or not value.strip():
+                raise invalid()
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                raise invalid()
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                raise invalid()
+            return value
+
+        case_context = require_dict(
+            context,
+            "case",
+            {
+                "case_id",
+                "case_no",
+                "case_title",
+                "case_type",
+                "district_code",
+                "valuation_base_date",
+                "form_codes",
+            },
+        )
+        if require_uuid(case_context["case_id"]) != str(review.case_id):
+            raise invalid()
+        for key in ("case_no", "case_title", "case_type", "district_code"):
+            require_text(case_context[key])
+        require_date(case_context["valuation_base_date"], allow_none=False)
+        form_codes = case_context["form_codes"]
+        if (
+            not isinstance(form_codes, list)
+            or not form_codes
+            or any(not isinstance(code, str) or not code.strip() for code in form_codes)
+            or len(form_codes) != len(set(form_codes))
+        ):
+            raise invalid()
+
+        source_run = require_dict(
+            context,
+            "source_validation_run",
+            {
+                "validation_run_id",
+                "case_id",
+                "form_instance_id",
+                "run_status",
+                "passed_count",
+                "warning_count",
+                "failed_count",
+                "rule_version_id",
+                "input_snapshot",
+                "ruleset_snapshot",
+                "completed_at",
+            },
+        )
+        source_run_id = require_uuid(source_run["validation_run_id"])
+        if require_uuid(source_run["case_id"]) != str(review.case_id):
+            raise invalid()
+        source_form_id = require_uuid(source_run["form_instance_id"])
+        if source_run["run_status"] != "COMPLETED":
+            raise invalid()
+        for key in ("passed_count", "warning_count", "failed_count"):
+            require_int(source_run[key])
+        if source_run["failed_count"] != 0:
+            raise invalid()
+        if not isinstance(source_run["input_snapshot"], dict) or not source_run["input_snapshot"]:
+            raise invalid()
+        if not isinstance(source_run["ruleset_snapshot"], dict) or not source_run["ruleset_snapshot"]:
+            raise invalid()
+        require_timestamp(source_run["completed_at"], allow_none=False)
+        source_rule_version_id = require_uuid(source_run["rule_version_id"])
+
+        report = require_dict(context, "report", {"form", "authoritative_form", "document"})
+        form_keys = {
+            "form_instance_id",
+            "case_id",
+            "form_code",
+            "version_no",
+            "form_status",
+            "output_document_id",
+            "form_content",
+        }
+
+        def validate_form(value: dict) -> dict:
+            form = require_dict(report, value, form_keys)
+            form_id = require_uuid(form["form_instance_id"])
+            if require_uuid(form["case_id"]) != str(review.case_id):
+                raise invalid()
+            require_text(form["form_code"])
+            require_int(form["version_no"], minimum=1)
+            if form["form_status"] != "FINAL":
+                raise invalid()
+            output_document_id = require_uuid(form["output_document_id"])
+            if not isinstance(form["form_content"], dict):
+                raise invalid()
+            return {
+                **form,
+                "form_instance_id": form_id,
+                "case_id": str(review.case_id),
+                "output_document_id": output_document_id,
+            }
+
+        report_form = validate_form("form")
+        authoritative_form = validate_form("authoritative_form")
+        if (
+            report_form["form_instance_id"] != authoritative_form["form_instance_id"]
+            or report_form["version_no"] != authoritative_form["version_no"]
+            or report_form["form_code"] != authoritative_form["form_code"]
+            or report_form["output_document_id"]
+            != authoritative_form["output_document_id"]
+            or source_form_id != report_form["form_instance_id"]
+        ):
+            raise invalid()
+
+        report_document = require_dict(
+            report,
+            "document",
+            {
+                "document_id",
+                "case_id",
+                "document_type",
+                "original_filename",
+                "mime_type",
+                "version_no",
+                "document_group_id",
+                "checksum_sha256",
+                "file_size_bytes",
+                "uploaded_at",
+                "is_active",
+            },
+        )
+        report_document_id = require_uuid(report_document["document_id"])
+        if require_uuid(report_document["case_id"]) != str(review.case_id):
+            raise invalid()
+        for key in ("document_type", "original_filename", "mime_type"):
+            require_text(report_document[key])
+        require_int(report_document["version_no"], minimum=1)
+        require_uuid(report_document["document_group_id"])
+        if not isinstance(report_document["checksum_sha256"], str) or not re.fullmatch(
+            r"[0-9a-f]{64}", report_document["checksum_sha256"]
+        ):
+            raise invalid()
+        require_int(report_document["file_size_bytes"])
+        require_timestamp(report_document["uploaded_at"], allow_none=False)
+        if not isinstance(report_document["is_active"], bool) or not report_document["is_active"]:
+            raise invalid()
+        if report_form["output_document_id"] != report_document_id:
+            raise invalid()
+
+        documents = {
+            str(item["document_id"]): dict(item) for item in snapshot["documents"]
+        }
+        immutable_document_keys = (
+            "document_type",
+            "original_filename",
+            "mime_type",
+            "version_no",
+            "document_group_id",
+            "checksum_sha256",
+            "file_size_bytes",
+            "uploaded_at",
+            "is_active",
+        )
+        snapshot_document = documents.get(report_document_id)
+        if snapshot_document is None or any(
+            snapshot_document[key] != report_document[key]
+            for key in immutable_document_keys
+        ):
+            raise invalid()
+        for item in official_fields:
+            if item.document_id is None or str(item.document_id) not in documents:
+                raise invalid()
+            if item.form_code not in form_codes:
+                raise invalid()
+
+        rule_selection = require_dict(
+            context,
+            "rule_selection",
+            {"rule_version", "rule_source", "validation_rules"},
+        )
+        rule_version_keys = {
+            "rule_version_id",
+            "rule_set_code",
+            "version_no",
+            "version_name",
+            "status",
+            "effective_from",
+            "effective_to",
+            "applicable_case_type",
+            "applicable_district_code",
+            "selection_priority",
+            "source_document_id",
+        }
+        rule_version = require_dict(rule_selection, "rule_version", rule_version_keys)
+        rule_version_id = require_uuid(rule_version["rule_version_id"])
+        if rule_version_id != source_rule_version_id or rule_version["status"] != "PUBLISHED":
+            raise invalid()
+        require_text(rule_version["rule_set_code"])
+        require_int(rule_version["version_no"], minimum=1)
+        require_text(rule_version["version_name"])
+        require_date(rule_version["effective_from"])
+        require_date(rule_version["effective_to"])
+        if (
+            rule_version["applicable_case_type"] != case_context["case_type"]
+            or rule_version["applicable_district_code"]
+            != case_context["district_code"]
+        ):
+            raise invalid()
+        require_int(rule_version["selection_priority"])
+        source_document_id = require_uuid(rule_version["source_document_id"])
+
+        rule_source_keys = {
+            "document_id",
+            "checksum_sha256",
+            "version_no",
+            "effective_from",
+            "effective_to",
+        }
+        rule_source = require_dict(rule_selection, "rule_source", rule_source_keys)
+        if require_uuid(rule_source["document_id"]) != source_document_id:
+            raise invalid()
+        if not isinstance(rule_source["checksum_sha256"], str) or not re.fullmatch(
+            r"[0-9a-f]{64}", rule_source["checksum_sha256"]
+        ):
+            raise invalid()
+        require_int(rule_source["version_no"], minimum=1)
+        require_date(rule_source["effective_from"])
+        require_date(rule_source["effective_to"])
+
+        validation_rules = rule_selection["validation_rules"]
+        if not isinstance(validation_rules, list) or not validation_rules:
+            raise invalid()
+        rule_keys = {
+            "validation_rule_id",
+            "rule_version_id",
+            "rule_code",
+            "rule_name",
+            "target_form_code",
+            "target_table",
+            "target_field_code",
+            "severity",
+            "rule_expression",
+            "message_template",
+            "is_active",
+        }
+        copied_rules = []
+        for rule in validation_rules:
+            if not isinstance(rule, dict) or set(rule) != rule_keys:
+                raise invalid()
+            copied_rule = dict(rule)
+            if require_uuid(rule["validation_rule_id"]) is None:
+                raise invalid()
+            if require_uuid(rule["rule_version_id"]) != rule_version_id:
+                raise invalid()
+            for key in ("rule_code", "rule_name", "target_table", "target_field_code", "severity", "rule_expression", "message_template"):
+                require_text(rule[key])
+            if rule["target_form_code"] is not None:
+                require_text(rule["target_form_code"])
+            if not isinstance(rule["is_active"], bool) or not rule["is_active"]:
+                raise invalid()
+            copied_rules.append(copied_rule)
+
+        validation = snapshot["validation"]
+        if (
+            not isinstance(validation, dict)
+            or require_uuid(validation.get("validation_run_id")) != source_run_id
+            or require_uuid(validation.get("form_instance_id")) != report_form["form_instance_id"]
+            or require_uuid(validation.get("rule_version_id")) != rule_version_id
+        ):
+            raise invalid()
+
+        fields = trusted_fields_by_code(official_fields)
+        contracts = validate_rule_contracts(copied_rules)
+        prepared_rules = prepare_trusted_rules(contracts, fields)
+        case_projection = {
+            key: case_context[key]
+            for key in (
+                "case_id",
+                "case_no",
+                "case_title",
+                "valuation_base_date",
+                "district_code",
+            )
+        }
+        return TrustedRunContext(
+            document=snapshot_document,
+            fields=fields,
+            official_fields=official_fields,
+            rule_version=dict(rule_version),
+            validation_rules=tuple(copied_rules),
+            rule_source=dict(rule_source),
+            prepared_rules=prepared_rules,
+            documents=documents,
+            case=case_projection,
+        )
+
     async def _load_submitted_snapshot(self, review):
         submission = await self.repository.get_submission_snapshot_record(
             review.latest_submission_id,
@@ -519,15 +882,24 @@ class ReviewService:
         if review.latest_submission_id is not None:
             if submitted_inputs is None:
                 submitted_inputs = await self._load_submitted_snapshot(review)
-            _, document, official_fields = submitted_inputs
-        else:
-            document = await self.repository.get_latest_original_document(review.case_id)
-            official_fields = tuple(
-                self._trusted_field(row)
-                for row in await self.repository.list_applied_confirmed_extracted_fields(
-                    review.case_id
+            snapshot, _document, official_fields = submitted_inputs
+            try:
+                self._snapshot_trusted_run_context(
+                    review, snapshot, official_fields
                 )
+            except AppError as error:
+                if error.code == "SUBMISSION_SNAPSHOT_INVALID":
+                    raise
+                return (trusted_preflight_to_missing(error),)
+            return ()
+
+        document = await self.repository.get_latest_original_document(review.case_id)
+        official_fields = tuple(
+            self._trusted_field(row)
+            for row in await self.repository.list_applied_confirmed_extracted_fields(
+                review.case_id
             )
+        )
         if document is None:
             return (trusted_context_missing_requirement(),)
         fields = trusted_fields_by_code(official_fields)
@@ -624,29 +996,26 @@ class ReviewService:
             snapshot, document, official_fields = await self._load_submitted_snapshot(
                 review
             )
-            documents = {
-                str(item["document_id"]): dict(item)
-                for item in snapshot["documents"]
-            }
-        else:
-            document = await self.repository.get_latest_original_document(
-                review.case_id
+            return self._snapshot_trusted_run_context(
+                review, snapshot, official_fields
             )
-            if document is None:
-                raise AppError(
-                    "TRUSTED_INPUT_MISSING",
-                    "案件沒有可用的正式原始估價報告",
-                    409,
-                )
 
-            field_rows = await self.repository.list_applied_confirmed_extracted_fields(
-                review.case_id
+        document = await self.repository.get_latest_original_document(review.case_id)
+        if document is None:
+            raise AppError(
+                "TRUSTED_INPUT_MISSING",
+                "案件沒有可用的正式原始估價報告",
+                409,
             )
-            official_fields = tuple(
-                self._trusted_field(row)
-                for row in field_rows
-            )
-            documents = {str(document["document_id"]): document}
+
+        field_rows = await self.repository.list_applied_confirmed_extracted_fields(
+            review.case_id
+        )
+        official_fields = tuple(
+            self._trusted_field(row)
+            for row in field_rows
+        )
+        documents = {str(document["document_id"]): document}
         fields = trusted_fields_by_code(official_fields)
 
         case_context = await self.repository.get_case_rule_context(review.case_id)
@@ -944,7 +1313,11 @@ class ReviewService:
             raise AppError("RUN_ALREADY_ACTIVE", "此案件已有執行中的檢核", 409)
 
         context = await self._resolve_trusted_run_context(review)
-        case = await self.repository.get_case_report_data(review.case_id)
+        case = context.case
+        if case is None:
+            # Legacy standalone Reviews have no Submission pointer and retain
+            # the existing canonical live-data fallback.
+            case = await self.repository.get_case_report_data(review.case_id)
         input_snapshot = self._input_snapshot(review, case, context)
 
         review.review_status = ensure_transition(review.review_status, "ANALYZING")

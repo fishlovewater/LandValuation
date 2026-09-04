@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
 from app.db.session import AsyncSessionFactory
@@ -15,6 +16,9 @@ from app.review.repository import ReviewRepository
 from app.valuation.submissions.repository import SubmissionRepository
 from app.valuation.submissions.schemas import SubmitForReviewCommand
 from app.valuation.submissions.service import SubmissionService
+from app.valuation.repository import ValuationRepository
+from app.valuation.schemas import CaseUpdate
+from app.valuation.service import ValuationService
 
 
 REVIEW_WORKFLOW_UPDATE_COLUMNS = {
@@ -701,6 +705,32 @@ class _SubmitLockProbeRepository(SubmissionRepository):
         return case
 
 
+class _CaseWriterProbeRepository(ValuationRepository):
+    def __init__(self, session, writer_ready, submission_attempted, release_writer):
+        super().__init__(session)
+        self.writer_ready = writer_ready
+        self.submission_attempted = submission_attempted
+        self.release_writer = release_writer
+
+    async def get_case(self, case_id, for_update=False):
+        case = await super().get_case(case_id, for_update=for_update)
+        if not self.writer_ready.is_set():
+            self.writer_ready.set()
+            await self.submission_attempted.wait()
+            await self.release_writer.wait()
+        return case
+
+
+class _SubmissionAttemptProbeRepository(SubmissionRepository):
+    def __init__(self, session, submission_attempted):
+        super().__init__(session)
+        self.submission_attempted = submission_attempted
+
+    async def lock_case(self, case_id):
+        self.submission_attempted.set()
+        return await super().lock_case(case_id)
+
+
 class _CorrectionLockProbeRepository(ReviewRepository):
     def __init__(self, session, correction_next_lock):
         super().__init__(session)
@@ -740,6 +770,58 @@ async def _run_submission_with_probe(
         repository = _SubmitLockProbeRepository(
             session, case_locked, correction_next_lock
         )
+        try:
+            result = await SubmissionService(
+                session, repository=repository
+            ).submit(case_id, command_value, actor)
+            await session.commit()
+            return result
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def _run_case_writer_with_probe(
+    case_id, actor, writer_ready, submission_attempted, release_writer
+):
+    async with AsyncSessionFactory() as session:
+        repository = _CaseWriterProbeRepository(
+            session, writer_ready, submission_attempted, release_writer
+        )
+        try:
+            result = await ValuationService(session, repository=repository).update_case(
+                case_id,
+                CaseUpdate(case_title="writer committed title"),
+                actor,
+            )
+            await session.execute(
+                text(
+                    """
+                    UPDATE valuation.form_instances
+                    SET form_content = form_content ||
+                        '{"writer_marker": "writer committed form"}'::jsonb
+                    WHERE form_instance_id = (
+                        SELECT form_instance_id
+                        FROM valuation.form_instances
+                        WHERE case_id = :case_id
+                          AND form_code = 'F02'
+                        ORDER BY version_no DESC, form_instance_id DESC
+                        LIMIT 1
+                    )
+                    """
+                ),
+                {"case_id": case_id},
+            )
+            await session.commit()
+            return result
+        except Exception:
+            await session.rollback()
+            raise
+
+
+async def _run_submission_with_attempt_probe(case_id, command_value, actor, submission_attempted):
+    async with AsyncSessionFactory() as session:
+        repository = _SubmissionAttemptProbeRepository(session, submission_attempted)
         try:
             result = await SubmissionService(
                 session, repository=repository
@@ -875,6 +957,58 @@ async def test_real_sessions_submit_vs_complete_have_no_deadlock(
         (review_id, case_id),
     )
     assert admin_cursor.fetchone() == ("REVIEW_COMPLETED", "REVIEW_COMPLETED", 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_case_writer_and_submission_share_case_lock_for_consistent_snapshot(
+    admin_cursor, submission_fixture_graphs
+) -> None:
+    case_id, actor, command_value = _seed_submittable_case(
+        admin_cursor, cleanup=submission_fixture_graphs
+    )
+    writer_ready = asyncio.Event()
+    submission_attempted = asyncio.Event()
+    release_writer = asyncio.Event()
+
+    writer_task = asyncio.create_task(
+        _run_case_writer_with_probe(
+            case_id,
+            actor,
+            writer_ready,
+            submission_attempted,
+            release_writer,
+        )
+    )
+    await asyncio.wait_for(writer_ready.wait(), timeout=5)
+    submission_task = asyncio.create_task(
+        _run_submission_with_attempt_probe(
+            case_id, command_value, actor, submission_attempted
+        )
+    )
+    await asyncio.wait_for(submission_attempted.wait(), timeout=5)
+    release_writer.set()
+
+    writer_result, submission_result = await asyncio.wait_for(
+        asyncio.gather(writer_task, submission_task), timeout=10
+    )
+    graph = submission_fixture_graphs[-1]
+    graph.review_ids.add(submission_result.review_id)
+    graph.submission_ids.add(submission_result.submission_id)
+
+    admin_cursor.execute(
+        """
+        SELECT input_snapshot->'execution_context'->'case'->>'case_title',
+               input_snapshot->'execution_context'->'report'->'form'
+                   ->'form_content'->>'writer_marker'
+        FROM valuation.review_submissions
+        WHERE submission_id = %s
+        """,
+        (submission_result.submission_id,),
+    )
+    assert admin_cursor.fetchone() == (
+        writer_result.case_title,
+        "writer committed form",
+    )
 
 
 @pytest.mark.asyncio

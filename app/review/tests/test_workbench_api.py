@@ -118,6 +118,10 @@ def workbench_submission(workbench_records, postgres_connection):
     submission_id = uuid4()
     validation_run_id = uuid4()
     document_id = uuid4()
+    form_instance_id = uuid4()
+    source_document_id = uuid4()
+    rule_version_id = uuid4()
+    validation_rule_id = uuid4()
     request_id = uuid4()
     document_group_id = uuid4()
     snapshot = {
@@ -155,7 +159,106 @@ def workbench_submission(workbench_records, postgres_connection):
                 "is_active": True,
             }
         ],
-        "validation": {},
+        "validation": {
+            "validation_run_id": str(validation_run_id),
+            "form_instance_id": str(form_instance_id),
+            "rule_version_id": str(rule_version_id),
+        },
+    }
+    snapshot["execution_context"] = {
+        "schema_version": "valuation-review-execution-v1",
+        "case": {
+            "case_id": str(workbench_records.reviewed_case_id),
+            "case_no": "WB-REVIEWED",
+            "case_title": "已進入審查案件",
+            "case_type": "LAND",
+            "district_code": "F01",
+            "valuation_base_date": "2026-09-03",
+            "form_codes": ["F03"],
+        },
+        "source_validation_run": {
+            "validation_run_id": str(validation_run_id),
+            "case_id": str(workbench_records.reviewed_case_id),
+            "form_instance_id": str(form_instance_id),
+            "run_status": "COMPLETED",
+            "passed_count": 1,
+            "warning_count": 0,
+            "failed_count": 0,
+            "rule_version_id": str(rule_version_id),
+            "input_snapshot": {"case_version": 1},
+            "ruleset_snapshot": {"fixture": True},
+            "completed_at": "2026-09-03T01:00:00+00:00",
+        },
+        "report": {
+            "form": {
+                "form_instance_id": str(form_instance_id),
+                "case_id": str(workbench_records.reviewed_case_id),
+                "form_code": "F03",
+                "version_no": 1,
+                "form_status": "FINAL",
+                "output_document_id": str(document_id),
+                "form_content": {"report_type": "REPORT_COMPARISON_COMMERCIAL"},
+            },
+            "authoritative_form": {
+                "form_instance_id": str(form_instance_id),
+                "case_id": str(workbench_records.reviewed_case_id),
+                "form_code": "F03",
+                "version_no": 1,
+                "form_status": "FINAL",
+                "output_document_id": str(document_id),
+                "form_content": {"report_type": "REPORT_COMPARISON_COMMERCIAL"},
+            },
+            "document": {
+                "document_id": str(document_id),
+                "case_id": str(workbench_records.reviewed_case_id),
+                "document_type": "original",
+                "original_filename": "submitted.pdf",
+                "mime_type": "application/pdf",
+                "version_no": 1,
+                "document_group_id": str(document_group_id),
+                "checksum_sha256": "f" * 64,
+                "file_size_bytes": 100,
+                "uploaded_at": "2026-09-03T01:00:00+00:00",
+                "is_active": True,
+            },
+        },
+        "rule_selection": {
+            "rule_version": {
+                "rule_version_id": str(rule_version_id),
+                "rule_set_code": "WB_RULES",
+                "version_no": 1,
+                "version_name": "Workbench Rules",
+                "status": "PUBLISHED",
+                "effective_from": "2026-09-03",
+                "effective_to": None,
+                "applicable_case_type": "LAND",
+                "applicable_district_code": "F01",
+                "selection_priority": 10,
+                "source_document_id": str(source_document_id),
+            },
+            "rule_source": {
+                "document_id": str(source_document_id),
+                "checksum_sha256": "a" * 64,
+                "version_no": 1,
+                "effective_from": "2026-09-03",
+                "effective_to": None,
+            },
+            "validation_rules": [
+                {
+                    "validation_rule_id": str(validation_rule_id),
+                    "rule_version_id": str(rule_version_id),
+                    "rule_code": "ADJUSTMENT_RATE",
+                    "rule_name": "調整率一致性檢核",
+                    "target_form_code": "F03",
+                    "target_table": "comparison",
+                    "target_field_code": "adjustment_rate",
+                    "severity": "HIGH",
+                    "rule_expression": '{"system_rate":"-5","tolerance":"0"}',
+                    "message_template": "調整率一致性檢核",
+                    "is_active": True,
+                }
+            ],
+        },
     }
     input_fingerprint = snapshot_fingerprint(snapshot)
     with postgres_connection.cursor() as cursor:
@@ -180,16 +283,79 @@ def workbench_submission(workbench_records, postgres_connection):
         )
         cursor.execute(
             """
+            INSERT INTO valuation.form_instances (
+                form_instance_id, case_id, form_code, version_no, form_status,
+                form_content, output_document_id
+            ) VALUES (
+                %s, %s, 'F03', 1, 'FINAL',
+                '{"report_type": "REPORT_COMPARISON_COMMERCIAL"}'::jsonb, %s
+            )
+            """,
+            (form_instance_id, workbench_records.reviewed_case_id, document_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO knowledge.documents (
+                document_id, document_code, title, document_type,
+                original_filename, mime_type, bucket_name, object_key,
+                checksum_sha256, file_size_bytes, version_no, effective_from,
+                extraction_status, publication_status, approved_by_user_id,
+                approved_at
+            ) VALUES (
+                %s, 'WB-RULE-SOURCE', 'Workbench rule source', 'REGULATION',
+                'workbench-rule.pdf', 'application/pdf', 'land-valuation', %s,
+                %s, 100, 1, '2026-09-03', 'COMPLETED', 'PUBLISHED', %s, now()
+            )
+            """,
+            (
+                source_document_id,
+                f"knowledge/{source_document_id}/workbench-rule.pdf",
+                "a" * 64,
+                workbench_records.user_id,
+            ),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.rule_versions (
+                rule_version_id, rule_set_code, version_no, version_name,
+                effective_from, status, applicable_case_type,
+                applicable_district_code, selection_priority, source_document_id
+            ) VALUES (%s, 'WB_RULES', 1, 'Workbench Rules', '2026-09-03',
+                      'PUBLISHED', 'LAND', 'F01', 10, %s)
+            """,
+            (rule_version_id, source_document_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.validation_rules (
+                validation_rule_id, rule_version_id, rule_code, rule_name,
+                target_form_code, target_table, target_field_code, severity,
+                rule_expression, message_template, is_active
+            ) VALUES (%s, %s, 'ADJUSTMENT_RATE', '調整率一致性檢核', 'F03',
+                      'comparison', 'adjustment_rate', 'HIGH',
+                      '{"system_rate":"-5","tolerance":"0"}'::jsonb,
+                      '調整率一致性檢核', true)
+            """,
+            (validation_rule_id, rule_version_id),
+        )
+        cursor.execute(
+            """
             INSERT INTO valuation.validation_runs (
                 validation_run_id, case_id, review_id, run_status,
-                input_snapshot, ruleset_snapshot
-            ) VALUES (%s, %s, %s, 'COMPLETED', '{}'::jsonb,
-                      '{"fixture": true}'::jsonb)
+                form_instance_id, passed_count, warning_count, failed_count,
+                rule_version_id, completed_at, input_snapshot, ruleset_snapshot
+            ) VALUES (
+                %s, %s, %s, 'COMPLETED', %s, 1, 0, 0, %s, now(),
+                '{"case_version": 1}'::jsonb,
+                '{"fixture": true}'::jsonb
+            )
             """,
             (
                 validation_run_id,
                 workbench_records.reviewed_case_id,
                 workbench_records.review_id,
+                form_instance_id,
+                rule_version_id,
             ),
         )
         cursor.execute(
@@ -232,6 +398,7 @@ def workbench_submission(workbench_records, postgres_connection):
         input_fingerprint=input_fingerprint,
     )
 
+    postgres_connection.rollback()
     with postgres_connection.cursor() as cursor:
         cursor.execute(
             "UPDATE review.reviews SET latest_submission_id = NULL WHERE review_id = %s",
@@ -251,8 +418,24 @@ def workbench_submission(workbench_records, postgres_connection):
             (validation_run_id,),
         )
         cursor.execute(
+            "DELETE FROM valuation.form_instances WHERE form_instance_id = %s",
+            (form_instance_id,),
+        )
+        cursor.execute(
             "DELETE FROM valuation.documents WHERE document_id = %s",
             (document_id,),
+        )
+        cursor.execute(
+            "DELETE FROM valuation.validation_rules WHERE validation_rule_id = %s",
+            (validation_rule_id,),
+        )
+        cursor.execute(
+            "DELETE FROM valuation.rule_versions WHERE rule_version_id = %s",
+            (rule_version_id,),
+        )
+        cursor.execute(
+            "DELETE FROM knowledge.documents WHERE document_id = %s",
+            (source_document_id,),
         )
     postgres_connection.commit()
 
@@ -637,10 +820,14 @@ def test_submitted_preflight_uses_snapshot_after_live_field_is_invalidated(
         cursor.execute(
             """
             INSERT INTO valuation.form_instances (
-                form_instance_id, case_id, form_code, version_no, form_status
-            ) VALUES (%s, %s, 'F01', 1, 'READY')
+                form_instance_id, case_id, form_code, version_no, form_status,
+                form_content, output_document_id
+            ) VALUES (
+                %s, %s, 'F01', 1, 'FINAL',
+                '{"report_type": "REPORT_COMPARISON_COMMERCIAL"}'::jsonb, %s
+            )
             """,
-            (form_instance_id, workbench_records.reviewed_case_id),
+            (form_instance_id, workbench_records.reviewed_case_id, document_id),
         )
         cursor.execute(
             """
@@ -650,20 +837,6 @@ def test_submitted_preflight_uses_snapshot_after_live_field_is_invalidated(
             ) VALUES (%s, %s, %s, 'LOCAL_PDF', 'COMPLETED', %s, now())
             """,
             (extraction_id, workbench_records.reviewed_case_id, document_id, workbench_records.user_id),
-        )
-        cursor.execute(
-            """
-            INSERT INTO valuation.validation_runs (
-                validation_run_id, case_id, review_id, run_status,
-                input_snapshot, ruleset_snapshot
-            ) VALUES (%s, %s, %s, 'COMPLETED', '{}'::jsonb,
-                      '{"fixture": true}'::jsonb)
-            """,
-            (
-                validation_run_id,
-                workbench_records.reviewed_case_id,
-                workbench_records.review_id,
-            ),
         )
         cursor.execute(
             """
@@ -761,6 +934,26 @@ def test_submitted_preflight_uses_snapshot_after_live_field_is_invalidated(
                 ),
             )
         cursor.execute(
+            """
+            INSERT INTO valuation.validation_runs (
+                validation_run_id, case_id, review_id, run_status,
+                form_instance_id, passed_count, warning_count, failed_count,
+                rule_version_id, completed_at, input_snapshot, ruleset_snapshot
+            ) VALUES (
+                %s, %s, %s, 'COMPLETED', %s, 2, 0, 0, %s, now(),
+                '{"case_version": 1}'::jsonb,
+                '{"fixture": true}'::jsonb
+            )
+            """,
+            (
+                validation_run_id,
+                workbench_records.reviewed_case_id,
+                workbench_records.review_id,
+                form_instance_id,
+                rule_version_id,
+            ),
+        )
+        cursor.execute(
             "UPDATE review.reviews SET latest_submission_id = NULL WHERE review_id = %s",
             (workbench_records.review_id,),
         )
@@ -816,7 +1009,123 @@ def test_submitted_preflight_uses_snapshot_after_live_field_is_invalidated(
                 "is_active": True,
             }
         ],
-        "validation": {},
+        "validation": {
+            "validation_run_id": str(validation_run_id),
+            "form_instance_id": str(form_instance_id),
+            "rule_version_id": str(rule_version_id),
+        },
+        "execution_context": {
+            "schema_version": "valuation-review-execution-v1",
+            "case": {
+                "case_id": str(workbench_records.reviewed_case_id),
+                "case_no": "WB-REVIEWED",
+                "case_title": "已進入審查案件",
+                "case_type": "LAND",
+                "district_code": "F01",
+                "valuation_base_date": "2026-09-03",
+                "form_codes": ["F01"],
+            },
+            "source_validation_run": {
+                "validation_run_id": str(validation_run_id),
+                "case_id": str(workbench_records.reviewed_case_id),
+                "form_instance_id": str(form_instance_id),
+                "run_status": "COMPLETED",
+                "passed_count": 2,
+                "warning_count": 0,
+                "failed_count": 0,
+                "rule_version_id": str(rule_version_id),
+                "input_snapshot": {"case_version": 1},
+                "ruleset_snapshot": {"fixture": True},
+                "completed_at": "2026-09-03T01:00:00+00:00",
+            },
+            "report": {
+                "form": {
+                    "form_instance_id": str(form_instance_id),
+                    "case_id": str(workbench_records.reviewed_case_id),
+                    "form_code": "F01",
+                    "version_no": 1,
+                    "form_status": "FINAL",
+                    "output_document_id": str(document_id),
+                    "form_content": {
+                        "report_type": "REPORT_COMPARISON_COMMERCIAL"
+                    },
+                },
+                "authoritative_form": {
+                    "form_instance_id": str(form_instance_id),
+                    "case_id": str(workbench_records.reviewed_case_id),
+                    "form_code": "F01",
+                    "version_no": 1,
+                    "form_status": "FINAL",
+                    "output_document_id": str(document_id),
+                    "form_content": {
+                        "report_type": "REPORT_COMPARISON_COMMERCIAL"
+                    },
+                },
+                "document": {
+                    "document_id": str(document_id),
+                    "case_id": str(workbench_records.reviewed_case_id),
+                    "document_type": "original",
+                    "original_filename": "preflight.pdf",
+                    "mime_type": "application/pdf",
+                    "version_no": 1,
+                    "document_group_id": str(document_group_id),
+                    "checksum_sha256": "d" * 64,
+                    "file_size_bytes": 100,
+                    "uploaded_at": "2026-09-03T00:00:00+00:00",
+                    "is_active": True,
+                },
+            },
+            "rule_selection": {
+                "rule_version": {
+                    "rule_version_id": str(rule_version_id),
+                    "rule_set_code": f"PREFLIGHT-RULES-{str(rule_version_id)[:8]}",
+                    "version_no": 1,
+                    "version_name": "Preflight Rules",
+                    "status": "PUBLISHED",
+                    "effective_from": "2026-09-03",
+                    "effective_to": None,
+                    "applicable_case_type": "LAND",
+                    "applicable_district_code": "F01",
+                    "selection_priority": 10,
+                    "source_document_id": str(source_document_id),
+                },
+                "rule_source": {
+                    "document_id": str(source_document_id),
+                    "checksum_sha256": "a" * 64,
+                    "version_no": 1,
+                    "effective_from": "2026-09-03",
+                    "effective_to": None,
+                },
+                "validation_rules": [
+                    {
+                        "validation_rule_id": str(adjustment_rule_id),
+                        "rule_version_id": str(rule_version_id),
+                        "rule_code": "ADJUSTMENT_RATE",
+                        "rule_name": "ADJUSTMENT_RATE",
+                        "target_form_code": "F01",
+                        "target_table": "comparison",
+                        "target_field_code": "adjustment_rate",
+                        "severity": "HIGH",
+                        "rule_expression": '{"system_rate":"-5","tolerance":"0"}',
+                        "message_template": "ADJUSTMENT_RATE",
+                        "is_active": True,
+                    },
+                    {
+                        "validation_rule_id": str(expert_rule_id),
+                        "rule_version_id": str(rule_version_id),
+                        "rule_code": "EXPERT_GRADE",
+                        "rule_name": "EXPERT_GRADE",
+                        "target_form_code": "F01",
+                        "target_table": "comparison",
+                        "target_field_code": "expert_grade",
+                        "severity": "HIGH",
+                        "rule_expression": '{"system_grade":"A"}',
+                        "message_template": "EXPERT_GRADE",
+                        "is_active": True,
+                    },
+                ],
+            },
+        },
     }
     submission_id = uuid4()
     from app.valuation.submissions.snapshot import snapshot_fingerprint

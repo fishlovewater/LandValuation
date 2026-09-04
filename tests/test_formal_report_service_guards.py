@@ -65,3 +65,24 @@ def test_formal_rule_guard_rejects_unsafe_rule_or_template(case, rule, expected_
     with pytest.raises(AppError) as exc_info:
         FormalReportService._validate_rule(case, rule)
     assert exc_info.value.code == expected_code
+
+
+@pytest.mark.asyncio
+async def test_formal_validation_locks_case_before_reading_writable_records():
+    calls = []
+
+    class _Pages:
+        async def _read_records(self, case_id, report_id, user, *, for_update=False):
+            calls.append(for_update)
+            raise RuntimeError("stop after lock probe")
+
+    service = FormalReportService(
+        None,
+        pages=_Pages(),
+        repository=SimpleNamespace(),
+    )
+
+    with pytest.raises(RuntimeError, match="stop after lock probe"):
+        await service.validate(uuid4(), uuid4(), SimpleNamespace(), None)
+
+    assert calls == [True]

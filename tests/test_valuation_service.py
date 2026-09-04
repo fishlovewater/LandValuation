@@ -43,8 +43,10 @@ class FakeRepository:
         self.forms = []
         self.owner_filter = None
         self.source_document_matches = True
+        self.case_reads = []
 
-    async def get_case(self, case_id):
+    async def get_case(self, case_id, for_update=False):
+        self.case_reads.append((case_id, for_update))
         return self.case if self.case.case_id == case_id else None
 
     async def list_cases(self, *, owner_id, case_status, offset, limit):
@@ -127,6 +129,31 @@ async def test_archived_case_cannot_be_edited() -> None:
 
     assert raised.value.code == "CASE_STATE_CONFLICT"
     assert raised.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_owned_editable_case_locks_case_row_before_editing() -> None:
+    user = user_with_role()
+    record = case_record(user.user_id, CaseStatus.PROCESSING.value)
+    repository = FakeRepository(record)
+    service = ValuationService(None, repository=repository)
+
+    await service._owned_editable_case(record.case_id, user)
+
+    assert repository.case_reads == [(record.case_id, True)]
+
+
+@pytest.mark.asyncio
+async def test_archive_case_locks_case_row_before_changing_status() -> None:
+    user = user_with_role()
+    record = case_record(user.user_id, CaseStatus.PROCESSING.value)
+    repository = FakeRepository(record)
+    service = ValuationService(None, repository=repository)
+
+    await service.archive_case(record.case_id, user)
+
+    assert repository.case_reads == [(record.case_id, True)]
+    assert record.case_status == CaseStatus.ARCHIVED.value
 
 
 @pytest.mark.asyncio

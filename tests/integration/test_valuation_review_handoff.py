@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -688,3 +689,235 @@ async def test_appraiser_submission_handoff_is_reviewable_and_statuses_pair(
         assert await _status_pair(
             session, return_case.case_id, return_submission.review_id
         ) == ("RETURNED_FOR_REVISION", "REVISION_REQUIRED")
+
+
+@pytest.mark.asyncio
+async def test_submitted_review_run_uses_frozen_execution_context_after_source_mutation(
+    admin_cursor, handoff_data: _HandoffData
+) -> None:
+    appraiser_id, reviewer_id = handoff_data.user_ids
+    appraiser = _actor(appraiser_id, "APPRAISER", "valuation.submit_review")
+    reviewer = _actor(reviewer_id, "REVIEWER", "review.execute")
+    case = handoff_data.cases[0]
+    command = SubmitForReviewCommand(
+        request_id=uuid4(),
+        expected_case_version=1,
+        source_validation_run_id=case.source_validation_run_id,
+        source_report_document_id=case.document_id,
+    )
+
+    async with AsyncSessionFactory() as session:
+        submission = await SubmissionService(session).submit(
+            case.case_id, command, appraiser
+        )
+        await session.commit()
+
+        admin_cursor.execute(
+            """
+            SELECT case_no, case_title, case_type, district_code,
+                   valuation_base_date::text
+            FROM valuation.cases
+            WHERE case_id = %s
+            """,
+            (case.case_id,),
+        )
+        original_case = admin_cursor.fetchone()
+
+        # Every source used to construct Review execution is changed after the
+        # handoff.  A submitted Review must continue to run from its snapshot.
+        admin_cursor.execute(
+            """
+            UPDATE valuation.cases
+            SET case_no = 'MUTATED-CASE', case_title = 'mutated title',
+                case_type = 'MUTATED_TYPE', district_code = 'MUTATED_DISTRICT',
+                valuation_base_date = CURRENT_DATE + 1000
+            WHERE case_id = %s
+            """,
+            (case.case_id,),
+        )
+        admin_cursor.execute(
+            """
+            UPDATE valuation.form_instances
+            SET form_status = 'VOID', form_content = '{"mutated": true}'::jsonb
+            WHERE form_instance_id = %s
+            """,
+            (case.report_form_id,),
+        )
+        admin_cursor.execute(
+            """
+            UPDATE valuation.documents
+            SET original_filename = 'mutated-report.pdf', checksum_sha256 = %s
+            WHERE document_id = %s
+            """,
+            ("f" * 64, case.document_id),
+        )
+        admin_cursor.execute(
+            """
+            UPDATE valuation.validation_runs
+            SET passed_count = 0, failed_count = 99,
+                input_snapshot = '{"mutated": true}'::jsonb,
+                ruleset_snapshot = '{"mutated": true}'::jsonb
+            WHERE validation_run_id = %s
+            """,
+            (case.source_validation_run_id,),
+        )
+        admin_cursor.execute(
+            """
+            UPDATE valuation.rule_versions
+            SET status = 'DRAFT', version_name = 'mutated rules'
+            WHERE rule_version_id = %s
+            """,
+            (handoff_data.rule_version_id,),
+        )
+        admin_cursor.execute(
+            """
+            UPDATE valuation.validation_rules
+            SET is_active = false,
+                rule_expression = '{"system_rate":"-99","tolerance":"0"}'
+            WHERE rule_version_id = %s
+            """,
+            (handoff_data.rule_version_id,),
+        )
+        admin_cursor.execute(
+            """
+            UPDATE knowledge.documents
+            SET publication_status = 'DRAFT'
+            WHERE document_id = %s
+            """,
+            (handoff_data.rule_source_document_id,),
+        )
+    admin_cursor.connection.commit()
+
+    try:
+        async with AsyncSessionFactory() as session:
+            review_service = ReviewService(ReviewRepository(session))
+            completeness, _, _ = await review_service.check_completeness(
+                submission.review_id, reviewer.user_id
+            )
+            assert completeness.ready
+            await session.commit()
+            run, _ = await review_service.create_run(
+                submission.review_id, reviewer.user_id
+            )
+            findings = await review_service.list_findings(run.validation_run_id)
+
+            assert run.input_snapshot["case"] == {
+                "case_id": str(case.case_id),
+                "case_no": original_case[0],
+                "case_title": original_case[1],
+                "valuation_base_date": original_case[4],
+                "district_code": original_case[3],
+            }
+            assert {
+                (check["field_code"], check["reported_value"])
+                for check in run.input_snapshot["checks"]
+            } == {("adjustment_rate", case.adjustment_value), ("expert_grade", case.grade_value)}
+            assert run.input_snapshot["rule_version"]["status"] == "PUBLISHED"
+            assert run.input_snapshot["validation_rules"][0]["configuration"] in (
+                {"system_rate": "-5", "tolerance": "0"},
+                {"system_grade": "A"},
+            )
+            assert {
+                (finding.field_path, finding.reported_value) for finding in findings
+            } == {
+                ("F02.adjustment_rate", "-12.00"),
+                ("F02.expert_grade", case.grade_value),
+            }
+            adjustment_finding = next(
+                finding
+                for finding in findings
+                if finding.field_path == "F02.adjustment_rate"
+            )
+            assert adjustment_finding.system_adjustment_rate == Decimal("-5.000000")
+    finally:
+        # Restore the fixture's source rows so its normal cleanup remains
+        # valid and the case can be reused by the rest of the fixture.
+        admin_cursor.execute(
+            """
+            UPDATE valuation.cases
+            SET case_no = %s, case_title = %s, case_type = 'LAND',
+                district_code = 'BANQIAO', valuation_base_date = CURRENT_DATE
+            WHERE case_id = %s
+            """,
+            (
+                f"HANDOFF-1-{case.case_id.hex[:12]}",
+                "Valuation review handoff 1",
+                case.case_id,
+            ),
+        )
+        admin_cursor.execute(
+            """
+            UPDATE valuation.form_instances
+            SET form_status = 'FINAL',
+                form_content = jsonb_build_object(
+                    'report_type', 'REPORT_COMPARISON_COMMERCIAL',
+                    'report_id', %s::text,
+                    'report_version', 1,
+                    'data', jsonb_build_object(
+                        'calculation_status', 'CALCULATED',
+                        'calculation_snapshot', jsonb_build_object('formula_code', 'FORMAL_V1'),
+                        'benchmark_comparison_price', '246.9000',
+                        'calculated_at', now()::text
+                    )
+                )
+            WHERE form_instance_id = %s
+            """,
+            (case.report_form_id, case.report_form_id),
+        )
+        admin_cursor.execute(
+            """
+            UPDATE valuation.documents
+            SET original_filename = %s, checksum_sha256 = %s
+            WHERE document_id = %s
+            """,
+            (case.original_filename, "a" * 64, case.document_id),
+        )
+        admin_cursor.execute(
+            """
+            UPDATE valuation.validation_runs
+            SET passed_count = 2, failed_count = 0,
+                input_snapshot = jsonb_build_object(
+                    'case_version', 1, 'source', 'valuation',
+                    'rule_version_id', %s::text
+                ),
+                ruleset_snapshot = jsonb_build_object(
+                    'ruleset_code', 'HANDOFF_VALIDATION_V1',
+                    'rule_version_id', %s::text
+                )
+            WHERE validation_run_id = %s
+            """,
+            (
+                handoff_data.rule_version_id,
+                handoff_data.rule_version_id,
+                case.source_validation_run_id,
+            ),
+        )
+        admin_cursor.execute(
+            """
+            UPDATE valuation.rule_versions
+            SET status = 'PUBLISHED', version_name = 'Handoff rules'
+            WHERE rule_version_id = %s
+            """,
+            (handoff_data.rule_version_id,),
+        )
+        admin_cursor.execute(
+            """
+            UPDATE valuation.validation_rules
+            SET is_active = true,
+                rule_expression = CASE rule_code
+                    WHEN 'ADJUSTMENT_RATE' THEN '{"system_rate":"-5","tolerance":"0"}'
+                    ELSE '{"system_grade":"A"}'
+                END
+            WHERE rule_version_id = %s
+            """,
+            (handoff_data.rule_version_id,),
+        )
+        admin_cursor.execute(
+            """
+            UPDATE knowledge.documents
+            SET publication_status = 'PUBLISHED'
+            WHERE document_id = %s
+            """,
+            (handoff_data.rule_source_document_id,),
+        )
+        admin_cursor.connection.commit()
