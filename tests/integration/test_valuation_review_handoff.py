@@ -288,7 +288,7 @@ def _insert_live_original_v3(cursor, *, case: _Case, appraiser_id: UUID) -> UUID
             document_id,
             case.case_id,
             f"cases/{case.case_id}/handoff-original-v3.pdf",
-            "g" * 64,
+            "9" * 64,
             appraiser_id,
             original_group_id,
         ),
@@ -320,6 +320,14 @@ def _insert_report_revision_graph(
         """,
         (case.document_id,),
     )
+    cursor.execute(
+        """
+        UPDATE valuation.form_instances
+        SET form_status = 'VOID'
+        WHERE form_instance_id = %s
+        """,
+        (case.report_form_id,),
+    )
 
     document_id = uuid4()
     form_instance_id = uuid4()
@@ -341,7 +349,7 @@ def _insert_report_revision_graph(
             case.case_id,
             filename,
             f"cases/{case.case_id}/{filename}",
-            "h" * 64,
+            "c" * 64,
             appraiser_id,
             report_group_id,
         ),

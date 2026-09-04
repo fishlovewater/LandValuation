@@ -99,3 +99,51 @@ Case。未新增 schema、UI 或 workflow 狀態。
   連線 `npipe:////./pipe/docker_engine`（permission denied）。因此本輪沒有
   實際 PostgreSQL/SQLAlchemy session、focused integration、backend/full-suite
   或 transaction 證據，不宣稱整合測試通過。
+
+## 本輪追加：fresh handoff fixture 與完整驗證
+
+日期：2026-09-05
+
+本輪只修改 `tests/integration/test_valuation_review_handoff.py` 的測試資料：
+
+- `_insert_live_original_v3()` 的 checksum 由非十六進位的 `"g" * 64` 改為
+  合法小寫 hex 的 `"9" * 64`。
+- `_insert_report_revision_graph()` 的 checksum 由非十六進位的 `"h" * 64`
+  改為 `"c" * 64`，並在建立 v2 FINAL F02 前將同案件 v1 form 標為 `VOID`，
+  符合 `uq_form_instances_one_final` 的 schema invariant。
+
+### TDD / root-cause 證據
+
+- RED：fresh focused run 首先以 `ck_documents_sha256` 重現 `1 failed, 1
+  passed`，failing row 為 64 個 `g`；修正後暴露同類 64 個 `h` fixture，再次
+  重現相同 constraint failure。
+- GREEN：補齊兩個 checksum 並讓 v1 form 先轉 `VOID` 後，handoff focused run
+  通過 `2 passed`。
+- 靜態盤點 handoff test 的 checksum literals 均為 64 字元小寫十六進位值，且
+  v2 document checksum 與同案件既有 checksum 不重複。
+
+### Fresh environment verification
+
+```text
+.\scripts\run-integration-tests.ps1 -PytestArgs "tests/integration/test_valuation_review_handoff.py"
+2 passed in 1.07s
+
+.\scripts\run-integration-tests.ps1 -PytestArgs "app/review/tests"
+327 passed, 10 warnings in 19.12s
+
+.\scripts\run-integration-tests.ps1 -PytestArgs "tests"
+305 passed, 2 skipped in 65.70s
+
+node --test app/review/tests/test_ui_behavior.mjs
+38 passed, 0 failed
+
+python -m compileall -q -f app tests
+exit code 0
+
+git diff --check
+no output / no whitespace error
+```
+
+每個 isolated Docker run 都由既有腳本 teardown；最後以唯讀篩選確認符合
+`valuation-review-vr-` 命名的 containers、networks、volumes 均為空。未修改
+production、未 push/merge/branch cleanup，`.serena/` 仍未追蹤且未納入提交。
