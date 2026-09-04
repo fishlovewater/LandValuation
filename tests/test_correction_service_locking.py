@@ -16,11 +16,12 @@ class _Session:
 
 
 class _ReviewRepository:
-    def __init__(self, calls, review, case, run):
+    def __init__(self, calls, review, case, run, latest_submission=None):
         self.calls = calls
         self.review = review
         self.case = case
         self.run = run
+        self.latest_submission = latest_submission
         self.session = _Session(calls)
 
     async def get(self, review_id, for_update=False):
@@ -34,6 +35,19 @@ class _ReviewRepository:
     async def get_run(self, run_id):
         self.calls.append("run")
         return self.run if run_id == self.run.validation_run_id else None
+
+    async def get_submission_provenance_by_id(
+        self, submission_id, *, review_id, case_id
+    ):
+        self.calls.append("submission")
+        if (
+            self.latest_submission is None
+            or submission_id != self.latest_submission["submission_id"]
+            or review_id != self.review.review_id
+            or case_id != self.case.case_id
+        ):
+            return None
+        return dict(self.latest_submission)
 
     async def list_findings(self, run_id):
         self.calls.append("findings")
@@ -194,6 +208,50 @@ async def test_recheck_requires_a_newer_valuation_submission():
     assert getattr(raised.value, "code", None) == "REVIEW_RESUBMISSION_REQUIRED"
     assert getattr(raised.value, "status_code", None) == 409
     assert request.status == "RESUBMITTED"
+
+
+@pytest.mark.asyncio
+async def test_recheck_rejects_when_response_document_is_not_latest_submission():
+    calls = []
+    review, case, run, _ = _records(review_status="RETURNED_FOR_REVISION")
+    previous_submission_id = uuid4()
+    latest_submission_id = uuid4()
+    response_v2_document_id = uuid4()
+    latest_v3_document_id = uuid4()
+    review.latest_submission_id = latest_submission_id
+    run.submission_id = previous_submission_id
+    request = SimpleNamespace(
+        correction_request_id=uuid4(),
+        review_id=review.review_id,
+        based_on_validation_run_id=run.validation_run_id,
+        status="RESUBMITTED",
+        response_document_id=response_v2_document_id,
+        response_document_version=2,
+    )
+    latest_submission = {
+        "submission_id": latest_submission_id,
+        "source_report_document_id": latest_v3_document_id,
+    }
+    repository = _ReviewRepository(
+        calls, review, case, run, latest_submission=latest_submission
+    )
+
+    class _ReviewService:
+        async def check_completeness(self, *_args):
+            raise AssertionError("recheck must reject before starting a Run")
+
+    with pytest.raises(AppError) as raised:
+        await CorrectionService(
+            repository,
+            _CorrectionRepository(calls, request),
+            review_service=_ReviewService(),
+        ).recheck(request.correction_request_id, uuid4())
+
+    assert raised.value.code == "CORRECTION_RECHECK_DOCUMENT_MISMATCH"
+    assert raised.value.status_code == 409
+    assert request.status == "RESUBMITTED"
+    assert "submission" in calls
+    assert "flush" not in calls
 
 
 @pytest.mark.asyncio

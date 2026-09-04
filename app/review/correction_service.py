@@ -237,6 +237,29 @@ class CorrectionService:
                 "回件後必須先由估價流程建立較新的送審版本",
                 409,
             )
+        if latest_submission_id is not None:
+            latest_submission = (
+                await self.review_repository.get_submission_provenance_by_id(
+                    latest_submission_id,
+                    review_id=review.review_id,
+                    case_id=review.case_id,
+                )
+            )
+            if latest_submission is None:
+                raise AppError(
+                    "CORRECTION_RECHECK_SUBMISSION_INVALID",
+                    "目前送審版本不存在或不屬於此審查案件",
+                    409,
+                )
+            if (
+                latest_submission.get("source_report_document_id")
+                != request.response_document_id
+            ):
+                raise AppError(
+                    "CORRECTION_RECHECK_DOCUMENT_MISMATCH",
+                    "新版回件文件與目前送審版本不一致，無法執行新版重檢",
+                    409,
+                )
 
         request.status = "RECHECKING"
         await self.corrections.session.flush()

@@ -106,6 +106,7 @@ class ReviewRepository:
                     ReviewSubmissionRecord.submission_no,
                     ReviewSubmissionRecord.submitted_at,
                     ReviewSubmissionRecord.input_fingerprint,
+                    ReviewSubmissionRecord.source_report_document_id,
                 ).where(
                     ReviewSubmissionRecord.submission_id == submission_id,
                     ReviewSubmissionRecord.review_id == review_id,
