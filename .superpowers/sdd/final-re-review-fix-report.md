@@ -51,3 +51,51 @@
 重新執行 correction focused pytest、Review backend suite、完整 isolated
 suite 與 Docker residue check，特別確認實際 repository provenance query、
 transaction rollback，以及 mismatch 時沒有新 Run、finding 或歷程紀錄。
+
+## 本輪追加：Correction draft provenance 修正
+
+日期：2026-09-05
+
+上一輪的 recheck 文件綁定修正已保留。本輪處理另一個 Important：
+`CorrectionService.create_draft()` 原本無論 Review 是否有
+`latest_submission_id` 都讀 live 最新 `original` 文件，可能讓 Submission 1
+的修正通知錯綁後來的 v3。現在有 pointer 的 Review 會依
+`review_id + case_id` 讀取該 Submission，並使用其
+`source_report_document_id` 對應的文件 ID、版本與 `document_group_id`；
+pointer 不存在時才保留既有 live 最新文件 fallback。Submission 或來源文件
+不存在、跨 Review/Case 或無法完成 ownership join 時，會以明確的
+`409 CORRECTION_BASE_DOCUMENT_SUBMISSION_INVALID` fail closed。
+
+`ReviewRepository.get_submission_provenance_by_id()` 現在 join
+`valuation.documents` 取得來源文件 metadata，未限制 `is_active`，因此已被
+新版取代的歷史來源文件仍能作為 correction base；同時要求來源文件屬於同一
+Case。未新增 schema、UI 或 workflow 狀態。
+
+### 本輪 TDD 證據
+
+- RED：新增 pointer-backed draft 測試後，在尚未分流的實作上以
+  `asyncio.run` 執行，確實在 `request.base_document_id == source_document_id`
+  斷言失敗，拿到 live v3 而非 Submission source v1。
+- GREEN：加入 pointer/fallback 分流後，`tests/test_correction_service_locking.py`
+  的 9 個 async coroutine 直接執行均成功；另涵蓋 pointer 缺少 owned source
+  document 時的 409 fail-closed。
+- 整合測試已擴充同一 handoff：live original v3、complete report v2、
+  Submission 2、同 group 回件登記、新 Review Run、`RESOLVED` correction item
+  與 `CORRECTION_RECHECKED` history。
+
+### 本輪環境驗證與限制
+
+- `node --test app/review/tests/test_ui_behavior.mjs`：38 passed, 0 failed。
+- `python -m compileall -q -f app tests`（`PYTHONPYCACHEPREFIX` 指向可寫暫存）：
+  成功，無編譯錯誤。
+- `git diff --check`：成功，無 whitespace error。
+- `python -m pytest tests/test_correction_service_locking.py -q`：9 skipped；
+  Host 缺少 `pytest-asyncio`，因此 async pytest 結果不可視為通過；直接
+  coroutine 驗證才是本輪 unit 證據。
+- `python -m pytest tests/integration/test_valuation_review_handoff.py
+  --collect-only -q`：收集前即因 Host 缺少 `pwdlib` 的
+  `ModuleNotFoundError` 中止。
+- Docker Desktop `com.docker.service` 仍為 `Stopped`；`docker version` 無法
+  連線 `npipe:////./pipe/docker_engine`（permission denied）。因此本輪沒有
+  實際 PostgreSQL/SQLAlchemy session、focused integration、backend/full-suite
+  或 transaction 證據，不宣稱整合測試通過。

@@ -18,7 +18,7 @@ from app.review.models import (
 )
 from app.review.schemas import ReviewCreate, ReviewListQuery
 from app.review.risks import EXPERT_MINIMUM_MEDIUM_TYPE, HIGH_RISK_FINDING_TYPES
-from app.valuation.models import CaseRecord, ReviewSubmissionRecord
+from app.valuation.models import CaseRecord, DocumentRecord, ReviewSubmissionRecord
 
 
 class ReviewRepository:
@@ -107,6 +107,18 @@ class ReviewRepository:
                     ReviewSubmissionRecord.submitted_at,
                     ReviewSubmissionRecord.input_fingerprint,
                     ReviewSubmissionRecord.source_report_document_id,
+                    DocumentRecord.document_id,
+                    DocumentRecord.document_type,
+                    DocumentRecord.version_no,
+                    DocumentRecord.document_group_id,
+                    DocumentRecord.object_key,
+                    DocumentRecord.checksum_sha256,
+                )
+                .join(
+                    DocumentRecord,
+                    (DocumentRecord.document_id
+                     == ReviewSubmissionRecord.source_report_document_id)
+                    & (DocumentRecord.case_id == ReviewSubmissionRecord.case_id),
                 ).where(
                     ReviewSubmissionRecord.submission_id == submission_id,
                     ReviewSubmissionRecord.review_id == review_id,

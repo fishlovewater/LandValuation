@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -16,12 +17,21 @@ class _Session:
 
 
 class _ReviewRepository:
-    def __init__(self, calls, review, case, run, latest_submission=None):
+    def __init__(
+        self,
+        calls,
+        review,
+        case,
+        run,
+        latest_submission=None,
+        latest_original_document=None,
+    ):
         self.calls = calls
         self.review = review
         self.case = case
         self.run = run
         self.latest_submission = latest_submission
+        self.latest_original_document = latest_original_document
         self.session = _Session(calls)
 
     async def get(self, review_id, for_update=False):
@@ -48,6 +58,12 @@ class _ReviewRepository:
         ):
             return None
         return dict(self.latest_submission)
+
+    async def get_latest_original_document(self, case_id):
+        self.calls.append("latest_document")
+        if case_id != self.case.case_id:
+            return None
+        return self.latest_original_document
 
     async def list_findings(self, run_id):
         self.calls.append("findings")
@@ -80,6 +96,21 @@ class _CorrectionRepository:
     async def active_for_review(self, review_id):
         self.calls.append("active")
         return self.request
+
+    async def next_request_no(self, review_id):
+        self.calls.append("next_request_no")
+        return 1
+
+    async def create_request(self, **values):
+        self.calls.append("create_request")
+        self.request = SimpleNamespace(
+            correction_request_id=uuid4(), **values
+        )
+        return self.request
+
+    async def create_items(self, rows):
+        self.calls.append("create_items")
+        return rows
 
     async def count_active_requests(self, review_id):
         self.calls.append("active_count")
@@ -161,6 +192,160 @@ async def test_send_locks_case_before_review_and_request():
     assert request.status == "SENT"
     assert review.review_status == "RETURNED_FOR_REVISION"
     assert case.case_status == "REVISION_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_create_draft_uses_submission_source_document_instead_of_live_latest():
+    calls = []
+    review, case, run, findings = _records()
+    submission_id = uuid4()
+    source_document_id = uuid4()
+    source_document_group_id = uuid4()
+    live_document_id = uuid4()
+    review.latest_submission_id = submission_id
+    findings.append(
+        SimpleNamespace(
+            finding_id=uuid4(),
+            finding_code="ADJUSTMENT_RATE",
+            finding_type="VALUE_MISMATCH",
+            severity="HIGH",
+            status="CONFIRMED_ISSUE",
+        )
+    )
+    repository = _ReviewRepository(
+        calls,
+        review,
+        case,
+        run,
+        latest_submission={
+            "submission_id": submission_id,
+            "source_report_document_id": source_document_id,
+            "document_id": source_document_id,
+            "version_no": 1,
+            "document_group_id": source_document_group_id,
+        },
+        latest_original_document={
+            "document_id": live_document_id,
+            "version_no": 3,
+            "document_group_id": uuid4(),
+        },
+    )
+
+    async def list_findings(run_id):
+        calls.append("findings")
+        return findings
+
+    repository.list_findings = list_findings
+    corrections = _CorrectionRepository(calls)
+
+    request = await CorrectionService(repository, corrections).create_draft(
+        review.review_id,
+        SimpleNamespace(
+            due_at=datetime.now(UTC) + timedelta(days=1), message=" 請修正 "
+        ),
+        uuid4(),
+    )
+
+    assert request.base_document_id == source_document_id
+    assert request.base_document_version == 1
+    assert "submission" in calls
+    assert "latest_document" not in calls
+
+
+@pytest.mark.asyncio
+async def test_create_draft_rejects_submission_pointer_without_owned_source_document():
+    calls = []
+    review, case, run, findings = _records()
+    review.latest_submission_id = uuid4()
+    findings.append(
+        SimpleNamespace(
+            finding_id=uuid4(),
+            finding_code="ADJUSTMENT_RATE",
+            finding_type="VALUE_MISMATCH",
+            severity="HIGH",
+            status="CONFIRMED_ISSUE",
+        )
+    )
+    repository = _ReviewRepository(
+        calls,
+        review,
+        case,
+        run,
+        latest_original_document={
+            "document_id": uuid4(),
+            "version_no": 3,
+            "document_group_id": uuid4(),
+        },
+    )
+
+    async def list_findings(run_id):
+        calls.append("findings")
+        return findings
+
+    repository.list_findings = list_findings
+
+    with pytest.raises(AppError) as raised:
+        await CorrectionService(
+            repository, _CorrectionRepository(calls)
+        ).create_draft(
+            review.review_id,
+            SimpleNamespace(
+                due_at=datetime.now(UTC) + timedelta(days=1), message="請修正"
+            ),
+            uuid4(),
+        )
+
+    assert raised.value.code == "CORRECTION_BASE_DOCUMENT_SUBMISSION_INVALID"
+    assert raised.value.status_code == 409
+    assert "submission" in calls
+    assert "latest_document" not in calls
+
+
+@pytest.mark.asyncio
+async def test_create_draft_uses_legacy_latest_document_without_submission_pointer():
+    calls = []
+    review, case, run, findings = _records()
+    source_document_id = uuid4()
+    findings.append(
+        SimpleNamespace(
+            finding_id=uuid4(),
+            finding_code="ADJUSTMENT_RATE",
+            finding_type="VALUE_MISMATCH",
+            severity="HIGH",
+            status="CONFIRMED_ISSUE",
+        )
+    )
+    repository = _ReviewRepository(
+        calls,
+        review,
+        case,
+        run,
+        latest_original_document={
+            "document_id": source_document_id,
+            "version_no": 1,
+            "document_group_id": uuid4(),
+        },
+    )
+
+    async def list_findings(run_id):
+        calls.append("findings")
+        return findings
+
+    repository.list_findings = list_findings
+    corrections = _CorrectionRepository(calls)
+
+    request = await CorrectionService(repository, corrections).create_draft(
+        review.review_id,
+        SimpleNamespace(
+            due_at=datetime.now(UTC) + timedelta(days=1), message="請修正"
+        ),
+        uuid4(),
+    )
+
+    assert request.base_document_id == source_document_id
+    assert request.base_document_version == 1
+    assert "submission" not in calls
+    assert "latest_document" in calls
 
 
 @pytest.mark.asyncio

@@ -68,9 +68,25 @@ class CorrectionService:
         summary, confirmed = await self._gate_inputs(review)
         validate_correction_send(summary)
 
-        base_document = await self.review_repository.get_latest_original_document(
-            review.case_id
-        )
+        latest_submission_id = getattr(review, "latest_submission_id", None)
+        if latest_submission_id is not None:
+            base_document = (
+                await self.review_repository.get_submission_provenance_by_id(
+                    latest_submission_id,
+                    review_id=review.review_id,
+                    case_id=review.case_id,
+                )
+            )
+            if base_document is None:
+                raise AppError(
+                    "CORRECTION_BASE_DOCUMENT_SUBMISSION_INVALID",
+                    "目前送審版本不存在、來源文件遺失或不屬於此審查案件",
+                    409,
+                )
+        else:
+            base_document = await self.review_repository.get_latest_original_document(
+                review.case_id
+            )
         if base_document is None:
             raise AppError("CORRECTION_BASE_DOCUMENT_MISSING", "案件沒有正式原始文件", 409)
 

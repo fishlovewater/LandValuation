@@ -253,6 +253,201 @@ def _insert_case_graph(
     )
 
 
+def _insert_live_original_v3(cursor, *, case: _Case, appraiser_id: UUID) -> UUID:
+    cursor.execute(
+        """
+        SELECT document_group_id
+        FROM valuation.documents
+        WHERE case_id = %s AND document_type = 'original'
+        ORDER BY version_no DESC, document_id DESC
+        LIMIT 1
+        """,
+        (case.case_id,),
+    )
+    original_group_id = cursor.fetchone()[0]
+    cursor.execute(
+        """
+        UPDATE valuation.documents
+        SET is_active = false
+        WHERE case_id = %s AND document_type = 'original'
+        """,
+        (case.case_id,),
+    )
+    document_id = uuid4()
+    cursor.execute(
+        """
+        INSERT INTO valuation.documents
+            (document_id, case_id, document_type, original_filename, mime_type,
+             bucket_name, object_key, checksum_sha256, file_size_bytes,
+             version_no, uploaded_by_user_id, uploaded_at, is_active,
+             document_group_id)
+        VALUES (%s, %s, 'original', 'handoff-original-v3.pdf', 'application/pdf',
+                'land-valuation', %s, %s, 1024, 3, %s, now(), true, %s)
+        """,
+        (
+            document_id,
+            case.case_id,
+            f"cases/{case.case_id}/handoff-original-v3.pdf",
+            "g" * 64,
+            appraiser_id,
+            original_group_id,
+        ),
+    )
+    return document_id
+
+
+def _insert_report_revision_graph(
+    cursor,
+    *,
+    case: _Case,
+    appraiser_id: UUID,
+    rule_version_id: UUID,
+) -> tuple[UUID, UUID]:
+    cursor.execute(
+        """
+        SELECT document_group_id
+        FROM valuation.documents
+        WHERE document_id = %s
+        """,
+        (case.document_id,),
+    )
+    report_group_id = cursor.fetchone()[0]
+    cursor.execute(
+        """
+        UPDATE valuation.documents
+        SET is_active = false
+        WHERE document_id = %s
+        """,
+        (case.document_id,),
+    )
+
+    document_id = uuid4()
+    form_instance_id = uuid4()
+    extraction_id = uuid4()
+    validation_run_id = uuid4()
+    filename = f"{case.original_filename[:-4]}-v2.pdf"
+    cursor.execute(
+        """
+        INSERT INTO valuation.documents
+            (document_id, case_id, document_type, original_filename, mime_type,
+             bucket_name, object_key, checksum_sha256, file_size_bytes,
+             version_no, uploaded_by_user_id, uploaded_at, is_active,
+             document_group_id)
+        VALUES (%s, %s, 'complete-valuation-report', %s, 'application/pdf',
+                'land-valuation', %s, %s, 2048, 2, %s, now(), true, %s)
+        """,
+        (
+            document_id,
+            case.case_id,
+            filename,
+            f"cases/{case.case_id}/{filename}",
+            "h" * 64,
+            appraiser_id,
+            report_group_id,
+        ),
+    )
+    cursor.execute(
+        """
+        INSERT INTO valuation.form_instances
+            (form_instance_id, case_id, form_code, version_no, form_status,
+             form_content, output_document_id, created_by_user_id,
+             updated_by_user_id)
+        VALUES (
+            %s, %s, 'F02', 2, 'FINAL',
+            jsonb_build_object(
+                'report_type', 'REPORT_COMPARISON_COMMERCIAL',
+                'report_id', %s::text,
+                'report_version', 2,
+                'data', jsonb_build_object(
+                    'calculation_status', 'CALCULATED',
+                    'calculation_snapshot',
+                        jsonb_build_object('formula_code', 'FORMAL_V2'),
+                    'benchmark_comparison_price', '246.9000',
+                    'calculated_at', now()::text
+                )
+            ),
+            %s, %s, %s
+        )
+        """,
+        (
+            form_instance_id,
+            case.case_id,
+            form_instance_id,
+            document_id,
+            appraiser_id,
+            appraiser_id,
+        ),
+    )
+    cursor.execute(
+        """
+        INSERT INTO valuation.document_extractions
+            (extraction_id, case_id, document_id, provider, extraction_status,
+             created_by_user_id, completed_at)
+        VALUES (%s, %s, %s, 'LOCAL_PDF', 'COMPLETED', %s, now())
+        """,
+        (extraction_id, case.case_id, document_id, appraiser_id),
+    )
+    for field_name, value, raw_text, page in (
+        ("adjustment_rate", "-5.0000", "報告調整率 -5%", 3),
+        ("expert_grade", "A", "報告級距 A", 4),
+    ):
+        cursor.execute(
+            """
+            INSERT INTO valuation.extracted_fields
+                (extracted_field_id, case_id, extraction_id, document_id,
+                 form_code, field_name, extracted_value, confidence,
+                 source_page, source_text, analysis_provider, field_status,
+                 confirmed_value, confirmed_by_user_id, confirmed_at,
+                 applied_form_instance_id, applied_at)
+            VALUES (%s, %s, %s, %s, 'F02', %s, to_jsonb(%s::text), 1.0000,
+                    %s, %s, 'RULE', 'APPLIED', to_jsonb(%s::text), %s, now(),
+                    %s, now())
+            """,
+            (
+                uuid4(),
+                case.case_id,
+                extraction_id,
+                document_id,
+                field_name,
+                value,
+                page,
+                raw_text,
+                value,
+                appraiser_id,
+                form_instance_id,
+            ),
+        )
+    cursor.execute(
+        """
+        INSERT INTO valuation.validation_runs
+            (validation_run_id, case_id, form_instance_id, run_status,
+             passed_count, warning_count, failed_count, completed_at,
+             triggered_by_user_id, rule_version_id, input_snapshot,
+             ruleset_snapshot)
+        VALUES (%s, %s, %s, 'COMPLETED', 2, 0, 0, now(), %s, %s,
+                jsonb_build_object(
+                    'case_version', 2,
+                    'source', 'valuation',
+                    'rule_version_id', %s::text
+                ),
+                jsonb_build_object(
+                    'ruleset_code', 'HANDOFF_VALIDATION_V1',
+                    'rule_version_id', %s::text
+                ))
+        """,
+        (
+            validation_run_id,
+            case.case_id,
+            form_instance_id,
+            appraiser_id,
+            rule_version_id,
+            rule_version_id,
+            rule_version_id,
+        ),
+    )
+    return document_id, validation_run_id
+
+
 @pytest.fixture
 def handoff_data(admin_cursor) -> _HandoffData:
     appraiser_id = uuid4()
@@ -666,6 +861,14 @@ async def test_appraiser_submission_handoff_is_reviewable_and_statuses_pair(
         assert return_summary.review_id == return_submission.review_id
         assert confirmed_finding_id is not None
 
+        # A newer live source document must not replace the immutable report
+        # that the first Submission handed to Review.
+        live_original_v3_id = _insert_live_original_v3(
+            admin_cursor,
+            case=return_case,
+            appraiser_id=appraiser_id,
+        )
+        admin_cursor.connection.commit()
         draft = await corrections.create_draft(
             return_submission.review_id,
             CorrectionRequestCreate(
@@ -675,6 +878,9 @@ async def test_appraiser_submission_handoff_is_reviewable_and_statuses_pair(
             reviewer.user_id,
         )
         await session.commit()
+        assert draft.base_document_id == return_case.document_id
+        assert draft.base_document_version == 1
+        assert draft.base_document_id != live_original_v3_id
         correction_items = await correction_repository.list_items(
             draft.correction_request_id
         )
@@ -689,6 +895,66 @@ async def test_appraiser_submission_handoff_is_reviewable_and_statuses_pair(
         assert await _status_pair(
             session, return_case.case_id, return_submission.review_id
         ) == ("RETURNED_FOR_REVISION", "REVISION_REQUIRED")
+
+        response_document_id, response_validation_run_id = (
+            _insert_report_revision_graph(
+                admin_cursor,
+                case=return_case,
+                appraiser_id=appraiser_id,
+                rule_version_id=handoff_data.rule_version_id,
+            )
+        )
+        admin_cursor.connection.commit()
+
+        revised_submission = await SubmissionService(session).submit(
+            return_case.case_id,
+            SubmitForReviewCommand(
+                request_id=uuid4(),
+                expected_case_version=2,
+                source_validation_run_id=response_validation_run_id,
+                source_report_document_id=response_document_id,
+            ),
+            appraiser,
+        )
+        await session.commit()
+        assert revised_submission.submission_no == 2
+        assert revised_submission.review_id == return_submission.review_id
+
+        resubmitted = await corrections.register_resubmission(
+            draft.correction_request_id,
+            SimpleNamespace(
+                document_id=response_document_id,
+                document_version=2,
+            ),
+            reviewer.user_id,
+        )
+        await session.commit()
+        assert resubmitted.status == "RESUBMITTED"
+        assert resubmitted.response_document_id == response_document_id
+        assert resubmitted.response_document_version == 2
+
+        rechecked_run, _ = await corrections.recheck(
+            draft.correction_request_id, reviewer.user_id
+        )
+        await session.commit()
+        assert rechecked_run is not None
+        assert rechecked_run.validation_run_id != return_run.validation_run_id
+        assert rechecked_run.submission_id == revised_submission.submission_id
+
+        rechecked_request = await correction_repository.get_request(
+            draft.correction_request_id
+        )
+        assert rechecked_request.status == "RECHECKED"
+        rechecked_items = await correction_repository.list_items(
+            draft.correction_request_id
+        )
+        assert [item.recheck_outcome for item in rechecked_items] == ["RESOLVED"]
+        assert [item.resulting_finding_id for item in rechecked_items] == [None]
+        assert len(await review_repository.list_runs(return_submission.review_id)) == 2
+        report = await review_service.build_report(rechecked_run.validation_run_id)
+        assert any(
+            event.event_type == "CORRECTION_RECHECKED" for event in report.history
+        )
 
 
 @pytest.mark.asyncio
