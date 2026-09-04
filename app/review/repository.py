@@ -266,53 +266,6 @@ class ReviewRepository:
         ).mappings().one_or_none()
         return dict(row) if row else None
 
-    async def get_latest_completed_extraction(
-        self, document_id: UUID, document_version: int
-    ):
-        row = (
-            await self.session.execute(
-                text(
-                    """
-                    SELECT extraction_run_id, case_id, document_id,
-                           document_version, run_no, status, extractor_name,
-                           extractor_version, started_at, completed_at
-                    FROM valuation.extraction_runs
-                    WHERE document_id = :document_id
-                      AND document_version = :document_version
-                      AND status = 'COMPLETED'
-                    ORDER BY run_no DESC, completed_at DESC, extraction_run_id DESC
-                    LIMIT 1
-                    """
-                ),
-                {
-                    "document_id": document_id,
-                    "document_version": document_version,
-                },
-            )
-        ).mappings().one_or_none()
-        return dict(row) if row else None
-
-    async def list_official_extracted_fields(self, extraction_run_id: UUID):
-        rows = (
-            await self.session.execute(
-                text(
-                    """
-                    SELECT extracted_field_id, extraction_run_id, field_code,
-                           field_path, value_type, raw_text, normalized_value,
-                           page_number, bounding_box, confidence,
-                           verification_status, verified_by_user_id, verified_at,
-                           is_official
-                    FROM valuation.extracted_fields
-                    WHERE extraction_run_id = :extraction_run_id
-                      AND is_official = true
-                    ORDER BY field_code, extracted_field_id
-                    """
-                ),
-                {"extraction_run_id": extraction_run_id},
-            )
-        ).mappings()
-        return [dict(row) for row in rows]
-
     async def list_applied_confirmed_extracted_fields(self, case_id: UUID):
         rows = (
             await self.session.execute(

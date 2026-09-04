@@ -20,6 +20,8 @@
 - Every production change follows red-green-refactor and is verified in the isolated Docker test environment.
 - Preserve the pre-existing untracked `.serena/` directory.
 
+目前可執行的 migration head：`20260904_0014`。
+
 ---
 
 ### Task 1: Restore the submission command and its focused tests
@@ -432,7 +434,7 @@ git commit -m "fix(api): restore valuation swagger editor"
 
 - [ ] **Step 1: Add a test proving a downgraded test cannot poison its successor**
 
-Add a pair of ordered tests in a dedicated class or module: the first downgrades to `20260901_0009` and intentionally exits after registering cleanup; the second asserts `alembic_version` equals `20260903_0013` and all `0010`–`0013` columns exist.
+Add a pair of ordered tests in a dedicated class or module: the first downgrades to `20260901_0009` and intentionally exits after registering cleanup; the second asserts `alembic_version` equals `20260904_0014` and all `0010`–`0014` schema changes exist.
 
 - [ ] **Step 2: Verify RED with the combined migration order**
 

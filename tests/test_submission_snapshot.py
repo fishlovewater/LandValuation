@@ -83,3 +83,59 @@ def test_snapshot_normalizes_uuid_and_datetime_to_strings() -> None:
     assert encoded == (
         f'{{"id":"{identifier}","occurred_at":"{occurred_at.isoformat()}"}}'.encode()
     )
+
+
+def test_snapshot_freezes_review_execution_context() -> None:
+    execution_context = {
+        "schema_version": "valuation-review-execution-v1",
+        "case": {
+            "case_type": "LAND",
+            "district_code": "BANQIAO",
+            "valuation_base_date": "2026-09-03",
+            "form_codes": ["F02"],
+        },
+        "source_validation_run": {
+            "validation_run_id": str(uuid4()),
+            "case_id": str(uuid4()),
+            "form_instance_id": str(uuid4()),
+            "run_status": "COMPLETED",
+            "input_snapshot": {"input_fingerprint": "a" * 64},
+        },
+        "report": {
+            "form_instance_id": str(uuid4()),
+            "version_no": 2,
+            "output_document_id": str(uuid4()),
+        },
+        "rule_selection": {
+            "rule_version": {"rule_version_id": str(uuid4())},
+            "rule_source": {"document_id": str(uuid4())},
+            "validation_rules": [],
+        },
+    }
+
+    snapshot = build_submission_snapshot(
+        case_version=2,
+        submitted_by_user_id=uuid4(),
+        request_id=uuid4(),
+        applied_fields=[],
+        calculations={},
+        documents=[],
+        validation={},
+        execution_context=execution_context,
+    )
+
+    assert snapshot["execution_context"] == execution_context
+
+
+def test_snapshot_rejects_float_in_review_execution_context() -> None:
+    with pytest.raises(TypeError, match="^float is not allowed in submission snapshots$"):
+        build_submission_snapshot(
+            case_version=1,
+            submitted_by_user_id=uuid4(),
+            request_id=uuid4(),
+            applied_fields=[],
+            calculations={},
+            documents=[],
+            validation={},
+            execution_context={"rule_selection": {"priority": 1.5}},
+        )

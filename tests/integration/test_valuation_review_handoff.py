@@ -63,6 +63,7 @@ def _insert_case_graph(
     cursor,
     *,
     appraiser_id: UUID,
+    rule_version_id: UUID,
     source_validation_run_id: UUID,
     index: int,
 ) -> _Case:
@@ -214,11 +215,29 @@ def _insert_case_graph(
         INSERT INTO valuation.validation_runs
             (validation_run_id, case_id, form_instance_id, run_status,
              passed_count, warning_count, failed_count, completed_at,
-             triggered_by_user_id, ruleset_snapshot)
+             triggered_by_user_id, rule_version_id, input_snapshot,
+             ruleset_snapshot)
         VALUES (%s, %s, %s, 'COMPLETED', 2, 0, 0, now(), %s,
-                jsonb_build_object('ruleset_code', 'HANDOFF_VALIDATION_V1'))
+                %s,
+                jsonb_build_object(
+                    'case_version', 1,
+                    'source', 'valuation',
+                    'rule_version_id', %s::text
+                ),
+                jsonb_build_object(
+                    'ruleset_code', 'HANDOFF_VALIDATION_V1',
+                    'rule_version_id', %s::text
+                ))
         """,
-        (source_validation_run_id, case_id, report_form_id, appraiser_id),
+        (
+            source_validation_run_id,
+            case_id,
+            report_form_id,
+            appraiser_id,
+            rule_version_id,
+            rule_version_id,
+            rule_version_id,
+        ),
     )
     return _Case(
         case_id=case_id,
@@ -319,12 +338,14 @@ def handoff_data(admin_cursor) -> _HandoffData:
     first = _insert_case_graph(
         admin_cursor,
         appraiser_id=appraiser_id,
+        rule_version_id=rule_version_id,
         source_validation_run_id=source_validation_run_ids[0],
         index=1,
     )
     second = _insert_case_graph(
         admin_cursor,
         appraiser_id=appraiser_id,
+        rule_version_id=rule_version_id,
         source_validation_run_id=source_validation_run_ids[1],
         index=2,
     )

@@ -108,7 +108,8 @@ POST /api/v1/valuation/cases/{case_id}/submit-for-review
 本次最小 handoff 的實作驗證紀錄：
 
 - 公開送審端點為 `POST /api/v1/valuation/cases/{case_id}/submit-for-review`。
-- 資料庫 migration head 為 `20260903_0013`。
+- 資料庫 migration head 為 `20260904_0014`；`0014` 以明確檢查既有重複資料後，
+  強制每個估價案件只有一筆 Review 工作流。
 - 可執行的跨模組驗收測試為
   `tests/integration/test_valuation_review_handoff.py`；路由共存檢查在
   `tests/test_integration_surface.py`。

@@ -244,21 +244,74 @@ class WorkbenchRepository:
     async def get_document_for_review(
         self, review_id: UUID, document_id: UUID
     ) -> dict | None:
-        row = (
+        review = (
             await self.session.execute(
                 text(
                     """
-                    SELECT d.document_id, d.original_filename, d.mime_type,
-                           d.object_key
-                    FROM review.reviews r
-                    JOIN valuation.documents d ON d.case_id = r.case_id
-                    WHERE r.review_id = :review_id
-                      AND d.document_id = :document_id
+                    SELECT case_id, latest_submission_id
+                    FROM review.reviews
+                    WHERE review_id = :review_id
                     """
                 ),
-                {"review_id": review_id, "document_id": document_id},
+                {"review_id": review_id},
             )
         ).mappings().one_or_none()
+        if review is None:
+            return None
+
+        if review["latest_submission_id"] is None:
+            # Legacy standalone Reviews have no immutable handoff pointer and
+            # intentionally retain the live case-document fallback.
+            row = (
+                await self.session.execute(
+                    text(
+                        """
+                        SELECT d.document_id, d.original_filename, d.mime_type,
+                               d.object_key
+                        FROM valuation.documents d
+                        WHERE d.case_id = :case_id
+                          AND d.document_id = :document_id
+                        """
+                    ),
+                    {"case_id": review["case_id"], "document_id": document_id},
+                )
+            ).mappings().one_or_none()
+        else:
+            # A submitted Review is bounded by the immutable list of document
+            # IDs in its Snapshot.  The live row is used only to obtain the
+            # current storage handle after that membership check succeeds.
+            row = (
+                await self.session.execute(
+                    text(
+                        """
+                        SELECT d.document_id, d.original_filename, d.mime_type,
+                               d.object_key
+                        FROM valuation.review_submissions s
+                        JOIN valuation.documents d
+                          ON d.case_id = s.case_id
+                         AND d.document_id = :document_id
+                        CROSS JOIN LATERAL jsonb_array_elements(
+                            CASE
+                                WHEN jsonb_typeof(s.input_snapshot->'documents') = 'array'
+                                THEN s.input_snapshot->'documents'
+                                ELSE '[]'::jsonb
+                            END
+                        ) AS submitted_document(item)
+                        WHERE s.submission_id = :submission_id
+                          AND s.review_id = :review_id
+                          AND s.case_id = :case_id
+                          AND submitted_document.item->>'document_id'
+                              = d.document_id::text
+                        """
+                    ),
+                    {
+                        "submission_id": review["latest_submission_id"],
+                        "review_id": review_id,
+                        "case_id": review["case_id"],
+                        "document_id": document_id,
+                    },
+                )
+            ).mappings().one_or_none()
         return dict(row) if row else None
 
     async def list_official_field_versions(self, case_id: UUID) -> list[dict]:

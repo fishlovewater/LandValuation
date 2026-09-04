@@ -287,7 +287,9 @@ class ReviewService:
             "documents",
             "validation",
         }
-        if set(snapshot) != top_level_keys:
+        if not top_level_keys.issubset(snapshot) or set(snapshot) - (
+            top_level_keys | {"execution_context"}
+        ):
             raise invalid()
         if snapshot.get("schema_version") != SNAPSHOT_SCHEMA_VERSION:
             raise invalid()
@@ -351,6 +353,15 @@ class ReviewService:
             raise invalid()
         if not valid_json_value(snapshot["validation"]):
             raise invalid()
+        if "execution_context" in snapshot:
+            execution_context = snapshot["execution_context"]
+            if (
+                not isinstance(execution_context, dict)
+                or execution_context.get("schema_version")
+                != "valuation-review-execution-v1"
+                or not valid_json_value(execution_context)
+            ):
+                raise invalid()
 
         if input_fingerprint is not _MISSING_FINGERPRINT:
             if not isinstance(input_fingerprint, str) or not re.fullmatch(

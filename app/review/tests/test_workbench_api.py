@@ -493,6 +493,54 @@ def test_submitted_workbench_detail_uses_snapshot_documents_after_live_change(
         postgres_connection.commit()
 
 
+def test_submitted_workbench_preview_rejects_document_added_after_submission(
+    workbench_client, workbench_records, workbench_submission, postgres_connection
+):
+    post_submission_document_id = uuid4()
+    object_key = f"cases/{workbench_records.reviewed_case_id}/post-submit-preview.pdf"
+    with postgres_connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO valuation.documents (
+                document_id, case_id, document_type, original_filename,
+                mime_type, bucket_name, object_key, checksum_sha256,
+                file_size_bytes, version_no, uploaded_by_user_id,
+                is_active, document_group_id
+            ) VALUES (%s, %s, 'original', 'post-submit-preview.pdf',
+                      'application/pdf', 'land-valuation', %s, %s, 100, 2,
+                      %s, true, %s)
+            """,
+            (
+                post_submission_document_id,
+                workbench_records.reviewed_case_id,
+                object_key,
+                "e" * 64,
+                workbench_records.user_id,
+                uuid4(),
+            ),
+        )
+    postgres_connection.commit()
+
+    storage = DocumentStorage({object_key: b"%PDF-post-submit"})
+    app.dependency_overrides[get_storage_service] = lambda: storage
+    try:
+        response = workbench_client.get(
+            "/api/v1/review/workbench/cases/"
+            f"{workbench_records.review_id}/documents/"
+            f"{post_submission_document_id}/content"
+        )
+    finally:
+        app.dependency_overrides.pop(get_storage_service, None)
+        with postgres_connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM valuation.documents WHERE document_id = %s",
+                (post_submission_document_id,),
+            )
+        postgres_connection.commit()
+
+    assert response.status_code == 404
+
+
 def test_workbench_detail_does_not_project_latest_submission_onto_legacy_run(
     workbench_client, workbench_records, workbench_submission, postgres_connection
 ):

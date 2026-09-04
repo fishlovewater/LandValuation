@@ -41,6 +41,9 @@ class _SubmissionFixtureGraph:
     user_id: UUID
     document_id: UUID
     document_group_id: UUID
+    rule_source_document_id: UUID
+    rule_version_id: UUID
+    validation_rule_id: UUID
     form_instance_id: UUID
     extraction_id: UUID
     extracted_field_id: UUID
@@ -140,6 +143,18 @@ def _delete_submission_fixture_graph(admin_cursor, graph: _SubmissionFixtureGrap
     admin_cursor.execute(
         "DELETE FROM valuation.documents WHERE document_id = %s",
         (graph.document_id,),
+    )
+    admin_cursor.execute(
+        "DELETE FROM valuation.validation_rules WHERE validation_rule_id = %s",
+        (graph.validation_rule_id,),
+    )
+    admin_cursor.execute(
+        "DELETE FROM valuation.rule_versions WHERE rule_version_id = %s",
+        (graph.rule_version_id,),
+    )
+    admin_cursor.execute(
+        "DELETE FROM knowledge.documents WHERE document_id = %s",
+        (graph.rule_source_document_id,),
     )
     admin_cursor.execute(
         "DELETE FROM valuation.cases WHERE case_id = %s", (graph.case_id,)
@@ -390,6 +405,9 @@ def _seed_submittable_case(
     document_group_id = uuid4()
     extraction_id = uuid4()
     extracted_field_id = uuid4()
+    rule_source_document_id = uuid4()
+    rule_version_id = uuid4()
+    validation_rule_id = uuid4()
     validation_run_id = uuid4()
     request_id = uuid4()
     admin_cursor.execute(
@@ -412,6 +430,53 @@ def _seed_submittable_case(
                 'NEW_TAIPEI', 'BANQIAO', 'PROCESSING', %s, %s)
         """,
         (case_id, f"SUBMIT-{case_id.hex[:12]}", user_id, user_id),
+    )
+    admin_cursor.execute(
+        """
+        INSERT INTO knowledge.documents
+            (document_id, document_code, title, document_type,
+             original_filename, mime_type, bucket_name, object_key,
+             checksum_sha256, file_size_bytes, version_no, effective_from,
+             extraction_status, publication_status, approved_by_user_id,
+             approved_at)
+        VALUES (%s, %s, 'Submission rule source', 'REGULATION',
+                'submission-rule.pdf', 'application/pdf', 'land-valuation', %s,
+                %s, 100, 1, DATE '2026-09-01', 'COMPLETED', 'PUBLISHED', %s, now())
+        """,
+        (
+            rule_source_document_id,
+            f"SUBMISSION-RULE-{rule_source_document_id.hex[:12]}",
+            f"knowledge/{rule_source_document_id}/submission-rule.pdf",
+            "b" * 64,
+            user_id,
+        ),
+    )
+    admin_cursor.execute(
+        """
+        INSERT INTO valuation.rule_versions
+            (rule_version_id, rule_set_code, version_no, version_name,
+             effective_from, status, source_document_id, applicable_case_type,
+             applicable_district_code, selection_priority)
+        VALUES (%s, %s, 1, 'Submission rules', DATE '2026-09-01', 'PUBLISHED', %s,
+                'LAND', 'BANQIAO', 100)
+        """,
+        (
+            rule_version_id,
+            f"SUBMISSION-RULESET-{rule_version_id.hex[:12]}",
+            rule_source_document_id,
+        ),
+    )
+    admin_cursor.execute(
+        """
+        INSERT INTO valuation.validation_rules
+            (validation_rule_id, rule_version_id, rule_code, rule_name,
+             target_form_code, target_table, target_field_code, severity,
+             rule_expression, message_template, is_active)
+        VALUES (%s, %s, 'SUBMISSION_SOURCE_READY', 'Submission source ready',
+                'F02', 'forms', 'adjustment_rate', 'MEDIUM', '{}',
+                'Submission source is ready', true)
+        """,
+        (validation_rule_id, rule_version_id),
     )
     admin_cursor.execute(
         """
@@ -471,11 +536,26 @@ def _seed_submittable_case(
         INSERT INTO valuation.validation_runs
             (validation_run_id, case_id, form_instance_id, run_status,
              passed_count, warning_count, failed_count, completed_at,
-             triggered_by_user_id, ruleset_snapshot)
+             triggered_by_user_id, rule_version_id, input_snapshot,
+             ruleset_snapshot)
         VALUES (%s, %s, %s, 'COMPLETED', 1, 0, 0, now(), %s,
-                jsonb_build_object('ruleset_code', 'COMPLETE_REPORT_VALIDATION_V1'))
+                %s,
+                jsonb_build_object('case_version', 1, 'source', 'valuation'),
+                jsonb_build_object(
+                    'ruleset_code', 'COMPLETE_REPORT_VALIDATION_V1',
+                    'rule_version_id', %s::text,
+                    'validation_rule_ids', jsonb_build_array(%s::text)
+                ))
         """,
-        (validation_run_id, case_id, report_id, user_id),
+        (
+            validation_run_id,
+            case_id,
+            report_id,
+            user_id,
+            rule_version_id,
+            rule_version_id,
+            validation_rule_id,
+        ),
     )
     admin_cursor.execute(
         """
@@ -506,6 +586,9 @@ def _seed_submittable_case(
                 user_id=user_id,
                 document_id=document_id,
                 document_group_id=document_group_id,
+                rule_source_document_id=rule_source_document_id,
+                rule_version_id=rule_version_id,
+                validation_rule_id=validation_rule_id,
                 form_instance_id=report_id,
                 extraction_id=extraction_id,
                 extracted_field_id=extracted_field_id,
@@ -555,14 +638,6 @@ def _seed_review_race_case(
         VALUES (%s, %s, 'SMART_REVIEW', 'REVIEW_REQUIRED', %s)
         """,
         (review_id, case_id, command_value.source_validation_run_id),
-    )
-    admin_cursor.execute(
-        """
-        UPDATE valuation.validation_runs
-        SET review_id = %s
-        WHERE validation_run_id = %s
-        """,
-        (review_id, command_value.source_validation_run_id),
     )
     request_id = None
     if with_correction:

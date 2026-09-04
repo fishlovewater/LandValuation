@@ -146,3 +146,35 @@ async def test_send_locks_case_before_review_and_request():
     assert request.status == "SENT"
     assert review.review_status == "RETURNED_FOR_REVISION"
     assert case.case_status == "REVISION_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_complete_review_rejects_a_run_from_an_older_submission():
+    calls = []
+    review, case, run, _ = _records()
+    review.latest_submission_id = uuid4()
+    run.submission_id = uuid4()
+    repository = _ReviewRepository(calls, review, case, run)
+
+    with pytest.raises(Exception) as raised:
+        await CorrectionService(repository, _CorrectionRepository(calls)).complete_review(
+            review.review_id, "確認無誤", uuid4(), uuid4()
+        )
+
+    assert getattr(raised.value, "code", None) == "REVIEW_SUBMISSION_STALE"
+    assert review.review_status == "REVIEW_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_complete_review_rejects_already_completed_review():
+    calls = []
+    review, case, run, _ = _records(review_status="REVIEW_COMPLETED")
+    repository = _ReviewRepository(calls, review, case, run)
+
+    with pytest.raises(Exception) as raised:
+        await CorrectionService(repository, _CorrectionRepository(calls)).complete_review(
+            review.review_id, "再次完成", uuid4(), uuid4()
+        )
+
+    assert getattr(raised.value, "code", None) == "REVIEW_ALREADY_COMPLETED"
+    assert "decision" not in calls

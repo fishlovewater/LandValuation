@@ -26,6 +26,7 @@ EDITABLE_CASE_STATUSES = {
     CaseStatus.DRAFT.value,
     CaseStatus.PROCESSING.value,
     CaseStatus.CORRECTION.value,
+    CaseStatus.REVISION_REQUIRED.value,
 }
 PRIVILEGED_READ_ROLES = {"REVIEWER", "INSPECTOR"}
 

@@ -39,19 +39,21 @@ def build_submission_snapshot(
     calculations: dict,
     documents: list[dict],
     validation: dict,
+    execution_context: dict | None = None,
 ) -> dict:
-    return normalize_snapshot_value(
-        {
-            "schema_version": SNAPSHOT_SCHEMA_VERSION,
-            "case_version": case_version,
-            "submitted_by_user_id": submitted_by_user_id,
-            "request_id": request_id,
-            "applied_fields": applied_fields,
-            "calculations": calculations,
-            "documents": documents,
-            "validation": validation,
-        }
-    )
+    snapshot = {
+        "schema_version": SNAPSHOT_SCHEMA_VERSION,
+        "case_version": case_version,
+        "submitted_by_user_id": submitted_by_user_id,
+        "request_id": request_id,
+        "applied_fields": applied_fields,
+        "calculations": calculations,
+        "documents": documents,
+        "validation": validation,
+    }
+    if execution_context is not None:
+        snapshot["execution_context"] = execution_context
+    return normalize_snapshot_value(snapshot)
 
 
 def snapshot_bytes(snapshot: dict) -> bytes:

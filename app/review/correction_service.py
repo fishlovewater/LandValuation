@@ -319,6 +319,25 @@ class CorrectionService:
                 "審查案件與估價案件關聯已變更",
                 409,
             )
+        if review.review_status == "REVIEW_COMPLETED":
+            raise AppError(
+                "REVIEW_ALREADY_COMPLETED",
+                "審查案件已完成，不可重複核定",
+                409,
+            )
+        run = (
+            await self.review_repository.get_run(review.latest_validation_run_id)
+            if review.latest_validation_run_id
+            else None
+        )
+        if run is not None and getattr(run, "submission_id", None) != getattr(
+            review, "latest_submission_id", None
+        ):
+            raise AppError(
+                "REVIEW_SUBMISSION_STALE",
+                "審查批次不是目前送審版本，請重新執行最新版本檢核",
+                409,
+            )
         summary = await self._completion_summary(review)
         validate_review_completion(reason, summary)
         before_status = review.review_status

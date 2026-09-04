@@ -87,6 +87,14 @@ def test_review_runtime_does_not_reference_legacy_extraction_schema():
     assert "extraction_run_id" not in joined
 
 
+def test_review_repository_has_no_legacy_extraction_runtime_methods():
+    source = Path("app/review/repository.py").read_text(encoding="utf-8")
+
+    assert "valuation.extraction_runs" not in source
+    assert "get_latest_completed_extraction" not in source
+    assert "list_official_extracted_fields" not in source
+
+
 import uuid
 
 import pytest

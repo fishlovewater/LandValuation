@@ -110,7 +110,7 @@ class TestMigrationRoundtripIsolation:
 
     def test_02_successor_starts_at_alembic_head(self, admin_cursor):
         admin_cursor.execute("SELECT version_num FROM alembic_version")
-        assert admin_cursor.fetchone() == ("20260903_0013",)
+        assert admin_cursor.fetchone() == ("20260904_0014",)
 
         required_columns = {
             ("valuation", "valuations"): {"request_id"},

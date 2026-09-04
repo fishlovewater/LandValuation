@@ -61,6 +61,7 @@ class SubmissionState:
             source_validation_run=SimpleNamespace(
                 validation_run_id=command_value.source_validation_run_id,
                 case_id=self.case.case_id,
+                review_id=None,
                 run_status="COMPLETED",
                 form_instance_id=uuid4(),
                 passed_count=12,
@@ -69,6 +70,7 @@ class SubmissionState:
                 rule_version_id=uuid4(),
                 ruleset_snapshot={"ruleset_code": "COMPLETE_REPORT_VALIDATION_V1"},
                 completed_at=datetime(2026, 9, 3, tzinfo=UTC),
+                input_snapshot={"source": "valuation"},
             ),
             source_report_document=SimpleNamespace(
                 document_id=command_value.source_report_document_id,
@@ -119,6 +121,9 @@ class SubmissionState:
             },
         )
         self.inputs.report_form.form_instance_id = (
+            self.inputs.authoritative_report_form.form_instance_id
+        )
+        self.inputs.source_validation_run.form_instance_id = (
             self.inputs.authoritative_report_form.form_instance_id
         )
 
@@ -185,7 +190,8 @@ class StatefulRepository:
     async def flush(self):
         self.state.calls.append("flush")
         self.state.flush_count += 1
-        self.state.lock.release()
+        if self.state.lock.locked():
+            self.state.lock.release()
 
 
 def setup_service(command_value=None, *, owner=None):
@@ -243,6 +249,35 @@ async def test_submit_rejects_non_completed_source_validation() -> None:
         await service.submit(state.case.case_id, command_value, owner)
 
     assert raised.value.code == "SUBMISSION_VALIDATION_NOT_COMPLETED"
+    assert raised.value.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_code"),
+    [
+        ("review_run", "SUBMISSION_SOURCE_RUN_INVALID"),
+        ("other_case", "SUBMISSION_SOURCE_RUN_INVALID"),
+        ("missing_snapshot", "SUBMISSION_VALIDATION_SNAPSHOT_REQUIRED"),
+        ("missing_lineage", "SUBMISSION_SOURCE_LINEAGE_CONFLICT"),
+    ],
+)
+def test_submit_rejects_non_valuation_or_incomplete_source_run(
+    mutation, expected_code
+) -> None:
+    _service, state, _owner, command_value = setup_service()
+    if mutation == "review_run":
+        state.inputs.source_validation_run.review_id = uuid4()
+    elif mutation == "other_case":
+        state.inputs.source_validation_run.case_id = uuid4()
+    elif mutation == "missing_snapshot":
+        state.inputs.source_validation_run.input_snapshot = {}
+    else:
+        state.inputs.source_validation_run.form_instance_id = uuid4()
+
+    with pytest.raises(AppError) as raised:
+        SubmissionService._validate_readiness(state.inputs, command_value)
+
+    assert raised.value.code == expected_code
     assert raised.value.status_code == 422
 
 
@@ -337,8 +372,9 @@ async def test_first_submit_creates_review_submission_pointer_and_event() -> Non
         command_value.request_id
     )
     assert state.submissions[0].supersedes_submission_id is None
+    assert state.inputs.source_validation_run.submission_id == result.submission_id
     assert state.events[0][1] == "SUBMITTED_FOR_REVIEW"
-    assert state.flush_count == 1
+    assert state.flush_count == 2
     assert state.calls[:3] == [
         "lock_case",
         "find_by_request",
@@ -433,3 +469,58 @@ async def test_concurrent_same_request_creates_one_submission() -> None:
     assert first.submission_id == second.submission_id
     assert len(state.submissions) == 1
     assert len(state.events) == 1
+
+
+@pytest.mark.asyncio
+async def test_new_submission_requires_a_newer_case_version() -> None:
+    service, state, owner, first_command = setup_service()
+    await service.submit(state.case.case_id, first_command, owner)
+
+    state.case.case_status = "REVISION_REQUIRED"
+    unchanged = command(
+        request_id=uuid4(),
+        case_version=first_command.expected_case_version,
+        run_id=first_command.source_validation_run_id,
+        document_id=first_command.source_report_document_id,
+    )
+
+    with pytest.raises(AppError) as raised:
+        await SubmissionService(
+            None,
+            repository=StatefulRepository(state),
+        ).submit(state.case.case_id, unchanged, owner)
+
+    assert raised.value.code == "CASE_VERSION_CONFLICT"
+    assert raised.value.status_code == 409
+    assert len(state.submissions) == 1
+
+
+@pytest.mark.asyncio
+async def test_revision_submission_accepts_a_newer_case_version() -> None:
+    service, state, owner, first_command = setup_service()
+    await service.submit(state.case.case_id, first_command, owner)
+
+    state.case.case_status = "REVISION_REQUIRED"
+    newer = command(
+        request_id=uuid4(),
+        case_version=first_command.expected_case_version + 1,
+        run_id=uuid4(),
+        document_id=uuid4(),
+    )
+    state.inputs.case_version = newer.expected_case_version
+    state.inputs.authoritative_report_form.version_no = newer.expected_case_version
+    state.inputs.report_form.version_no = newer.expected_case_version
+    state.inputs.source_validation_run.validation_run_id = newer.source_validation_run_id
+    state.inputs.source_report_document.document_id = newer.source_report_document_id
+    state.inputs.report_form.output_document_id = newer.source_report_document_id
+    state.inputs.applied_fields[0]["document_id"] = newer.source_report_document_id
+    state.inputs.documents[0]["document_id"] = newer.source_report_document_id
+
+    result = await SubmissionService(
+        None,
+        repository=StatefulRepository(state),
+    ).submit(state.case.case_id, newer, owner)
+
+    assert result.submission_no == 2
+    assert len(state.submissions) == 2
+    assert state.submissions[1].supersedes_submission_id == state.submissions[0].submission_id

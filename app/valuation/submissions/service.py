@@ -56,6 +56,31 @@ class SubmissionService:
         inputs = await self.repository.load_submission_inputs(case_id, command)
         self._validate_readiness(inputs, command)
 
+        latest_submission = (
+            None if locked_review is None else locked_review.latest_submission
+        )
+        if case.case_status == "REVISION_REQUIRED":
+            if latest_submission is None:
+                raise AppError(
+                    "CASE_SUBMISSION_STATE_CONFLICT",
+                    "退回案件缺少可延續的既有送審版本",
+                    409,
+                )
+            previous_version = None
+            if isinstance(latest_submission.input_snapshot, dict):
+                previous_version = latest_submission.input_snapshot.get("case_version")
+            if (
+                isinstance(previous_version, bool)
+                or not isinstance(previous_version, int)
+                or inputs.case_version <= previous_version
+            ):
+                raise AppError(
+                    "CASE_VERSION_CONFLICT",
+                    "重送案件版本必須晚於前一次送審版本",
+                    409,
+                    {"previous_case_version": previous_version},
+                )
+
         snapshot = build_submission_snapshot(
             case_version=inputs.case_version,
             submitted_by_user_id=actor.user_id,
@@ -64,13 +89,13 @@ class SubmissionService:
             calculations=inputs.calculations,
             documents=inputs.documents,
             validation=inputs.validation,
+            execution_context=getattr(inputs, "execution_context", None),
         )
         fingerprint = snapshot_fingerprint(snapshot)
 
         if locked_review is None:
             locked_review = await self.repository.create_review(case_id, actor.user_id)
         review = locked_review.review
-        latest_submission = locked_review.latest_submission
         review.form_instance_id = inputs.report_form.form_instance_id
         review.validation_run_id = inputs.source_validation_run.validation_run_id
         submission_no = 1 if latest_submission is None else latest_submission.submission_no + 1
@@ -91,6 +116,17 @@ class SubmissionService:
             request_id=command.request_id,
         )
         await self.repository.create_submission(submission)
+        # The Review and submission rows form a foreign-key cycle.  Persist the
+        # submission first so the later workflow pointers and the source-run
+        # handoff can be updated without violating either FK.
+        await self.repository.session.flush()
+        # Bind the Valuation-produced source run to this immutable handoff so
+        # any Review workflow pointer to that run remains current.
+        inputs.source_validation_run.submission_id = submission.submission_id
+        # Keep the scalar and relationship values synchronized after the row is
+        # present; assigning this FK before the first flush would violate the
+        # Review-to-submission cycle.
+        review.latest_submission_id = submission.submission_id
         review.latest_submission = submission
         review.review_status = "RECEIVED"
         case.case_status = "IN_REVIEW"
@@ -142,6 +178,38 @@ class SubmissionService:
             raise AppError("CASE_VERSION_CONFLICT", "案件版本已變更", 409)
         if inputs.source_validation_run is None:
             raise ResourceNotFoundError("送審檢核結果")
+        source_run = inputs.source_validation_run
+        if getattr(source_run, "review_id", None) is not None:
+            raise AppError(
+                "SUBMISSION_SOURCE_RUN_INVALID",
+                "送審來源檢核必須是估價端產生的檢核批次",
+                422,
+            )
+        source_case_id = getattr(source_run, "case_id", None)
+        related_case_ids = {
+            source_case_id,
+            getattr(inputs.authoritative_report_form, "case_id", None),
+            getattr(inputs.source_report_document, "case_id", None),
+            getattr(inputs.report_form, "case_id", None),
+        }
+        if None in related_case_ids or len(related_case_ids) != 1:
+            raise AppError(
+                "SUBMISSION_SOURCE_RUN_INVALID",
+                "送審來源檢核與完整估價報告必須屬於同一案件",
+                422,
+            )
+        if not isinstance(source_run.input_snapshot, dict) or not source_run.input_snapshot:
+            raise AppError(
+                "SUBMISSION_VALIDATION_SNAPSHOT_REQUIRED",
+                "送審前來源檢核必須保存不可變輸入快照",
+                422,
+            )
+        if source_run.rule_version_id is None:
+            raise AppError(
+                "SUBMISSION_RULE_VERSION_REQUIRED",
+                "送審前來源檢核必須保存規則版本",
+                422,
+            )
         if inputs.source_validation_run.run_status != "COMPLETED":
             raise AppError(
                 "SUBMISSION_VALIDATION_NOT_COMPLETED",
@@ -165,6 +233,18 @@ class SubmissionService:
             != command.source_report_document_id
         ):
             raise ResourceNotFoundError("完整估價報告")
+        if source_run.form_instance_id is None:
+            raise AppError(
+                "SUBMISSION_SOURCE_LINEAGE_REQUIRED",
+                "來源檢核必須關聯正式完整估價報告表單",
+                422,
+            )
+        if source_run.form_instance_id != inputs.report_form.form_instance_id:
+            raise AppError(
+                "SUBMISSION_SOURCE_LINEAGE_CONFLICT",
+                "來源檢核與正式完整估價報告表單版本不一致",
+                422,
+            )
         if inputs.report_form.form_status != "FINAL":
             raise AppError(
                 "SUBMISSION_REPORT_NOT_FINAL",

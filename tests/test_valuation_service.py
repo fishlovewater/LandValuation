@@ -40,6 +40,7 @@ class FakeRepository:
     def __init__(self, case: CaseRecord) -> None:
         self.case = case
         self.form = None
+        self.forms = []
         self.owner_filter = None
         self.source_document_matches = True
 
@@ -64,11 +65,17 @@ class FakeRepository:
         return record
 
     async def next_form_version(self, case_id, form_code):
-        return 1
+        existing = [
+            item
+            for item in self.forms + ([self.form] if self.form is not None else [])
+            if item.case_id == case_id and item.form_code == form_code
+        ]
+        return max((item.version_no for item in existing), default=0) + 1
 
     async def create_form(self, record):
         if record.form_instance_id is None:
             record.form_instance_id = uuid4()
+        self.forms.append(record)
         self.form = record
         return record
 
@@ -120,6 +127,37 @@ async def test_archived_case_cannot_be_edited() -> None:
 
     assert raised.value.code == "CASE_STATE_CONFLICT"
     assert raised.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_returned_appraiser_can_create_new_form_version_without_rewriting_history() -> None:
+    user = user_with_role()
+    record = case_record(user.user_id, CaseStatus.REVISION_REQUIRED.value)
+    repository = FakeRepository(record)
+    previous = FormInstanceRecord(
+        form_instance_id=uuid4(),
+        case_id=record.case_id,
+        form_code=FormCode.F03.value,
+        version_no=1,
+        form_status=FormStatus.FINAL.value,
+        created_by_user_id=user.user_id,
+        updated_by_user_id=user.user_id,
+    )
+    repository.forms.append(previous)
+    repository.form = previous
+    service = ValuationService(None, repository=repository)
+
+    created = await service.create_form(
+        record.case_id,
+        FormCreate(form_code=FormCode.F03),
+        user,
+    )
+
+    assert created.version_no == 2
+    assert created.form_instance_id != previous.form_instance_id
+    assert previous.version_no == 1
+    assert previous.form_status == FormStatus.FINAL.value
+    assert [item.version_no for item in repository.forms] == [1, 2]
 
 
 @pytest.mark.asyncio

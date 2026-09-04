@@ -11,6 +11,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
@@ -31,7 +32,10 @@ class Review(Base):
     """ORM mapping for the Alembic-managed review.reviews table."""
 
     __tablename__ = "reviews"
-    __table_args__ = {"schema": "review"}
+    __table_args__ = (
+        UniqueConstraint("case_id", name="uq_reviews_case_id"),
+        {"schema": "review"},
+    )
 
     review_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
@@ -127,7 +131,10 @@ class ValidationRun(Base):
     prompt_version: Mapped[str | None] = mapped_column(String(100))
     error_code: Mapped[str | None] = mapped_column(String(100))
     error_message: Mapped[str | None] = mapped_column(Text)
-    submission_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True))
+    submission_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("valuation.review_submissions.submission_id"),
+    )
 
 
 class ValidationFinding(Base):

@@ -7,7 +7,10 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import AppError, ResourceNotFoundError
 from app.review.models import Review, ValidationRun
+from app.review.repository import ReviewRepository
+from app.review.rule_selection import RuleCandidate, select_effective_rule
 from app.valuation.models import (
     CaseEventRecord,
     CaseRecord,
@@ -41,6 +44,7 @@ class SubmissionInputs:
     calculations: dict
     documents: list[dict]
     validation: dict
+    execution_context: dict | None = None
 
 
 class SubmissionRepository:
@@ -310,7 +314,15 @@ class SubmissionRepository:
                 "rule_version_id": validation_run.rule_version_id,
                 "ruleset_snapshot": validation_run.ruleset_snapshot,
                 "completed_at": validation_run.completed_at,
+                "input_snapshot": validation_run.input_snapshot,
             }
+        execution_context = await self._build_execution_context(
+            case_id=case_id,
+            validation_run=validation_run,
+            report_document=report_document,
+            report_form=report_form,
+            authoritative_report_form=authoritative_report_form,
+        )
         return SubmissionInputs(
             case_version=(
                 None
@@ -325,7 +337,164 @@ class SubmissionRepository:
             calculations=calculations,
             documents=documents,
             validation=validation,
+            execution_context=execution_context,
         )
+
+    async def _build_execution_context(
+        self,
+        *,
+        case_id: UUID,
+        validation_run: ValidationRun | None,
+        report_document: DocumentRecord | None,
+        report_form: FormInstanceRecord | None,
+        authoritative_report_form: FormInstanceRecord | None,
+    ) -> dict | None:
+        """Freeze the minimum Valuation context needed by Review execution.
+
+        The public submit command carries only source IDs.  This method is the
+        server-side handoff boundary: all Review rule inputs are selected and
+        copied while the caller still holds the case lock.
+        """
+        if (
+            validation_run is None
+            or report_document is None
+            or report_form is None
+            or authoritative_report_form is None
+        ):
+            return None
+
+        if not isinstance(validation_run.input_snapshot, dict) or not validation_run.input_snapshot:
+            raise AppError(
+                "SUBMISSION_VALIDATION_SNAPSHOT_REQUIRED",
+                "送審前來源檢核必須保存不可變輸入快照",
+                422,
+            )
+        if validation_run.rule_version_id is None:
+            raise AppError(
+                "SUBMISSION_RULE_VERSION_REQUIRED",
+                "送審前來源檢核必須保存規則版本",
+                422,
+            )
+
+        review_repository = ReviewRepository(self.session)
+        case_context = await review_repository.get_case_rule_context(case_id)
+        if case_context is None:
+            raise ResourceNotFoundError("估價案件")
+        candidates = await review_repository.list_rule_candidates()
+        selection = select_effective_rule(
+            (
+                RuleCandidate(
+                    rule_version_id=str(candidate["rule_version_id"]),
+                    status=candidate["status"],
+                    effective_from=candidate["effective_from"],
+                    effective_to=candidate["effective_to"],
+                    case_type=candidate["applicable_case_type"],
+                    district_code=candidate["applicable_district_code"],
+                    priority=candidate["selection_priority"],
+                )
+                for candidate in candidates
+            ),
+            case_context["valuation_base_date"],
+            case_context["case_type"],
+            case_context["district_code"],
+            case_context["form_codes"],
+        )
+        if selection.rule is None:
+            raise AppError(
+                "SUBMISSION_RULE_SELECTION_REQUIRED",
+                "送審前找不到案件適用的正式規則版本",
+                422,
+            )
+        candidates_by_id = {
+            str(candidate["rule_version_id"]): candidate for candidate in candidates
+        }
+        rule_version = candidates_by_id[selection.rule.rule_version_id]
+        if str(validation_run.rule_version_id) != selection.rule.rule_version_id:
+            raise AppError(
+                "SUBMISSION_RULE_VERSION_CONFLICT",
+                "來源檢核規則版本與案件適用規則不一致",
+                422,
+            )
+        rule_source = await review_repository.get_rule_source(
+            UUID(str(rule_version["source_document_id"])),
+            case_context["valuation_base_date"],
+        ) if rule_version.get("source_document_id") is not None else None
+        if rule_source is None:
+            raise AppError(
+                "RULE_SOURCE_UNAVAILABLE",
+                "正式規則版本缺少適用且可用的法規來源",
+                422,
+            )
+        validation_rules = await review_repository.list_active_rules(
+            UUID(selection.rule.rule_version_id),
+            case_context["form_codes"],
+        )
+        if not validation_rules:
+            raise AppError(
+                "SUBMISSION_VALIDATION_RULES_REQUIRED",
+                "送審前正式規則版本必須有啟用的審查規則",
+                422,
+            )
+
+        def form_snapshot(form: FormInstanceRecord) -> dict:
+            return {
+                "form_instance_id": form.form_instance_id,
+                "case_id": form.case_id,
+                "form_code": form.form_code,
+                "version_no": form.version_no,
+                "form_status": form.form_status,
+                "output_document_id": form.output_document_id,
+                "form_content": form.form_content,
+            }
+
+        def document_snapshot(document: DocumentRecord) -> dict:
+            return {
+                "document_id": document.document_id,
+                "case_id": document.case_id,
+                "document_type": document.document_type,
+                "original_filename": document.original_filename,
+                "mime_type": document.mime_type,
+                "version_no": document.version_no,
+                "document_group_id": document.document_group_id,
+                "checksum_sha256": document.checksum_sha256,
+                "file_size_bytes": document.file_size_bytes,
+                "uploaded_at": document.uploaded_at,
+                "is_active": document.is_active,
+            }
+
+        return {
+            "schema_version": "valuation-review-execution-v1",
+            "case": {
+                "case_id": case_id,
+                "case_type": case_context["case_type"],
+                "district_code": case_context["district_code"],
+                "valuation_base_date": case_context["valuation_base_date"],
+                "form_codes": sorted(case_context["form_codes"]),
+            },
+            "source_validation_run": {
+                "validation_run_id": validation_run.validation_run_id,
+                "case_id": validation_run.case_id,
+                "form_instance_id": validation_run.form_instance_id,
+                "run_status": validation_run.run_status,
+                "passed_count": validation_run.passed_count,
+                "warning_count": validation_run.warning_count,
+                "failed_count": validation_run.failed_count,
+                "rule_version_id": validation_run.rule_version_id,
+                "input_snapshot": validation_run.input_snapshot,
+                "ruleset_snapshot": validation_run.ruleset_snapshot,
+                "completed_at": validation_run.completed_at,
+            },
+            "report": {
+                "form": form_snapshot(report_form),
+                "authoritative_form": form_snapshot(authoritative_report_form),
+                "document": document_snapshot(report_document),
+            },
+            "rule_selection": {
+                "rule_version": rule_version,
+                "rule_source": rule_source,
+                "validation_rules": validation_rules,
+            },
+        }
 
     async def create_review(self, case_id: UUID, actor_id: UUID) -> LockedReview:
         review = Review(
