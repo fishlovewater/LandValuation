@@ -49,16 +49,20 @@ def review_case(postgres_connection):
         source_document_id=uuid4(),
         rule_version_id=uuid4(),
         validation_rule_id=uuid4(),
-        extraction_run_id=uuid4(),
+        extraction_id=uuid4(),
+        form_instance_id=uuid4(),
     )
     with postgres_connection.cursor() as cursor:
         cursor.execute("DELETE FROM review.missing_items WHERE review_id = %s", (review_id,))
         cursor.execute("DELETE FROM review.reviews WHERE review_id = %s", (review_id,))
         cursor.execute(
-            "DELETE FROM valuation.extracted_fields WHERE extraction_run_id IN (SELECT extraction_run_id FROM valuation.extraction_runs WHERE case_id = %s)",
+            "DELETE FROM valuation.extracted_fields WHERE case_id = %s",
             (case_id,),
         )
-        cursor.execute("DELETE FROM valuation.extraction_runs WHERE case_id = %s", (case_id,))
+        cursor.execute(
+            "DELETE FROM valuation.document_extractions WHERE case_id = %s",
+            (case_id,),
+        )
         cursor.execute(
             "DELETE FROM valuation.validation_rules WHERE rule_version_id IN (SELECT rule_version_id FROM valuation.rule_versions WHERE rule_set_code LIKE %s)",
             (f"MISSING_{str(case_id)[:8]}%",),
@@ -175,7 +179,7 @@ def add_complete_trusted_inputs(connection, review_case):
             """INSERT INTO valuation.form_instances (
                 form_instance_id, case_id, form_code, version_no, form_status
             ) VALUES (%s, %s, 'F01', 1, 'READY')""",
-            (uuid4(), review_case.case_id),
+            (review_case.form_instance_id, review_case.case_id),
         )
         cursor.execute(
             """INSERT INTO knowledge.documents (
@@ -219,37 +223,44 @@ def add_complete_trusted_inputs(connection, review_case):
             (review_case.validation_rule_id, review_case.rule_version_id),
         )
         cursor.execute(
-            """INSERT INTO valuation.extraction_runs (
-                extraction_run_id, case_id, document_id, document_version, run_no,
-                status, extractor_name, started_at, completed_at
-            ) VALUES (%s, %s, %s, 1, 1, 'COMPLETED', 'fixture',
+            """INSERT INTO valuation.document_extractions (
+                extraction_id, case_id, document_id, provider,
+                extraction_status, created_by_user_id,
+                started_at, completed_at
+            ) VALUES (%s, %s, %s, 'LOCAL_PDF', 'COMPLETED', %s,
                       now() - interval '1 minute', now())""",
             (
-                review_case.extraction_run_id,
+                review_case.extraction_id,
                 review_case.case_id,
                 review_case.original_document_id,
+                review_case.user_id,
             ),
         )
-        for field_code, field_path, value_type, raw_text, normalized_value in (
-            ("adjustment_rate", "comparables[0].adjustment_rate", "DECIMAL", "Adjustment rate -12%", '"-12"'),
-            ("expert_grade", "comparables[0].grade", "TEXT", "Expert grade B", '"B"'),
+        for field_name, source_text, confirmed_value in (
+            ("adjustment_rate", "Adjustment rate -12%", '"-12"'),
+            ("expert_grade", "Expert grade B", '"B"'),
         ):
             cursor.execute(
                 """INSERT INTO valuation.extracted_fields (
-                    extracted_field_id, extraction_run_id, field_code, field_path,
-                    value_type, raw_text, normalized_value, page_number,
-                    verification_status, verified_by_user_id, verified_at, is_official
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, 3,
-                          'VERIFIED', %s, %s, true)""",
+                    extracted_field_id, case_id, extraction_id, document_id,
+                    form_code, field_name, extracted_value, confidence,
+                    source_page, source_text, field_status, confirmed_value,
+                    confirmed_by_user_id, confirmed_at, applied_form_instance_id,
+                    applied_at
+                ) VALUES (%s, %s, %s, %s, 'F01', %s, %s::jsonb, 0.9500,
+                          3, %s, 'APPLIED', %s::jsonb, %s, %s, %s, %s)""",
                 (
                     uuid4(),
-                    review_case.extraction_run_id,
-                    field_code,
-                    field_path,
-                    value_type,
-                    raw_text,
-                    normalized_value,
+                    review_case.case_id,
+                    review_case.extraction_id,
+                    review_case.original_document_id,
+                    field_name,
+                    confirmed_value,
+                    source_text,
+                    confirmed_value,
                     review_case.user_id,
+                    datetime.now(UTC),
+                    review_case.form_instance_id,
                     datetime.now(UTC),
                 ),
             )

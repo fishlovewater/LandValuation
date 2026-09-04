@@ -345,8 +345,8 @@ def test_incomplete_recheck_persists_missing_items_without_creating_run(
     with postgres_connection.cursor() as cursor:
         cursor.execute(
             """
-            UPDATE valuation.extraction_runs
-            SET status = 'PROCESSING', completed_at = NULL
+            UPDATE valuation.document_extractions
+            SET extraction_status = 'PROCESSING', completed_at = NULL
             WHERE document_id = %s
             """,
             (workflow_data.v2_document_id,),

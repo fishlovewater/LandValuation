@@ -15,6 +15,7 @@ def workflow_data(postgres_connection):
         user_id=uuid4(), case_id=uuid4(), source_document_id=uuid4(),
         rule_version_id=uuid4(), adjustment_rule_id=uuid4(), expert_rule_id=uuid4(),
         original_group_id=uuid4(), v1_document_id=None, v2_document_id=None,
+        form_instance_id=uuid4(),
         v1_field_ids=set(), v2_field_ids=set(),
     )
     with postgres_connection.cursor() as cursor:
@@ -45,8 +46,8 @@ def workflow_data(postgres_connection):
         cursor.execute("DELETE FROM valuation.validation_runs WHERE case_id = %s", (data.case_id,))
         cursor.execute("DELETE FROM review.missing_items WHERE review_id IN (SELECT review_id FROM review.reviews WHERE case_id = %s)", (data.case_id,))
         cursor.execute("DELETE FROM review.reviews WHERE case_id = %s", (data.case_id,))
-        cursor.execute("DELETE FROM valuation.extracted_fields WHERE extraction_run_id IN (SELECT extraction_run_id FROM valuation.extraction_runs WHERE case_id = %s)", (data.case_id,))
-        cursor.execute("DELETE FROM valuation.extraction_runs WHERE case_id = %s", (data.case_id,))
+        cursor.execute("DELETE FROM valuation.extracted_fields WHERE case_id = %s", (data.case_id,))
+        cursor.execute("DELETE FROM valuation.document_extractions WHERE case_id = %s", (data.case_id,))
         cursor.execute("DELETE FROM valuation.validation_rules WHERE rule_version_id = %s", (data.rule_version_id,))
         cursor.execute("DELETE FROM valuation.rule_versions WHERE rule_version_id = %s", (data.rule_version_id,))
         cursor.execute("DELETE FROM knowledge.documents WHERE document_id = %s", (data.source_document_id,))
@@ -71,25 +72,46 @@ def workflow_client(workflow_data):
 
 
 def _insert_extraction(cursor, data, document_id, version, adjustment_rate, field_ids):
-    extraction_run_id = uuid4()
+    extraction_id = uuid4()
+    completed_at = datetime.now(UTC)
     cursor.execute(
-        """INSERT INTO valuation.extraction_runs (extraction_run_id, case_id, document_id,
-           document_version, run_no, status, extractor_name, started_at, completed_at)
-           VALUES (%s, %s, %s, %s, 1, 'COMPLETED', 'fixture', now() - interval '1 minute', now())""",
-        (extraction_run_id, data.case_id, document_id, version),
+        """INSERT INTO valuation.document_extractions (
+           extraction_id, case_id, document_id, provider, extraction_status,
+           created_by_user_id, started_at, completed_at)
+           VALUES (%s, %s, %s, 'LOCAL_PDF', 'COMPLETED', %s,
+                   %s - interval '1 minute', %s)""",
+        (extraction_id, data.case_id, document_id, data.user_id, completed_at, completed_at),
     )
-    for field_code, path, value_type, raw_text, normalized, page in (
-        ("adjustment_rate", "comparables[0].adjustment_rate", "DECIMAL", f"Adjustment rate {adjustment_rate}%", f'"{adjustment_rate}"', 3),
-        ("expert_grade", "comparables[0].grade", "TEXT", "Expert grade B", '"B"', 4),
+    for field_name, source_text, confirmed_value, page in (
+        ("adjustment_rate", f"Adjustment rate {adjustment_rate}%", f'"{adjustment_rate}"', 3),
+        ("expert_grade", "Expert grade B", '"B"', 4),
     ):
         field_id = uuid4()
         field_ids.add(str(field_id))
         cursor.execute(
-            """INSERT INTO valuation.extracted_fields (extracted_field_id, extraction_run_id,
-               field_code, field_path, value_type, raw_text, normalized_value, page_number,
-               verification_status, verified_by_user_id, verified_at, is_official)
-               VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, 'VERIFIED', %s, %s, true)""",
-            (field_id, extraction_run_id, field_code, path, value_type, raw_text, normalized, page, data.user_id, datetime.now(UTC)),
+            """INSERT INTO valuation.extracted_fields (
+               extracted_field_id, case_id, extraction_id, document_id,
+               form_code, field_name, extracted_value, confidence,
+               source_page, source_text, field_status, confirmed_value,
+               confirmed_by_user_id, confirmed_at, applied_form_instance_id,
+               applied_at)
+               VALUES (%s, %s, %s, %s, 'F01', %s, %s::jsonb, 0.9500,
+                       %s, %s, 'APPLIED', %s::jsonb, %s, %s, %s, %s)""",
+            (
+                field_id,
+                data.case_id,
+                extraction_id,
+                document_id,
+                field_name,
+                confirmed_value,
+                page,
+                source_text,
+                confirmed_value,
+                data.user_id,
+                completed_at,
+                data.form_instance_id,
+                completed_at,
+            ),
         )
 
 
@@ -111,7 +133,7 @@ def add_complete_inputs(connection, data, version=1):
                     (document_id, data.case_id, document_type, f"{document_type}.pdf", f"cases/{data.case_id}/{document_type}.pdf", checksum, data.original_group_id if document_type == "original" else uuid4()),
                 )
             cursor.execute("INSERT INTO valuation.parcels (case_id, district_code, section_name, land_no, area_sqm) VALUES (%s, 'F01', 'Test Section', '1', 100.5)", (data.case_id,))
-            cursor.execute("INSERT INTO valuation.form_instances (form_instance_id, case_id, form_code, version_no, form_status) VALUES (%s, %s, 'F01', 1, 'READY')", (uuid4(), data.case_id))
+            cursor.execute("INSERT INTO valuation.form_instances (form_instance_id, case_id, form_code, version_no, form_status) VALUES (%s, %s, 'F01', 1, 'READY')", (data.form_instance_id, data.case_id))
             cursor.execute(
                 """INSERT INTO knowledge.documents (document_id, document_code, title, document_type,
                    original_filename, mime_type, bucket_name, object_key, checksum_sha256,
@@ -232,4 +254,4 @@ def test_fixed_case_workflow_preserves_trusted_history(workflow_client, workflow
     report2 = workflow_client.get(f"/api/v1/review/runs/{run2['validation_run_id']}/report").json()
     assert _evidence_field_ids(report1["findings"]) == workflow_data.v1_field_ids
     assert _evidence_field_ids(report2["findings"]) == workflow_data.v2_field_ids
-    assert all(evidence["verification_status"] == "VERIFIED" for finding in report1["findings"] for evidence in finding["source_evidence"])
+    assert all(evidence["verification_status"] == "APPLIED" for finding in report1["findings"] for evidence in finding["source_evidence"])

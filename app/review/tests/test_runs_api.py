@@ -20,7 +20,7 @@ from app.valuation.submissions.snapshot import SNAPSHOT_SCHEMA_VERSION, snapshot
 def runnable_review(request, postgres_connection):
     options = getattr(request, "param", {})
     with_extraction = options.get("with_extraction", True)
-    adjustment_status = options.get("adjustment_status", "VERIFIED")
+    adjustment_status = options.get("adjustment_status", "APPLIED")
     source_publication_status = options.get("source_publication_status", "PUBLISHED")
     source_extraction_status = options.get("source_extraction_status", "COMPLETED")
     tied_rule_versions = options.get("tied_rule_versions", False)
@@ -37,7 +37,7 @@ def runnable_review(request, postgres_connection):
         validation_rule_id=None,
         expert_rule_id=uuid4(),
         unsupported_rule_id=uuid4(),
-        extraction_run_id=uuid4(),
+        extraction_id=uuid4(),
         form_instance_id=uuid4(),
         adjustment_field_id=uuid4(),
         expert_grade_field_id=uuid4(),
@@ -203,17 +203,16 @@ def runnable_review(request, postgres_connection):
                           now() - interval '1 minute', now())
                 """,
                 (
-                    ids.extraction_run_id,
+                    ids.extraction_id,
                     ids.case_id,
                     ids.original_document_id,
                     ids.user_id,
                 ),
             )
-            for field_id, field_code, value_type, raw_text, normalized_value, status in (
+            for field_id, field_code, raw_text, normalized_value, status in (
                 (
                     ids.adjustment_field_id,
                     "adjustment_rate",
-                    "DECIMAL",
                     "報告記載調整率 -12%",
                     '"-12"',
                     adjustment_status,
@@ -221,21 +220,19 @@ def runnable_review(request, postgres_connection):
                 (
                     ids.expert_grade_field_id,
                     "expert_grade",
-                    "TEXT",
                     "報告評定 A 級",
                     '"A"',
-                    "VERIFIED",
+                    "APPLIED",
                 ),
                 (
                     ids.unrelated_field_id,
                     "property_description",
-                    "TEXT",
                     "土地描述",
                     '"郊區住宅用地"',
-                    "VERIFIED",
+                    "APPLIED",
                 ),
             ):
-                field_status = "APPLIED" if status == "VERIFIED" else "NEEDS_CONFIRMATION"
+                field_status = status
                 confirmed_value = normalized_value if field_status == "APPLIED" else None
                 verified = field_status == "APPLIED"
                 confirmed_at = datetime.now(UTC) if verified else None
@@ -253,7 +250,7 @@ def runnable_review(request, postgres_connection):
                     (
                         field_id,
                         ids.case_id,
-                        ids.extraction_run_id,
+                        ids.extraction_id,
                         ids.original_document_id,
                         field_code,
                         normalized_value,
@@ -312,11 +309,11 @@ def runnable_review(request, postgres_connection):
         cursor.execute("DELETE FROM review.reviews WHERE review_id = %s", (ids.review_id,))
         cursor.execute(
             "DELETE FROM valuation.extracted_fields WHERE extraction_id = %s",
-            (ids.extraction_run_id,),
+            (ids.extraction_id,),
         )
         cursor.execute(
             "DELETE FROM valuation.document_extractions WHERE extraction_id = %s",
-            (ids.extraction_run_id,),
+            (ids.extraction_id,),
         )
         cursor.execute(
             "DELETE FROM valuation.validation_rules WHERE rule_version_id IN (%s, %s)",
@@ -827,12 +824,6 @@ def test_snapshot_deduplicates_shared_prepared_field_but_keeps_all_official_fiel
             "document_group_id": uuid4(),
             "checksum_sha256": "a" * 64,
         },
-        extraction_run={
-            "extraction_run_id": uuid4(),
-            "run_no": 1,
-            "extractor_name": "fixture",
-            "extractor_version": "1.0",
-        },
         fields={"adjustment_rate": adjustment_field, "expert_grade": grade_field},
         official_fields=(adjustment_field, grade_field, unrelated_field),
         rule_version={
@@ -1009,7 +1000,7 @@ def test_run_rejects_caller_owned_authoritative_fields(
     "runnable_review, expected_code",
     [
         ({"with_extraction": False}, "TRUSTED_INPUT_MISSING"),
-        ({"adjustment_status": "AUTO_EXTRACTED"}, "TRUSTED_INPUT_MISSING"),
+        ({"adjustment_status": "NEEDS_CONFIRMATION"}, "TRUSTED_INPUT_MISSING"),
         ({"source_publication_status": "DRAFT"}, "RULE_SOURCE_UNAVAILABLE"),
         ({"source_extraction_status": "PENDING"}, "RULE_SOURCE_UNAVAILABLE"),
         ({"tied_rule_versions": True}, "RULE_SELECTION_CONFLICT"),
@@ -1043,7 +1034,7 @@ def test_run_snapshot_preserves_zero_server_extracted_value(
             SET confirmed_value = '"0"'::jsonb, source_text = '調整率 0%%'
             WHERE extraction_id = %s AND field_name = 'adjustment_rate'
             """,
-            (runnable_review.extraction_run_id,),
+            (runnable_review.extraction_id,),
         )
     postgres_connection.commit()
 
@@ -1131,7 +1122,7 @@ def test_run_rejects_invalid_trusted_normalized_value_before_mutation(
             """,
             (
                 json.dumps(confirmed_value),
-                runnable_review.extraction_run_id,
+                runnable_review.extraction_id,
                 field_code,
             ),
         )
@@ -1221,7 +1212,7 @@ def test_second_finding_persistence_failure_rolls_back_the_entire_run(
             SET confirmed_value = '"B"'::jsonb
             WHERE extraction_id = %s AND field_name = 'expert_grade'
             """,
-            (runnable_review.extraction_run_id,),
+            (runnable_review.extraction_id,),
         )
     postgres_connection.commit()
 

@@ -68,7 +68,7 @@ def test_structured_and_pdf_report_apis(authorized_client, runnable_review):
     assert finding["finding_code"] == (
         f"{runnable_review.rule_version_id}:{runnable_review.validation_rule_id}"
     )
-    assert finding["source_evidence"][0]["verification_status"] == "VERIFIED"
+    assert finding["source_evidence"][0]["verification_status"] == "APPLIED"
 
     storage = FakeStorage()
     app.dependency_overrides[get_storage_service] = lambda: storage

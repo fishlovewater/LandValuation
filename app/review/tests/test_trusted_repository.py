@@ -22,8 +22,8 @@ def trusted_repository_data(postgres_connection):
         extraction_v1_id=uuid4(),
         extraction_v2_id=uuid4(),
         other_extraction_id=uuid4(),
-        wrong_version_extraction_id=uuid4(),
         pending_extraction_id=uuid4(),
+        form_instance_id=uuid4(),
         source_document_id=uuid4(),
         completed_draft_source_document_id=uuid4(),
         pending_published_source_document_id=uuid4(),
@@ -124,49 +124,52 @@ def trusted_repository_data(postgres_connection):
             ) VALUES (%s, %s, 'F01', 1, 'READY'),
                      (%s, %s, 'F02', 1, 'VOID')
             """,
-            (uuid4(), ids.case_id, uuid4(), ids.case_id),
+            (ids.form_instance_id, ids.case_id, uuid4(), ids.case_id),
         )
-        for extraction_id, case_id, document_id, version_no, run_no, status in (
-            (ids.extraction_v1_id, ids.case_id, ids.original_v1_id, 1, 1, "COMPLETED"),
-            (ids.extraction_v2_id, ids.case_id, ids.original_v2_id, 2, 2, "COMPLETED"),
-            (ids.other_extraction_id, ids.other_case_id, ids.other_document_id, 9, 99, "COMPLETED"),
-            (ids.wrong_version_extraction_id, ids.case_id, ids.original_v2_id, 1, 100, "COMPLETED"),
-            (ids.pending_extraction_id, ids.case_id, ids.original_v2_id, 2, 99, "PENDING"),
+        for extraction_id, case_id, document_id, status in (
+            (ids.extraction_v1_id, ids.case_id, ids.original_v1_id, "COMPLETED"),
+            (ids.extraction_v2_id, ids.case_id, ids.original_v2_id, "COMPLETED"),
+            (ids.other_extraction_id, ids.other_case_id, ids.other_document_id, "COMPLETED"),
+            (ids.pending_extraction_id, ids.case_id, ids.original_v2_id, "PENDING"),
         ):
             cursor.execute(
                 """
-                INSERT INTO valuation.extraction_runs (
-                    extraction_run_id, case_id, document_id, document_version,
-                    run_no, status, extractor_name, started_at, completed_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, 'fixture',
+                INSERT INTO valuation.document_extractions (
+                    extraction_id, case_id, document_id, provider,
+                    extraction_status, created_by_user_id,
+                    started_at, completed_at
+                ) VALUES (%s, %s, %s, 'LOCAL_PDF', %s, %s,
                           now() - interval '1 minute',
                           CASE WHEN %s = 'COMPLETED' THEN now() ELSE NULL END)
                 """,
-                (extraction_id, case_id, document_id, version_no, run_no, status, status),
+                (extraction_id, case_id, document_id, status, ids.user_id, status),
             )
-        for field_code, value_type, raw_text, normalized_value, is_official in (
-            ("adjustment_rate", "DECIMAL", "-5%", '"-5"', True),
-            ("expert_grade", "TEXT", "A 級", '"A"', True),
-            ("nonofficial_only", "TEXT", "草稿欄位", '"draft"', False),
+        for field_name, source_text, confirmed_value in (
+            ("adjustment_rate", "-5%", '"-5"'),
+            ("expert_grade", "A 級", '"A"'),
         ):
             cursor.execute(
                 """
                 INSERT INTO valuation.extracted_fields (
-                    extracted_field_id, extraction_run_id, field_code, field_path,
-                    value_type, raw_text, normalized_value, page_number,
-                    verification_status, is_official
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, 1,
-                              'AUTO_EXTRACTED', %s)
+                    extracted_field_id, case_id, extraction_id, document_id,
+                    form_code, field_name, extracted_value, confidence,
+                    source_page, source_text, field_status, confirmed_value,
+                    confirmed_by_user_id, confirmed_at, applied_form_instance_id,
+                    applied_at
+                    ) VALUES (%s, %s, %s, %s, 'F01', %s, %s::jsonb, 0.9500,
+                              1, %s, 'APPLIED', %s::jsonb, %s, now(), %s, now())
                 """,
                 (
                     uuid4(),
+                    ids.case_id,
                     ids.extraction_v2_id,
-                    field_code,
-                    f"report.{field_code}",
-                    value_type,
-                    raw_text,
-                    normalized_value,
-                    is_official,
+                    ids.original_v2_id,
+                    field_name,
+                    confirmed_value,
+                    source_text,
+                    confirmed_value,
+                    ids.user_id,
+                    ids.form_instance_id,
                 ),
             )
         for document_id, document_code, filename, checksum, extraction_status, publication_status in (
@@ -271,22 +274,20 @@ def trusted_repository_data(postgres_connection):
     yield ids
     with postgres_connection.cursor() as cursor:
         cursor.execute(
-            "DELETE FROM valuation.extracted_fields WHERE extraction_run_id IN (%s, %s, %s, %s, %s)",
+            "DELETE FROM valuation.extracted_fields WHERE extraction_id IN (%s, %s, %s, %s)",
             (
                 ids.extraction_v1_id,
                 ids.extraction_v2_id,
                 ids.other_extraction_id,
-                ids.wrong_version_extraction_id,
                 ids.pending_extraction_id,
             ),
         )
         cursor.execute(
-            "DELETE FROM valuation.extraction_runs WHERE extraction_run_id IN (%s, %s, %s, %s, %s)",
+            "DELETE FROM valuation.document_extractions WHERE extraction_id IN (%s, %s, %s, %s)",
             (
                 ids.extraction_v1_id,
                 ids.extraction_v2_id,
                 ids.other_extraction_id,
-                ids.wrong_version_extraction_id,
                 ids.pending_extraction_id,
             ),
         )
@@ -330,20 +331,17 @@ async def test_loads_only_server_owned_trusted_context(trusted_repository_data):
         assert document["document_id"] == trusted_repository_data.original_v2_id
         assert document["version_no"] == 2
 
-        extraction = await repository.get_latest_completed_extraction(
-            document["document_id"], document["version_no"]
+        fields = await repository.list_applied_confirmed_extracted_fields(
+            trusted_repository_data.case_id
         )
-        assert extraction["extraction_run_id"] == trusted_repository_data.extraction_v2_id
-        assert extraction["status"] == "COMPLETED"
-        assert extraction["extraction_run_id"] != trusted_repository_data.other_extraction_id
-
-        fields = await repository.list_official_extracted_fields(
-            extraction["extraction_run_id"]
-        )
-        assert {row["field_code"] for row in fields} == {
+        assert {row["field_name"] for row in fields} == {
             "adjustment_rate",
             "expert_grade",
         }
+        assert {row["document_id"] for row in fields} == {
+            trusted_repository_data.original_v2_id
+        }
+        assert all(row["field_status"] == "APPLIED" for row in fields)
 
         context = await repository.get_case_rule_context(trusted_repository_data.case_id)
         assert context["case_type"] == "LAND"

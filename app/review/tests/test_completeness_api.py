@@ -13,7 +13,7 @@ from app.main import app
 def trusted_case(request, postgres_connection):
     options = getattr(request, "param", {})
     with_extraction = options.get("with_extraction", True)
-    adjustment_status = options.get("adjustment_status", "VERIFIED")
+    adjustment_status = options.get("adjustment_status", "APPLIED")
     source_extraction_status = options.get("source_extraction_status", "COMPLETED")
     source_publication_status = options.get("source_publication_status", "PUBLISHED")
     ids = SimpleNamespace(
@@ -23,7 +23,8 @@ def trusted_case(request, postgres_connection):
         original_document_id=uuid4(),
         source_document_id=uuid4(),
         rule_version_id=uuid4(),
-        extraction_run_id=uuid4(),
+        extraction_id=uuid4(),
+        form_instance_id=uuid4(),
     )
 
     with postgres_connection.cursor() as cursor:
@@ -92,7 +93,7 @@ def trusted_case(request, postgres_connection):
                 form_instance_id, case_id, form_code, version_no, form_status
             ) VALUES (%s, %s, 'F01', 1, 'READY')
             """,
-            (uuid4(), ids.case_id),
+            (ids.form_instance_id, ids.case_id),
         )
         cursor.execute(
             """
@@ -163,45 +164,55 @@ def trusted_case(request, postgres_connection):
         if with_extraction:
             cursor.execute(
                 """
-                INSERT INTO valuation.extraction_runs (
-                    extraction_run_id, case_id, document_id, document_version,
-                    run_no, status, extractor_name, started_at, completed_at
-                ) VALUES (%s, %s, %s, 1, 1, 'COMPLETED', 'fixture',
+                INSERT INTO valuation.document_extractions (
+                    extraction_id, case_id, document_id, provider,
+                    extraction_status, created_by_user_id,
+                    started_at, completed_at
+                ) VALUES (%s, %s, %s, 'LOCAL_PDF', 'COMPLETED', %s,
                           now() - interval '1 minute', now())
                 """,
-                (ids.extraction_run_id, ids.case_id, ids.original_document_id),
+                (
+                    ids.extraction_id,
+                    ids.case_id,
+                    ids.original_document_id,
+                    ids.user_id,
+                ),
             )
-            for field_code, value_type, raw_text, normalized_value, status in (
+            for field_code, normalized_value, raw_text, status in (
                 (
                     "adjustment_rate",
-                    "DECIMAL",
-                    "調整率 -12%",
                     '"-12"',
+                    "調整率 -12%",
                     adjustment_status,
                 ),
-                ("expert_grade", "TEXT", "級距 A", '"A"', "VERIFIED"),
+                ("expert_grade", '"A"', "級距 A", "APPLIED"),
             ):
-                verified = status == "VERIFIED"
+                applied = status == "APPLIED"
                 cursor.execute(
                     """
                     INSERT INTO valuation.extracted_fields (
-                        extracted_field_id, extraction_run_id, field_code, field_path,
-                        value_type, raw_text, normalized_value, page_number,
-                        verification_status, verified_by_user_id, verified_at,
-                        is_official
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, 3, %s, %s, %s, true)
+                        extracted_field_id, case_id, extraction_id, document_id,
+                        form_code, field_name, extracted_value, confidence,
+                        source_page, source_text, field_status, confirmed_value,
+                        confirmed_by_user_id, confirmed_at, applied_form_instance_id,
+                        applied_at
+                    ) VALUES (%s, %s, %s, %s, 'F01', %s, %s::jsonb, 0.9500,
+                              3, %s, %s, %s::jsonb, %s, %s, %s, %s)
                     """,
                     (
                         uuid4(),
-                        ids.extraction_run_id,
+                        ids.case_id,
+                        ids.extraction_id,
+                        ids.original_document_id,
                         field_code,
-                        f"report.{field_code}",
-                        value_type,
-                        raw_text,
                         normalized_value,
+                        raw_text,
                         status,
-                        ids.user_id if verified else None,
-                        datetime.now(UTC) if verified else None,
+                        normalized_value if applied else None,
+                        ids.user_id if applied else None,
+                        datetime.now(UTC) if applied else None,
+                        ids.form_instance_id if applied else None,
+                        datetime.now(UTC) if applied else None,
                     ),
                 )
     postgres_connection.commit()
@@ -210,12 +221,12 @@ def trusted_case(request, postgres_connection):
         cursor.execute("DELETE FROM review.missing_items WHERE review_id = %s", (ids.review_id,))
         cursor.execute("DELETE FROM review.reviews WHERE review_id = %s", (ids.review_id,))
         cursor.execute(
-            "DELETE FROM valuation.extracted_fields WHERE extraction_run_id = %s",
-            (ids.extraction_run_id,),
+            "DELETE FROM valuation.extracted_fields WHERE extraction_id = %s",
+            (ids.extraction_id,),
         )
         cursor.execute(
-            "DELETE FROM valuation.extraction_runs WHERE extraction_run_id = %s",
-            (ids.extraction_run_id,),
+            "DELETE FROM valuation.document_extractions WHERE extraction_id = %s",
+            (ids.extraction_id,),
         )
         cursor.execute(
             "DELETE FROM valuation.validation_rules WHERE rule_version_id = %s",
@@ -261,13 +272,13 @@ def test_completeness_blocks_when_completed_extraction_is_missing(
 
     assert response.status_code == 200
     assert response.json()["review_status"] == "PENDING_MATERIALS"
-    assert "TRUSTED_INPUT_MISSING" in {
+    assert "TRUSTED_INPUT_MISSING_ADJUSTMENT_RATE" in {
         item["item_code"] for item in response.json()["items"]
     }
 
 
 @pytest.mark.parametrize(
-    "trusted_case", [{"adjustment_status": "AUTO_EXTRACTED"}], indirect=True
+    "trusted_case", [{"adjustment_status": "NEEDS_CONFIRMATION"}], indirect=True
 )
 def test_completeness_blocks_auto_extracted_high_impact_field(
     authorized_client, trusted_case
@@ -278,7 +289,7 @@ def test_completeness_blocks_auto_extracted_high_impact_field(
 
     assert response.status_code == 200
     assert response.json()["review_status"] == "PENDING_MATERIALS"
-    assert "TRUSTED_INPUT_UNVERIFIED_ADJUSTMENT_RATE" in {
+    assert "TRUSTED_INPUT_MISSING_ADJUSTMENT_RATE" in {
         item["item_code"] for item in response.json()["items"]
     }
 
@@ -407,10 +418,10 @@ def test_completeness_blocks_invalid_trusted_normalized_value(
         cursor.execute(
             """
             UPDATE valuation.extracted_fields
-            SET normalized_value = 'true'::jsonb
-            WHERE extraction_run_id = %s AND field_code = 'adjustment_rate'
+            SET confirmed_value = 'true'::jsonb
+            WHERE extraction_id = %s AND field_name = 'adjustment_rate'
             """,
-            (trusted_case.extraction_run_id,),
+            (trusted_case.extraction_id,),
         )
     postgres_connection.commit()
 

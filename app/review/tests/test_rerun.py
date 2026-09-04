@@ -360,10 +360,10 @@ def test_superseded_run_high_finding_does_not_block_current_clean_run(
         cursor.execute(
             """
             UPDATE valuation.extracted_fields
-            SET normalized_value = '"-5"'::jsonb, raw_text = '調整率 -5%%'
-            WHERE extraction_run_id = %s AND field_code = 'adjustment_rate'
+            SET confirmed_value = '"-5"'::jsonb, source_text = '調整率 -5%%'
+            WHERE extraction_id = %s AND field_name = 'adjustment_rate'
             """,
-            (runnable_review.extraction_run_id,),
+            (runnable_review.extraction_id,),
         )
     postgres_connection.commit()
 
