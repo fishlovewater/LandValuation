@@ -26,6 +26,8 @@ REVIEW_WORKFLOW_UPDATE_COLUMNS = {
     "latest_submission_id",
     "latest_validation_run_id",
     "low_count",
+    "manual_priority",
+    "manual_priority_reason",
     "medium_count",
     "missing_item_count",
     "review_status",
@@ -250,10 +252,44 @@ def test_review_runtime_acl_is_limited_to_the_minimal_workflow(admin_cursor) -> 
         "started_by_user_id",
         "started_at",
         "received_at",
-        "manual_priority",
-        "manual_priority_reason",
         "due_at",
     }.issubset(set(denied_columns or ()))
+
+
+@pytest.mark.asyncio
+async def test_runtime_role_can_update_review_priority(
+    admin_cursor, db_cursor, submission_fixture_graphs
+) -> None:
+    case_id, actor, _command = _seed_submittable_case(
+        admin_cursor, cleanup=submission_fixture_graphs
+    )
+    review_id = uuid4()
+    admin_cursor.execute(
+        """
+        INSERT INTO review.reviews
+            (review_id, case_id, review_type, review_status, started_by_user_id)
+        VALUES (%s, %s, 'SMART_REVIEW', 'RECEIVED', %s)
+        """,
+        (review_id, case_id, actor.user_id),
+    )
+    submission_fixture_graphs[-1].review_ids.add(review_id)
+    admin_cursor.connection.commit()
+
+    async with AsyncSessionFactory() as session:
+        review = await ReviewRepository(session).set_priority(
+            review_id, 90, "法定期限將屆", actor.user_id
+        )
+        await session.commit()
+
+    db_cursor.execute(
+        """
+        SELECT manual_priority, manual_priority_reason
+        FROM review.reviews
+        WHERE review_id = %s
+        """,
+        (review_id,),
+    )
+    assert db_cursor.fetchone() == (90, "法定期限將屆")
 
 
 def test_review_runtime_acl_can_read_cross_schema_inputs(admin_cursor) -> None:

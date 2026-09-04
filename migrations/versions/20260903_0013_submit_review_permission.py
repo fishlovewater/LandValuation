@@ -29,8 +29,9 @@ def upgrade() -> None:
     op.execute(
         "GRANT UPDATE (assigned_reviewer_id, completed_at, current_risk_level, "
         "form_instance_id, high_count, latest_submission_id, "
-        "latest_validation_run_id, low_count, medium_count, "
-        "missing_item_count, review_status, validation_run_id) "
+        "latest_validation_run_id, low_count, manual_priority, "
+        "manual_priority_reason, medium_count, missing_item_count, "
+        "review_status, validation_run_id) "
         "ON review.reviews TO land_valuation_app"
     )
     op.execute(
@@ -94,8 +95,9 @@ def downgrade() -> None:
     op.execute(
         "REVOKE UPDATE (assigned_reviewer_id, completed_at, current_risk_level, "
         "form_instance_id, high_count, latest_submission_id, "
-        "latest_validation_run_id, low_count, medium_count, "
-        "missing_item_count, review_status, validation_run_id) "
+        "latest_validation_run_id, low_count, manual_priority, "
+        "manual_priority_reason, medium_count, missing_item_count, "
+        "review_status, validation_run_id) "
         "ON review.reviews FROM land_valuation_app"
     )
     op.execute("REVOKE DELETE ON review.reviews FROM land_valuation_app")
