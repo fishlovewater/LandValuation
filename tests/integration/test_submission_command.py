@@ -17,6 +17,22 @@ from app.valuation.submissions.schemas import SubmitForReviewCommand
 from app.valuation.submissions.service import SubmissionService
 
 
+REVIEW_WORKFLOW_UPDATE_COLUMNS = {
+    "assigned_reviewer_id",
+    "completed_at",
+    "current_risk_level",
+    "form_instance_id",
+    "high_count",
+    "latest_submission_id",
+    "latest_validation_run_id",
+    "low_count",
+    "medium_count",
+    "missing_item_count",
+    "review_status",
+    "validation_run_id",
+}
+
+
 @dataclass
 class _SubmissionFixtureGraph:
     case_id: UUID
@@ -162,7 +178,7 @@ def test_submit_review_permission_is_seeded_only_for_appraiser(admin_cursor) -> 
     assert [row[0] for row in admin_cursor.fetchall()] == ["APPRAISER"]
 
 
-def test_submit_runtime_acl_is_limited_to_the_submit_transaction(admin_cursor) -> None:
+def test_review_runtime_acl_is_limited_to_the_minimal_workflow(admin_cursor) -> None:
     runtime_role = make_url(os.environ["DATABASE_URL"]).username
     assert runtime_role is not None
     admin_cursor.execute(
@@ -191,7 +207,7 @@ def test_submit_runtime_acl_is_limited_to_the_submit_transaction(admin_cursor) -
         True,
         True,
         True,
-        True,
+        False,
         False,
         True,
         False,
@@ -207,6 +223,37 @@ def test_submit_runtime_acl_is_limited_to_the_submit_transaction(admin_cursor) -
         (runtime_role,),
     )
     assert admin_cursor.fetchone() == (True,)
+
+    admin_cursor.execute(
+        """
+        SELECT
+            has_table_privilege(%s, 'review.reviews', 'UPDATE'),
+            array_agg(column_name::text ORDER BY column_name)
+                FILTER (WHERE has_column_privilege(
+                    %s, 'review.reviews', column_name, 'UPDATE'
+                )),
+            array_agg(column_name::text ORDER BY column_name)
+                FILTER (WHERE NOT has_column_privilege(
+                    %s, 'review.reviews', column_name, 'UPDATE'
+                ))
+        FROM information_schema.columns
+        WHERE table_schema = 'review' AND table_name = 'reviews'
+        """,
+        (runtime_role,) * 3,
+    )
+    table_update, allowed_columns, denied_columns = admin_cursor.fetchone()
+    assert table_update is False
+    assert set(allowed_columns or ()) == REVIEW_WORKFLOW_UPDATE_COLUMNS
+    assert {
+        "case_id",
+        "review_type",
+        "started_by_user_id",
+        "started_at",
+        "received_at",
+        "manual_priority",
+        "manual_priority_reason",
+        "due_at",
+    }.issubset(set(denied_columns or ()))
 
 
 def test_review_runtime_acl_can_read_cross_schema_inputs(admin_cursor) -> None:
@@ -260,6 +307,15 @@ def test_submit_permission_migration_downgrades_and_reupgrades(
         (runtime_role,) * 2,
     )
     assert admin_cursor.fetchone() == (False, False)
+    admin_cursor.execute(
+        """
+        SELECT
+            has_table_privilege(%s, 'review.reviews', 'UPDATE'),
+            has_column_privilege(%s, 'review.reviews', 'case_id', 'UPDATE')
+        """,
+        (runtime_role,) * 2,
+    )
+    assert admin_cursor.fetchone() == (True, True)
     admin_cursor.connection.commit()
 
     migration_roundtrip("upgrade", "head")
@@ -274,6 +330,16 @@ def test_submit_permission_migration_downgrades_and_reupgrades(
         """
     )
     assert admin_cursor.fetchone() == (1,)
+    admin_cursor.execute(
+        """
+        SELECT
+            has_table_privilege(%s, 'review.reviews', 'UPDATE'),
+            has_column_privilege(%s, 'review.reviews', 'case_id', 'UPDATE'),
+            has_column_privilege(%s, 'review.reviews', 'review_status', 'UPDATE')
+        """,
+        (runtime_role,) * 3,
+    )
+    assert admin_cursor.fetchone() == (False, False, True)
 
 
 def _seed_submittable_case(

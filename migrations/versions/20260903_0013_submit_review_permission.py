@@ -23,7 +23,15 @@ def upgrade() -> None:
     op.execute("GRANT USAGE ON SCHEMA review, history TO land_valuation_app")
     op.execute("REVOKE DELETE ON review.reviews FROM land_valuation_app")
     op.execute(
-        "GRANT SELECT, INSERT, UPDATE ON review.reviews TO land_valuation_app"
+        "GRANT SELECT, INSERT ON review.reviews TO land_valuation_app"
+    )
+    op.execute("REVOKE UPDATE ON review.reviews FROM land_valuation_app")
+    op.execute(
+        "GRANT UPDATE (assigned_reviewer_id, completed_at, current_risk_level, "
+        "form_instance_id, high_count, latest_submission_id, "
+        "latest_validation_run_id, low_count, medium_count, "
+        "missing_item_count, review_status, validation_run_id) "
+        "ON review.reviews TO land_valuation_app"
     )
     op.execute(
         "REVOKE SELECT, UPDATE, DELETE ON history.case_events "
@@ -80,11 +88,28 @@ def downgrade() -> None:
           AND p.permission_code = 'valuation.submit_review'
         """
     )
-    # Restore the materialized default table grants that predated this
-    # revision, then remove only the schema usage introduced above.
+    # Remove the narrow Review grants before restoring the table-wide UPDATE
+    # that existed at 20260901_0012. The other table grants below restore the
+    # privileges materialized by the prior revision and integration defaults.
     op.execute(
-        "GRANT SELECT, INSERT, UPDATE, DELETE ON review.reviews, "
-        "history.case_events, valuation.review_submissions TO land_valuation_app"
+        "REVOKE UPDATE (assigned_reviewer_id, completed_at, current_risk_level, "
+        "form_instance_id, high_count, latest_submission_id, "
+        "latest_validation_run_id, low_count, medium_count, "
+        "missing_item_count, review_status, validation_run_id) "
+        "ON review.reviews FROM land_valuation_app"
+    )
+    op.execute("REVOKE DELETE ON review.reviews FROM land_valuation_app")
+    op.execute(
+        "REVOKE SELECT (occurred_at) ON history.case_events "
+        "FROM land_valuation_app"
+    )
+    op.execute(
+        "GRANT SELECT, INSERT, UPDATE ON review.reviews, history.case_events "
+        "TO land_valuation_app"
+    )
+    op.execute(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON valuation.review_submissions "
+        "TO land_valuation_app"
     )
     op.execute("REVOKE USAGE ON SCHEMA auth, knowledge FROM land_valuation_app")
     op.execute("REVOKE USAGE ON SCHEMA review, history FROM land_valuation_app")
