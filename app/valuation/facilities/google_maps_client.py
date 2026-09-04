@@ -20,7 +20,7 @@ class GoogleMapsClient:
         )
         if not self.api_key:
             logger.warning("GOOGLE_MAPS_API_KEY is not set. Google Maps API calls will fail.")
-        
+
         self.client = client or httpx.AsyncClient(timeout=10.0)
         self._owns_client = client is None
 
@@ -47,7 +47,7 @@ class GoogleMapsClient:
             "key": self.api_key,
             "language": "zh-TW"
         }
-        
+
         try:
             response = await self.client.get(url, params=params)
             response.raise_for_status()
@@ -76,12 +76,12 @@ class GoogleMapsClient:
             "key": self.api_key,
             "language": "zh-TW"
         }
-        
+
         try:
             response = await self.client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
-            
+
             candidates = []
             if data.get("status") in ("OK", "ZERO_RESULTS"):
                 results = data.get("results", [])[:max_results]
@@ -108,10 +108,10 @@ class GoogleMapsClient:
             return []
 
         url = "https://maps.googleapis.com/maps/api/distancematrix/json"
-        
+
         origin_str = f"{origin_lat},{origin_lng}"
         dest_strs = [f"{dest['lat']},{dest['lng']}" for dest in destinations]
-        
+
         params = {
             "origins": origin_str,
             "destinations": "|".join(dest_strs),
@@ -119,12 +119,12 @@ class GoogleMapsClient:
             "key": self.api_key,
             "language": "zh-TW"
         }
-        
+
         try:
             response = await self.client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
-            
+
             if data.get("status") == "OK":
                 elements = data["rows"][0]["elements"]
                 results = []

@@ -48,7 +48,6 @@ class BedrockConverseProvider:
                 retries={"max_attempts": 2, "mode": "standard"},
             ),
         )
-
     async def converse(self, messages: list[dict[str, Any]]) -> ProviderResponse:
         try:
             result = await run_in_threadpool(
@@ -85,4 +84,3 @@ class BedrockConverseProvider:
             tool_calls=calls,
             stop_reason=result.get("stopReason", "end_turn"),
         )
-

@@ -94,4 +94,3 @@ class FormalReportResponse(BaseModel):
     file_size_bytes: int
     download_path: str
     request_id: UUID | None = None
-

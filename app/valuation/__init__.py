@@ -1,2 +1,1 @@
 """Valuation assistance subsystem."""
-

@@ -11,10 +11,10 @@ async def test_geocode():
             "results": [{"geometry": {"location": {"lat": 25.0, "lng": 121.0}}}]
         }
         mock_get.return_value = mock_response
-        
+
         client = GoogleMapsClient(api_key="dummy_key")
         result = await client.geocode("Test Address")
-        
+
         assert result == {"lat": 25.0, "lng": 121.0}
         mock_get.assert_called_once()
         await client.close()
@@ -31,10 +31,10 @@ async def test_search_nearby_places():
             ]
         }
         mock_get.return_value = mock_response
-        
+
         client = GoogleMapsClient(api_key="dummy_key")
         results = await client.search_nearby_places(25.0, 121.0, "park")
-        
+
         assert len(results) == 2
         assert results[0]["name"] == "Place 1"
         await client.close()
@@ -53,11 +53,11 @@ async def test_compute_route_matrix():
             }]
         }
         mock_get.return_value = mock_response
-        
+
         client = GoogleMapsClient(api_key="dummy_key")
         destinations = [{"lat": 25.1, "lng": 121.1}, {"lat": 25.2, "lng": 121.2}]
         results = await client.compute_route_matrix(25.0, 121.0, destinations)
-        
+
         assert len(results) == 2
         assert results[0]["distance_meters"] == 500
         assert results[1]["distance_meters"] == 200

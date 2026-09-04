@@ -171,4 +171,3 @@ def calculate_benchmark_comparison_price(
         Decimal("0"),
     )
     return weighted.quantize(INTEGER_PRICE_QUANTUM, rounding=ROUND_HALF_UP)
-

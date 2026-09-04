@@ -21,4 +21,3 @@ def is_example_reference(source: KnowledgeSourceLike) -> bool:
         or metadata.get("formal_rule_eligible") is False
         or metadata.get("source_usage") == EXAMPLE_REFERENCE_DOCUMENT_TYPE
     )
-

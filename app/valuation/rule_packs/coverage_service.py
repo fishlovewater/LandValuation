@@ -82,7 +82,6 @@ class RuleCoverageService:
             matches=match_responses,
             message=message,
         )
-
     async def require(
         self,
         *,
@@ -149,4 +148,3 @@ class RuleCoverageService:
             effective_from=rule.effective_from,
             effective_to=rule.effective_to,
         )
-

@@ -112,4 +112,3 @@ async def test_matrix_contains_29_districts_times_five_land_uses() -> None:
     assert matrix.covered_count == 0
     assert matrix.missing_count == 145
     assert matrix.ambiguous_count == 0
-
