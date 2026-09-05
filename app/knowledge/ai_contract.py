@@ -205,6 +205,10 @@ def parse_answer(output: str, packet: list[dict]) -> AiAnswer:
         and item.supported_claim
         and _normalise_for_evidence(item.supporting_quote)
         in _normalise_for_evidence(str(packet_by_id[item.chunk_id]["content"]))
+        and _normalise_for_evidence(item.supported_claim)
+        in _normalise_for_evidence(item.supporting_quote)
+        and _normalise_for_evidence(item.supported_claim)
+        in _normalise_for_evidence(answer)
         for item in evidence
         if item.chunk_id in packet_by_id
     )

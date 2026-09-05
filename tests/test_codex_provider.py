@@ -32,13 +32,17 @@ def candidate(content: str) -> RetrievedKnowledge:
     )
 
 
-def test_codex_packet_passes_authorized_sources_without_keyword_ranking() -> None:
+def test_codex_packet_caps_authorized_sources_at_configured_limit_without_keyword_ranking() -> None:
     provider = CodexCliKnowledgeProvider(
-        Settings(codex_cli_max_source_characters=2000, app_env="test")
+        Settings(knowledge_ai_max_source_characters=2000, app_env="test")
     )
-    packet = provider._source_packet([candidate("甲來源"), candidate("乙來源")])
+    packet = provider._source_packet(
+        [candidate("甲" * 1500), candidate("乙" * 1500)]
+    )
 
-    assert [item["content"] for item in packet] == ["甲來源", "乙來源"]
+    assert [len(item["content"]) for item in packet] == [1500, 500]
+    assert sum(len(item["content"]) for item in packet) == 2000
+    assert packet[1]["content"] == "乙" * 500
 
 
 def test_codex_response_rejects_unknown_citation() -> None:
@@ -78,7 +82,6 @@ def test_codex_response_rejects_supported_answer_without_source() -> None:
     except AppError as exc:
         assert exc.code == "AI_PROVIDER_INVALID_RESPONSE"
         assert exc.details["validation_errors"] == ["SUPPORTED_ANSWER_WITHOUT_CITATION"]
-        assert exc.details["validation_errors"] == ["SUPPORTED_ANSWER_WITHOUT_CITATION"]
     else:
         raise AssertionError("supported answer without a citation must be rejected")
 
@@ -103,6 +106,30 @@ def test_codex_response_rejects_quote_not_found_in_cited_chunk() -> None:
         assert exc.details["validation_errors"] == ["EVIDENCE_QUOTE_NOT_VERIFIABLE_IN_SOURCE"]
     else:
         raise AssertionError("non-verbatim evidence quote must be rejected")
+
+
+def test_codex_response_rejects_claim_unrelated_to_valid_source_quote() -> None:
+    provider = CodexCliKnowledgeProvider(Settings(app_env="test"))
+    packet = provider._source_packet([candidate("市價查估應依明確法源辦理。")])
+    chunk_id = packet[0]["chunk_id"]
+
+    try:
+        provider._parse_answer(
+            '{"answer":"補償金應按公告地價計算。【來源1】","cited_chunk_ids":["'
+            + chunk_id
+            + '"] ,"evidence":[{"chunk_id":"'
+            + chunk_id
+            + '","supporting_quote":"市價查估應依明確法源辦理。","supported_claim":"補償金應按公告地價計算。"}],'
+            '"needs_clarification":false,"clarification_question":null}',
+            packet,
+        )
+    except AppError as exc:
+        assert exc.code == "AI_PROVIDER_INVALID_RESPONSE"
+        assert exc.details["validation_errors"] == [
+            "EVIDENCE_QUOTE_NOT_VERIFIABLE_IN_SOURCE"
+        ]
+    else:
+        raise AssertionError("unrelated supported claim must be rejected")
 
 
 def test_codex_response_accepts_verifiable_claim_evidence() -> None:

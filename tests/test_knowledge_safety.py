@@ -114,8 +114,8 @@ def test_ai_answer_exposes_the_exact_evidence_quote_to_api_clients() -> None:
                 supported_claim="補償市價由主管機關提交地價評議委員會評定。",
             )
         ],
-        needs_clarification=False,
-        clarification_question=None,
+        needs_clarification=True,
+        clarification_question="請確認要查詢的適用年度。",
     )
 
     response = KnowledgeSafetyService().ai_answer_response(
@@ -125,6 +125,7 @@ def test_ai_answer_exposes_the_exact_evidence_quote_to_api_clients() -> None:
         model_id="test-model",
     )
 
-    assert response.answer_status is KnowledgeAnswerStatus.SUPPORTED
+    assert response.answer_status is KnowledgeAnswerStatus.CLARIFICATION_REQUIRED
     assert response.citations[0].supporting_quote == answer.evidence[0].supporting_quote
     assert response.citations[0].supported_claim == answer.evidence[0].supported_claim
+    assert response.clarification_question == answer.clarification_question

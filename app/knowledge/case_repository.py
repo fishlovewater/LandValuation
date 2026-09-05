@@ -38,6 +38,7 @@ class CaseContextRepository:
                     """
                     SELECT r.review_id, r.review_type, r.review_status,
                            r.started_at, r.completed_at,
+                           r.latest_validation_run_id,
                            rs.overall_risk_level, rs.risk_score, rs.summary,
                            COALESCE(rs.category_scores, '{}'::jsonb) AS category_scores
                     FROM review.reviews r
@@ -59,17 +60,21 @@ class CaseContextRepository:
             await self.session.execute(
                 text(
                     """
-                    SELECT finding_id, finding_code, finding_type, severity,
-                           title, description, status, created_at
-                    FROM review.findings
-                    WHERE review_id = :review_id
+                     SELECT f.finding_id, f.finding_code, f.finding_type, f.severity,
+                            f.title, f.description, f.status, f.created_at
+                     FROM review.findings f
+                     WHERE f.review_id = :review_id
+                       AND f.validation_run_id = :validation_run_id
                     ORDER BY CASE severity
                         WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2
                         WHEN 'MEDIUM' THEN 3 ELSE 4 END,
                         created_at DESC
                     """
                 ),
-                {"review_id": review_id},
+                {
+                    "review_id": review_id,
+                    "validation_run_id": result["latest_validation_run_id"],
+                },
             )
         ).mappings().all()
         missing_items = (

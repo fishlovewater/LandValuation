@@ -187,6 +187,7 @@ class KnowledgeSafetyService:
             unreadable_sources=[self._unreadable_source(item) for item in unreadable_sources],
             generation_mode=provider_name.upper(),
             model_id=model_id,
+            clarification_question=answer.clarification_question,
             next_action=(
                 "ANSWER_CLARIFICATION_QUESTION"
                 if answer.needs_clarification

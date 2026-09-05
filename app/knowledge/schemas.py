@@ -73,6 +73,7 @@ class KnowledgeAnswerResponse(KnowledgeSourceResponse):
     generation_mode: str
     next_action: str
     model_id: str | None = None
+    clarification_question: str | None = None
     # Case data is returned as structured, permission-checked context.  It is
     # intentionally separate from citations, which always refer to MinIO
     # knowledge sources and therefore remain independently verifiable.
