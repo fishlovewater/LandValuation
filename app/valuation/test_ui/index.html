@@ -1034,7 +1034,7 @@
         }
 
         function fieldLabel(fieldName) {
-          return FIELD_LABELS[fieldName] || text(fieldName, "待確認欄位");
+          return FIELD_LABELS[fieldName] || "待確認欄位";
         }
 
         function statusLabel(status) {
@@ -1042,7 +1042,7 @@
         }
 
         function codeLabel(code) {
-          return CODE_LABELS[code] || text(code, "系統檢核項目");
+          return CODE_LABELS[code] || "系統檢核項目";
         }
 
         function normaliseKey(key) {
@@ -1343,7 +1343,7 @@
           state.case = safe.case || state.case;
           state.selectedCaseId = safe.case?.case_id || state.selectedCaseId;
           state.case_id = state.selectedCaseId;
-          state.reportId = safe.report_id || state.reportId;
+          state.reportId = safe.report_id ?? null;
           state.report_id = state.reportId;
           state.documents = safe.documents || [];
           state.forms = safe.forms || safe.form_guidance || [];
@@ -1381,6 +1381,17 @@
           const choice = choices?.[id];
           const raw = typeof choice === "string" ? choice : choice?.choice;
           return typeof raw === "string" ? raw.toUpperCase() : raw;
+        }
+
+        function candidateNormalizedValue(candidate) {
+          // The current AutomatedWorkflowResponse exposes extracted_value for a
+          // pending candidate, not normalized_value. Keep this display-only
+          // fallback explicit; formal values remain server-owned and are never
+          // inferred from this presentation value.
+          const value = candidate?.normalized_value
+            ?? candidate?.confirmed_value
+            ?? candidate?.extracted_value;
+          return typeof value === "string" ? value.trim() : value;
         }
 
         function canApplyCandidates(candidates, choices) {
@@ -1422,12 +1433,12 @@
             const documentRecord = findDocument(candidate.document_id);
             const status = candidate.field_status || "EXTRACTED";
             const isPending = status === "NEEDS_CONFIRMATION";
-            const normalizedValue = candidate.normalized_value ?? candidate.confirmed_value;
+            const normalizedValue = candidateNormalizedValue(candidate);
             const page = candidate.source_page ?? candidate.page_number;
             const evidence = candidate.source_text ?? candidate.evidence_text;
             return `<article class="candidate-card" data-candidate-id="${id}">
               <h3>${escapeHtml(fieldLabel(candidate.field_name))}</h3>
-              <p class="candidate-meta">擷取值：${escapeHtml(text(candidate.extracted_value))}｜正規化值：${escapeHtml(text(normalizedValue, "尚未確認"))}</p>
+              <p class="candidate-meta">擷取值：${escapeHtml(text(candidate.extracted_value))}｜正規化候選值（僅供畫面確認）：${escapeHtml(text(normalizedValue, "尚未確認"))}</p>
               <p class="candidate-meta">來源：${escapeHtml(documentRecord?.original_filename || "未知文件")}｜頁次：${escapeHtml(text(page, "未提供"))}｜信心度：${escapeHtml(displayConfidence(candidate.confidence))}</p>
               <p class="candidate-evidence">證據：${escapeHtml(text(evidence, "未提供原文證據"))}</p>
               <p class="candidate-meta">目前狀態：${escapeHtml(statusLabel(status))}</p>
@@ -1449,6 +1460,19 @@
               applyButton.disabled = !canApplyCandidates(state.candidates, state.candidateChoices);
             });
           });
+          list.querySelectorAll("[data-corrected-id]").forEach((input) => {
+            const updateCorrection = () => {
+              const candidateId = input.dataset.correctedId;
+              const current = state.candidateChoices[candidateId] || {};
+              state.candidateChoices[candidateId] = {
+                choice: current.choice,
+                corrected_value: input.value || null,
+              };
+              applyButton.disabled = !canApplyCandidates(state.candidates, state.candidateChoices);
+            };
+            input.addEventListener("input", updateCorrection);
+            input.addEventListener("change", updateCorrection);
+          });
           applyButton.disabled = !canApplyCandidates(state.candidates, state.candidateChoices);
           if (actionMessage) actionMessage.textContent = applyButton.disabled && pending.length
             ? "每一項待人工確認內容都需要選擇處理方式。"
@@ -1460,11 +1484,14 @@
             .filter((candidate) => candidate.field_status === "NEEDS_CONFIRMATION")
             .map((candidate) => {
               const choice = state.candidateChoices[candidate.extracted_field_id] || {};
+              const correction = byId("candidate-list")?.querySelector?.(
+                `[data-corrected-id="${candidate.extracted_field_id}"]`,
+              );
               return {
                 document_id: candidate.document_id,
                 extracted_field_id: candidate.extracted_field_id,
                 choice: choice.choice,
-                corrected_value: choice.corrected_value ?? null,
+                corrected_value: correction ? (correction.value || null) : (choice.corrected_value ?? null),
               };
             });
         }
@@ -1590,11 +1617,21 @@
           const warningCodes = (validation.findings || [])
             .filter((finding) => finding.severity === "WARNING")
             .map((finding) => finding.code);
-          if (warningCodes.length && options.acknowledged_warning_codes === undefined && typeof window?.confirm === "function") {
+          let acknowledged = Array.isArray(options.acknowledged_warning_codes)
+            ? Array.from(new Set(options.acknowledged_warning_codes))
+            : null;
+          if (warningCodes.length && acknowledged === null && typeof window?.confirm === "function") {
             const confirmed = window.confirm(`檢核有 ${warningCodes.length} 項警示，確定要產生正式 PDF 嗎？`);
-            if (!confirmed) return { calculation, validation, report: null };
+            if (confirmed) acknowledged = warningCodes;
           }
-          const acknowledged = options.acknowledged_warning_codes || warningCodes;
+          if (warningCodes.length) {
+            const acknowledgedSet = new Set(acknowledged || []);
+            if (!warningCodes.every((code) => acknowledgedSet.has(code))) {
+              setStatus("正式檢核有警示，請明確確認後才能產生正式 PDF。", true);
+              return { calculation, validation, report: null };
+            }
+          }
+          acknowledged = acknowledged || [];
           const report = await request(`${base}/formal-pdf`, {
             method: "POST",
             body: formalReportPayload(explicit, acknowledged),
@@ -1718,11 +1755,11 @@
         function lockEditing(locked) {
           state.locked = locked;
           if (typeof document === "undefined") return;
-          document.querySelectorAll("#intake-form input, #intake-form select, #intake-form textarea, #intake-form button, #confirm-candidates, #run-formal-workflow").forEach((item) => {
+          document.querySelectorAll("#intake-form input, #intake-form select, #intake-form textarea, #intake-form button, #candidate-list input, #candidate-list select, #candidate-list textarea, #confirm-candidates, #run-formal-workflow").forEach((item) => {
             item.disabled = locked;
           });
           const submit = byId("submit-for-review");
-          if (submit && locked) submit.disabled = true;
+          if (submit) submit.disabled = locked || !state.formal.report?.document_id || !state.formal.validation?.validation_run_id;
         }
 
         function renderWorkflowWarnings(workflow) {
@@ -1755,6 +1792,8 @@
         async function loadCase(caseId) {
           state.selectedCaseId = caseId;
           state.case_id = caseId;
+          state.reportId = null;
+          state.report_id = null;
           lockEditing(false);
           state.reportPackage = null;
           state.formal = { validation: null, report: null, validation_run_id: null, document_id: null, version_no: null, download_path: null };
@@ -1878,13 +1917,18 @@
           buildIntakeManifest,
           buildConfirmationRequest,
           canApplyCandidates,
+          candidateNormalizedValue,
+          candidateRecordsFromState,
           redactForLog,
           formalCalculationPayload,
           formalReportPayload,
           newRequestId: makeRequestId,
           buildSubmitCommand,
           fieldLabel,
+          codeLabel,
           statusLabel,
+          saveWorkflow,
+          lockEditing,
           safeDownloadPath,
           get state() {
             return Object.assign({}, state, { token: REDACTED });

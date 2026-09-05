@@ -48,6 +48,58 @@ function fakeForm(values, files = []) {
   };
 }
 
+function fakeElement(overrides = {}) {
+  const listeners = Object.create(null);
+  return Object.assign({
+    disabled: false,
+    hidden: false,
+    value: "",
+    textContent: "",
+    innerHTML: "",
+    dataset: {},
+    classList: { toggle() {} },
+    addEventListener(type, handler) {
+      listeners[type] = handler;
+    },
+    getListener(type) {
+      return listeners[type];
+    },
+    querySelector() {
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  }, overrides);
+}
+
+function fakeDocument(elements = {}, querySelectorAll = () => []) {
+  return {
+    getElementById(id) {
+      return elements[id] || null;
+    },
+    querySelectorAll,
+  };
+}
+
+function candidateWorkflow(overrides = {}) {
+  return Object.assign({
+    case: { case_id: "case-1", case_title: "測試案件" },
+    report_id: "report-1",
+    documents: [],
+    candidates: [{
+      extracted_field_id: "f1",
+      document_id: "d1",
+      field_name: "transaction_total_price",
+      extracted_value: "100",
+      field_status: "NEEDS_CONFIRMATION",
+      source_page: 1,
+      source_text: "交易總價 100",
+      confidence: 0.9,
+    }],
+  }, overrides);
+}
+
 test("builds an explicit confirmation request", () => {
   const { logic } = loadLogic();
 
@@ -103,6 +155,31 @@ test("redacts credentials and storage internals recursively", () => {
       nested: { bucket_name: "[REDACTED]", safe: "ok" },
     },
   );
+});
+
+test("redacts the rendered request log, not only the helper output", async () => {
+  const requestLog = fakeElement();
+  const document = fakeDocument({ "request-log": requestLog });
+  const { logic } = loadLogic({
+    document,
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      async json() {
+        return {
+          password: "secret",
+          object_key: "private/case.pdf",
+          nested: { storage_url: "https://storage.invalid/file" },
+        };
+      },
+    }),
+  });
+
+  await logic.request("/valuation/cases/case-1/auto-workflow/review");
+
+  assert.match(requestLog.textContent, /\[REDACTED\]/);
+  assert.doesNotMatch(requestLog.textContent, /secret|private\/case\.pdf|storage\.invalid/);
 });
 
 test("builds intake manifest from named controls rather than a JSON editor", () => {
@@ -221,9 +298,127 @@ test("labels candidate fields and workflow statuses for appraisers", () => {
   const { logic } = loadLogic();
 
   assert.equal(logic.fieldLabel("transaction_total_price"), "交易總價");
-  assert.equal(logic.fieldLabel("unknown_field"), "unknown_field");
+  assert.equal(logic.fieldLabel("unknown_field"), "待確認欄位");
+  assert.equal(logic.codeLabel("UNKNOWN_WORKFLOW_CODE"), "系統檢核項目");
   assert.equal(logic.statusLabel("IN_REVIEW"), "審查中");
   assert.equal(logic.statusLabel("REVISION_REQUIRED"), "退回補正");
+});
+
+test("keeps a correction typed after choosing confirmation", () => {
+  const radio = fakeElement({ dataset: { choiceId: "f1" }, value: "CONFIRM" });
+  const correction = fakeElement({ dataset: { correctedId: "f1" }, value: "" });
+  const candidateList = fakeElement({
+    querySelectorAll(selector) {
+      if (selector.includes("data-choice-id")) return [radio];
+      if (selector.includes("data-corrected-id")) return [correction];
+      return [];
+    },
+    querySelector(selector) {
+      return selector.includes('data-corrected-id="f1"') ? correction : null;
+    },
+  });
+  const document = fakeDocument({
+    "candidate-list": candidateList,
+    "candidate-summary": fakeElement(),
+    "candidate-action-message": fakeElement(),
+    "confirm-candidates": fakeElement(),
+  });
+  const { logic } = loadLogic({ document });
+
+  logic.saveWorkflow(candidateWorkflow());
+  radio.getListener("change")();
+  correction.value = "120";
+  correction.getListener("input")();
+
+  assert.deepEqual(logic.candidateRecordsFromState(), [{
+    document_id: "d1",
+    extracted_field_id: "f1",
+    choice: "CONFIRM",
+    corrected_value: "120",
+  }]);
+});
+
+test("locks and unlocks candidate radios and correction fields with the case", () => {
+  const radio = fakeElement({ dataset: { choiceId: "f1" } });
+  const correction = fakeElement({ dataset: { correctedId: "f1" } });
+  const controls = [radio, correction];
+  const document = fakeDocument({}, (selector) => (
+    selector.includes("#candidate-list") ? controls : []
+  ));
+  const { logic } = loadLogic({ document });
+
+  logic.lockEditing(true);
+  assert.equal(radio.disabled, true);
+  assert.equal(correction.disabled, true);
+
+  logic.lockEditing(false);
+  assert.equal(radio.disabled, false);
+  assert.equal(correction.disabled, false);
+});
+
+test("clears a previous report id when workflow response has no report", () => {
+  const { logic } = loadLogic();
+
+  logic.saveWorkflow(candidateWorkflow({ report_id: "report-old" }));
+  assert.equal(logic.state.report_id, "report-old");
+
+  logic.saveWorkflow(candidateWorkflow({ report_id: null }));
+  assert.equal(logic.state.report_id, null);
+  assert.equal(logic.state.reportId, null);
+});
+
+test("uses the available pending candidate value as a display-only normalized value", () => {
+  const { logic } = loadLogic();
+
+  assert.equal(
+    logic.candidateNormalizedValue({ extracted_value: " 120 ", confirmed_value: null }),
+    "120",
+  );
+  assert.equal(
+    logic.candidateNormalizedValue({ extracted_value: "raw", normalized_value: 120 }),
+    120,
+  );
+});
+
+test("does not generate a PDF when warning acknowledgement cannot be explicit", async () => {
+  const calls = [];
+  const { logic } = loadLogic({
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith("/formal-calculation")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => "application/json" },
+          async json() { return { calculation_id: "calc-1" }; },
+        };
+      }
+      if (url.endsWith("/formal-validation")) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => "application/json" },
+          async json() {
+            return {
+              can_generate_formal_report: true,
+              failed_count: 0,
+              warning_count: 1,
+              validation_run_id: "run-1",
+              findings: [{ severity: "WARNING", code: "WARN_MISSING_PHOTO" }],
+            };
+          },
+        };
+      }
+      throw new Error("formal PDF must not be requested");
+    },
+  });
+
+  logic.saveWorkflow(candidateWorkflow({ candidates: [] }));
+  const result = await logic.runFormalWorkflow();
+
+  assert.equal(result.report, null);
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every(({ url }) => !url.endsWith("/formal-pdf")));
 });
 
 test("request prefixes API paths, sends JSON, and attaches the bearer token", async () => {
