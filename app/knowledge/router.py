@@ -111,8 +111,8 @@ async def _source_document(document_id: UUID, repository: KnowledgeRepository, s
 async def search(
     payload: KnowledgeSearchRequest,
     session: DbSession,
-    storage: KnowledgeStorage,
     _user: KnowledgeReader,
+    storage: KnowledgeStorage,
 ) -> KnowledgeSearchResponse:
     _reject_case_context(payload.case_id)
     candidates, unreadable_sources = await _retrieval_candidates(
@@ -127,8 +127,8 @@ async def search(
 async def ask(
     payload: KnowledgeSearchRequest,
     session: DbSession,
-    storage: KnowledgeStorage,
     user: KnowledgeReader,
+    storage: KnowledgeStorage,
 ) -> KnowledgeAnswerResponse:
     try:
         case_context = (
@@ -242,8 +242,8 @@ async def provider_status(_user: KnowledgeReader) -> KnowledgeProviderStatusResp
 async def source_download(
     document_id: UUID,
     session: DbSession,
-    storage: KnowledgeStorage,
     _user: KnowledgeReader,
+    storage: KnowledgeStorage,
 ) -> KnowledgeSourceDownloadResponse:
     """Create a short-lived MinIO URL only after source authorization."""
 
