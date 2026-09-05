@@ -91,8 +91,8 @@ SQL rows use the existing `valuation.cases`, `valuation.parcels`,
 `review.reviews`, and `review.risk_summaries` tables. No schema is created.
 
 The demo and History queries intentionally use the Review columns shared by the
-base and expanded schemas. On a base schema, `started_at` is exposed as
-`received_at`, and current risk is read from the latest
+base and expanded schemas. On this integration branch, `review.reviews.received_at`
+is authoritative, and current risk is read from the latest
 `review.risk_summaries.overall_risk_level` row.
 
 The downloadable MinIO object key is:
