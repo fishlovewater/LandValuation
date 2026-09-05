@@ -118,9 +118,11 @@ function casePanelElements() {
     "candidate-list",
     "candidate-action-message",
     "confirm-candidates",
+    "refresh-candidates",
     "formal-check",
     "formal-summary",
     "formal-findings",
+    "run-formal-workflow",
     "download-formal-report",
     "submit-for-review",
     "correction-message",
@@ -471,6 +473,8 @@ test("logout clears case state, workflow IDs, and rendered panels", () => {
   elements["formal-findings"].innerHTML = "舊檢核結果";
   elements["request-log"].textContent = "舊請求紀錄";
   elements["download-formal-report"].disabled = false;
+  elements["refresh-candidates"].disabled = false;
+  elements["run-formal-workflow"].disabled = false;
 
   logic.showLogin("已登出測試台。");
 
@@ -487,6 +491,8 @@ test("logout clears case state, workflow IDs, and rendered panels", () => {
   assert.equal(elements["formal-findings"].innerHTML, "");
   assert.equal(elements["request-log"].textContent, "尚無請求紀錄。");
   assert.equal(elements["download-formal-report"].disabled, true);
+  assert.equal(elements["refresh-candidates"].disabled, true);
+  assert.equal(elements["run-formal-workflow"].disabled, true);
 });
 
 test("case replacement clears the old panels before the new review response arrives", async () => {
@@ -518,6 +524,44 @@ test("case replacement clears the old panels before the new review response arri
   })));
   await loading;
   assert.equal(logic.state.selectedCaseId, "case-2");
+});
+
+test("ignores a case response that finishes after logout", async () => {
+  const elements = casePanelElements();
+  let resolveReview;
+  const { logic } = loadLogic({
+    document: fakeDocument(elements),
+    fetch: async (url) => {
+      if (url.endsWith("/auto-workflow/review")) {
+        return new Promise((resolve) => { resolveReview = resolve; });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    },
+  });
+
+  logic.saveWorkflow(candidateWorkflow({ report_id: "old-report" }));
+  const loading = logic.loadCase("case-2");
+  logic.showLogin("已登出測試台。");
+
+  resolveReview(jsonResponse(candidateWorkflow({
+    case: { case_id: "case-2", case_title: "不應重新顯示的案件" },
+    report_id: null,
+    candidates: [{
+      extracted_field_id: "stale-field",
+      document_id: "stale-document",
+      field_name: "transaction_total_price",
+      extracted_value: "999",
+      field_status: "NEEDS_CONFIRMATION",
+    }],
+  })));
+  await loading;
+
+  assert.equal(logic.state.case, null);
+  assert.equal(logic.state.selectedCaseId, null);
+  assert.equal(logic.state.reportId, null);
+  assert.deepEqual(logic.state.candidates, []);
+  assert.equal(elements["candidate-list"].innerHTML, "");
+  assert.equal(elements["request-log"].textContent, "尚無請求紀錄。");
 });
 
 test("new intake clears the old case before the intake response arrives", async () => {
@@ -559,6 +603,48 @@ test("new intake clears the old case before the intake response arrives", async 
   assert.equal(logic.state.selectedCaseId, "new-case");
 });
 
+test("ignores a new-intake response that finishes after logout", async () => {
+  const elements = casePanelElements();
+  let resolveIntake;
+  class FakeFormData {
+    append() {}
+  }
+  const { logic } = loadLogic({
+    document: fakeDocument(elements),
+    FormData: FakeFormData,
+    fetch: async (url) => {
+      if (url.endsWith("/auto-workflows/intake")) {
+        return new Promise((resolve) => { resolveIntake = resolve; });
+      }
+      if (url.endsWith("/valuation/cases")) return jsonResponse([]);
+      throw new Error(`unexpected request: ${url}`);
+    },
+  });
+
+  logic.saveWorkflow(candidateWorkflow({ report_id: "old-report" }));
+  const submitting = logic.submitIntake({
+    form: fakeForm(
+      { case_no: "NEW-001", case_title: "不應重新顯示的新案件" },
+      [{ name: "source.pdf" }],
+    ),
+  });
+  logic.showLogin("已登出測試台。");
+
+  resolveIntake(jsonResponse(candidateWorkflow({
+    case: { case_id: "stale-new-case", case_title: "不應重新顯示的新案件" },
+    report_id: null,
+    candidates: [],
+  })));
+  await submitting;
+
+  assert.equal(logic.state.case, null);
+  assert.equal(logic.state.selectedCaseId, null);
+  assert.equal(logic.state.reportId, null);
+  assert.deepEqual(logic.state.documents, []);
+  assert.equal(elements["candidate-list"].innerHTML, "");
+  assert.equal(elements["request-log"].textContent, "尚無請求紀錄。");
+});
+
 test("unknown labels keep escaped machine identity as secondary detail", () => {
   const elements = casePanelElements();
   const { logic } = loadLogic({ document: fakeDocument(elements) });
@@ -579,6 +665,27 @@ test("unknown labels keep escaped machine identity as secondary detail", () => {
   assert.doesNotMatch(elements["candidate-list"].innerHTML, /<h3>&lt;unmapped-field&gt;/);
   assert.match(elements["status-message"].innerHTML, /系統檢核項目/);
   assert.match(elements["status-message"].innerHTML, /檢核代碼：&lt;UNKNOWN_BLOCKER&gt;/);
+});
+
+test("treats inherited identifiers as unknown labels with escaped detail", () => {
+  const elements = casePanelElements();
+  const { logic } = loadLogic({ document: fakeDocument(elements) });
+
+  logic.saveWorkflow(candidateWorkflow({
+    candidates: [{
+      extracted_field_id: "f-inherited",
+      document_id: "d1",
+      field_name: "constructor",
+      extracted_value: "value",
+      field_status: "NEEDS_CONFIRMATION",
+    }],
+    warnings: ["toString"],
+  }));
+
+  assert.match(elements["candidate-list"].innerHTML, /待確認欄位/);
+  assert.match(elements["candidate-list"].innerHTML, /欄位代碼：constructor/);
+  assert.match(elements["status-message"].innerHTML, /系統檢核項目/);
+  assert.match(elements["status-message"].innerHTML, /檢核代碼：toString/);
 });
 
 test("renders a Chinese report type label in the report selector", async () => {

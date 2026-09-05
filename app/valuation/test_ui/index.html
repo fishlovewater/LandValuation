@@ -1010,6 +1010,11 @@
           handoff: null,
           locked: false,
         };
+        let viewGeneration = 0;
+
+        function isCurrentView(generation) {
+          return generation === viewGeneration;
+        }
 
         function byId(id) {
           return typeof document === "undefined" ? null : document.getElementById(id);
@@ -1072,6 +1077,7 @@
         }
 
         function resetCaseState({ clearCases = false } = {}) {
+          viewGeneration += 1;
           state.case = null;
           state.selectedCaseId = null;
           state.case_id = null;
@@ -1096,6 +1102,7 @@
           resetCasePanels();
           lockEditing(false);
           if (clearCases) renderCases();
+          return viewGeneration;
         }
 
         function text(value, fallback = "—") {
@@ -1119,12 +1126,16 @@
             .replace(/'/g, "&#39;");
         }
 
+        function hasMappedLabel(labels, key) {
+          return Object.prototype.hasOwnProperty.call(labels, key);
+        }
+
         function fieldLabel(fieldName) {
-          return FIELD_LABELS[fieldName] || "待確認欄位";
+          return hasMappedLabel(FIELD_LABELS, fieldName) ? FIELD_LABELS[fieldName] : "待確認欄位";
         }
 
         function fieldLabelDetail(fieldName) {
-          if (FIELD_LABELS[fieldName] || fieldName === null || fieldName === undefined || fieldName === "") return "";
+          if (hasMappedLabel(FIELD_LABELS, fieldName) || fieldName === null || fieldName === undefined || fieldName === "") return "";
           return `（欄位代碼：${escapeHtml(fieldName)}）`;
         }
 
@@ -1133,20 +1144,20 @@
         }
 
         function codeLabel(code) {
-          return CODE_LABELS[code] || "系統檢核項目";
+          return hasMappedLabel(CODE_LABELS, code) ? CODE_LABELS[code] : "系統檢核項目";
         }
 
         function codeLabelDetail(code) {
-          if (CODE_LABELS[code] || code === null || code === undefined || code === "") return "";
+          if (hasMappedLabel(CODE_LABELS, code) || code === null || code === undefined || code === "") return "";
           return `（檢核代碼：${escapeHtml(code)}）`;
         }
 
         function reportTypeLabel(reportType) {
-          return REPORT_TYPE_LABELS[reportType] || "正式報告套件";
+          return hasMappedLabel(REPORT_TYPE_LABELS, reportType) ? REPORT_TYPE_LABELS[reportType] : "正式報告套件";
         }
 
         function reportTypeDetail(reportType) {
-          if (REPORT_TYPE_LABELS[reportType] || reportType === null || reportType === undefined || reportType === "") return "";
+          if (hasMappedLabel(REPORT_TYPE_LABELS, reportType) || reportType === null || reportType === undefined || reportType === "") return "";
           return `（報告類型代碼：${escapeHtml(reportType)}）`;
         }
 
@@ -1223,6 +1234,7 @@
         }
 
         async function request(path, options = {}) {
+          const generation = viewGeneration;
           const method = options.method || "GET";
           const headers = Object.assign({}, options.headers || {});
           const token = state.token || getStoredToken();
@@ -1249,7 +1261,7 @@
               body: requestBody,
             });
           } catch (error) {
-            logRequest(method, path, 0, { message: error?.message || "網路連線失敗" });
+            if (isCurrentView(generation)) logRequest(method, path, 0, { message: error?.message || "網路連線失敗" });
             throw new UiError(0, { message: "目前無法連線到估價服務。" });
           }
           const contentType = response.headers?.get?.("content-type") || "";
@@ -1270,7 +1282,7 @@
               }
             }
           }
-          logRequest(method, path, response.status, payload);
+          if (isCurrentView(generation)) logRequest(method, path, response.status, payload);
           if (!response.ok) throw new UiError(response.status, payload);
           return payload;
         }
@@ -1442,8 +1454,9 @@
           });
         }
 
-        function saveWorkflow(result) {
+        function saveWorkflow(result, expectedGeneration = null) {
           if (!result) return null;
+          if (expectedGeneration !== null && !isCurrentView(expectedGeneration)) return null;
           const safe = safeWorkflowResponse(result);
           const incomingCaseId = safe.case?.case_id;
           if (incomingCaseId && (state.case || state.selectedCaseId) && incomingCaseId !== state.selectedCaseId) {
@@ -1460,14 +1473,19 @@
           state.candidateChoices = Object.create(null);
           renderCandidates();
           renderWorkflowWarnings(safe);
+          lockEditing(state.locked);
           return safe;
         }
 
-        async function loadReportPackage() {
+        async function loadReportPackage(expectedGeneration = viewGeneration) {
           if (!state.selectedCaseId || !state.reportId) return null;
+          const generation = expectedGeneration;
+          const caseId = state.selectedCaseId;
+          const reportId = state.reportId;
           const packageResult = await request(
-            `/valuation/cases/${state.selectedCaseId}/reports/${state.reportId}`,
+            `/valuation/cases/${caseId}/reports/${reportId}`,
           );
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId || state.reportId !== reportId) return null;
           state.reportPackage = packageResult;
           const formSelector = byId("form-selector");
           if (formSelector) {
@@ -1619,19 +1637,22 @@
           const formData = new FormData();
           formData.append("intake_manifest_json", JSON.stringify(manifest));
           files.forEach((file) => formData.append("files", file, file.name));
-          resetCaseState();
+          const generation = resetCaseState();
           const result = await request("/valuation/auto-workflows/intake", {
             method: "POST",
             formData,
           });
-          saveWorkflow(result);
+          if (!isCurrentView(generation)) return null;
+          if (!saveWorkflow(result, generation)) return null;
           setStatus("已建立案件並完成來源檔案收件。", false);
-          await refreshCases();
+          await refreshCases(generation);
           return result;
         }
 
         async function confirmCandidates(choices) {
           if (!state.selectedCaseId) throw new UiError(400, { message: "請先選擇案件。" });
+          const generation = viewGeneration;
+          const caseId = state.selectedCaseId;
           if (Array.isArray(choices)) {
             choices.forEach((item) => {
               state.candidateChoices[item.extracted_field_id] = {
@@ -1645,12 +1666,13 @@
             throw new UiError(422, { message: "每一項待確認候選內容都需要先選擇確認或拒絕。" });
           }
           const result = await request(
-            `/valuation/cases/${state.selectedCaseId}/auto-workflow/confirm`,
+            `/valuation/cases/${caseId}/auto-workflow/confirm`,
             { method: "POST", body: buildConfirmationRequest(records) },
           );
-          saveWorkflow(result);
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+          if (!saveWorkflow(result, generation)) return null;
           setStatus("候選內容已依人工選擇套用；請檢查正式資料。", false);
-          await refreshCases();
+          await refreshCases(generation);
           return result;
         }
 
@@ -1702,8 +1724,11 @@
           if (!state.selectedCaseId || !state.reportId) {
             throw new UiError(400, { message: "請先完成案件收件與報告套件建立。" });
           }
+          const generation = viewGeneration;
+          const caseId = state.selectedCaseId;
+          const reportId = state.reportId;
           const explicit = options.explicit !== false;
-          const base = `/valuation/cases/${state.selectedCaseId}/reports/${state.reportId}`;
+          const base = `/valuation/cases/${caseId}/reports/${reportId}`;
           state.formal.validation = null;
           state.formal.report = null;
           state.formal.validation_run_id = null;
@@ -1718,7 +1743,9 @@
             method: "POST",
             body: formalCalculationPayload(explicit),
           });
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId || state.reportId !== reportId) return null;
           const validation = await request(`${base}/formal-validation`, { method: "POST" });
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId || state.reportId !== reportId) return null;
           state.formal.validation = validation;
           renderFormalResult(validation, null);
           if (!validation.can_generate_formal_report) {
@@ -1747,6 +1774,7 @@
             method: "POST",
             body: formalReportPayload(explicit, acknowledged),
           });
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId || state.reportId !== reportId) return null;
           state.formal = {
             validation,
             report: safeFormalReport(report),
@@ -1786,14 +1814,17 @@
 
         async function downloadAuthorizedBlob(downloadPath, filename = "正式報告.pdf") {
           if (!safeDownloadPath(downloadPath)) throw new UiError(400, { message: "下載路徑格式不安全。" });
+          const generation = viewGeneration;
           const token = state.token || getStoredToken();
           const headers = token ? { Authorization: `Bearer ${token}` } : {};
           const fetcher = typeof fetch === "function" ? fetch : window?.fetch;
           if (typeof fetcher !== "function") throw new UiError(0, { message: "目前無法連線到估價服務。" });
           const response = await fetcher(downloadPath, { method: "GET", headers });
+          if (!isCurrentView(generation)) return null;
           logRequest("GET", downloadPath, response.status, { download: true });
           if (!response.ok) throw new UiError(response.status, { message: "正式 PDF 下載失敗。" });
           const blob = await response.blob();
+          if (!isCurrentView(generation)) return null;
           const objectUrl = URL.createObjectURL(blob);
           const anchor = document.createElement("a");
           anchor.href = objectUrl;
@@ -1810,9 +1841,12 @@
           return filename;
         }
 
-        async function refreshHandoff() {
+        async function refreshHandoff(expectedGeneration = viewGeneration) {
           if (!state.selectedCaseId) return null;
-          const handoff = await request(`/valuation/cases/${state.selectedCaseId}/review-handoff`);
+          const generation = expectedGeneration;
+          const caseId = state.selectedCaseId;
+          const handoff = await request(`/valuation/cases/${caseId}/review-handoff`);
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
           state.handoff = redactForLog(handoff);
           renderHandoff(handoff);
           if (["IN_REVIEW", "REVIEW_COMPLETED"].includes(handoff.case_status)) lockEditing(true);
@@ -1821,10 +1855,13 @@
 
         async function submitForReview() {
           if (!state.selectedCaseId) throw new UiError(400, { message: "請先選擇案件。" });
+          const generation = viewGeneration;
+          const caseId = state.selectedCaseId;
           if (!state.formal.validation_run_id || !state.formal.document_id) {
             throw new UiError(422, { message: "請先完成正式檢核與 PDF 產生。" });
           }
-          if (!state.reportPackage) await loadReportPackage();
+          if (!state.reportPackage) await loadReportPackage(generation);
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
           if (!state.reportPackage?.version_no) {
             throw new UiError(422, { message: "找不到目前報告套件版本。" });
           }
@@ -1836,14 +1873,17 @@
             state.formal.report,
             state.submissionRequestId,
           );
-          const result = await request(`/valuation/cases/${state.selectedCaseId}/submit-for-review`, {
+          const result = await request(`/valuation/cases/${caseId}/submit-for-review`, {
             method: "POST",
             body: command,
           });
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
           state.submissionRequestId = null;
           state.request_id = null;
-          await refreshHandoff();
-          await refreshCases();
+          await refreshHandoff(generation);
+          if (!isCurrentView(generation)) return null;
+          await refreshCases(generation);
+          if (!isCurrentView(generation)) return null;
           lockEditing(true);
           setStatus("案件已送出審查，編輯功能已鎖定。", false);
           return result;
@@ -1869,6 +1909,10 @@
           document.querySelectorAll("#intake-form input, #intake-form select, #intake-form textarea, #intake-form button, #candidate-list input, #candidate-list select, #candidate-list textarea, #confirm-candidates, #run-formal-workflow").forEach((item) => {
             item.disabled = locked;
           });
+          const refreshCandidates = byId("refresh-candidates");
+          if (refreshCandidates) refreshCandidates.disabled = locked || !state.selectedCaseId;
+          const runFormal = byId("run-formal-workflow");
+          if (runFormal) runFormal.disabled = locked || !state.selectedCaseId || !state.reportId;
           const submit = byId("submit-for-review");
           if (submit) submit.disabled = locked || !state.formal.report?.document_id || !state.formal.validation?.validation_run_id;
         }
@@ -1909,20 +1953,27 @@
         }
 
         async function loadCase(caseId) {
-          resetCaseState();
+          const generation = resetCaseState();
           state.selectedCaseId = caseId;
           state.case_id = caseId;
           const result = await request(`/valuation/cases/${caseId}/auto-workflow/review`);
-          saveWorkflow(result);
-          if (result.report_id) await loadReportPackage();
-          await refreshHandoff().catch(() => undefined);
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+          if (result?.case?.case_id && result.case.case_id !== caseId) return null;
+          if (!saveWorkflow(result, generation)) return null;
+          if (state.reportId) await loadReportPackage(generation);
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+          await refreshHandoff(generation).catch(() => undefined);
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
           setStatus(`已載入案件：${result.case?.case_title || "估價案件"}。`, false);
           renderCases();
           return result;
         }
 
-        async function refreshCases() {
-          state.cases = await request("/valuation/cases");
+        async function refreshCases(expectedGeneration = viewGeneration) {
+          const generation = expectedGeneration;
+          const cases = await request("/valuation/cases");
+          if (!isCurrentView(generation)) return state.cases;
+          state.cases = cases;
           renderCases();
           if (state.selectedCaseId && !state.cases.some((item) => item.case_id === state.selectedCaseId)) {
             state.selectedCaseId = null;
@@ -1931,10 +1982,12 @@
         }
 
         async function login(username, password) {
+          const loginGeneration = viewGeneration;
           const result = await request("/auth/login", {
             method: "POST",
             body: { username, password },
           });
+          if (!isCurrentView(loginGeneration)) return null;
           state.token = result.access_token;
           try {
             sessionStorage.setItem("valuation.token", state.token);
@@ -1942,12 +1995,14 @@
             // Session storage is optional for the development test page.
           }
           const user = await request("/auth/me");
-          resetCaseState({ clearCases: true });
+          if (!isCurrentView(loginGeneration)) return null;
+          const generation = resetCaseState({ clearCases: true });
           state.user = redactForLog(user);
           const passwordField = byId("login-password");
           if (passwordField) passwordField.value = "";
           showWorkbench();
-          await refreshCases();
+          await refreshCases(generation);
+          if (!isCurrentView(generation)) return null;
           setStatus(`已登入 ${user.display_name || user.username}，請選擇案件或建立新案件。`, false);
           return user;
         }
@@ -2007,14 +2062,18 @@
           attachEvents();
           const token = getStoredToken();
           if (!token) return;
+          const generation = viewGeneration;
           state.token = token;
           showWorkbench();
           request("/auth/me")
             .then((user) => {
+              if (!isCurrentView(generation)) return null;
               state.user = redactForLog(user);
-              return refreshCases();
+              return refreshCases(generation);
             })
-            .catch(() => showLogin("登入狀態已失效，請重新登入。"));
+            .catch(() => {
+              if (isCurrentView(generation)) showLogin("登入狀態已失效，請重新登入。");
+            });
         }
 
         const valuationUiLogic = {
