@@ -126,7 +126,13 @@ function casePanelElements() {
     "download-formal-report",
     "submit-for-review",
     "correction-message",
+    "correction-due-date",
+    "correction-status",
+    "correction-items",
     "missing-items",
+    "revision-primary-action",
+    "submission-history",
+    "handoff-summary",
     "request-log",
     "form-selector",
   ].map((id) => [id, fakeElement()]));
@@ -334,6 +340,232 @@ test("labels candidate fields and workflow statuses for appraisers", () => {
   assert.equal(logic.codeLabel("UNKNOWN_WORKFLOW_CODE"), "系統檢核項目");
   assert.equal(logic.statusLabel("IN_REVIEW"), "審查中");
   assert.equal(logic.statusLabel("REVISION_REQUIRED"), "退回補正");
+});
+
+test("maps a sent correction on a returned case to an editable revision action", () => {
+  const { logic } = loadLogic();
+
+  assert.deepEqual(logic.handoffView({
+    case_status: "REVISION_REQUIRED",
+    correction: { status: "SENT" },
+  }), {
+    label: "退回補正",
+    editable: true,
+    primaryAction: "開始補正",
+  });
+});
+
+test("keeps review-owned correction items separate from missing materials", () => {
+  const { logic } = loadLogic();
+
+  const groups = logic.groupRevisionNeeds({
+    correction: {
+      items: [{ finding_code: "DATE", requested_correction: "更正價格日期" }],
+    },
+    missing_items: [{ item_code: "LAND_REGISTER", item_name: "土地登記謄本" }],
+  });
+
+  assert.equal(groups.content.length, 1);
+  assert.equal(groups.materials.length, 1);
+});
+
+test("renders correction notice as read-only Chinese content", () => {
+  const elements = casePanelElements();
+  const { logic } = loadLogic({ document: fakeDocument(elements) });
+
+  logic.renderHandoff({
+    case_status: "REVISION_REQUIRED",
+    display_status: "退回補正",
+    correction: {
+      status: "SENT",
+      message: "請修正價格日期",
+      due_at: "2026-09-10T00:00:00Z",
+      items: [{
+        finding_code: "DATE",
+        severity: "HIGH",
+        issue_summary: "價格日期與來源不一致",
+        requested_correction: "更正價格日期",
+        document_id: "doc-1",
+        document_name: "價格表.pdf",
+        page_number: 3,
+      }],
+    },
+    missing_items: [{
+      item_code: "LAND_REGISTER",
+      item_name: "土地登記謄本",
+      reason: "必要文件尚未提供",
+    }],
+    latest_submission: { submission_id: "submission-1", submission_no: 1 },
+  });
+
+  assert.match(elements["correction-message"].textContent, /請修正價格日期/);
+  assert.match(elements["correction-due-date"].textContent, /2026-09-10/);
+  assert.match(elements["correction-items"].innerHTML, /內容需要修改/);
+  assert.match(elements["correction-items"].innerHTML, /更正價格日期/);
+  assert.match(elements["correction-items"].innerHTML, /價格表\.pdf/);
+  assert.match(elements["missing-items"].innerHTML, /需要補充資料/);
+  assert.match(elements["missing-items"].innerHTML, /土地登記謄本/);
+  assert.equal(elements["revision-primary-action"].textContent, "開始補正");
+  assert.equal(elements["revision-primary-action"].disabled, false);
+});
+
+test("starts a returned-case revision with a newer report package", async () => {
+  const elements = casePanelElements();
+  const calls = [];
+  const { logic } = loadLogic({
+    document: fakeDocument(elements),
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith("/review-handoff")) {
+        return jsonResponse({
+          case_id: "case-1",
+          case_status: "REVISION_REQUIRED",
+          display_status: "退回補正",
+          correction: { status: "SENT", items: [] },
+          missing_items: [],
+        });
+      }
+      if (url.endsWith("/report-packages")) {
+        return jsonResponse({
+          case_id: "case-1",
+          report_id: "report-2",
+          report_type: "REPORT_COMPARISON_COMMERCIAL",
+          version_no: 2,
+          components: [],
+        }, 201);
+      }
+      throw new Error(`unexpected request: ${url}`);
+    },
+  });
+
+  logic.saveWorkflow(candidateWorkflow({ candidates: [], report_id: "report-1" }));
+  logic.state.reportPackage = { report_id: "report-1", version_no: 1, report_type: "REPORT_COMPARISON_COMMERCIAL" };
+  await logic.refreshHandoff();
+  const result = await logic.startRevision();
+
+  assert.equal(result.version_no, 2);
+  assert.equal(logic.state.revision.active, true);
+  assert.equal(logic.state.reportId, "report-2");
+  assert.equal(logic.state.reportPackage.version_no, 2);
+  assert.equal(calls.filter(({ url }) => url.endsWith("/report-packages")).length, 1);
+  const body = JSON.parse(calls.find(({ url }) => url.endsWith("/report-packages")).options.body);
+  assert.deepEqual(body, { report_type: "REPORT_COMPARISON_COMMERCIAL" });
+});
+
+test("resubmits a corrected report with a fresh request and refreshes projections", async () => {
+  const elements = casePanelElements();
+  const calls = [];
+  const reportPackage = {
+    case_id: "case-1",
+    report_id: "report-2",
+    report_type: "REPORT_COMPARISON_COMMERCIAL",
+    version_no: 2,
+    components: [],
+  };
+  const { logic } = loadLogic({
+    document: fakeDocument(elements),
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith("/review-handoff")) {
+        const resubmitted = calls.some(({ url: calledUrl }) => calledUrl.endsWith("/submit-for-review"));
+        return jsonResponse({
+          case_id: "case-1",
+          case_status: resubmitted ? "IN_REVIEW" : "REVISION_REQUIRED",
+          display_status: resubmitted ? "審查中" : "退回補正",
+          correction: { status: resubmitted ? "RESUBMITTED" : "SENT", message: "請修正", items: [] },
+          missing_items: [],
+          latest_submission: {
+            submission_id: resubmitted ? "submission-2" : "submission-1",
+            submission_no: resubmitted ? 2 : 1,
+          },
+        });
+      }
+      if (url.endsWith("/report-packages")) return jsonResponse(reportPackage, 201);
+      if (url.endsWith("/submit-for-review")) return jsonResponse({ submission_no: 2, case_status: "IN_REVIEW" }, 201);
+      if (url.endsWith("/auto-workflow/review")) return jsonResponse(candidateWorkflow({ candidates: [], report_id: "report-2" }));
+      if (url.endsWith("/reports/report-2")) return jsonResponse(reportPackage);
+      if (url.endsWith("/documents")) return jsonResponse([]);
+      if (url.endsWith("/report-progress")) return jsonResponse({ report_id: "report-2", version_no: 2, sections: [] });
+      if (url.endsWith("/valuation/cases/case-1")) return jsonResponse({ case_id: "case-1", case_status: "IN_REVIEW" });
+      if (url.endsWith("/valuation/cases")) return jsonResponse([{ case_id: "case-1", case_no: "CASE-1", case_title: "案件" }]);
+      throw new Error(`unexpected request: ${url}`);
+    },
+  });
+
+  logic.saveWorkflow(candidateWorkflow({ candidates: [], report_id: "report-1" }));
+  logic.state.reportPackage = { report_id: "report-1", version_no: 1, report_type: "REPORT_COMPARISON_COMMERCIAL" };
+  await logic.refreshHandoff();
+  await logic.startRevision();
+  logic.state.formal.validation = { validation_run_id: "run-2" };
+  logic.state.formal.report = { document_id: "document-2", version_no: 2, download_path: "/api/v1/valuation/cases/case-1/complete-reports/document-2/download" };
+
+  const result = await logic.resubmitForReview();
+  const submitCall = calls.find(({ url }) => url.endsWith("/submit-for-review"));
+  const body = JSON.parse(submitCall.options.body);
+
+  assert.equal(result.submission_no, 2);
+  assert.equal(body.expected_case_version, 2);
+  assert.equal(body.source_validation_run_id, "run-2");
+  assert.equal(body.source_report_document_id, "document-2");
+  assert.match(body.request_id, /^[0-9a-f-]{36}$/i);
+  assert.equal(elements["status-message"].textContent, "已重新送審");
+  assert.match(elements["correction-status"].textContent, /RESUBMITTED/);
+  assert.match(elements["submission-history"].innerHTML, /第 1 次送審/);
+  assert.match(elements["submission-history"].innerHTML, /第 2 次送審/);
+  assert.ok(calls.some(({ url }) => url.endsWith("/documents")));
+  assert.ok(calls.some(({ url }) => url.endsWith("/report-progress")));
+});
+
+test("uploads and extracts returned-case documents without manual identifiers", async () => {
+  const elements = casePanelElements();
+  const calls = [];
+  class FakeFormData {
+    constructor() { this.entries = []; }
+    append(...entry) { this.entries.push(entry); }
+  }
+  const uploaded = {
+    document_id: "document-2",
+    document_group_id: "group-1",
+    case_id: "case-1",
+    document_type: "land-register",
+    original_filename: "new-register.pdf",
+    mime_type: "application/pdf",
+    version_no: 2,
+    is_active: true,
+  };
+  const { logic } = loadLogic({
+    document: fakeDocument(elements),
+    FormData: FakeFormData,
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith("/review-handoff")) return jsonResponse({ case_id: "case-1", case_status: "REVISION_REQUIRED", display_status: "退回補正", correction: { status: "SENT", items: [] }, missing_items: [] });
+      if (url.endsWith("/report-packages")) return jsonResponse({ report_id: "report-2", case_id: "case-1", report_type: "REPORT_COMPARISON_COMMERCIAL", version_no: 2, components: [] }, 201);
+      if (url.endsWith("/documents")) return jsonResponse(uploaded, 201);
+      if (url.endsWith("/documents/document-2/extract")) return jsonResponse({ candidates: [{ extracted_field_id: "new-f1", field_status: "NEEDS_CONFIRMATION" }] });
+      if (url.endsWith("/auto-workflow/review")) return jsonResponse(candidateWorkflow({ report_id: "report-2", candidates: [{ extracted_field_id: "new-f1", field_status: "NEEDS_CONFIRMATION" }] }));
+      if (url.endsWith("/reports/report-2")) return jsonResponse({ report_id: "report-2", version_no: 2, report_type: "REPORT_COMPARISON_COMMERCIAL" });
+      throw new Error(`unexpected request: ${url}`);
+    },
+  });
+
+  logic.saveWorkflow(candidateWorkflow({ report_id: "report-1", candidates: [], documents: [{ document: { document_id: "document-1", document_group_id: "group-1", document_type: "land-register", original_filename: "old-register.pdf", version_no: 1 } }] }));
+  logic.state.reportPackage = { report_id: "report-1", version_no: 1, report_type: "REPORT_COMPARISON_COMMERCIAL" };
+  await logic.refreshHandoff();
+  await logic.startRevision();
+  const result = await logic.submitIntake({
+    form: fakeForm({ existing_case_id: "case-1", document_category: "land-register" }, [{ name: "new-register.pdf" }]),
+  });
+
+  const upload = calls.find(({ url }) => url.endsWith("/documents"));
+  assert.equal(upload.options.method, "POST");
+  assert.deepEqual(upload.options.body.entries, [
+    ["category", "land-register"],
+    ["document_group_id", "group-1"],
+    ["file", { name: "new-register.pdf" }, "new-register.pdf"],
+  ]);
+  assert.ok(calls.some(({ url }) => url.endsWith("/documents/document-2/extract")));
+  assert.equal(result.documents[0].document_id, "document-2");
+  assert.equal(logic.state.candidates[0].extracted_field_id, "new-f1");
 });
 
 test("keeps a correction typed after choosing confirmation", () => {

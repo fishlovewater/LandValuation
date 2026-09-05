@@ -480,6 +480,40 @@
         padding-left: 1.2rem;
       }
 
+      .notice-block .correction-items,
+      .notice-block .submission-history {
+        display: grid;
+        gap: 0.7rem;
+        padding: 0;
+        margin: 0;
+        list-style: none;
+      }
+
+      .correction-item,
+      .submission-history-item {
+        padding: 0.75rem;
+        background: #fffefa;
+        border: 1px solid #e4ca9d;
+      }
+
+      .correction-item p,
+      .submission-history-item p {
+        margin: 0.25rem 0 0;
+      }
+
+      .correction-item strong,
+      .submission-history-item strong {
+        color: var(--ink);
+      }
+
+      .revision-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+        margin-top: 1rem;
+      }
+
       .developer-drawer {
         margin-top: 1.25rem;
         padding: 0.1rem 1rem;
@@ -902,16 +936,34 @@
               <p class="section-note">這個區域會保留退回修正通知與缺少資料，方便查估人員回到正確的工作步驟。</p>
               <div class="notice-grid">
                 <div class="notice-block">
-                  <h3>修正通知</h3>
+                  <h3>修正通知（唯讀）</h3>
                   <p id="correction-message">尚未產生修正通知。系統會在審查端指出需要調整的內容。</p>
+                  <p id="correction-due-date" class="inline-status">期限：尚未提供</p>
+                  <p id="correction-status" class="inline-status">狀態：尚未產生</p>
                 </div>
                 <div class="notice-block">
-                  <h3>缺少資料</h3>
+                  <h3>內容需要修改</h3>
+                  <div id="correction-items" class="correction-items" aria-live="polite">
+                    <p>目前沒有需要修改的內容。</p>
+                  </div>
+                </div>
+                <div class="notice-block">
+                  <h3>需要補充資料</h3>
                   <ul id="missing-items">
-                    <li>尚未載入缺少資料清單</li>
-                    <li>補充文件到位後再重新檢核</li>
+                    <li>目前沒有待補充資料。</li>
                   </ul>
                 </div>
+              </div>
+              <div class="notice-block" style="margin-top: 1rem;">
+                <h3>送審歷程</h3>
+                <p id="handoff-summary" class="inline-status">尚未產生送審紀錄。</p>
+                <ol id="submission-history" class="submission-history" aria-live="polite">
+                  <li>尚未產生送審紀錄。</li>
+                </ol>
+              </div>
+              <div class="revision-actions">
+                <button id="revision-primary-action" class="button-primary" type="button" disabled>開始補正</button>
+                <span class="inline-status" id="revision-action-message" role="status"></span>
               </div>
             </section>
           </div>
@@ -958,6 +1010,7 @@
           IN_REVIEW: "審查中",
           REVISION_REQUIRED: "退回補正",
           REVIEW_COMPLETED: "審查完成",
+          RESUBMITTED: "已重新送審",
           COMPLETED: "已完成",
           READY_FOR_DRAFT: "可準備草稿",
           READY_FOR_VALIDATION: "可執行檢核",
@@ -990,6 +1043,7 @@
           reportId: null,
           reportPackage: null,
           documents: [],
+          reportProgress: null,
           forms: [],
           candidates: [],
           candidateChoices: Object.create(null),
@@ -1008,6 +1062,12 @@
           request_id: null,
           submissionRequestId: null,
           handoff: null,
+          submissionHistory: [],
+          revision: {
+            active: false,
+            previousVersion: null,
+            reportId: null,
+          },
           locked: false,
         };
         let viewGeneration = 0;
@@ -1056,7 +1116,13 @@
             "formal-findings": "",
             "form-selector": '<option value="">尚未載入表單</option>',
             "correction-message": "尚未產生修正通知。系統會在審查端指出需要調整的內容。",
-            "missing-items": "<li>尚未載入缺少資料清單</li><li>補充文件到位後再重新檢核</li>",
+            "correction-due-date": "期限：尚未提供",
+            "correction-status": "狀態：尚未產生",
+            "correction-items": "<p>目前沒有需要修改的內容。</p>",
+            "missing-items": "<li>目前沒有待補充資料。</li>",
+            "handoff-summary": "尚未產生送審紀錄。",
+            "submission-history": "<li>尚未產生送審紀錄。</li>",
+            "revision-action-message": "",
           };
           Object.entries(htmlById).forEach(([id, html]) => {
             const element = byId(id);
@@ -1070,10 +1136,12 @@
             const element = byId(id);
             if (element) element.textContent = value;
           });
-          ["confirm-candidates", "download-formal-report", "submit-for-review"].forEach((id) => {
+          ["confirm-candidates", "download-formal-report", "submit-for-review", "revision-primary-action"].forEach((id) => {
             const element = byId(id);
             if (element) element.disabled = true;
           });
+          const revisionAction = byId("revision-primary-action");
+          if (revisionAction) revisionAction.textContent = "開始補正";
         }
 
         function resetCaseState({ clearCases = false } = {}) {
@@ -1085,6 +1153,7 @@
           state.reportId = null;
           state.reportPackage = null;
           state.documents = [];
+          state.reportProgress = null;
           state.forms = [];
           state.candidates = [];
           state.candidateChoices = Object.create(null);
@@ -1096,6 +1165,12 @@
           state.submissionRequestId = null;
           state.request_id = null;
           state.handoff = null;
+          state.submissionHistory = [];
+          state.revision = {
+            active: false,
+            previousVersion: null,
+            reportId: null,
+          };
           state.locked = false;
           if (clearCases) state.cases = [];
           resetIntakeForm();
@@ -1625,6 +1700,81 @@
             });
         }
 
+        function revisionDocumentGroupId(documentType) {
+          const existing = (state.documents || []).map((item) => item?.document || item).find(
+            (item) => item?.document_type === documentType && item?.document_group_id,
+          );
+          return existing?.document_group_id || null;
+        }
+
+        function revisionCasePayload(manifest) {
+          const source = manifest?.case || {};
+          const payload = {};
+          [
+            "case_title",
+            "case_type",
+            "requesting_agency",
+            "valuation_base_date",
+            "city_code",
+            "district_code",
+            "land_use_type",
+          ].forEach((key) => {
+            if (source[key] !== undefined && source[key] !== null && source[key] !== "") payload[key] = source[key];
+          });
+          return payload;
+        }
+
+        async function submitRevisionChanges(form, files, expectedGeneration, caseId) {
+          const generation = expectedGeneration;
+          const manifest = buildIntakeManifest(form);
+          const casePayload = revisionCasePayload(manifest);
+          if (Object.keys(casePayload).length) {
+            const updatedCase = await request(`/valuation/cases/${caseId}`, {
+              method: "PATCH",
+              body: casePayload,
+            });
+            if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+            state.case = updatedCase || state.case;
+          }
+          const category = controlValue(form, "document_category", "original") || "original";
+          const documents = [];
+          const extractions = [];
+          for (const file of files) {
+            const formData = new FormData();
+            formData.append("category", category);
+            const groupId = revisionDocumentGroupId(category);
+            if (groupId) formData.append("document_group_id", groupId);
+            formData.append("file", file, file.name);
+            const uploaded = await request(`/valuation/cases/${caseId}/documents`, {
+              method: "POST",
+              formData,
+            });
+            if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+            const safe = safeDocument(uploaded) || uploaded;
+            documents.push(safe);
+            if (safe?.document_id) {
+              const extraction = await request(
+                `/valuation/cases/${caseId}/documents/${safe.document_id}/extract`,
+                { method: "POST" },
+              );
+              if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+              extractions.push(extraction);
+            }
+          }
+          state.documents = (state.documents || []).concat(
+            documents.map((documentRecord) => ({ document: documentRecord })),
+          );
+          const workflow = await request(`/valuation/cases/${caseId}/auto-workflow/review`);
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+          if (!saveWorkflow(workflow, generation)) return null;
+          if (state.reportId) await loadReportPackage(generation);
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+          await refreshHandoff(generation);
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+          setStatus("補正資料已更新，請重新確認候選內容。", false);
+          return { documents, extractions, workflow };
+        }
+
         async function submitIntake(eventOrOptions) {
           const options = eventOrOptions && (eventOrOptions.form || eventOrOptions.elements)
             ? { form: eventOrOptions.form || eventOrOptions }
@@ -1632,6 +1782,10 @@
           const form = options.form || byId("intake-form");
           const files = options.files || selectedFiles(form);
           if (!form) throw new UiError(400, { message: "找不到收件表單。" });
+          if (state.revision.active && state.selectedCaseId) {
+            if (typeof FormData === "undefined" && files.length) throw new UiError(0, { message: "目前瀏覽器不支援檔案上傳。" });
+            return submitRevisionChanges(form, files, viewGeneration, state.selectedCaseId);
+          }
           if (!files.length) throw new UiError(422, { message: "至少需要選取一份來源檔案。" });
           if (typeof FormData === "undefined") throw new UiError(0, { message: "目前瀏覽器不支援檔案上傳。" });
           const manifest = buildIntakeManifest(form);
@@ -1797,7 +1951,7 @@
           const source = typeof globalThis !== "undefined" ? globalThis.crypto : null;
           if (source && typeof source.randomUUID === "function") return source.randomUUID();
           const random = () => Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0");
-          return `${random()}-${random().slice(0, 4)}-4${random().slice(0, 3)}-${(8 + Math.floor(Math.random() * 4)).toString(16)}${random().slice(0, 3)}-${random()}${random()}`;
+          return `${random()}-${random().slice(0, 4)}-4${random().slice(0, 3)}-${(8 + Math.floor(Math.random() * 4)).toString(16)}${random().slice(0, 3)}-${random()}${random().slice(0, 4)}`;
         }
 
         function buildSubmitCommand(reportPackage, formalValidation, formalReport, requestId) {
@@ -1811,6 +1965,71 @@
 
         function safeDownloadPath(path) {
           return typeof path === "string" && path.startsWith(API_PREFIX + "/valuation/") && !/[?#]/.test(path);
+        }
+
+        function handoffView(handoff) {
+          const status = handoff?.case_status || "DRAFT";
+          const editable = status === "REVISION_REQUIRED";
+          return {
+            label: handoff?.display_status || statusLabel(status),
+            editable,
+            primaryAction: editable ? "開始補正" : "檢視目前狀態",
+          };
+        }
+
+        function groupRevisionNeeds(handoff) {
+          return {
+            content: Array.isArray(handoff?.correction?.items)
+              ? handoff.correction.items.slice()
+              : [],
+            materials: Array.isArray(handoff?.missing_items)
+              ? handoff.missing_items.slice()
+              : [],
+          };
+        }
+
+        function formatDueDate(value) {
+          if (!value) return "尚未提供";
+          const raw = String(value);
+          const match = raw.match(/^\d{4}-\d{2}-\d{2}/);
+          return match ? match[0] : raw;
+        }
+
+        function renderCorrectionItems(items) {
+          const target = byId("correction-items");
+          if (!target) return;
+          const list = Array.isArray(items) ? items : (Array.isArray(items?.correction?.items) ? items.correction.items : []);
+          target.innerHTML = `<h3>內容需要修改</h3>` + (list.length
+            ? list.map((item) => {
+              const documentRecord = findDocument(item.document_id);
+              const documentName = item.document_name
+                || item.original_filename
+                || item.filename
+                || item.document?.original_filename
+                || documentRecord?.original_filename
+                || "未提供";
+              const page = item.page_number ?? item.source_page;
+              return `<article class="correction-item"><strong>${escapeHtml(text(item.issue_summary, "需要檢視的內容"))}</strong><p>要求修正：${escapeHtml(text(item.requested_correction, "請依通知內容修正"))}</p><p>來源文件：${escapeHtml(text(documentName))}｜頁次：${escapeHtml(text(page, "未提供"))}</p></article>`;
+            }).join("")
+            : "<p>目前沒有需要修改的內容。</p>");
+        }
+
+        function renderMissingItems(items) {
+          const target = byId("missing-items");
+          if (!target) return;
+          const list = Array.isArray(items) ? items : (Array.isArray(items?.missing_items) ? items.missing_items : []);
+          target.innerHTML = `<li class="revision-heading">需要補充資料</li>` + (list.length
+            ? list.map((item) => `<li><strong>${escapeHtml(text(item.item_name || item.item_code, "待補充資料"))}</strong>${item.reason ? `：${escapeHtml(item.reason)}` : ""}${item.due_at ? `（期限：${escapeHtml(formatDueDate(item.due_at))}）` : ""}</li>`).join("")
+            : "<li>目前沒有待補充資料。</li>");
+        }
+
+        function renderSubmissionHistory() {
+          const target = byId("submission-history");
+          if (!target) return;
+          const history = state.submissionHistory || [];
+          target.innerHTML = history.length
+            ? history.map((item) => `<li class="submission-history-item"><strong>第 ${escapeHtml(item.submission_no)} 次送審</strong>${item.submitted_at ? `<p>送審時間：${escapeHtml(formatDueDate(item.submitted_at))}</p>` : ""}</li>`).join("")
+            : "<li>尚未產生送審紀錄。</li>";
         }
 
         async function downloadAuthorizedBlob(downloadPath, filename = "正式報告.pdf") {
@@ -1861,8 +2080,18 @@
           const handoff = await request(`/valuation/cases/${caseId}/review-handoff`);
           if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
           state.handoff = redactForLog(handoff);
+          if (handoff?.latest_submission?.submission_id) {
+            const known = (state.submissionHistory || []).some(
+              (item) => item.submission_id === handoff.latest_submission.submission_id,
+            );
+            if (!known) state.submissionHistory.push({
+              submission_id: handoff.latest_submission.submission_id,
+              submission_no: handoff.latest_submission.submission_no,
+              submitted_at: handoff.latest_submission.submitted_at,
+            });
+          }
           renderHandoff(handoff);
-          if (["IN_REVIEW", "REVIEW_COMPLETED"].includes(handoff.case_status)) lockEditing(true);
+          lockEditing(["IN_REVIEW", "REVIEW_COMPLETED"].includes(handoff.case_status));
           return handoff;
         }
 
@@ -1902,18 +2131,160 @@
           return result;
         }
 
+        async function startRevision() {
+          if (!state.selectedCaseId) throw new UiError(400, { message: "請先選擇案件。" });
+          const handoff = state.handoff || {};
+          if (!handoffView(handoff).editable) {
+            throw new UiError(409, { message: "目前案件不是退回補正狀態。" });
+          }
+          if (state.revision.active && state.revision.reportId === state.reportId && state.reportPackage) {
+            return state.reportPackage;
+          }
+          const generation = viewGeneration;
+          const caseId = state.selectedCaseId;
+          const previousVersion = Number(state.reportPackage?.version_no || 0);
+          const reportType = state.reportPackage?.report_type || "REPORT_COMPARISON_COMMERCIAL";
+          const preparedDate = controlValue(byId("intake-form"), "prepared_date");
+          const body = { report_type: reportType };
+          if (preparedDate) body.prepared_date = preparedDate;
+          const result = await request(`/valuation/cases/${caseId}/report-packages`, {
+            method: "POST",
+            body,
+          });
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+          const nextVersion = Number(result?.version_no);
+          if (!result?.report_id || !Number.isInteger(nextVersion) || nextVersion <= previousVersion) {
+            throw new UiError(409, { message: "補正必須建立較新的報告版本。" }, generation);
+          }
+          state.reportPackage = result;
+          state.reportId = result.report_id;
+          state.report_id = result.report_id;
+          state.forms = Array.isArray(result.components) ? result.components : state.forms;
+          state.revision = {
+            active: true,
+            previousVersion,
+            reportId: result.report_id,
+          };
+          state.formal = emptyFormalState();
+          state.validation_run_id = null;
+          state.document_id = null;
+          state.version_no = null;
+          state.download_path = null;
+          const intakeSubmit = byId("submit-intake");
+          if (intakeSubmit) intakeSubmit.textContent = "上傳補正資料";
+          renderHandoff(state.handoff);
+          lockEditing(false);
+          setStatus("已開始補正，請更新估價資料後重新產生正式報告。", false);
+          return result;
+        }
+
+        async function refreshRevisionProjection(expectedGeneration, caseId) {
+          const generation = expectedGeneration;
+          const latestCase = await request(`/valuation/cases/${caseId}`);
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+          state.case = latestCase;
+          const documents = await request(`/valuation/cases/${caseId}/documents`);
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+          state.documents = Array.isArray(documents) ? documents.map(safeDocument).filter(Boolean) : [];
+          const progress = await request(`/valuation/cases/${caseId}/report-progress`);
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+          state.reportProgress = progress;
+          const workflow = await request(`/valuation/cases/${caseId}/auto-workflow/review`);
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+          if (!saveWorkflow(workflow, generation)) return null;
+          if (state.reportId) await loadReportPackage(generation);
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+          await refreshHandoff(generation);
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+          renderCases();
+          return { case: latestCase, documents: state.documents, progress, workflow };
+        }
+
+        async function resubmitForReview() {
+          if (!state.selectedCaseId) throw new UiError(400, { message: "請先選擇案件。" });
+          const generation = viewGeneration;
+          const caseId = state.selectedCaseId;
+          if (!state.revision.active) {
+            throw new UiError(409, { message: "請先按下開始補正。" });
+          }
+          const validationRunId = state.formal.validation?.validation_run_id || state.formal.validation_run_id;
+          const reportDocumentId = state.formal.report?.document_id || state.formal.document_id;
+          if (!validationRunId || !reportDocumentId) {
+            throw new UiError(422, { message: "請先完成新的正式檢核與 PDF 產生。" });
+          }
+          if (!state.reportPackage?.version_no || Number(state.reportPackage.version_no) <= Number(state.revision.previousVersion || 0)) {
+            throw new UiError(409, { message: "重新送審必須使用較新的報告版本。" });
+          }
+          const requestId = makeRequestId();
+          const formalValidation = state.formal.validation || { validation_run_id: validationRunId };
+          const formalReport = state.formal.report || { document_id: reportDocumentId };
+          state.submissionRequestId = requestId;
+          state.request_id = requestId;
+          const command = buildSubmitCommand(
+            state.reportPackage,
+            formalValidation,
+            formalReport,
+            requestId,
+          );
+          const result = await request(`/valuation/cases/${caseId}/submit-for-review`, {
+            method: "POST",
+            body: command,
+          });
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+          state.submissionRequestId = null;
+          state.request_id = null;
+          state.revision.active = false;
+          await refreshRevisionProjection(generation, caseId);
+          if (!isCurrentView(generation) || state.selectedCaseId !== caseId) return null;
+          lockEditing(true);
+          setStatus("已重新送審", false);
+          return result;
+        }
+
         function renderHandoff(handoff) {
           const message = byId("correction-message");
-          const missing = byId("missing-items");
+          const dueDate = byId("correction-due-date");
+          const correctionStatus = byId("correction-status");
+          const summary = byId("handoff-summary");
+          const action = byId("revision-primary-action");
+          const actionMessage = byId("revision-action-message");
+          const correction = handoff?.correction;
+          const view = handoffView(handoff);
+          const groups = groupRevisionNeeds(handoff);
+          if (handoff?.latest_submission?.submission_id) {
+            const known = (state.submissionHistory || []).some(
+              (item) => item.submission_id === handoff.latest_submission.submission_id,
+            );
+            if (!known) state.submissionHistory.push({
+              submission_id: handoff.latest_submission.submission_id,
+              submission_no: handoff.latest_submission.submission_no,
+              submitted_at: handoff.latest_submission.submitted_at,
+            });
+          }
           if (message) {
-            message.textContent = handoff?.correction?.message || "尚未產生修正通知。系統會在審查端指出需要調整的內容。";
+            message.textContent = correction?.message || "尚未產生修正通知。系統會在審查端指出需要調整的內容。";
           }
-          if (missing) {
-            const items = handoff?.missing_items || [];
-            missing.innerHTML = items.length
-              ? items.map((item) => `<li>${escapeHtml(item.item_name || item.item_code)}${item.reason ? `：${escapeHtml(item.reason)}` : ""}</li>`).join("")
-              : "<li>目前沒有待補充資料。</li>";
+          if (dueDate) dueDate.textContent = `期限：${formatDueDate(correction?.due_at)}`;
+          if (correctionStatus) correctionStatus.textContent = `狀態：${correction?.status || "尚未產生"}${correction?.status === "RESUBMITTED" ? "（已重新送審）" : ""}`;
+          renderCorrectionItems(groups.content);
+          renderMissingItems(groups.materials);
+          if (summary) {
+            const latest = handoff?.latest_submission?.submission_no;
+            summary.textContent = latest
+              ? `目前狀態：${escapeHtml(view.label)}｜最近一次送審：第 ${latest} 次`
+              : `目前狀態：${escapeHtml(view.label)}｜尚未送審`;
           }
+          if (action) {
+            action.textContent = view.primaryAction;
+            action.disabled = !view.editable;
+          }
+          if (actionMessage) {
+            actionMessage.textContent = view.editable
+              ? (state.revision.active ? "補正工作區已啟用，可更新資料後重新產生正式報告。" : "可回到估價資料區進行補正。")
+              : "審查中的內容與已完成案件維持唯讀。";
+          }
+          renderSubmissionHistory();
+          return view;
         }
 
         function lockEditing(locked) {
@@ -1924,10 +2295,13 @@
           });
           const refreshCandidates = byId("refresh-candidates");
           if (refreshCandidates) refreshCandidates.disabled = locked || !state.selectedCaseId;
+          const revisionPending = handoffView(state.handoff).editable && !state.revision.active;
           const runFormal = byId("run-formal-workflow");
-          if (runFormal) runFormal.disabled = locked || !state.selectedCaseId || !state.reportId;
+          if (runFormal) runFormal.disabled = locked || revisionPending || !state.selectedCaseId || !state.reportId;
           const submit = byId("submit-for-review");
-          if (submit) submit.disabled = locked || !state.formal.report?.document_id || !state.formal.validation?.validation_run_id;
+          if (submit) submit.disabled = locked || revisionPending || !state.formal.report?.document_id || !state.formal.validation?.validation_run_id;
+          const revisionAction = byId("revision-primary-action");
+          if (revisionAction) revisionAction.disabled = locked || !handoffView(state.handoff).editable;
         }
 
         function renderWorkflowWarnings(workflow) {
@@ -2073,7 +2447,8 @@
           byId("refresh-candidates")?.addEventListener("click", () => state.selectedCaseId && loadCase(state.selectedCaseId).catch(setStatusForError));
           byId("run-formal-workflow")?.addEventListener("click", () => runFormalWorkflow().catch(setStatusForError));
           byId("download-formal-report")?.addEventListener("click", () => downloadAuthorizedBlob(state.formal.download_path, state.formal.report?.filename).catch(setStatusForError));
-          byId("submit-for-review")?.addEventListener("click", () => submitForReview().catch(setStatusForError));
+          byId("submit-for-review")?.addEventListener("click", () => (state.revision.active ? resubmitForReview() : submitForReview()).catch(setStatusForError));
+          byId("revision-primary-action")?.addEventListener("click", () => startRevision().catch(setStatusForError));
         }
 
         function initialise() {
@@ -2101,6 +2476,9 @@
           confirmCandidates,
           runFormalWorkflow,
           submitForReview,
+          refreshHandoff,
+          startRevision,
+          resubmitForReview,
           downloadAuthorizedBlob,
           buildIntakeManifest,
           buildConfirmationRequest,
@@ -2112,6 +2490,11 @@
           formalReportPayload,
           newRequestId: makeRequestId,
           buildSubmitCommand,
+          handoffView,
+          groupRevisionNeeds,
+          renderHandoff,
+          renderCorrectionItems,
+          renderMissingItems,
           fieldLabel,
           codeLabel,
           statusLabel,
