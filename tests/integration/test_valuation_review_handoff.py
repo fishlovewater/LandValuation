@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -18,6 +19,7 @@ from app.review.schemas import CorrectionRequestCreate, FindingTriageRequest
 from app.review.service import ReviewService
 from app.review.workbench_repository import WorkbenchRepository
 from app.review.workbench_service import WorkbenchService
+from app.valuation.submissions.repository import SubmissionRepository
 from app.valuation.submissions.schemas import SubmitForReviewCommand
 from app.valuation.submissions.service import SubmissionService
 
@@ -42,6 +44,82 @@ class _HandoffData:
     validation_rule_ids: tuple[UUID, UUID]
     rule_source_document_id: UUID
     user_ids: tuple[UUID, UUID]
+
+
+class _RaceStop(Exception):
+    pass
+
+
+class _BlockingReviewService:
+    async def check_completeness(self, *_args):
+        raise _RaceStop
+
+
+class _SignalledCorrectionRepository(CorrectionRepository):
+    def __init__(
+        self,
+        session,
+        *,
+        first_lock: asyncio.Event,
+        case_locked: asyncio.Event,
+        submission_review_locked: asyncio.Event,
+    ):
+        super().__init__(session)
+        self.first_lock = first_lock
+        self.case_locked = case_locked
+        self.submission_review_locked = submission_review_locked
+
+    async def get_request(self, request_id, for_update=False):
+        request = await super().get_request(request_id, for_update=for_update)
+        if for_update:
+            self.first_lock.set()
+            if not self.case_locked.is_set():
+                await self.submission_review_locked.wait()
+        return request
+
+
+class _SignalledReviewRepository(ReviewRepository):
+    def __init__(
+        self,
+        session,
+        *,
+        first_lock: asyncio.Event,
+        case_locked: asyncio.Event,
+        submission_started: asyncio.Event,
+    ):
+        super().__init__(session)
+        self.first_lock = first_lock
+        self.case_locked = case_locked
+        self.submission_started = submission_started
+
+    async def get_case(self, case_id, for_update=False):
+        case = await super().get_case(case_id, for_update=for_update)
+        if for_update:
+            self.case_locked.set()
+            self.first_lock.set()
+        return case
+
+    async def get(self, review_id, for_update=False):
+        review = await super().get(review_id, for_update=for_update)
+        if for_update and self.case_locked.is_set():
+            await self.submission_started.wait()
+        return review
+
+
+class _SignalledSubmissionRepository(SubmissionRepository):
+    def __init__(self, session, *, submission_started, submission_review_locked):
+        super().__init__(session)
+        self.submission_started = submission_started
+        self.submission_review_locked = submission_review_locked
+
+    async def lock_case(self, case_id):
+        self.submission_started.set()
+        return await super().lock_case(case_id)
+
+    async def lock_review_for_case(self, case_id):
+        review = await super().lock_review_for_case(case_id)
+        self.submission_review_locked.set()
+        return review
 
 
 def _insert_user(cursor, user_id: UUID, role_name: str) -> None:
@@ -966,6 +1044,144 @@ async def test_appraiser_submission_handoff_is_reviewable_and_statuses_pair(
         assert any(
             event.event_type == "CORRECTION_RECHECKED" for event in report.history
         )
+
+
+@pytest.mark.asyncio
+async def test_two_sessions_serialize_revision_and_recheck_locks(
+    admin_cursor, handoff_data: _HandoffData
+) -> None:
+    appraiser_id, reviewer_id = handoff_data.user_ids
+    appraiser = _actor(appraiser_id, "APPRAISER", "valuation.submit_review")
+    case = handoff_data.cases[0]
+    first_command = SubmitForReviewCommand(
+        request_id=uuid4(),
+        expected_case_version=1,
+        source_validation_run_id=case.source_validation_run_id,
+        source_report_document_id=case.document_id,
+    )
+
+    async with AsyncSessionFactory() as setup_session:
+        first = await SubmissionService(setup_session).submit(
+            case.case_id, first_command, appraiser
+        )
+        await setup_session.commit()
+
+    response_document_id, response_validation_run_id = _insert_report_revision_graph(
+        admin_cursor,
+        case=case,
+        appraiser_id=appraiser_id,
+        rule_version_id=handoff_data.rule_version_id,
+    )
+    admin_cursor.execute(
+        "UPDATE valuation.validation_runs SET submission_id = NULL "
+        "WHERE validation_run_id = %s",
+        (case.source_validation_run_id,),
+    )
+    correction_request_id = uuid4()
+    admin_cursor.execute(
+        "UPDATE valuation.cases SET case_status = 'REVISION_REQUIRED' "
+        "WHERE case_id = %s",
+        (case.case_id,),
+    )
+    admin_cursor.execute(
+        "UPDATE review.reviews SET review_status = 'IN_REVIEW' "
+        "WHERE review_id = %s",
+        (first.review_id,),
+    )
+    admin_cursor.execute(
+        """
+        INSERT INTO review.correction_requests (
+            correction_request_id, review_id, request_no,
+            based_on_validation_run_id, status, due_at, message,
+            base_document_id, base_document_version,
+            response_document_id, response_document_version,
+            created_by_user_id, created_at, sent_by_user_id, sent_at,
+            resubmitted_by_user_id, resubmitted_at
+        ) VALUES (
+            %s, %s, 1, %s, 'RESUBMITTED', CURRENT_TIMESTAMP + INTERVAL '5 days',
+            '請修正送審報告', %s, 1, %s, 2, %s, now(), %s, now(), %s, now()
+        )
+        """,
+        (
+            correction_request_id,
+            first.review_id,
+            case.source_validation_run_id,
+            case.document_id,
+            case.document_id,
+            reviewer_id,
+            reviewer_id,
+            reviewer_id,
+        ),
+    )
+    admin_cursor.connection.commit()
+
+    first_lock = asyncio.Event()
+    case_locked = asyncio.Event()
+    submission_started = asyncio.Event()
+    submission_review_locked = asyncio.Event()
+
+    async def run_recheck():
+        async with AsyncSessionFactory() as session:
+            review_repository = _SignalledReviewRepository(
+                session,
+                first_lock=first_lock,
+                case_locked=case_locked,
+                submission_started=submission_started,
+            )
+            correction_repository = _SignalledCorrectionRepository(
+                session,
+                first_lock=first_lock,
+                case_locked=case_locked,
+                submission_review_locked=submission_review_locked,
+            )
+            service = CorrectionService(
+                review_repository,
+                correction_repository,
+                review_service=_BlockingReviewService(),
+            )
+            try:
+                await service.recheck(correction_request_id, reviewer_id)
+            except _RaceStop:
+                return
+            finally:
+                await session.rollback()
+
+    async def run_revision_submission():
+        async with AsyncSessionFactory() as session:
+            repository = _SignalledSubmissionRepository(
+                session,
+                submission_started=submission_started,
+                submission_review_locked=submission_review_locked,
+            )
+            try:
+                await SubmissionService(session, repository=repository).submit(
+                    case.case_id,
+                    SubmitForReviewCommand(
+                        request_id=uuid4(),
+                        expected_case_version=2,
+                        source_validation_run_id=response_validation_run_id,
+                        source_report_document_id=response_document_id,
+                    ),
+                    appraiser,
+                )
+            except AppError as raised:
+                assert raised.code == "CORRECTION_RESUBMISSION_INVALID"
+            finally:
+                await session.rollback()
+
+    recheck_task = asyncio.create_task(run_recheck())
+    await asyncio.wait_for(first_lock.wait(), timeout=2)
+    submission_task = asyncio.create_task(run_revision_submission())
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(recheck_task, submission_task),
+            timeout=3,
+        )
+    finally:
+        for task in (recheck_task, submission_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(recheck_task, submission_task, return_exceptions=True)
 
 
 @pytest.mark.asyncio

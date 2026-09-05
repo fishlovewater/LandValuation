@@ -546,7 +546,12 @@ async def test_register_latest_resubmission_rejects_missing_active_request():
 
     assert raised.value.code == "CORRECTION_RESUBMISSION_INVALID"
     assert raised.value.status_code == 409
-    assert calls == [("active", True)]
+    assert calls == [
+        ("review", False),
+        ("case", True),
+        ("review", True),
+        ("active", True),
+    ]
 
 
 @pytest.mark.asyncio

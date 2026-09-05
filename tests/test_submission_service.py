@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.exceptions import AppError, PermissionDeniedError
+from app.review.correction_service import CorrectionService
 from app.review.schemas import CorrectionResubmissionCreate
 from app.valuation.submissions.schemas import SubmitForReviewCommand
 from app.valuation.submissions.service import SubmissionService
@@ -211,6 +212,115 @@ class FakeRevisionRegistrar:
         )
 
 
+class _RaceStop(Exception):
+    pass
+
+
+class _RaceLocks:
+    def __init__(self):
+        self.case = asyncio.Lock()
+        self.review = asyncio.Lock()
+        self.correction = asyncio.Lock()
+        self.case_owner = None
+        self.review_owner = None
+        self.correction_owner = None
+        self.first_lock = asyncio.Event()
+        self.recheck_case_locked = asyncio.Event()
+        self.submission_review_locked = asyncio.Event()
+
+    async def acquire(self, row, owner):
+        lock = getattr(self, row)
+        await lock.acquire()
+        setattr(self, f"{row}_owner", owner)
+
+    def release(self, row, owner):
+        lock = getattr(self, row)
+        if getattr(self, f"{row}_owner") == owner:
+            setattr(self, f"{row}_owner", None)
+            lock.release()
+
+
+class _RaceSubmissionRepository(StatefulRepository):
+    def __init__(self, state, locks):
+        super().__init__(state)
+        self.locks = locks
+
+    async def lock_case(self, case_id):
+        self.state.calls.append("lock_case")
+        await self.locks.acquire("case", "submission")
+        return self.state.case
+
+    async def lock_review_for_case(self, case_id):
+        self.state.calls.append("lock_review_for_case")
+        await self.locks.acquire("review", "submission")
+        self.locks.submission_review_locked.set()
+        return await super().lock_review_for_case(case_id)
+
+
+class _RaceRevisionRegistrar:
+    def __init__(self, locks):
+        self.locks = locks
+
+    async def register_latest_resubmission(self, review_id, payload, actor_id):
+        await self.locks.acquire("correction", "submission")
+
+
+class _RaceCorrectionRepository:
+    def __init__(self, locks, request):
+        self.locks = locks
+        self.request = request
+        self.session = self
+
+    async def get_request(self, request_id, for_update=False):
+        if for_update:
+            await self.locks.acquire("correction", "recheck")
+            self.locks.first_lock.set()
+            if not self.locks.recheck_case_locked.is_set():
+                await self.locks.submission_review_locked.wait()
+        return self.request
+
+    async def flush(self):
+        return None
+
+
+class _RaceReviewRepository:
+    def __init__(self, locks, review, case, run, response_document_id):
+        self.locks = locks
+        self.review = review
+        self.case = case
+        self.run = run
+        self.response_document_id = response_document_id
+        self.session = self
+
+    async def get(self, review_id, for_update=False):
+        if for_update:
+            await self.locks.acquire("review", "recheck")
+        return self.review
+
+    async def get_case(self, case_id, for_update=False):
+        if for_update:
+            await self.locks.acquire("case", "recheck")
+            self.locks.recheck_case_locked.set()
+            self.locks.first_lock.set()
+        return self.case
+
+    async def get_run(self, run_id):
+        return self.run
+
+    async def get_submission_provenance_by_id(
+        self, submission_id, *, review_id, case_id
+    ):
+        return {"source_report_document_id": self.response_document_id}
+
+    async def flush(self):
+        return None
+
+
+class _RaceReviewService:
+    async def check_completeness(self, *_args):
+        raise _RaceStop
+
+
 def setup_service(command_value=None, *, owner=None):
     command_value = command_value or command()
     owner = owner or actor()
@@ -241,6 +351,76 @@ def prepare_newer_revision(state, first_command):
     state.inputs.applied_fields[0]["document_id"] = newer.source_report_document_id
     state.inputs.documents[0]["document_id"] = newer.source_report_document_id
     return newer
+
+
+@pytest.mark.asyncio
+async def test_revision_and_recheck_sessions_follow_case_review_correction_lock_order():
+    service, state, owner, first_command = setup_service()
+    await service.submit(state.case.case_id, first_command, owner)
+    newer = prepare_newer_revision(state, first_command)
+    locks = _RaceLocks()
+
+    review = state.review
+    review.review_status = "IN_REVIEW"
+    request = SimpleNamespace(
+        correction_request_id=uuid4(),
+        review_id=review.review_id,
+        based_on_validation_run_id=uuid4(),
+        status="RESUBMITTED",
+        response_document_id=newer.source_report_document_id,
+    )
+    run = SimpleNamespace(
+        validation_run_id=request.based_on_validation_run_id,
+        submission_id=uuid4(),
+    )
+    review_repository = _RaceReviewRepository(
+        locks,
+        review,
+        state.case,
+        run,
+        newer.source_report_document_id,
+    )
+    correction_repository = _RaceCorrectionRepository(locks, request)
+    recheck_service = CorrectionService(
+        review_repository,
+        correction_repository,
+        review_service=_RaceReviewService(),
+    )
+    submission_service = SubmissionService(
+        None,
+        repository=_RaceSubmissionRepository(state, locks),
+        revision_registrar=_RaceRevisionRegistrar(locks),
+    )
+
+    async def run_recheck():
+        try:
+            await recheck_service.recheck(request.correction_request_id, uuid4())
+        except _RaceStop:
+            return
+        finally:
+            for row in ("correction", "review", "case"):
+                locks.release(row, "recheck")
+
+    async def run_submission():
+        try:
+            await submission_service.submit(state.case.case_id, newer, owner)
+        finally:
+            for row in ("correction", "review", "case"):
+                locks.release(row, "submission")
+
+    recheck_task = asyncio.create_task(run_recheck())
+    await asyncio.wait_for(locks.first_lock.wait(), timeout=1)
+    submission_task = asyncio.create_task(run_submission())
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(recheck_task, submission_task),
+            timeout=1,
+        )
+    finally:
+        for task in (recheck_task, submission_task):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(recheck_task, submission_task, return_exceptions=True)
 
 
 @pytest.mark.asyncio

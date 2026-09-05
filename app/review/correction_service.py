@@ -189,6 +189,7 @@ class CorrectionService:
         payload: CorrectionResubmissionCreate,
         actor_id: UUID,
     ):
+        _case, review = await self._lock_review_context(review_id)
         request = await self.corrections.active_for_review(
             review_id, for_update=True
         )
@@ -198,19 +199,65 @@ class CorrectionService:
                 "找不到等待補正的修正通知",
                 409,
             )
-        return await self._register_locked_resubmission(request, payload, actor_id)
+        if request.review_id != review.review_id:
+            raise AppError(
+                "CORRECTION_REQUEST_OWNERSHIP_CONFLICT",
+                "修正通知與審查案件關聯已變更",
+                409,
+            )
+        return await self._register_locked_resubmission(
+            request, payload, actor_id, review=review
+        )
 
     async def register_resubmission(self, request_id, payload, actor_id):
+        _case, review, request = await self._lock_request_context(request_id)
+        return await self._register_locked_resubmission(
+            request, payload, actor_id, review=review
+        )
+
+    async def _lock_review_context(self, review_id: UUID):
+        review_probe = await self.review_repository.get(review_id)
+        if review_probe is None:
+            raise ResourceNotFoundError("審查案件")
+        case = await self.review_repository.get_case(
+            review_probe.case_id, for_update=True
+        )
+        if case is None:
+            raise ResourceNotFoundError("估價案件")
+        review = await self.review_repository.get(review_id, for_update=True)
+        if review is None:
+            raise ResourceNotFoundError("審查案件")
+        if review.case_id != case.case_id:
+            raise AppError(
+                "CORRECTION_REQUEST_OWNERSHIP_CONFLICT",
+                "修正通知與審查案件關聯已變更",
+                409,
+            )
+        return case, review
+
+    async def _lock_request_context(self, request_id):
+        request_probe = await self.corrections.get_request(request_id)
+        if request_probe is None:
+            raise ResourceNotFoundError("修正通知")
+        case, review = await self._lock_review_context(request_probe.review_id)
         request = await self.corrections.get_request(request_id, for_update=True)
         if request is None:
             raise ResourceNotFoundError("修正通知")
-        return await self._register_locked_resubmission(request, payload, actor_id)
+        if request.review_id != review.review_id:
+            raise AppError(
+                "CORRECTION_REQUEST_OWNERSHIP_CONFLICT",
+                "修正通知與審查案件關聯已變更",
+                409,
+            )
+        return case, review, request
 
     async def _register_locked_resubmission(
         self,
         request,
         payload: CorrectionResubmissionCreate,
         actor_id: UUID,
+        *,
+        review=None,
     ):
         if request.status != "SENT":
             raise AppError(
@@ -218,9 +265,10 @@ class CorrectionService:
                 "只有已送出且尚未回件的修正通知可登記新版文件",
                 409,
             )
-        review = await self.review_repository.get(request.review_id)
         if review is None:
-            raise ResourceNotFoundError("審查案件")
+            review = await self.review_repository.get(request.review_id)
+            if review is None:
+                raise ResourceNotFoundError("審查案件")
         document = await self.corrections.valid_resubmission_document(
             case_id=review.case_id,
             base_document_id=request.base_document_id,
@@ -243,19 +291,13 @@ class CorrectionService:
         return request
 
     async def recheck(self, request_id, actor_id):
-        request = await self.corrections.get_request(request_id, for_update=True)
-        if request is None:
-            raise ResourceNotFoundError("修正通知")
+        _case, review, request = await self._lock_request_context(request_id)
         if request.status != "RESUBMITTED":
             raise AppError(
                 "CORRECTION_RECHECK_INVALID",
                 "只有已回件的修正通知可執行新版重檢",
                 409,
             )
-        review = await self.review_repository.get(request.review_id, for_update=True)
-        if review is None:
-            raise ResourceNotFoundError("審查案件")
-
         # Registering a response document does not create the immutable
         # Valuation submission that Review must execute.  For submitted
         # Reviews, refuse to rerun the same snapshot; the Valuation submit
