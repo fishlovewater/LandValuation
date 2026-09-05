@@ -282,7 +282,7 @@ async def seed() -> None:
                     (document_id,document_group_id,case_id,document_type,original_filename,mime_type,
                      bucket_name,object_key,checksum_sha256,file_size_bytes,version_no,is_active,storage_etag)
                     VALUES
-                    (:did,:did,:both,'generated-report','history-demo-report.pdf','application/pdf',
+                    (:did,:did,:both,'review-report','history-demo-report.pdf','application/pdf',
                      :bucket,:dkey,:dhash,:dsize,1,true,:etag),
                     (:mid,:mid,:review,'review-report','history-demo-missing.docx',
                      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

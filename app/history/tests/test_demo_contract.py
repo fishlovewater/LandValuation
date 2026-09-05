@@ -30,6 +30,15 @@ def test_missing_object_is_distinct_from_downloadable_object():
     assert demo.DOWNLOAD_OBJECT_KEY.endswith("history-demo-report.pdf")
 
 
+def test_downloadable_both_case_is_seeded_as_review_report():
+    source = "".join(inspect.getsource(demo.seed).split())
+
+    assert (
+        "(:did,:did,:both,'review-report','history-demo-report.pdf','application/pdf',"
+        in source
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("command", ("seed", "reset"))
 async def test_mutating_demo_commands_require_development(monkeypatch, command):
