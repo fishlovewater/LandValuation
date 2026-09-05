@@ -1,13 +1,15 @@
 from io import BytesIO
+from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.auth.dependencies import DbSession, require_permissions
 from app.auth.models import User
+from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.valuation.schemas import (
     CaseCreate,
@@ -54,12 +56,20 @@ from app.valuation.pdf_errors import build_pdf_safely
 from app.valuation.service import ValuationService
 
 router = APIRouter()
+TEST_UI_PATH = Path(__file__).with_name("test_ui") / "index.html"
 
 CaseReader = Annotated[User, Depends(require_permissions("case.read"))]
 CaseCreator = Annotated[User, Depends(require_permissions("case.create"))]
 CaseEditor = Annotated[User, Depends(require_permissions("case.update"))]
 ValuationReader = Annotated[User, Depends(require_permissions("valuation.read"))]
 ValuationEditor = Annotated[User, Depends(require_permissions("valuation.update"))]
+
+
+@router.get("/test-ui", include_in_schema=False)
+async def valuation_test_ui() -> FileResponse:
+    if get_settings().app_env.lower() != "development":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return FileResponse(TEST_UI_PATH, media_type="text/html; charset=utf-8")
 
 
 @router.get("/form-types", response_model=list[FormRequirementResponse])
