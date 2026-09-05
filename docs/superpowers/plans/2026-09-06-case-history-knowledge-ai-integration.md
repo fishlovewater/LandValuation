@@ -20,6 +20,7 @@
 - MinIO persistence stores bucket plus object key only; no localhost URL or persistent presigned URL may be stored.
 - Development seeds remain explicit commands and never run at application startup.
 - `rtk` was unavailable during planning; use the raw commands below unless it is installed before execution.
+- If the worktree has no `.venv`, run the same pytest selectors in a dependency-complete API test image with the worktree mounted read-only, `PYTHONDONTWRITEBYTECODE=1`, and `-p no:cacheprovider`.
 
 ---
 
@@ -490,13 +491,17 @@ pwsh -File scripts/run-integration-tests.ps1 -PytestArgs "tests/integration/test
 
 Expected: exit code 0; the script removes its temporary Compose project and volumes.
 
-- [ ] **Step 5: Run the full automated suite**
+- [ ] **Step 5: Run the complete non-integration suite**
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pytest -q --ignore=tests/integration
 ```
 
-Expected: exit code 0. If it fails, record the exact failing selectors and compare them against `fa2304f` before changing code; do not label a pre-existing failure as an integration regression.
+Expected: exit code 0. Database-backed tests are not silently skipped: they run
+separately in Step 4 through the isolated integration harness. If this step
+fails, record the exact failing selectors and compare them against `fa2304f`
+before changing code; do not label a pre-existing failure as an integration
+regression.
 
 - [ ] **Step 6: Seed and inspect the History development boundary**
 
