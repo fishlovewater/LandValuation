@@ -976,6 +976,9 @@
           FORMAL_CALCULATION_REQUIRED: "尚未完成正式計算",
           FORMAL_VALIDATION_FAILED: "正式檢核仍有錯誤",
         });
+        const REPORT_TYPE_LABELS = Object.freeze({
+          REPORT_COMPARISON_COMMERCIAL: "商業用地比較報告",
+        });
         const state = {
           token: null,
           user: null,
@@ -1012,6 +1015,89 @@
           return typeof document === "undefined" ? null : document.getElementById(id);
         }
 
+        function emptyFormalState() {
+          return {
+            validation: null,
+            report: null,
+            validation_run_id: null,
+            document_id: null,
+            version_no: null,
+            download_path: null,
+          };
+        }
+
+        function resetIntakeForm() {
+          const form = byId("intake-form");
+          if (form?.reset) {
+            form.reset();
+            return;
+          }
+          if (typeof form?.querySelectorAll === "function") {
+            form.querySelectorAll("input, select, textarea").forEach((control) => {
+              if (control.type === "checkbox" || control.type === "radio") control.checked = false;
+              else control.value = "";
+            });
+          }
+        }
+
+        function resetCasePanels() {
+          const htmlById = {
+            "candidate-decision": "逐項人工選擇確認或拒絕",
+            "candidate-summary": "<strong>目前尚無候選內容。</strong> 登入並選擇案件後，這裡會顯示來源頁次、原文摘要與可確認的欄位。",
+            "candidate-list": "",
+            "candidate-action-message": "",
+            "formal-check": "尚未執行檢核",
+            "formal-summary": "<p><strong>正式報告：</strong>尚未產生。</p><p><strong>檢核結果：</strong>尚未執行。</p>",
+            "formal-findings": "",
+            "form-selector": '<option value="">尚未載入表單</option>',
+            "correction-message": "尚未產生修正通知。系統會在審查端指出需要調整的內容。",
+            "missing-items": "<li>尚未載入缺少資料清單</li><li>補充文件到位後再重新檢核</li>",
+          };
+          Object.entries(htmlById).forEach(([id, html]) => {
+            const element = byId(id);
+            if (element) element.innerHTML = html;
+          });
+          const textById = {
+            "status-message": "尚未載入案件。",
+            "request-log": "尚無請求紀錄。",
+          };
+          Object.entries(textById).forEach(([id, value]) => {
+            const element = byId(id);
+            if (element) element.textContent = value;
+          });
+          ["confirm-candidates", "download-formal-report", "submit-for-review"].forEach((id) => {
+            const element = byId(id);
+            if (element) element.disabled = true;
+          });
+        }
+
+        function resetCaseState({ clearCases = false } = {}) {
+          state.case = null;
+          state.selectedCaseId = null;
+          state.case_id = null;
+          state.report_id = null;
+          state.reportId = null;
+          state.reportPackage = null;
+          state.documents = [];
+          state.forms = [];
+          state.candidates = [];
+          state.candidateChoices = Object.create(null);
+          state.formal = emptyFormalState();
+          state.validation_run_id = null;
+          state.document_id = null;
+          state.version_no = null;
+          state.download_path = null;
+          state.submissionRequestId = null;
+          state.request_id = null;
+          state.handoff = null;
+          state.locked = false;
+          if (clearCases) state.cases = [];
+          resetIntakeForm();
+          resetCasePanels();
+          lockEditing(false);
+          if (clearCases) renderCases();
+        }
+
         function text(value, fallback = "—") {
           if (value === null || value === undefined || value === "") return fallback;
           if (typeof value === "object") {
@@ -1037,12 +1123,31 @@
           return FIELD_LABELS[fieldName] || "待確認欄位";
         }
 
+        function fieldLabelDetail(fieldName) {
+          if (FIELD_LABELS[fieldName] || fieldName === null || fieldName === undefined || fieldName === "") return "";
+          return `（欄位代碼：${escapeHtml(fieldName)}）`;
+        }
+
         function statusLabel(status) {
           return STATUS_LABELS[status] || text(status, "尚未設定");
         }
 
         function codeLabel(code) {
           return CODE_LABELS[code] || "系統檢核項目";
+        }
+
+        function codeLabelDetail(code) {
+          if (CODE_LABELS[code] || code === null || code === undefined || code === "") return "";
+          return `（檢核代碼：${escapeHtml(code)}）`;
+        }
+
+        function reportTypeLabel(reportType) {
+          return REPORT_TYPE_LABELS[reportType] || "正式報告套件";
+        }
+
+        function reportTypeDetail(reportType) {
+          if (REPORT_TYPE_LABELS[reportType] || reportType === null || reportType === undefined || reportType === "") return "";
+          return `（報告類型代碼：${escapeHtml(reportType)}）`;
         }
 
         function normaliseKey(key) {
@@ -1340,6 +1445,10 @@
         function saveWorkflow(result) {
           if (!result) return null;
           const safe = safeWorkflowResponse(result);
+          const incomingCaseId = safe.case?.case_id;
+          if (incomingCaseId && (state.case || state.selectedCaseId) && incomingCaseId !== state.selectedCaseId) {
+            resetCaseState();
+          }
           state.case = safe.case || state.case;
           state.selectedCaseId = safe.case?.case_id || state.selectedCaseId;
           state.case_id = state.selectedCaseId;
@@ -1362,7 +1471,8 @@
           state.reportPackage = packageResult;
           const formSelector = byId("form-selector");
           if (formSelector) {
-            formSelector.innerHTML = `<option value="${escapeHtml(packageResult.report_type || "")}">${escapeHtml(packageResult.report_type || "正式報告套件")}</option>`;
+            const reportType = packageResult.report_type || "";
+            formSelector.innerHTML = `<option value="${escapeHtml(reportType)}">${escapeHtml(reportTypeLabel(reportType))}${reportTypeDetail(reportType)}</option>`;
           }
           return packageResult;
         }
@@ -1437,7 +1547,7 @@
             const page = candidate.source_page ?? candidate.page_number;
             const evidence = candidate.source_text ?? candidate.evidence_text;
             return `<article class="candidate-card" data-candidate-id="${id}">
-              <h3>${escapeHtml(fieldLabel(candidate.field_name))}</h3>
+              <h3>${escapeHtml(fieldLabel(candidate.field_name))}${fieldLabelDetail(candidate.field_name)}</h3>
               <p class="candidate-meta">擷取值：${escapeHtml(text(candidate.extracted_value))}｜正規化候選值（僅供畫面確認）：${escapeHtml(text(normalizedValue, "尚未確認"))}</p>
               <p class="candidate-meta">來源：${escapeHtml(documentRecord?.original_filename || "未知文件")}｜頁次：${escapeHtml(text(page, "未提供"))}｜信心度：${escapeHtml(displayConfidence(candidate.confidence))}</p>
               <p class="candidate-evidence">證據：${escapeHtml(text(evidence, "未提供原文證據"))}</p>
@@ -1509,6 +1619,7 @@
           const formData = new FormData();
           formData.append("intake_manifest_json", JSON.stringify(manifest));
           files.forEach((file) => formData.append("files", file, file.name));
+          resetCaseState();
           const result = await request("/valuation/auto-workflows/intake", {
             method: "POST",
             formData,
@@ -1580,7 +1691,7 @@
           if (check) check.textContent = validation ? (validation.can_generate_formal_report ? "可產生正式 PDF" : "有檢核阻擋") : "尚未執行檢核";
           if (findings) {
             findings.innerHTML = messages.length
-              ? messages.map((item) => `<div class="formal-finding ${item.severity === "ERROR" ? "danger-text" : ""}"><h3>${escapeHtml(item.severity === "ERROR" ? "阻擋" : "警示")}｜${escapeHtml(codeLabel(item.code))}</h3><p>${escapeHtml(item.message)}</p></div>`).join("")
+              ? messages.map((item) => `<div class="formal-finding ${item.severity === "ERROR" ? "danger-text" : ""}"><h3>${escapeHtml(item.severity === "ERROR" ? "阻擋" : "警示")}｜${escapeHtml(codeLabel(item.code))}${codeLabelDetail(item.code)}</h3><p>${escapeHtml(item.message)}</p></div>`).join("")
               : "<p class=\"inline-status\">正式檢核沒有回傳其他訊息。</p>";
           }
           if (download) download.disabled = !report?.download_path;
@@ -1764,7 +1875,15 @@
 
         function renderWorkflowWarnings(workflow) {
           const warnings = workflow?.warnings || workflow?.missing_items || [];
-          if (warnings.length) setStatus(warnings.map(codeLabel).join("；"), true);
+          if (warnings.length) {
+            const status = byId("status-message");
+            if (status) {
+              status.innerHTML = warnings
+                .map((code) => `${escapeHtml(codeLabel(code))}${codeLabelDetail(code)}`)
+                .join("；");
+              status.classList.toggle("danger-text", true);
+            }
+          }
         }
 
         function setStatus(message, error = false) {
@@ -1790,17 +1909,9 @@
         }
 
         async function loadCase(caseId) {
+          resetCaseState();
           state.selectedCaseId = caseId;
           state.case_id = caseId;
-          state.reportId = null;
-          state.report_id = null;
-          lockEditing(false);
-          state.reportPackage = null;
-          state.formal = { validation: null, report: null, validation_run_id: null, document_id: null, version_no: null, download_path: null };
-          state.validation_run_id = null;
-          state.document_id = null;
-          state.version_no = null;
-          state.download_path = null;
           const result = await request(`/valuation/cases/${caseId}/auto-workflow/review`);
           saveWorkflow(result);
           if (result.report_id) await loadReportPackage();
@@ -1831,6 +1942,7 @@
             // Session storage is optional for the development test page.
           }
           const user = await request("/auth/me");
+          resetCaseState({ clearCases: true });
           state.user = redactForLog(user);
           const passwordField = byId("login-password");
           if (passwordField) passwordField.value = "";
@@ -1848,14 +1960,13 @@
         }
 
         function showLogin(message) {
+          resetCaseState({ clearCases: true });
           const loginView = byId("login-view");
           const workbench = byId("workbench-shell");
           if (loginView) loginView.hidden = false;
           if (workbench) workbench.hidden = true;
           state.token = null;
           state.user = null;
-          state.selectedCaseId = null;
-          state.locked = false;
           try {
             sessionStorage.removeItem("valuation.token");
           } catch (_error) {
@@ -1929,6 +2040,11 @@
           statusLabel,
           saveWorkflow,
           lockEditing,
+          resetCaseState,
+          loadCase,
+          loadReportPackage,
+          showLogin,
+          reportTypeLabel,
           safeDownloadPath,
           get state() {
             return Object.assign({}, state, { token: REDACTED });

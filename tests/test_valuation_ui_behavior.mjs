@@ -100,6 +100,36 @@ function candidateWorkflow(overrides = {}) {
   }, overrides);
 }
 
+function jsonResponse(payload, status = 200) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: () => "application/json" },
+    async json() {
+      return payload;
+    },
+  };
+}
+
+function casePanelElements() {
+  return Object.fromEntries([
+    "status-message",
+    "candidate-summary",
+    "candidate-list",
+    "candidate-action-message",
+    "confirm-candidates",
+    "formal-check",
+    "formal-summary",
+    "formal-findings",
+    "download-formal-report",
+    "submit-for-review",
+    "correction-message",
+    "missing-items",
+    "request-log",
+    "form-selector",
+  ].map((id) => [id, fakeElement()]));
+}
+
 test("builds an explicit confirmation request", () => {
   const { logic } = loadLogic();
 
@@ -419,6 +449,150 @@ test("does not generate a PDF when warning acknowledgement cannot be explicit", 
   assert.equal(result.report, null);
   assert.equal(calls.length, 2);
   assert.ok(calls.every(({ url }) => !url.endsWith("/formal-pdf")));
+});
+
+test("logout clears case state, workflow IDs, and rendered panels", () => {
+  const elements = casePanelElements();
+  const { logic } = loadLogic({ document: fakeDocument(elements) });
+
+  logic.saveWorkflow(candidateWorkflow({
+    report_id: "old-report",
+    candidates: [{
+      extracted_field_id: "old-field",
+      document_id: "old-document",
+      field_name: "transaction_total_price",
+      extracted_value: "999",
+      field_status: "NEEDS_CONFIRMATION",
+    }],
+  }));
+  logic.state.formal.validation = { validation_run_id: "old-run" };
+  logic.state.formal.report = { document_id: "old-pdf", download_path: "/api/v1/valuation/old.pdf" };
+  elements["formal-summary"].innerHTML = "舊正式報告";
+  elements["formal-findings"].innerHTML = "舊檢核結果";
+  elements["request-log"].textContent = "舊請求紀錄";
+  elements["download-formal-report"].disabled = false;
+
+  logic.showLogin("已登出測試台。");
+
+  assert.equal(logic.state.case, null);
+  assert.equal(logic.state.selectedCaseId, null);
+  assert.equal(logic.state.reportId, null);
+  assert.deepEqual(logic.state.documents, []);
+  assert.deepEqual(logic.state.candidates, []);
+  assert.equal(logic.state.formal.validation, null);
+  assert.equal(logic.state.formal.report, null);
+  assert.equal(elements["candidate-list"].innerHTML, "");
+  assert.match(elements["candidate-summary"].innerHTML, /目前尚無候選內容/);
+  assert.match(elements["formal-summary"].innerHTML, /尚未產生/);
+  assert.equal(elements["formal-findings"].innerHTML, "");
+  assert.equal(elements["request-log"].textContent, "尚無請求紀錄。");
+  assert.equal(elements["download-formal-report"].disabled, true);
+});
+
+test("case replacement clears the old panels before the new review response arrives", async () => {
+  const elements = casePanelElements();
+  let resolveReview;
+  const { logic } = loadLogic({
+    document: fakeDocument(elements),
+    fetch: async (url) => {
+      if (url.endsWith("/auto-workflow/review")) {
+        return new Promise((resolve) => { resolveReview = resolve; });
+      }
+      if (url.endsWith("/review-handoff")) return jsonResponse({ case_status: "DRAFT" });
+      throw new Error(`unexpected request: ${url}`);
+    },
+  });
+
+  logic.saveWorkflow(candidateWorkflow());
+  assert.match(elements["candidate-list"].innerHTML, /交易總價/);
+
+  const loading = logic.loadCase("case-2");
+  assert.equal(elements["candidate-list"].innerHTML, "");
+  assert.equal(elements["download-formal-report"].disabled, true);
+  assert.equal(logic.state.reportId, null);
+
+  resolveReview(jsonResponse(candidateWorkflow({
+    case: { case_id: "case-2", case_title: "新案件" },
+    report_id: null,
+    candidates: [],
+  })));
+  await loading;
+  assert.equal(logic.state.selectedCaseId, "case-2");
+});
+
+test("new intake clears the old case before the intake response arrives", async () => {
+  const elements = casePanelElements();
+  let resolveIntake;
+  class FakeFormData {
+    constructor() { this.entries = []; }
+    append(...entry) { this.entries.push(entry); }
+  }
+  const { logic } = loadLogic({
+   document: fakeDocument(elements),
+   FormData: FakeFormData,
+   fetch: async (url) => {
+      if (url.endsWith("/auto-workflows/intake")) {
+        return new Promise((resolve) => { resolveIntake = resolve; });
+      }
+      if (url.endsWith("/valuation/cases")) return jsonResponse([{ case_id: "new-case", case_no: "NEW-001", case_title: "新收件案件" }]);
+      throw new Error(`unexpected request: ${url}`);
+    },
+  });
+
+  logic.saveWorkflow(candidateWorkflow());
+  const form = fakeForm(
+    { case_no: "NEW-001", case_title: "新收件案件" },
+    [{ name: "source.pdf" }],
+  );
+  const submitting = logic.submitIntake({ form });
+
+  assert.equal(elements["candidate-list"].innerHTML, "");
+  assert.equal(logic.state.reportId, null);
+  assert.equal(elements["download-formal-report"].disabled, true);
+
+  resolveIntake(jsonResponse(candidateWorkflow({
+    case: { case_id: "new-case", case_title: "新收件案件" },
+    report_id: null,
+    candidates: [],
+  })));
+  await submitting;
+  assert.equal(logic.state.selectedCaseId, "new-case");
+});
+
+test("unknown labels keep escaped machine identity as secondary detail", () => {
+  const elements = casePanelElements();
+  const { logic } = loadLogic({ document: fakeDocument(elements) });
+
+  logic.saveWorkflow(candidateWorkflow({
+    candidates: [{
+      extracted_field_id: "f-unknown",
+      document_id: "d1",
+      field_name: "<unmapped-field>",
+      extracted_value: "value",
+      field_status: "NEEDS_CONFIRMATION",
+    }],
+    warnings: ["<UNKNOWN_BLOCKER>"],
+  }));
+
+  assert.match(elements["candidate-list"].innerHTML, /待確認欄位/);
+  assert.match(elements["candidate-list"].innerHTML, /欄位代碼：&lt;unmapped-field&gt;/);
+  assert.doesNotMatch(elements["candidate-list"].innerHTML, /<h3>&lt;unmapped-field&gt;/);
+  assert.match(elements["status-message"].innerHTML, /系統檢核項目/);
+  assert.match(elements["status-message"].innerHTML, /檢核代碼：&lt;UNKNOWN_BLOCKER&gt;/);
+});
+
+test("renders a Chinese report type label in the report selector", async () => {
+  const elements = casePanelElements();
+  const { logic } = loadLogic({
+    document: fakeDocument(elements),
+    fetch: async () => jsonResponse({ report_type: "REPORT_COMPARISON_COMMERCIAL" }),
+  });
+
+  logic.saveWorkflow(candidateWorkflow({ candidates: [] }));
+  await logic.loadReportPackage();
+
+  assert.match(elements["form-selector"].innerHTML, /商業用地比較報告/);
+  assert.doesNotMatch(elements["form-selector"].innerHTML, />REPORT_COMPARISON_COMMERCIAL<\/option>/);
 });
 
 test("request prefixes API paths, sends JSON, and attaches the bearer token", async () => {
