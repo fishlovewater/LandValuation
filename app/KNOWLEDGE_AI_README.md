@@ -34,8 +34,8 @@ MinIO 保存原始檔。對沒有 `knowledge.chunks` 的文件，系統會在提
 | API | 用途 | 必要權限 |
 |---|---|---|
 | `POST /search` | 找出關鍵字相符的候選法規、規則、公式或手冊片段；**不代表答案已被驗證** | `knowledge.read` |
-| `POST /ask` | 以本機 Codex CLI 依已授權來源產生、驗證證據後的回答與引用；可選擇帶入唯讀案件情境（開發測試用） | `knowledge.read`；帶 `case_id` 時另需 `case.read` |
-| `GET /provider-status` | 確認 API 執行主機是否能找到 Codex CLI | `knowledge.read` |
+| `POST /ask` | 以選定 provider 依已授權來源產生、驗證證據後的回答與引用；預設為只回傳證據的安全模式；可選擇帶入唯讀案件情境 | `knowledge.read`；帶 `case_id` 時另需 `case.read` |
+| `GET /provider-status` | 確認目前選定 provider 的設定與執行環境 | `knowledge.read` |
 | `GET /sources/{document_id}/download` | 取得可讀知識來源文件的短效 MinIO 下載網址 | `knowledge.read` |
 | `GET /cases/{case_id}/context` | 讀取案件號、基本資料，及依權限可見的最新審查結果 | `knowledge.read` + `case.read`；審查結果另需 `review.read` |
 
@@ -67,7 +67,8 @@ MinIO 保存原始檔。對沒有 `knowledge.chunks` 的文件，系統會在提
 
 因此 `/search` 的候選中即使出現「土地徵收」、「市價」等字，也**不可**解讀為系統已判定該頁就是法源依據。要取得真正可用的答案，請以完全相同的 request body 呼叫 `POST /ask`。
 
-`POST /ask` 的 `SUPPORTED` 只會在 AI 回傳下列完整證據鏈時出現：
+`POST /ask` 的 `EVIDENCE_ONLY` 表示已有關鍵字相符的來源，但尚未由 AI
+驗證答案；它不是 `SUPPORTED`。`SUPPORTED` 只會在 AI 回傳下列完整證據鏈時出現：
 
 1. `answer` 的每個重要結論都附有 `【來源1】`、`【來源2】` 等標記；
 2. 每個 citation 的 `supporting_quote` 是該 chunk 原文中可逐字找到、至少八個字的連續文字；
@@ -83,17 +84,32 @@ AI provider 可由 `KNOWLEDGE_ANSWER_PROVIDER` 切換，所有 provider 都使�
 
 | 設定值 | 用途 | 是否可用外部搜尋／工具 |
 |---|---|---|
-| `codex_cli` | 本機開發測試；使用已登入的 Codex CLI | 不可。啟動時明確關閉 `web_search`。 |
+| `evidence_only` | 預設安全模式；只回傳已授權的候選證據，不宣稱 AI 支持答案 | 不適用；不啟動模型。 |
+| `codex_cli` | 明確選用的 development/test provider；使用已登入的 Codex CLI | 由 CLI sandbox、approval、config 與環境白名單共同限制；不提供外部搜尋、shell tool、apps/connectors 或 multi-agent。 |
 | `bedrock` | 未來 AWS 正式環境；使用 Amazon Bedrock Converse | 不可。程式不傳遞 `toolConfig`，只傳來源封包。 |
-| `evidence_only` | 停用模型時的安全模式 | 不適用；只回傳來源證據。 |
 
 未來如要串接其他 AI，只需新增一個 provider adapter，實作 `answer(question, candidates)` 並回傳固定欄位 `answer`、`cited_chunk_ids`、`needs_clarification`、`clarification_question`。adapter 不可自行讀取 MinIO、案件資料、網站或外部 API；它只能接收後端已完成權限與生效日篩選的來源封包。
 
 ### Codex 開發測試模式
 
-`POST /ask` 現在預設使用已登入的本機 Codex CLI。它不採用中文關鍵字比對來決定回答內容：後端先依 MinIO `knowledge/` 前綴、文件類型與生效日過濾資料；已有 chunk 時重用 chunk，沒有 chunk 時才直接從 MinIO 臨時擷取，再把可用來源內容交給 Codex，由 AI 判斷問題、組織答案並選出實際使用的 chunk。後端會驗證 Codex 回傳的每一個 `cited_chunk_ids` 都確實是本次提供的來源；不符合就拒絕結果。
+`POST /ask` 預設使用 `evidence_only`，不啟動模型。只有在 development 或
+test 環境明確設定 `KNOWLEDGE_ANSWER_PROVIDER=codex_cli` 時，才會使用已登入的
+本機 Codex CLI。它不採用中文關鍵字比對來決定回答內容：後端先依 MinIO
+`knowledge/` 前綴、文件類型與生效日過濾資料；已有 chunk 時重用 chunk，沒有
+chunk 時才直接從 MinIO 臨時擷取，再把可用來源內容交給 Codex，由 AI 判斷問題、
+組織答案並選出實際使用的 chunk。後端會驗證 Codex 回傳的每一個
+`cited_chunk_ids` 都確實是本次提供的來源；不符合就拒絕結果。
 
-Codex 只以唯讀 sandbox 執行、使用 UTF-8 stdin 傳遞內容、忽略使用者自訂 config／rules，並明確停用 `web_search`。它沒有寫入資料庫或 MinIO 的權限。AI 的回答可用資料只有本次送入的來源封包；後端不提供瀏覽器、外部搜尋結果或網站內容。這是開發驗證用途，未來正式環境應改為不配置網路工具的 Bedrock provider。
+Codex 子程序使用 `--sandbox read-only` 與 `--ask-for-approval never`，忽略使用者
+config／rules，並以 `-c` 明確設定 `web_search="disabled"`、
+`features.shell_tool=false`、`features.apps=false`、
+`features.multi_agent=false`、`agents.enabled=false`、
+`allow_login_shell=false`。子程序只收到跨平台執行環境、家目錄／暫存路徑與
+Codex 登入所需的 allowlisted environment；不會收到資料庫、MinIO、AWS、Gemini、
+Maps 或其他 API service secrets。這些 CLI、sandbox、環境與後端引用驗證控制
+共同界定開發測試邊界；不要將提示詞中的模型指示誤讀為超出這些控制的保證。
+這是 development/test 用途，正式環境應維持 `evidence_only` 或改用不配置工具的
+Bedrock provider。
 
 ### AI 來源驗證提示詞規則
 
@@ -114,15 +130,21 @@ Codex 只以唯讀 sandbox 執行、使用 UTF-8 stdin 傳遞內容、忽略使�
 在 API 所在主機的 `.env` 設定：
 
 ```text
-KNOWLEDGE_ANSWER_PROVIDER=codex_cli
+KNOWLEDGE_ANSWER_PROVIDER=evidence_only
+# 僅在 development/test 且已明確確認 CLI 邊界時才改成 codex_cli
 CODEX_CLI_COMMAND=codex
 # 可留空，讓 Codex 使用登入帳號的預設模型
 # CODEX_CLI_MODEL=
 CODEX_CLI_TIMEOUT_SECONDS=180
-CODEX_CLI_MAX_SOURCE_CHARACTERS=60000
+KNOWLEDGE_AI_MAX_SOURCE_CHARACTERS=60000
 ```
 
-先呼叫 `GET /api/v1/knowledge/provider-status`。Codex 模式中，只有 `runtime_available: true` 代表 API 主機可找到 CLI；真正問答還需要該主機可連線到 OpenAI，且 CLI 已完成登入。若 FastAPI 跑在 Docker 容器內，容器通常無法使用 Windows 主機的 `codex.exe`，應先在 Windows 主機使用 `.venv` 啟動 API 進行測試，或另行建立受控的 provider proxy。
+先呼叫 `GET /api/v1/knowledge/provider-status`。Codex 模式中，只有
+`runtime_available: true` 代表 API 主機可找到 CLI；真正問答還需要該主機可連線
+到 OpenAI，且 CLI 已完成登入。若 FastAPI 跑在 Docker 容器內，容器通常無法使用
+Windows 主機的 `codex.exe`，應先在 Windows 主機使用 `.venv` 啟動 API 進行測試，
+或另行建立受控的 provider proxy。production/staging 明確選用 `codex_cli` 時，
+API 會以 provider configuration error fail closed。
 
 ### 未來 Amazon Bedrock 模式
 

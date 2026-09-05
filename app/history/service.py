@@ -83,7 +83,9 @@ class HistoryService:
         documents = await self.repository.list_documents(case_id, scope)
         return HistoryCaseDetail(
             case=case,
-            parcels=await self.repository.list_parcels(case_id),
+            parcels=(
+                await self.repository.list_parcels(case_id) if scope.valuation else []
+            ),
             documents=[self._document(item) for item in documents],
             valuation=(
                 await self.repository.valuation_data(case_id) if scope.valuation else None

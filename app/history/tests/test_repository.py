@@ -30,6 +30,17 @@ def test_history_search_reads_and_orders_reviews_by_received_at():
     assert "ORDER BY r.received_at DESC" in sql
 
 
+def test_history_current_risk_summary_is_scoped_to_latest_run_or_null_legacy():
+    normalized_sql = " ".join(HistoryRepository(None)._base_cte().split())
+
+    assert "rs.review_id = r.review_id" in normalized_sql
+    assert "rs.validation_run_id = r.latest_validation_run_id" in normalized_sql
+    assert (
+        "r.latest_validation_run_id IS NULL AND rs.validation_run_id IS NULL"
+        in normalized_sql
+    )
+
+
 @pytest.mark.asyncio
 async def test_history_detail_reads_and_orders_reviews_by_received_at():
     session = Session()

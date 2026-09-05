@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import subprocess
 import tempfile
@@ -18,6 +19,43 @@ from app.knowledge.ai_contract import (
     source_grounding_instructions,
 )
 from app.knowledge.service import RetrievedKnowledge
+
+
+_CODEX_ENV_KEYS = frozenset(
+    {
+        "PATH",
+        "PATHEXT",
+        "SYSTEMROOT",
+        "WINDIR",
+        "COMSPEC",
+        "SYSTEMDRIVE",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "HOME",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "CODEX_HOME",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_ORG_ID",
+        "OPENAI_PROJECT_ID",
+        "TERM",
+        "TERM_PROGRAM",
+        "LANG",
+        "LC_ALL",
+        "NO_COLOR",
+    }
+)
 
 
 class CodexCliKnowledgeProvider:
@@ -75,10 +113,22 @@ class CodexCliKnowledgeProvider:
                 "--ephemeral",
                 "--ignore-user-config",
                 "--ignore-rules",
-                "--disable",
-                "web_search",
+                "--ask-for-approval",
+                "never",
                 "--sandbox",
                 "read-only",
+                "-c",
+                'web_search="disabled"',
+                "-c",
+                "features.shell_tool=false",
+                "-c",
+                "features.apps=false",
+                "-c",
+                "features.multi_agent=false",
+                "-c",
+                "agents.enabled=false",
+                "-c",
+                "allow_login_shell=false",
                 "--skip-git-repo-check",
                 "--output-schema",
                 str(schema_path),
@@ -113,6 +163,7 @@ class CodexCliKnowledgeProvider:
                     cwd=workdir,
                     timeout=self.settings.codex_cli_timeout_seconds,
                     check=False,
+                    env=self._subprocess_environment(),
                 )
             try:
                 process = await asyncio.to_thread(run_codex)
@@ -156,6 +207,16 @@ class CodexCliKnowledgeProvider:
     def _source_packet(self, candidates: Iterable[RetrievedKnowledge]) -> list[dict]:
         """Pass all authorized sources in database order; no Chinese keyword scoring occurs here."""
         return build_source_packet(candidates, self.settings.knowledge_ai_max_source_characters)
+
+    @staticmethod
+    def _subprocess_environment() -> dict[str, str]:
+        """Pass only process/runtime, home, and Codex authentication settings."""
+
+        return {
+            key: value
+            for key, value in os.environ.items()
+            if key.upper() in _CODEX_ENV_KEYS
+        }
 
     @staticmethod
     def _parse_answer(output: str, packet: list[dict]) -> AiAnswer:

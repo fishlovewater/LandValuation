@@ -40,17 +40,30 @@ class _Session:
             if self.risk_summaries is not None:
                 normalized_sql = " ".join(sql.split())
                 if "rs.validation_run_id = r.latest_validation_run_id" in normalized_sql:
-                    summary = next(
-                        (
-                            item
-                            for item in self.risk_summaries
-                            if item["validation_run_id"] is not None
-                            and row["latest_validation_run_id"] is not None
-                            if item["validation_run_id"]
-                            == row["latest_validation_run_id"]
-                        ),
-                        None,
-                    )
+                    if row["latest_validation_run_id"] is not None:
+                        summary = next(
+                            (
+                                item
+                                for item in self.risk_summaries
+                                if item["validation_run_id"]
+                                == row["latest_validation_run_id"]
+                            ),
+                            None,
+                        )
+                    elif (
+                        "r.latest_validation_run_id IS NULL" in normalized_sql
+                        and "rs.validation_run_id IS NULL" in normalized_sql
+                    ):
+                        summary = next(
+                            (
+                                item
+                                for item in self.risk_summaries
+                                if item["validation_run_id"] is None
+                            ),
+                            None,
+                        )
+                    else:
+                        summary = None
                 else:
                     summary = self.risk_summaries[0] if self.risk_summaries else None
                 row.update(
@@ -208,3 +221,45 @@ async def test_latest_review_returns_empty_risk_fields_when_latest_run_has_no_su
     assert result["risk_score"] is None
     assert result["summary"] is None
     assert result["category_scores"] == {}
+
+
+@pytest.mark.asyncio
+async def test_latest_review_uses_null_legacy_risk_summary_only_when_latest_run_is_null():
+    review_id = uuid4()
+    stale_run_id = uuid4()
+    session = _Session(
+        {
+            "review_id": review_id,
+            "review_type": "AI_ASSISTED",
+            "review_status": "REVIEW_REQUIRED",
+            "started_at": "2026-09-06T00:00:00Z",
+            "completed_at": None,
+            "latest_validation_run_id": None,
+        },
+        [],
+        [],
+        [
+            {
+                "validation_run_id": stale_run_id,
+                "overall_risk_level": "HIGH",
+                "risk_score": 80,
+                "summary": "stale run",
+                "category_scores": {"stale": True},
+            },
+            {
+                "validation_run_id": None,
+                "overall_risk_level": "LOW",
+                "risk_score": 20,
+                "summary": "legacy summary",
+                "category_scores": {"legacy": True},
+            },
+        ],
+    )
+
+    result = await CaseContextRepository(session).latest_review(uuid4())
+
+    assert result["latest_validation_run_id"] is None
+    assert result["overall_risk_level"] == "LOW"
+    assert result["risk_score"] == 20
+    assert result["summary"] == "legacy summary"
+    assert result["category_scores"] == {"legacy": True}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import unicodedata
 from dataclasses import dataclass
 from typing import Iterable, Protocol
@@ -225,6 +226,17 @@ def parse_answer(output: str, packet: list[dict]) -> AiAnswer:
         validation_errors.append("EVIDENCE_QUOTE_NOT_VERIFIABLE_IN_SOURCE")
     if not needs_clarification and not cited_chunk_ids:
         validation_errors.append("SUPPORTED_ANSWER_WITHOUT_CITATION")
+    if not needs_clarification:
+        marker_tokens = re.findall(r"【來源([^】]*)】", answer)
+        marker_numbers = [int(token) for token in marker_tokens if token.isdigit()]
+        expected_marker_numbers = set(range(1, len(cited_chunk_ids) + 1))
+        if expected_marker_numbers.difference(marker_numbers):
+            validation_errors.append("CITATION_MARKER_MISSING")
+        if any(
+            not token.isdigit() or int(token) not in expected_marker_numbers
+            for token in marker_tokens
+        ):
+            validation_errors.append("CITATION_MARKER_OUT_OF_RANGE")
     if validation_errors:
         raise AppError(
             "AI_PROVIDER_INVALID_RESPONSE",

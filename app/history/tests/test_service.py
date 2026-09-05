@@ -36,6 +36,38 @@ class Repository:
         ], 1
 
 
+class DetailRepository:
+    def __init__(self):
+        self.calls = []
+        self.case_id = uuid4()
+
+    async def get_case(self, case_id):
+        self.calls.append("get_case")
+        assert case_id == self.case_id
+        return {"case_id": case_id, "case_no": "H-DETAIL-001"}
+
+    async def case_access(self, case_id, scope):
+        self.calls.append("case_access")
+        assert case_id == self.case_id
+        return {"allowed": True}
+
+    async def list_documents(self, case_id, scope):
+        self.calls.append("list_documents")
+        return []
+
+    async def list_parcels(self, case_id):
+        self.calls.append("list_parcels")
+        return [{"parcel_id": uuid4(), "land_no": "123-4"}]
+
+    async def valuation_data(self, case_id):
+        self.calls.append("valuation_data")
+        return {"forms": []}
+
+    async def review_data(self, case_id):
+        self.calls.append("review_data")
+        return {"reviews": []}
+
+
 @pytest.mark.asyncio
 async def test_structured_data_without_document_is_searchable(monkeypatch):
     service = HistoryService(None, Repository())
@@ -63,3 +95,44 @@ async def test_appraiser_cannot_infer_review_data_from_sorting(monkeypatch):
         await service.search(
             HistorySearchParams(sort="risk_level"), SimpleNamespace()
         )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_detail_does_not_load_or_expose_valuation_parcels(monkeypatch):
+    repository = DetailRepository()
+    service = HistoryService(None, repository)
+    monkeypatch.setattr(
+        service,
+        "scope",
+        lambda _user: HistoryScope(valuation=False, review=True),
+    )
+
+    detail = await service.detail(repository.case_id, SimpleNamespace())
+
+    assert detail.parcels == []
+    assert "list_parcels" not in repository.calls
+    assert detail.valuation is None
+    assert detail.review == {"reviews": []}
+
+
+@pytest.mark.asyncio
+async def test_appraiser_and_both_role_details_keep_parcels(monkeypatch):
+    repository = DetailRepository()
+    service = HistoryService(None, repository)
+
+    monkeypatch.setattr(
+        service,
+        "scope",
+        lambda _user: HistoryScope(valuation=True, review=False),
+    )
+    appraiser_detail = await service.detail(repository.case_id, SimpleNamespace())
+    assert len(appraiser_detail.parcels) == 1
+
+    repository.calls.clear()
+    monkeypatch.setattr(
+        service,
+        "scope",
+        lambda _user: HistoryScope(valuation=True, review=True),
+    )
+    both_detail = await service.detail(repository.case_id, SimpleNamespace())
+    assert len(both_detail.parcels) == 1

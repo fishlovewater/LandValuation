@@ -8,6 +8,7 @@ from app.knowledge.schemas import (
     KnowledgeSearchRequest,
 )
 from app.knowledge.ai_contract import AiAnswer, AiCitationEvidence
+from app.knowledge.runtime_extraction import virtual_document_from_object
 from app.knowledge.service import KnowledgeSafetyService, RetrievedKnowledge
 
 
@@ -18,6 +19,9 @@ def source(
     effective_from: date | None = date(2026, 1, 1),
     effective_to: date | None = None,
     content: str = "道路條件應依臨路寬度、通行性與現場勘查紀錄判斷。",
+    document_type: str = "MANUAL",
+    original_filename: str = "manual.pdf",
+    metadata_: dict | None = None,
 ) -> RetrievedKnowledge:
     return RetrievedKnowledge(
         document=SimpleNamespace(
@@ -27,9 +31,11 @@ def source(
             version_no=2,
             effective_from=effective_from,
             effective_to=effective_to,
-            document_type="MANUAL",
+            document_type=document_type,
+            original_filename=original_filename,
             publication_status=publication_status,
             extraction_status=extraction_status,
+            metadata_=metadata_ or {},
         ),
         chunk=SimpleNamespace(
             chunk_id=uuid4(),
@@ -74,6 +80,17 @@ def test_no_source_never_generates_an_answer() -> None:
     assert "找不到" in response.answer
 
 
+def test_evidence_only_status_is_not_ai_supported_when_candidates_exist() -> None:
+    request = KnowledgeSearchRequest(question="道路條件怎麼判斷？")
+
+    response = KnowledgeSafetyService().evidence_only_answer(request, [source()])
+
+    assert response.answer_status is KnowledgeAnswerStatus.EVIDENCE_ONLY
+    assert response.generation_mode == "EVIDENCE_ONLY"
+    assert response.citations
+    assert response.next_action == "REVIEW_CITED_SOURCES"
+
+
 def test_search_respects_document_type_filter() -> None:
     request = KnowledgeSearchRequest(
         question="道路條件怎麼判斷？",
@@ -83,6 +100,42 @@ def test_search_respects_document_type_filter() -> None:
 
     assert response.retrieval_status is KnowledgeRetrievalStatus.NO_RELEVANT_SOURCE
     assert "找不到" in response.retrieval_notice
+
+
+def test_example_reference_signals_are_excluded_at_retrieval_boundary() -> None:
+    request = KnowledgeSearchRequest(question="道路條件怎麼判斷？")
+    candidates = [
+        source(document_type="EXAMPLE_REFERENCE"),
+        source(original_filename="評價基準明細表範例.pdf"),
+        source(metadata_={"formal_rule_eligible": False}),
+        source(metadata_={"source_usage": "EXAMPLE_REFERENCE"}),
+    ]
+
+    response = KnowledgeSafetyService().search_response(request, candidates)
+
+    assert response.retrieval_status is KnowledgeRetrievalStatus.NO_RELEVANT_SOURCE
+    assert response.citations == []
+
+
+def test_request_time_minio_example_reference_cannot_be_ranked() -> None:
+    request = KnowledgeSearchRequest(question="道路條件怎麼判斷？")
+    document = virtual_document_from_object(
+        "land-valuation",
+        SimpleNamespace(
+            object_name="knowledge/評價基準明細表範例.pdf",
+            content_type="application/pdf",
+        ),
+    )
+    item = RetrievedKnowledge(
+        document=document,
+        chunk=SimpleNamespace(
+            chunk_id=uuid4(),
+            chunk_no=1,
+            content="道路條件應依臨路寬度、通行性與現場勘查紀錄判斷。",
+        ),
+    )
+
+    assert KnowledgeSafetyService().rank(request, [item]) == []
 
 
 def test_unreadable_sources_are_explicitly_reported() -> None:

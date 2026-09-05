@@ -1,8 +1,11 @@
 import asyncio
 import json
+import os
 import subprocess
 from types import SimpleNamespace
-from uuid import UUID, uuid4
+from uuid import uuid4
+
+import pytest
 
 from app.core.config import Settings
 from app.core.exceptions import AppError
@@ -11,6 +14,7 @@ from app.knowledge.codex_provider import CodexCliKnowledgeProvider
 from app.knowledge.ai_contract import answer_output_schema, answer_prompt
 from app.knowledge.provider_factory import create_provider
 from app.knowledge.service import RetrievedKnowledge
+from app.knowledge import router as knowledge_router
 
 
 def candidate(content: str) -> RetrievedKnowledge:
@@ -64,6 +68,7 @@ def test_codex_response_rejects_unknown_citation() -> None:
         assert exc.details["validation_errors"] == [
             "CITATION_ID_NOT_IN_SOURCE_PACKET",
             "CITATION_EVIDENCE_ORDER_OR_SET_MISMATCH",
+            "CITATION_MARKER_MISSING",
         ]
     else:
         raise AssertionError("unknown citation must be rejected")
@@ -150,22 +155,51 @@ def test_codex_response_accepts_verifiable_claim_evidence() -> None:
     assert answer.evidence[0].supporting_quote == "市價查估應依明確法源辦理。"
 
 
-def test_codex_response_accepts_supported_answer_without_display_marker() -> None:
+def test_codex_response_rejects_supported_answer_without_display_marker() -> None:
     provider = CodexCliKnowledgeProvider(Settings(app_env="test"))
     packet = provider._source_packet([candidate("市價查估應依明確法源辦理。")])
     chunk_id = packet[0]["chunk_id"]
 
-    answer = provider._parse_answer(
-        '{"answer":"市價查估應依明確法源辦理。","cited_chunk_ids":["'
-        + chunk_id
-        + '"] ,"evidence":[{"chunk_id":"'
-        + chunk_id
-        + '","supporting_quote":"市價查估應依明確法源辦理。","supported_claim":"市價查估應依明確法源辦理。"}],'
-        '"needs_clarification":false,"clarification_question":null}',
-        packet,
-    )
+    try:
+        provider._parse_answer(
+            '{"answer":"市價查估應依明確法源辦理。","cited_chunk_ids":["'
+            + chunk_id
+            + '"] ,"evidence":[{"chunk_id":"'
+            + chunk_id
+            + '","supporting_quote":"市價查估應依明確法源辦理。","supported_claim":"市價查估應依明確法源辦理。"}],'
+            '"needs_clarification":false,"clarification_question":null}',
+            packet,
+        )
+    except AppError as exc:
+        assert exc.code == "AI_PROVIDER_INVALID_RESPONSE"
+        assert exc.details["validation_errors"] == ["CITATION_MARKER_MISSING"]
+    else:
+        raise AssertionError("supported answers must display every cited source marker")
 
-    assert answer.cited_chunk_ids == [UUID(chunk_id)]
+
+def test_codex_response_rejects_missing_and_out_of_range_display_markers() -> None:
+    provider = CodexCliKnowledgeProvider(Settings(app_env="test"))
+    packet = provider._source_packet([candidate("市價查估應依明確法源辦理。")])
+    chunk_id = packet[0]["chunk_id"]
+
+    try:
+        provider._parse_answer(
+            '{"answer":"市價查估應依明確法源辦理。【來源2】","cited_chunk_ids":["'
+            + chunk_id
+            + '"] ,"evidence":[{"chunk_id":"'
+            + chunk_id
+            + '","supporting_quote":"市價查估應依明確法源辦理。","supported_claim":"市價查估應依明確法源辦理。"}],'
+            '"needs_clarification":false,"clarification_question":null}',
+            packet,
+        )
+    except AppError as exc:
+        assert exc.code == "AI_PROVIDER_INVALID_RESPONSE"
+        assert exc.details["validation_errors"] == [
+            "CITATION_MARKER_MISSING",
+            "CITATION_MARKER_OUT_OF_RANGE",
+        ]
+    else:
+        raise AssertionError("unknown source markers must be rejected")
 
 
 def test_prompt_requires_direct_legal_basis_evidence_and_clarification() -> None:
@@ -218,6 +252,13 @@ def test_codex_provider_uses_threaded_subprocess_on_windows_selector_loop(monkey
     calls = []
 
     monkeypatch.setattr("app.knowledge.codex_provider.shutil.which", lambda _command: "codex")
+    monkeypatch.setenv("OPENAI_API_KEY", "codex-auth-secret")
+    monkeypatch.setenv("CODEX_HOME", "C:\\Users\\tester\\.codex")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://db-secret")
+    monkeypatch.setenv("MINIO_ROOT_PASSWORD", "minio-secret")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws-secret")
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "maps-secret")
 
     def fake_run(command, **kwargs):
         calls.append((command, kwargs))
@@ -232,6 +273,32 @@ def test_codex_provider_uses_threaded_subprocess_on_windows_selector_loop(monkey
     assert answer.cited_chunk_ids == [item.chunk.chunk_id]
     assert calls[0][1]["input"].decode("utf-8")
     assert calls[0][1]["check"] is False
+    command = calls[0][0]
+    assert ["--ask-for-approval", "never"] == command[
+        command.index("--ask-for-approval") : command.index("--ask-for-approval") + 2
+    ]
+    for setting in (
+        'web_search="disabled"',
+        "features.shell_tool=false",
+        "features.apps=false",
+        "features.multi_agent=false",
+        "agents.enabled=false",
+        "allow_login_shell=false",
+    ):
+        assert command.count(setting) == 1
+    assert "--disable" not in command
+    child_env = calls[0][1]["env"]
+    assert child_env["OPENAI_API_KEY"] == "codex-auth-secret"
+    assert child_env["CODEX_HOME"] == "C:\\Users\\tester\\.codex"
+    assert child_env is not os.environ
+    for secret_name in (
+        "DATABASE_URL",
+        "MINIO_ROOT_PASSWORD",
+        "AWS_SECRET_ACCESS_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_MAPS_API_KEY",
+    ):
+        assert secret_name not in child_env
 
 
 def test_provider_factory_supports_codex_and_bedrock_without_credentials() -> None:
@@ -248,3 +315,33 @@ def test_provider_factory_supports_codex_and_bedrock_without_credentials() -> No
     assert codex.provider_name == "codex_cli"
     assert isinstance(bedrock, BedrockKnowledgeProvider)
     assert bedrock.configured() is True
+
+
+@pytest.mark.parametrize("app_env", ["production", "staging"])
+def test_provider_factory_rejects_codex_cli_outside_development_and_test(app_env) -> None:
+    try:
+        create_provider(
+            Settings(
+                knowledge_answer_provider="codex_cli",
+                app_env=app_env,
+            )
+        )
+    except AppError as exc:
+        assert exc.code == "AI_PROVIDER_CONFIGURATION_ERROR"
+        assert exc.status_code == 503
+    else:
+        raise AssertionError("codex_cli must be development/test only")
+
+
+def test_provider_status_reports_safe_evidence_only_mode_in_production(monkeypatch) -> None:
+    settings = Settings(
+        knowledge_answer_provider="evidence_only",
+        app_env="production",
+    )
+    monkeypatch.setattr(knowledge_router, "get_settings", lambda: settings)
+
+    response = asyncio.run(knowledge_router.provider_status(SimpleNamespace()))
+
+    assert response.provider == "evidence_only"
+    assert response.configured is True
+    assert response.runtime_available is True

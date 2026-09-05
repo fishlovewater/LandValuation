@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     minio_secure: bool = False
     minio_presigned_expiry_seconds: int = 900
 
-    knowledge_answer_provider: str = "codex_cli"
+    knowledge_answer_provider: str = "evidence_only"
     knowledge_ai_max_source_characters: int = Field(default=60000, ge=2000, le=200000)
     codex_cli_command: str = "codex"
     codex_cli_model: str | None = None

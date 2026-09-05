@@ -39,3 +39,10 @@ def test_non_test_environment_rejects_run_scoped_minio_bucket():
 def test_gemini_provider_requires_dedicated_api_key():
     with pytest.raises(ValidationError, match="GEMINI_API_KEY"):
         Settings(ai_provider="gemini")
+
+
+def test_knowledge_answer_provider_defaults_to_evidence_only(monkeypatch):
+    monkeypatch.delenv("KNOWLEDGE_ANSWER_PROVIDER", raising=False)
+    settings = Settings(app_env="test", _env_file=None)
+
+    assert settings.knowledge_answer_provider == "evidence_only"

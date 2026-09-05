@@ -14,6 +14,7 @@ from app.knowledge.schemas import (
     KnowledgeSearchResponse,
     KnowledgeUnreadableSource,
 )
+from app.knowledge.source_policy import is_example_reference
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,8 @@ class KnowledgeSafetyService:
         for item in candidates:
             document = item.document
             chunk = item.chunk
+            if is_example_reference(document):
+                continue
             if request.as_of_date and not self._effective_on(document, request.as_of_date):
                 continue
             if request.document_types and getattr(document, "document_type", None) not in request.document_types:
@@ -125,7 +128,7 @@ class KnowledgeSafetyService:
                 next_action="ASK_FOR_CLARIFICATION_OR_PUBLISH_RELEVANT_SOURCE",
             )
         return KnowledgeAnswerResponse(
-            answer_status=KnowledgeAnswerStatus.SUPPORTED,
+            answer_status=KnowledgeAnswerStatus.EVIDENCE_ONLY,
             citations=result.citations,
             unreadable_sources=result.unreadable_sources,
             answer=(

@@ -50,6 +50,15 @@ GET  /health/live
 GET  /health/ready
 ```
 
+Knowledge AI 的 `KNOWLEDGE_ANSWER_PROVIDER` 預設為安全的 `evidence_only`：
+有候選來源時回傳 `EVIDENCE_ONLY`，不宣稱答案已經 AI 驗證；只有經引用契約驗證
+的模型回答才會是 `SUPPORTED`。`codex_cli` 必須明確選用，且只允許
+`APP_ENV=development` 或 `test`；production/staging 會 fail closed。Codex
+測試模式以 read-only sandbox、approval never、停用 web search/shell/apps/
+multi-agent/login shell 的 CLI 設定，以及 allowlisted subprocess environment
+共同限制邊界。完整 provider 設定與使用方式見
+[app/KNOWLEDGE_AI_README.md](app/KNOWLEDGE_AI_README.md)。
+
 若現有 PostgreSQL volume 已由舊版 `database/init` SQL 建好相同結構，不可再執行初始 migration；請先備份並核對 schema，然後執行：
 
 ```powershell

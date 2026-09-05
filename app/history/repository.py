@@ -100,6 +100,13 @@ class HistoryRepository:
                         SELECT rs.overall_risk_level
                         FROM review.risk_summaries rs
                         WHERE rs.review_id = r.review_id
+                          AND (
+                              rs.validation_run_id = r.latest_validation_run_id
+                              OR (
+                                  r.latest_validation_run_id IS NULL
+                                  AND rs.validation_run_id IS NULL
+                              )
+                          )
                         ORDER BY rs.generated_at DESC, rs.risk_summary_id DESC
                         LIMIT 1
                     ) risk ON true

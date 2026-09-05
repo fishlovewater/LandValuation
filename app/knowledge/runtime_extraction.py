@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import PurePosixPath
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -49,6 +49,7 @@ class VirtualKnowledgeDocument:
     version_no: int = 1
     effective_from: None = None
     effective_to: None = None
+    metadata_: dict | None = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

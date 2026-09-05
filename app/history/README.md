@@ -92,8 +92,10 @@ SQL rows use the existing `valuation.cases`, `valuation.parcels`,
 
 The demo and History queries intentionally use the Review columns shared by the
 base and expanded schemas. On this integration branch, `review.reviews.received_at`
-is authoritative, and current risk is read from the latest
-`review.risk_summaries.overall_risk_level` row.
+is authoritative. Current risk is read only from the risk summary whose
+`validation_run_id` matches `review.reviews.latest_validation_run_id`; when both
+values are `NULL`, the legacy unscoped summary remains eligible. An older
+non-`NULL` validation run is never presented as current risk.
 
 The downloadable MinIO object key is:
 

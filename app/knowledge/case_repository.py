@@ -44,7 +44,13 @@ class CaseContextRepository:
                     FROM review.reviews r
                     LEFT JOIN review.risk_summaries rs
                         ON rs.review_id = r.review_id
-                       AND rs.validation_run_id = r.latest_validation_run_id
+                       AND (
+                           rs.validation_run_id = r.latest_validation_run_id
+                           OR (
+                               r.latest_validation_run_id IS NULL
+                               AND rs.validation_run_id IS NULL
+                           )
+                       )
                     WHERE r.case_id = :case_id
                     ORDER BY r.started_at DESC, r.review_id DESC
                     LIMIT 1
