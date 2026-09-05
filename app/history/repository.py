@@ -58,7 +58,7 @@ class HistoryRepository:
                     c.case_id, c.case_no, c.case_title, c.case_type,
                     c.valuation_base_date, c.city_code, c.district_code,
                     c.case_status, c.updated_at,
-                    lr.review_status, lr.started_at AS received_at,
+                    lr.review_status, lr.received_at,
                     lr.completed_at, lr.current_risk_level,
                     CASE lr.current_risk_level
                         WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3
@@ -93,7 +93,7 @@ class HistoryRepository:
                     ) AS review_documents
                 FROM valuation.cases c
                 LEFT JOIN LATERAL (
-                    SELECT r.review_id, r.review_status, r.started_at,
+                    SELECT r.review_id, r.review_status, r.received_at, r.started_at,
                            r.completed_at, risk.overall_risk_level AS current_risk_level
                     FROM review.reviews r
                     LEFT JOIN LATERAL (
@@ -104,7 +104,7 @@ class HistoryRepository:
                         LIMIT 1
                     ) risk ON true
                     WHERE r.case_id = c.case_id
-                    ORDER BY r.started_at DESC, r.review_id DESC
+                    ORDER BY r.received_at DESC, r.review_id DESC
                     LIMIT 1
                 ) lr ON true
             )
@@ -352,10 +352,10 @@ class HistoryRepository:
     async def review_data(self, case_id: UUID) -> dict:
         reviews = await self._json_rows(
             """SELECT review_id, review_type, review_status,
-                      started_at AS received_at, started_at, completed_at,
+                      received_at, started_at, completed_at,
                       form_instance_id, validation_run_id
                FROM review.reviews WHERE case_id = :case_id
-               ORDER BY completed_at DESC NULLS LAST, started_at DESC""",
+               ORDER BY completed_at DESC NULLS LAST, received_at DESC, review_id DESC""",
             case_id,
         )
         if not reviews:

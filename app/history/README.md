@@ -15,9 +15,8 @@ Import `router` explicitly with `from app.history.router import router`. It expo
 - `GET /history/test-ui` — development-only manual API console.
 
 The application currently mounts routers explicitly from `app/api/router.py`.
-Because this subsystem is restricted to `app/history/**`, its router is exported
-but is not mounted by this change. Mounting requires a separately authorized
-one-line change outside this directory.
+The integrated application includes this router, so these endpoints are
+available below `/api/v1/history` when the main API is running.
 
 ## Visibility rules
 
@@ -113,13 +112,14 @@ rows and the one uploaded demo PDF; it does not touch non-demo cases.
 
 The machine-readable expected results are kept at
 `app/history/test_data/expected_cases.json`. The manual frontend source is at
-`app/history/test_ui/index.html` and, after the router is mounted, is available
-at `/api/v1/history/test-ui` in the development environment.
+`app/history/test_ui/index.html` and is available at
+`/api/v1/history/test-ui` in the development environment.
 
 ## Standalone manual frontend
 
-The production API router is intentionally not changed. Start the isolated test
-app from Windows Command Prompt with:
+The integrated API exposes the same manual frontend at
+`/api/v1/history/test-ui`. To run an isolated test app from Windows Command
+Prompt instead, use:
 
 ```bat
 docker compose --env-file .env run --rm -v "%CD%:/app" -p 8001:8000 api uvicorn app.history.test_app:app --host 0.0.0.0 --port 8000

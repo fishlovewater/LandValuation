@@ -85,6 +85,14 @@ def _minio_client():
 def _bucket() -> str:
     return os.getenv("MINIO_BUCKET", "land-valuation")
 
+
+def _ensure_development() -> None:
+    if os.getenv("APP_ENV", "").lower() != "development":
+        raise RuntimeError(
+            "DEVELOPMENT_ONLY: demo commands require APP_ENV=development"
+        )
+
+
 VALUATION_CASE_ID = UUID("71000000-0000-4000-8000-000000000001")
 REVIEW_CASE_ID = UUID("71000000-0000-4000-8000-000000000002")
 BOTH_CASE_ID = UUID("71000000-0000-4000-8000-000000000003")
@@ -180,18 +188,17 @@ async def _delete_rows(session) -> None:
 
 
 async def reset() -> None:
+    _ensure_development()
     _, sessions = _database_runtime()
     async with sessions() as session:
         async with session.begin():
             await _delete_rows(session)
-    try:
-        client = _minio_client()
-        await asyncio.to_thread(client.remove_object, _bucket(), DOWNLOAD_OBJECT_KEY)
-    except Exception:
-        pass
+    client = _minio_client()
+    await asyncio.to_thread(client.remove_object, _bucket(), DOWNLOAD_OBJECT_KEY)
 
 
 async def seed() -> None:
+    _ensure_development()
     # Lazy import keeps ``status``/``reset`` usable in a partial local Python
     # environment; password hashing is required only while creating accounts.
     from app.core.security import hash_password
@@ -255,11 +262,13 @@ async def seed() -> None:
                     {"id": VALUATION_ID, "case_id": VALUATION_CASE_ID, "form_id": FORM_ID,
                      "snapshot": '{"demo":true,"method":"comparison","unit_price":88000}'})
                 await session.execute(text("""INSERT INTO review.reviews
-                    (review_id,case_id,review_type,review_status,started_at,completed_at)
+                    (review_id,case_id,review_type,review_status,received_at,started_at,completed_at)
                     VALUES (:id,:case_id,'SMART_REVIEW','COMPLETED',
+                    TIMESTAMPTZ '2026-08-19 09:00:00+08',
                     TIMESTAMPTZ '2026-08-20 10:00:00+08',
                     TIMESTAMPTZ '2026-08-20 12:00:00+08'),
                     (:both_id,:both_case,'MANUAL_REVIEW','RUNNING',
+                    TIMESTAMPTZ '2026-08-20 09:00:00+08',
                     TIMESTAMPTZ '2026-08-21 10:00:00+08',NULL)"""),
                     {"id": REVIEW_ID, "case_id": REVIEW_CASE_ID,
                      "both_id": BOTH_REVIEW_ID, "both_case": BOTH_CASE_ID})

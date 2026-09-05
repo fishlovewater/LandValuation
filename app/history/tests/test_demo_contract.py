@@ -1,3 +1,7 @@
+import inspect
+
+import pytest
+
 from app.history import demo
 
 
@@ -24,3 +28,65 @@ def test_missing_object_is_distinct_from_downloadable_object():
     assert demo.MISSING_OBJECT_KEY != demo.DOWNLOAD_OBJECT_KEY
     assert demo.MISSING_OBJECT_KEY.endswith("history-demo-missing.docx")
     assert demo.DOWNLOAD_OBJECT_KEY.endswith("history-demo-report.pdf")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("command", ("seed", "reset"))
+async def test_mutating_demo_commands_require_development(monkeypatch, command):
+    monkeypatch.setenv("APP_ENV", "production")
+    calls = []
+    monkeypatch.setattr(
+        demo,
+        "_database_runtime",
+        lambda: calls.append("database"),
+    )
+    monkeypatch.setattr(
+        demo,
+        "_minio_client",
+        lambda: calls.append("minio"),
+    )
+
+    with pytest.raises(RuntimeError, match="DEVELOPMENT_ONLY"):
+        await getattr(demo, command)()
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_reset_propagates_minio_failure(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+
+    class SessionContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def begin(self):
+            return self
+
+    class MinioClient:
+        def remove_object(self, *_args):
+            raise RuntimeError("MinIO unavailable")
+
+    async def no_rows(_session):
+        return None
+
+    monkeypatch.setattr(
+        demo,
+        "_database_runtime",
+        lambda: (None, lambda: SessionContext()),
+    )
+    monkeypatch.setattr(demo, "_delete_rows", no_rows)
+    monkeypatch.setattr(demo, "_minio_client", lambda: MinioClient())
+
+    with pytest.raises(RuntimeError, match="MinIO unavailable"):
+        await demo.reset()
+
+
+def test_demo_review_insert_uses_authoritative_deterministic_timestamps():
+    source = inspect.getsource(demo.seed).replace(" ", "")
+
+    assert "review_status,received_at,started_at,completed_at" in source
+    assert source.count("TIMESTAMPTZ") == 5
