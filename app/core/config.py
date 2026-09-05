@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     minio_secure: bool = False
     minio_presigned_expiry_seconds: int = 900
 
+    knowledge_answer_provider: str = "codex_cli"
+    knowledge_ai_max_source_characters: int = Field(default=60000, ge=2000, le=200000)
+    codex_cli_command: str = "codex"
+    codex_cli_model: str | None = None
+    codex_cli_timeout_seconds: int = Field(default=180, ge=10, le=900)
+    bedrock_timeout_seconds: int = Field(default=60, ge=10, le=900)
+    bedrock_max_tokens: int = Field(default=1200, ge=100, le=8000)
+    bedrock_temperature: float = Field(default=0, ge=0, le=1)
+
     document_extraction_provider: Literal[
         "local_pdf", "local_ocr", "auto", "textract"
     ] = "auto"
