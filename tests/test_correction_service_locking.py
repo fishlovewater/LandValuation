@@ -6,6 +6,7 @@ import pytest
 
 from app.core.exceptions import AppError
 from app.review.correction_service import CorrectionService
+from app.review.schemas import CorrectionResubmissionCreate
 
 
 class _Session:
@@ -79,9 +80,10 @@ class _ReviewRepository:
 
 
 class _CorrectionRepository:
-    def __init__(self, calls, request=None):
+    def __init__(self, calls, request=None, resubmission_document=None):
         self.calls = calls
         self.request = request
+        self.resubmission_document = resubmission_document
         self.session = _Session(calls)
 
     async def get_request(self, request_id, for_update=False):
@@ -93,9 +95,33 @@ class _CorrectionRepository:
             else None
         )
 
-    async def active_for_review(self, review_id):
-        self.calls.append("active")
-        return self.request
+    async def active_for_review(self, review_id, for_update=False):
+        self.calls.append(("active", for_update))
+        return (
+            self.request
+            if self.request is not None and self.request.review_id == review_id
+            else None
+        )
+
+    async def valid_resubmission_document(
+        self,
+        case_id,
+        base_document_id,
+        base_document_version,
+        document_id,
+        document_version,
+    ):
+        self.calls.append(
+            (
+                "valid_document",
+                case_id,
+                base_document_id,
+                base_document_version,
+                document_id,
+                document_version,
+            )
+        )
+        return self.resubmission_document
 
     async def next_request_no(self, review_id):
         self.calls.append("next_request_no")
@@ -452,3 +478,122 @@ async def test_complete_review_rejects_already_completed_review():
 
     assert getattr(raised.value, "code", None) == "REVIEW_ALREADY_COMPLETED"
     assert "decision" not in calls
+
+
+def _resubmission_request(review, *, status="SENT"):
+    return SimpleNamespace(
+        correction_request_id=uuid4(),
+        review_id=review.review_id,
+        based_on_validation_run_id=review.latest_validation_run_id,
+        status=status,
+        base_document_id=uuid4(),
+        base_document_version=1,
+        response_document_id=None,
+        response_document_version=None,
+        resubmitted_by_user_id=None,
+        resubmitted_at=None,
+    )
+
+
+def _resubmission_document(request):
+    return {
+        "document_id": uuid4(),
+        "version_no": request.base_document_version + 1,
+        "document_group_id": uuid4(),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["DRAFT", "RESUBMITTED", "RECHECKED"])
+async def test_register_latest_resubmission_requires_current_sent_request(status):
+    calls = []
+    review, case, run, _ = _records()
+    request = _resubmission_request(review, status=status)
+    corrections = _CorrectionRepository(calls, request, _resubmission_document(request))
+
+    with pytest.raises(AppError) as raised:
+        await CorrectionService(
+            _ReviewRepository(calls, review, case, run), corrections
+        ).register_latest_resubmission(
+            review.review_id,
+            CorrectionResubmissionCreate(
+                document_id=uuid4(), document_version=2
+            ),
+            uuid4(),
+        )
+
+    assert raised.value.code == "CORRECTION_RESUBMISSION_INVALID"
+    assert raised.value.status_code == 409
+    assert ("active", True) in calls
+
+
+@pytest.mark.asyncio
+async def test_register_latest_resubmission_rejects_missing_active_request():
+    calls = []
+    review, case, run, _ = _records()
+    corrections = _CorrectionRepository(calls)
+
+    with pytest.raises(AppError) as raised:
+        await CorrectionService(
+            _ReviewRepository(calls, review, case, run), corrections
+        ).register_latest_resubmission(
+            review.review_id,
+            CorrectionResubmissionCreate(
+                document_id=uuid4(), document_version=2
+            ),
+            uuid4(),
+        )
+
+    assert raised.value.code == "CORRECTION_RESUBMISSION_INVALID"
+    assert raised.value.status_code == 409
+    assert calls == [("active", True)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entry_point", ["latest", "explicit"])
+async def test_resubmission_entry_points_share_document_validation(entry_point):
+    calls = []
+    review, case, run, _ = _records()
+    request = _resubmission_request(review)
+    corrections = _CorrectionRepository(calls, request, None)
+    service = CorrectionService(_ReviewRepository(calls, review, case, run), corrections)
+    payload = CorrectionResubmissionCreate(document_id=uuid4(), document_version=2)
+
+    with pytest.raises(AppError) as raised:
+        if entry_point == "latest":
+            await service.register_latest_resubmission(review.review_id, payload, uuid4())
+        else:
+            await service.register_resubmission(
+                request.correction_request_id, payload, uuid4()
+            )
+
+    assert raised.value.code == "CORRECTION_RESUBMISSION_INVALID"
+    assert raised.value.status_code == 409
+    assert any(call[0] == "valid_document" for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_register_latest_resubmission_mutates_response_and_timestamp():
+    calls = []
+    review, case, run, _ = _records()
+    request = _resubmission_request(review)
+    document = _resubmission_document(request)
+    corrections = _CorrectionRepository(calls, request, document)
+    actor_id = uuid4()
+
+    result = await CorrectionService(
+        _ReviewRepository(calls, review, case, run), corrections
+    ).register_latest_resubmission(
+        review.review_id,
+        CorrectionResubmissionCreate(
+            document_id=document["document_id"], document_version=document["version_no"]
+        ),
+        actor_id,
+    )
+
+    assert result is request
+    assert request.status == "RESUBMITTED"
+    assert request.response_document_id == document["document_id"]
+    assert request.response_document_version == document["version_no"]
+    assert request.resubmitted_by_user_id == actor_id
+    assert isinstance(request.resubmitted_at, datetime)

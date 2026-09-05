@@ -13,6 +13,7 @@ from app.review.corrections import (
 )
 from app.review.correction_repository import CorrectionRepository
 from app.review.repository import ReviewRepository
+from app.review.schemas import CorrectionResubmissionCreate
 from app.review.service import ensure_transition
 
 
@@ -182,11 +183,35 @@ class CorrectionService:
         await self.corrections.session.flush()
         return request
 
+    async def register_latest_resubmission(
+        self,
+        review_id: UUID,
+        payload: CorrectionResubmissionCreate,
+        actor_id: UUID,
+    ):
+        request = await self.corrections.active_for_review(
+            review_id, for_update=True
+        )
+        if request is None:
+            raise AppError(
+                "CORRECTION_RESUBMISSION_INVALID",
+                "找不到等待補正的修正通知",
+                409,
+            )
+        return await self._register_locked_resubmission(request, payload, actor_id)
 
     async def register_resubmission(self, request_id, payload, actor_id):
         request = await self.corrections.get_request(request_id, for_update=True)
         if request is None:
             raise ResourceNotFoundError("修正通知")
+        return await self._register_locked_resubmission(request, payload, actor_id)
+
+    async def _register_locked_resubmission(
+        self,
+        request,
+        payload: CorrectionResubmissionCreate,
+        actor_id: UUID,
+    ):
         if request.status != "SENT":
             raise AppError(
                 "CORRECTION_RESUBMISSION_INVALID",

@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.exceptions import AppError, PermissionDeniedError
+from app.review.schemas import CorrectionResubmissionCreate
 from app.valuation.submissions.schemas import SubmitForReviewCommand
 from app.valuation.submissions.service import SubmissionService
 
@@ -194,6 +195,22 @@ class StatefulRepository:
             self.state.lock.release()
 
 
+class FakeRevisionRegistrar:
+    def __init__(self, error=None):
+        self.calls = []
+        self.error = error
+
+    async def register_latest_resubmission(self, review_id, payload, actor_id):
+        self.calls.append((review_id, payload, actor_id))
+        if self.error is not None:
+            raise self.error
+        return SimpleNamespace(
+            status="RESUBMITTED",
+            response_document_id=payload.document_id,
+            response_document_version=payload.document_version,
+        )
+
+
 def setup_service(command_value=None, *, owner=None):
     command_value = command_value or command()
     owner = owner or actor()
@@ -204,6 +221,26 @@ def setup_service(command_value=None, *, owner=None):
         owner,
         command_value,
     )
+
+
+def prepare_newer_revision(state, first_command):
+    state.case.case_status = "REVISION_REQUIRED"
+    newer = command(
+        request_id=uuid4(),
+        case_version=first_command.expected_case_version + 1,
+        run_id=uuid4(),
+        document_id=uuid4(),
+    )
+    state.inputs.case_version = newer.expected_case_version
+    state.inputs.authoritative_report_form.version_no = newer.expected_case_version
+    state.inputs.report_form.version_no = newer.expected_case_version
+    state.inputs.source_validation_run.validation_run_id = newer.source_validation_run_id
+    state.inputs.source_report_document.document_id = newer.source_report_document_id
+    state.inputs.source_report_document.version_no = 2
+    state.inputs.report_form.output_document_id = newer.source_report_document_id
+    state.inputs.applied_fields[0]["document_id"] = newer.source_report_document_id
+    state.inputs.documents[0]["document_id"] = newer.source_report_document_id
+    return newer
 
 
 @pytest.mark.asyncio
@@ -383,6 +420,63 @@ async def test_first_submit_creates_review_submission_pointer_and_event() -> Non
 
 
 @pytest.mark.asyncio
+async def test_first_submission_does_not_register_a_correction_response() -> None:
+    service, state, owner, command_value = setup_service()
+    registrar = FakeRevisionRegistrar()
+
+    await SubmissionService(
+        None,
+        repository=service.repository,
+        revision_registrar=registrar,
+    ).submit(state.case.case_id, command_value, owner)
+
+    assert registrar.calls == []
+
+
+@pytest.mark.asyncio
+async def test_revision_submission_registers_active_correction_response_once() -> None:
+    service, state, owner, first_command = setup_service()
+    await service.submit(state.case.case_id, first_command, owner)
+    newer = prepare_newer_revision(state, first_command)
+    registrar = FakeRevisionRegistrar()
+
+    result = await SubmissionService(
+        None,
+        repository=service.repository,
+        revision_registrar=registrar,
+    ).submit(state.case.case_id, newer, owner)
+
+    assert result.submission_no == 2
+    assert len(registrar.calls) == 1
+    review_id, payload, actor_id = registrar.calls[0]
+    assert review_id == state.review.review_id
+    assert isinstance(payload, CorrectionResubmissionCreate)
+    assert payload.document_id == newer.source_report_document_id
+    assert payload.document_version == 2
+    assert actor_id == owner.user_id
+
+
+@pytest.mark.asyncio
+async def test_same_revision_request_retry_does_not_register_correction_again() -> None:
+    service, state, owner, first_command = setup_service()
+    await service.submit(state.case.case_id, first_command, owner)
+    newer = prepare_newer_revision(state, first_command)
+    registrar = FakeRevisionRegistrar()
+    revision_service = SubmissionService(
+        None,
+        repository=service.repository,
+        revision_registrar=registrar,
+    )
+
+    first = await revision_service.submit(state.case.case_id, newer, owner)
+    second = await revision_service.submit(state.case.case_id, newer, owner)
+
+    assert second.submission_id == first.submission_id
+    assert len(state.submissions) == 2
+    assert len(registrar.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_submit_snapshot_contains_immutable_applied_field_evidence() -> None:
     service, state, owner, command_value = setup_service()
     field_id = state.inputs.applied_fields[0]["extracted_field_id"]
@@ -519,6 +613,7 @@ async def test_revision_submission_accepts_a_newer_case_version() -> None:
     result = await SubmissionService(
         None,
         repository=StatefulRepository(state),
+        revision_registrar=FakeRevisionRegistrar(),
     ).submit(state.case.case_id, newer, owner)
 
     assert result.submission_no == 2

@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import text
 
+from app.core.exceptions import AppError
 from app.db.session import AsyncSessionFactory
 from app.review.correction_repository import CorrectionRepository
 from app.review.correction_service import CorrectionService
@@ -794,6 +795,7 @@ async def test_appraiser_submission_handoff_is_reviewable_and_statuses_pair(
 
         return_submission = submissions[1]
         return_case = handoff_data.cases[1]
+        original_return_fingerprint = return_submission.input_fingerprint
         return_detail = await workbench.detail(return_submission.review_id)
         assert return_detail.submission_id == return_submission.submission_id
         assert return_detail.submission_no == 1
@@ -928,15 +930,10 @@ async def test_appraiser_submission_handoff_is_reviewable_and_statuses_pair(
         assert revised_submission.submission_no == 2
         assert revised_submission.review_id == return_submission.review_id
 
-        resubmitted = await corrections.register_resubmission(
-            draft.correction_request_id,
-            SimpleNamespace(
-                document_id=response_document_id,
-                document_version=2,
-            ),
-            reviewer.user_id,
+        resubmitted = await correction_repository.get_request(
+            draft.correction_request_id
         )
-        await session.commit()
+        assert resubmitted is not None
         assert resubmitted.status == "RESUBMITTED"
         assert resubmitted.response_document_id == response_document_id
         assert resubmitted.response_document_version == 2
@@ -959,10 +956,134 @@ async def test_appraiser_submission_handoff_is_reviewable_and_statuses_pair(
         assert [item.recheck_outcome for item in rechecked_items] == ["RESOLVED"]
         assert [item.resulting_finding_id for item in rechecked_items] == [None]
         assert len(await review_repository.list_runs(return_submission.review_id)) == 2
+        original_submission_record = await review_repository.get_submission_snapshot_record(
+            return_submission.submission_id,
+            review_id=return_submission.review_id,
+            case_id=return_case.case_id,
+        )
+        assert original_submission_record["input_fingerprint"] == original_return_fingerprint
         report = await review_service.build_report(rechecked_run.validation_run_id)
         assert any(
             event.event_type == "CORRECTION_RECHECKED" for event in report.history
         )
+
+
+@pytest.mark.asyncio
+async def test_revision_response_registration_rolls_back_submission_on_lineage_failure(
+    admin_cursor, handoff_data: _HandoffData
+) -> None:
+    appraiser_id, reviewer_id = handoff_data.user_ids
+    appraiser = _actor(appraiser_id, "APPRAISER", "valuation.submit_review")
+    reviewer = _actor(reviewer_id, "REVIEWER", "review.execute")
+    case = handoff_data.cases[0]
+    command = SubmitForReviewCommand(
+        request_id=uuid4(),
+        expected_case_version=1,
+        source_validation_run_id=case.source_validation_run_id,
+        source_report_document_id=case.document_id,
+    )
+
+    async with AsyncSessionFactory() as session:
+        first = await SubmissionService(session).submit(case.case_id, command, appraiser)
+        await session.commit()
+        first_fingerprint = (
+            await session.execute(
+                text(
+                    "SELECT input_fingerprint FROM valuation.review_submissions "
+                    "WHERE submission_id = :submission_id"
+                ),
+                {"submission_id": first.submission_id},
+            )
+        ).scalar_one()
+
+        review_service = ReviewService(ReviewRepository(session))
+        _run, _summary, _finding_id = await _run_and_triage(
+            session,
+            review_service,
+            first.review_id,
+            reviewer.user_id,
+            confirmed=True,
+        )
+        corrections = CorrectionService(
+            ReviewRepository(session), CorrectionRepository(session), review_service
+        )
+        draft = await corrections.create_draft(
+            first.review_id,
+            CorrectionRequestCreate(
+                message="請修正送審報告",
+                due_at=datetime.now(UTC) + timedelta(days=5),
+            ),
+            reviewer.user_id,
+        )
+        await session.commit()
+        await corrections.send(draft.correction_request_id, reviewer.user_id, uuid4())
+        await session.commit()
+
+        response_document_id, response_validation_run_id = (
+            _insert_report_revision_graph(
+                admin_cursor,
+                case=case,
+                appraiser_id=appraiser_id,
+                rule_version_id=handoff_data.rule_version_id,
+            )
+        )
+        admin_cursor.execute(
+            "UPDATE valuation.documents SET document_group_id = %s "
+            "WHERE document_id = %s",
+            (uuid4(), response_document_id),
+        )
+        admin_cursor.connection.commit()
+
+        with pytest.raises(AppError) as raised:
+            await SubmissionService(session).submit(
+                case.case_id,
+                SubmitForReviewCommand(
+                    request_id=uuid4(),
+                    expected_case_version=2,
+                    source_validation_run_id=response_validation_run_id,
+                    source_report_document_id=response_document_id,
+                ),
+                appraiser,
+            )
+        assert raised.value.code == "CORRECTION_RESUBMISSION_INVALID"
+        await session.rollback()
+
+        submission_count = (
+            await session.execute(
+                text(
+                    "SELECT count(*) FROM valuation.review_submissions "
+                    "WHERE review_id = :review_id"
+                ),
+                {"review_id": first.review_id},
+            )
+        ).scalar_one()
+        status_row = (
+            await session.execute(
+                text(
+                    "SELECT c.case_status, r.status "
+                    "FROM valuation.cases c "
+                    "JOIN review.reviews rv ON rv.case_id = c.case_id "
+                    "JOIN review.correction_requests r "
+                    "  ON r.review_id = rv.review_id "
+                    "WHERE c.case_id = :case_id "
+                    "  AND r.correction_request_id = :request_id"
+                ),
+                {"case_id": case.case_id, "request_id": draft.correction_request_id},
+            )
+        ).one()
+        restored_fingerprint = (
+            await session.execute(
+                text(
+                    "SELECT input_fingerprint FROM valuation.review_submissions "
+                    "WHERE submission_id = :submission_id"
+                ),
+                {"submission_id": first.submission_id},
+            )
+        ).scalar_one()
+
+        assert submission_count == 1
+        assert tuple(status_row) == ("REVISION_REQUIRED", "SENT")
+        assert restored_fingerprint == first_fingerprint
 
 
 @pytest.mark.asyncio

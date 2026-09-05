@@ -25,8 +25,10 @@ class SubmissionService:
         self,
         session: AsyncSession | None,
         repository: SubmissionRepository | None = None,
+        revision_registrar=None,
     ) -> None:
         self.repository = repository or SubmissionRepository(session)
+        self.revision_registrar = revision_registrar
 
     async def submit(
         self,
@@ -44,6 +46,7 @@ class SubmissionService:
             self._require_matching_request(existing, command)
             return self._result(existing, case.case_status)
 
+        was_revision = case.case_status == "REVISION_REQUIRED"
         if case.case_status not in {"PROCESSING", "REVISION_REQUIRED"}:
             raise AppError(
                 "CASE_SUBMISSION_STATE_CONFLICT",
@@ -145,7 +148,30 @@ class SubmissionService:
             },
         )
         await self.repository.session.flush()
+        if was_revision:
+            registrar = self.revision_registrar or self._build_revision_registrar()
+            from app.review.schemas import CorrectionResubmissionCreate
+
+            await registrar.register_latest_resubmission(
+                review.review_id,
+                CorrectionResubmissionCreate(
+                    document_id=command.source_report_document_id,
+                    document_version=inputs.source_report_document.version_no,
+                ),
+                actor.user_id,
+            )
         return self._result(submission, case.case_status)
+
+    def _build_revision_registrar(self):
+        from app.review.correction_repository import CorrectionRepository
+        from app.review.correction_service import CorrectionService
+        from app.review.repository import ReviewRepository
+
+        session = self.repository.session
+        return CorrectionService(
+            ReviewRepository(session),
+            CorrectionRepository(session),
+        )
 
     @staticmethod
     def _require_submit_authority(case, actor: User) -> None:
