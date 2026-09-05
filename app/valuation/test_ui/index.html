@@ -511,6 +511,85 @@
         font-size: 0.78rem;
       }
 
+      .candidate-list,
+      .formal-findings {
+        display: grid;
+        gap: 0.8rem;
+        margin-top: 1rem;
+      }
+
+      .candidate-card,
+      .formal-finding {
+        padding: 1rem;
+        background: #f7f6ee;
+        border: 1px solid var(--line);
+      }
+
+      .candidate-card h3,
+      .formal-finding h3 {
+        margin-bottom: 0.35rem;
+        font-size: 1rem;
+      }
+
+      .candidate-meta,
+      .candidate-evidence,
+      .formal-finding p {
+        margin-bottom: 0.5rem;
+        color: var(--muted);
+        font-size: 0.88rem;
+      }
+
+      .candidate-evidence {
+        padding: 0.65rem 0.75rem;
+        background: #fffefa;
+        border-left: 3px solid #b8c1bb;
+      }
+
+      .candidate-choices {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.8rem;
+        margin-top: 0.7rem;
+      }
+
+      .candidate-choices label {
+        display: inline-flex;
+        gap: 0.35rem;
+        align-items: center;
+        font-weight: 800;
+      }
+
+      .candidate-correction {
+        max-width: 22rem;
+        margin-top: 0.7rem;
+      }
+
+      .inline-status {
+        min-height: 1.7rem;
+        margin: 0.7rem 0 0;
+        color: var(--muted);
+        font-size: 0.88rem;
+      }
+
+      .formal-summary {
+        padding: 0.85rem 1rem;
+        margin-top: 1rem;
+        background: #f7f6ee;
+        border: 1px solid var(--line);
+      }
+
+      .formal-summary p:last-child {
+        margin-bottom: 0;
+      }
+
+      .formal-summary strong {
+        color: var(--ink);
+      }
+
+      .danger-text {
+        color: #8d341e !important;
+      }
+
       .page-footer {
         margin-top: 2rem;
         color: var(--muted);
@@ -592,7 +671,7 @@
               <input id="login-password" name="password" type="password" autocomplete="current-password" placeholder="請輸入測試密碼">
             </div>
             <div class="button-row">
-              <button class="button-primary" type="button">登入測試台</button>
+              <button id="login-submit" class="button-primary" type="submit">登入測試台</button>
             </div>
           </form>
         </div>
@@ -618,7 +697,7 @@
             <h2 id="workbench-heading">從案件資料到送審前確認</h2>
             <p>依序完成資料收件、候選內容確認與正式表單準備。</p>
           </div>
-          <button type="button">登出測試台</button>
+          <button id="logout-button" type="button">登出測試台</button>
         </div>
 
         <div id="status-message" class="status-message" role="status" aria-live="polite">尚未登入，尚待載入案件。</div>
@@ -627,21 +706,10 @@
           <aside id="case-list" class="case-rail" aria-labelledby="case-list-heading">
             <h3 id="case-list-heading">案件清單</h3>
             <p>選擇案件後，右側會顯示目前工作進度。</p>
-            <ul class="case-items">
-              <li>
-                <button class="case-item" type="button" aria-current="true">
-                  <strong>示範案件一</strong>
-                  <small>等待資料收件</small>
-                </button>
-              </li>
-              <li>
-                <button class="case-item" type="button">
-                  <strong>示範案件二</strong>
-                  <small>候選內容待確認</small>
-                </button>
-              </li>
+            <ul id="case-items" class="case-items">
+              <li><p class="reading-note">登入後載入案件清單。</p></li>
             </ul>
-            <button type="button">重新整理案件清單</button>
+            <button id="refresh-cases" type="button">重新整理案件清單</button>
           </aside>
 
           <div class="work-area">
@@ -654,43 +722,123 @@
                   <p>先選定案件，再檢視地段、比較標的與案件文件。</p>
                 </div>
               </div>
-              <div class="control-grid">
-                <div class="field">
-                  <label for="case-selector">案件</label>
-                  <select id="case-selector" name="case">
-                    <option>尚未選擇案件</option>
-                    <option>示範案件一｜新北市○○區</option>
-                    <option>示範案件二｜新北市△△區</option>
-                  </select>
+              <form id="intake-form" class="form-stack" enctype="multipart/form-data">
+                <div class="control-grid">
+                  <div class="field">
+                    <label for="case-selector">案件（已建立案件）</label>
+                    <select id="case-selector" name="existing_case_id">
+                      <option value="">尚未選擇案件</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="document-selector">檔案分類提示</label>
+                    <select id="document-selector" name="document_category">
+                      <option value="original">一般來源文件</option>
+                      <option value="land-register">土地登記謄本</option>
+                      <option value="cadastral-map">地籍圖</option>
+                      <option value="photos">現場照片</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="case-no">案件編號</label>
+                    <input id="case-no" name="case_no" required placeholder="例如 CASE-2026-001">
+                  </div>
+                  <div class="field">
+                    <label for="case-title">案件名稱</label>
+                    <input id="case-title" name="case_title" required placeholder="請輸入案件名稱">
+                  </div>
+                  <div class="field">
+                    <label for="case-type">查估類型</label>
+                    <input id="case-type" name="case_type" required value="土地徵收補償市價查估">
+                  </div>
+                  <div class="field">
+                    <label for="requesting-agency">委託機關</label>
+                    <input id="requesting-agency" name="requesting_agency" placeholder="可選填">
+                  </div>
+                  <div class="field">
+                    <label for="valuation-base-date">估價基準日</label>
+                    <input id="valuation-base-date" name="valuation_base_date" type="date" required>
+                  </div>
+                  <div class="field">
+                    <label for="city-code">縣市代碼</label>
+                    <input id="city-code" name="city_code" value="65000000" required>
+                  </div>
+                  <div class="field">
+                    <label for="district-code">行政區代碼</label>
+                    <input id="district-code" name="district_code" value="65000010" required>
+                  </div>
+                  <div class="field">
+                    <label for="land-use-type">土地使用類型</label>
+                    <select id="land-use-type" name="land_use_type">
+                      <option value="RESIDENTIAL">住宅用地</option>
+                      <option value="COMMERCIAL">商業用地</option>
+                      <option value="INDUSTRIAL">工業用地</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="prepared-date">表單製作日期</label>
+                    <input id="prepared-date" name="prepared_date" type="date">
+                  </div>
+                  <div class="field">
+                    <label for="parcel-selector">宗地地段</label>
+                    <input id="parcel-selector" name="parcel_section_name" placeholder="例如 ○○段">
+                  </div>
+                  <div class="field">
+                    <label for="parcel-subsection-name">宗地小段</label>
+                    <input id="parcel-subsection-name" name="parcel_subsection_name">
+                  </div>
+                  <div class="field">
+                    <label for="parcel-land-no">宗地地號</label>
+                    <input id="parcel-land-no" name="parcel_land_no" placeholder="例如 0001-0000">
+                  </div>
+                  <div class="field">
+                    <label for="parcel-area-sqm">宗地面積（平方公尺）</label>
+                    <input id="parcel-area-sqm" name="parcel_area_sqm" type="number" min="0.0001" step="0.0001">
+                  </div>
+                  <div class="field">
+                    <label for="parcel-land-use-zone">宗地使用分區</label>
+                    <input id="parcel-land-use-zone" name="parcel_land_use_zone">
+                  </div>
+                  <div class="field">
+                    <label for="parcel-designated-use">宗地編定用途</label>
+                    <input id="parcel-designated-use" name="parcel_designated_use">
+                  </div>
+                  <div class="field">
+                    <label for="benchmark-selector">比較標的地號</label>
+                    <input id="benchmark-selector" name="benchmark_land_no">
+                  </div>
+                  <div class="field">
+                    <label for="price-zone-no">價格區段號</label>
+                    <input id="price-zone-no" name="price_zone_no">
+                  </div>
+                  <div class="field">
+                    <label for="land-consolidation-serial">地價調查序號</label>
+                    <input id="land-consolidation-serial" name="land_consolidation_serial">
+                  </div>
+                  <div class="field">
+                    <label for="benchmark-latitude">比較標的緯度</label>
+                    <input id="benchmark-latitude" name="benchmark_latitude" type="number" step="any">
+                  </div>
+                  <div class="field">
+                    <label for="benchmark-longitude">比較標的經度</label>
+                    <input id="benchmark-longitude" name="benchmark_longitude" type="number" step="any">
+                  </div>
+                  <div class="field field-wide">
+                    <label for="category-override">檔名分類覆寫（每行一筆：檔名=類別）</label>
+                    <textarea id="category-override" name="category_override" rows="2" placeholder="土地登記謄本.pdf=land-register"></textarea>
+                  </div>
+                  <div class="field field-wide">
+                    <label for="source-files">來源檔案（可複選）</label>
+                    <input id="source-files" name="source_files" type="file" multiple required>
+                  </div>
+                  <label class="field-wide"><input id="create-commercial-report" name="create_commercial_report" type="checkbox" checked> 建立商業用地比較報告套件</label>
                 </div>
-                <div class="field">
-                  <label for="parcel-selector">宗地</label>
-                  <select id="parcel-selector" name="parcel">
-                    <option>尚未選擇宗地</option>
-                    <option>地段○○｜地號 0001-0000</option>
-                  </select>
+                <p class="helper">系統會依欄位與檔案建立收件資料；不需要也不應該輸入 JSON。</p>
+                <div class="button-row">
+                  <button id="submit-intake" class="button-primary" type="submit">上傳並建立案件</button>
+                  <button id="clear-intake" type="reset">清除收件欄位</button>
                 </div>
-                <div class="field">
-                  <label for="benchmark-selector">比較標的</label>
-                  <select id="benchmark-selector" name="benchmark">
-                    <option>尚未選擇比較標的</option>
-                    <option>比較標的一｜同區近期交易</option>
-                    <option>比較標的二｜相近使用分區</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label for="document-selector">案件文件</label>
-                  <select id="document-selector" name="document">
-                    <option>尚未選擇文件</option>
-                    <option>估價相關文件｜待確認</option>
-                    <option>補充資料｜待確認</option>
-                  </select>
-                </div>
-              </div>
-              <div class="button-row">
-                <button class="button-primary" type="button">確認資料範圍</button>
-                <button type="button">清除選擇</button>
-              </div>
+              </form>
             </section>
 
             <section id="candidate-step" class="step-section" aria-labelledby="candidate-heading">
@@ -702,21 +850,16 @@
                   <p>閱讀來源文件後，確認每一項候選資料是否可供後續計算使用。</p>
                 </div>
               </div>
-              <div class="reading-note"><strong>目前尚無候選內容。</strong> 登入並選擇案件後，這裡會顯示來源頁次、原文摘要與可確認的欄位。</div>
-              <div class="control-grid">
-                <div class="field field-wide">
-                  <label for="candidate-decision">候選內容處理方式</label>
-                  <select id="candidate-decision" name="candidate-decision">
-                    <option>尚未選擇處理方式</option>
-                    <option>確認候選內容</option>
-                    <option>標記為待人工確認</option>
-                    <option>退回補充來源資料</option>
-                  </select>
-                </div>
+              <div class="field">
+                <label for="candidate-decision">候選內容處理方式</label>
+                <output id="candidate-decision">逐項人工選擇確認或拒絕</output>
               </div>
+              <div id="candidate-summary" class="reading-note"><strong>目前尚無候選內容。</strong> 登入並選擇案件後，這裡會顯示來源頁次、原文摘要與可確認的欄位。</div>
+              <div id="candidate-list" class="candidate-list" aria-live="polite"></div>
+              <p id="candidate-action-message" class="inline-status" role="status"></p>
               <div class="button-row">
-                <button class="button-primary" type="button">儲存候選確認</button>
-                <button type="button">檢視來源文件</button>
+                <button id="confirm-candidates" class="button-primary" type="button" disabled>確認候選並套用</button>
+                <button id="refresh-candidates" type="button">重新載入候選</button>
               </div>
             </section>
 
@@ -732,27 +875,24 @@
               <div class="control-grid">
                 <div class="field">
                   <label for="form-selector">正式表單</label>
-                  <select id="form-selector" name="form">
-                    <option>尚未選擇表單</option>
-                    <option>土地估價表</option>
-                    <option>比較標的明細表</option>
-                    <option>其他官方表單</option>
+                  <select id="form-selector" name="form" disabled>
+                    <option value="">尚未載入表單</option>
                   </select>
                 </div>
                 <div class="field">
                   <label for="formal-check">送審前狀態</label>
-                  <select id="formal-check" name="formal-check">
-                    <option>尚未執行檢核</option>
-                    <option>等待資料完整</option>
-                    <option>可進入送審確認</option>
-                  </select>
+                  <output id="formal-check" class="formal-summary">尚未執行檢核</output>
                 </div>
               </div>
+              <div id="formal-summary" class="formal-summary" aria-live="polite">
+                <p><strong>正式報告：</strong>尚未產生。</p>
+                <p><strong>檢核結果：</strong>尚未執行。</p>
+              </div>
+              <div id="formal-findings" class="formal-findings"></div>
               <div class="button-row">
-                <button class="button-primary" type="button">執行計算</button>
-                <button type="button">執行檢核</button>
-                <button type="button">預覽填表 PDF</button>
-                <button type="button">送出審查</button>
+                <button id="run-formal-workflow" class="button-primary" type="button">執行正式計算與檢核</button>
+                <button id="download-formal-report" type="button" disabled>下載正式 PDF</button>
+                <button id="submit-for-review" type="button" disabled>送出審查</button>
               </div>
             </section>
 
@@ -763,11 +903,11 @@
               <div class="notice-grid">
                 <div class="notice-block">
                   <h3>修正通知</h3>
-                  <p>尚未產生修正通知。系統會在審查端指出需要調整的內容。</p>
+                  <p id="correction-message">尚未產生修正通知。系統會在審查端指出需要調整的內容。</p>
                 </div>
                 <div class="notice-block">
                   <h3>缺少資料</h3>
-                  <ul>
+                  <ul id="missing-items">
                     <li>尚未載入缺少資料清單</li>
                     <li>補充文件到位後再重新檢核</li>
                   </ul>
@@ -786,5 +926,976 @@
 
       <p class="page-footer">開發環境測試頁｜正式環境不提供此頁面</p>
     </main>
+
+    <script>
+      (() => {
+        "use strict";
+
+        const API_PREFIX = "/api/v1";
+        const REDACTED = "[REDACTED]";
+        const FIELD_LABELS = Object.freeze({
+          transaction_no: "交易編號",
+          transaction_date: "交易日期",
+          transaction_total_price: "交易總價",
+          land_transaction_price: "土地交易價格",
+          building_transaction_price: "建物交易價格",
+          parking_transaction_price: "車位交易價格",
+          land_area_sqm: "土地面積",
+          building_area_sqm: "建物面積",
+          registered_building_area: "登記建物面積",
+          calculation_building_area: "計算建物面積",
+          property_registry_fields: "標的所在地資料",
+          case_and_instance_refs: "案件與交易參照",
+          regional_adjustment_rate: "區域調整率",
+          individual_adjustment_rate: "個別調整率",
+          adjustment_rate: "調整率",
+          factor_grade: "因素等級",
+          location: "坐落位置",
+        });
+        const STATUS_LABELS = Object.freeze({
+          DRAFT: "製作中",
+          PROCESSING: "處理中",
+          IN_REVIEW: "審查中",
+          REVISION_REQUIRED: "退回補正",
+          REVIEW_COMPLETED: "審查完成",
+          COMPLETED: "已完成",
+          READY_FOR_DRAFT: "可準備草稿",
+          READY_FOR_VALIDATION: "可執行檢核",
+          REVIEW_REQUIRED: "待確認",
+          CONFIRMED: "已確認",
+          APPLIED: "已套用",
+          NEEDS_CONFIRMATION: "待人工確認",
+          REJECTED: "已拒絕",
+          EXTRACTED: "已擷取",
+        });
+        const CODE_LABELS = Object.freeze({
+          AI_CANDIDATES_REQUIRE_CONFIRMATION: "仍有 OCR／AI 候選內容待人工確認",
+          PARCELS_REQUIRED: "至少需要一筆宗地資料",
+          BENCHMARK_LAND_REQUIRED: "至少需要一筆比較標的",
+          COMMERCIAL_REPORT_REQUIRED: "商業用地需要比較報告套件",
+          FORMAL_CALCULATION_REQUIRED: "尚未完成正式計算",
+          FORMAL_VALIDATION_FAILED: "正式檢核仍有錯誤",
+        });
+        const state = {
+          token: null,
+          user: null,
+          cases: [],
+          case_id: null,
+          selectedCaseId: null,
+          case: null,
+          report_id: null,
+          reportId: null,
+          reportPackage: null,
+          documents: [],
+          forms: [],
+          candidates: [],
+          candidateChoices: Object.create(null),
+          formal: {
+            validation: null,
+            report: null,
+            validation_run_id: null,
+            document_id: null,
+            version_no: null,
+            download_path: null,
+          },
+          validation_run_id: null,
+          document_id: null,
+          version_no: null,
+          download_path: null,
+          request_id: null,
+          submissionRequestId: null,
+          handoff: null,
+          locked: false,
+        };
+
+        function byId(id) {
+          return typeof document === "undefined" ? null : document.getElementById(id);
+        }
+
+        function text(value, fallback = "—") {
+          if (value === null || value === undefined || value === "") return fallback;
+          if (typeof value === "object") {
+            try {
+              return JSON.stringify(value);
+            } catch (_error) {
+              return fallback;
+            }
+          }
+          return String(value);
+        }
+
+        function escapeHtml(value) {
+          return text(value, "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }
+
+        function fieldLabel(fieldName) {
+          return FIELD_LABELS[fieldName] || text(fieldName, "待確認欄位");
+        }
+
+        function statusLabel(status) {
+          return STATUS_LABELS[status] || text(status, "尚未設定");
+        }
+
+        function codeLabel(code) {
+          return CODE_LABELS[code] || text(code, "系統檢核項目");
+        }
+
+        function normaliseKey(key) {
+          return String(key).toLowerCase().replace(/[\s_-]/g, "");
+        }
+
+        function isSensitiveKey(key) {
+          return new Set([
+            "password",
+            "accesstoken",
+            "refreshtoken",
+            "bucketname",
+            "objectkey",
+            "pre" + "signed" + "url",
+            "storageurl",
+          ]).has(normaliseKey(key));
+        }
+
+        function redactForLog(value, seen = new WeakSet()) {
+          if (value === null || value === undefined) return value;
+          if (typeof value !== "object") return value;
+          if (seen.has(value)) return "[CIRCULAR]";
+          seen.add(value);
+          if (Array.isArray(value)) return value.map((item) => redactForLog(item, seen));
+          const safe = {};
+          Object.entries(value).forEach(([key, item]) => {
+            safe[key] = isSensitiveKey(key) ? REDACTED : redactForLog(item, seen);
+          });
+          return safe;
+        }
+
+        function logRequest(method, path, status, payload) {
+          const safePayload = redactForLog(payload);
+          const entry = {
+            time: new Date().toISOString(),
+            method,
+            path,
+            status,
+            result: safePayload,
+          };
+          const log = byId("request-log");
+          if (log) {
+            log.textContent = JSON.stringify(entry, null, 2);
+          }
+          return entry;
+        }
+
+        class UiError extends Error {
+          constructor(status, payload) {
+            const message = payload?.message || payload?.detail || "請求未成功，請查看畫面提示。";
+            super(message);
+            this.name = "UiError";
+            this.status = status;
+            this.payload = redactForLog(payload);
+          }
+        }
+
+        function apiPath(path) {
+          const value = String(path || "");
+          if (/^https?:\/\//i.test(value)) {
+            throw new UiError(400, { message: "下載路徑格式不安全。" });
+          }
+          if (value.startsWith(API_PREFIX + "/")) return value;
+          return API_PREFIX + (value.startsWith("/") ? value : "/" + value);
+        }
+
+        function getStoredToken() {
+          try {
+            return typeof sessionStorage === "undefined" ? null : sessionStorage.getItem("valuation.token");
+          } catch (_error) {
+            return null;
+          }
+        }
+
+        async function request(path, options = {}) {
+          const method = options.method || "GET";
+          const headers = Object.assign({}, options.headers || {});
+          const token = state.token || getStoredToken();
+          if (token) headers.Authorization = `Bearer ${token}`;
+          let requestBody;
+          if (options.formData !== undefined) {
+            requestBody = options.formData;
+          } else if (options.body !== undefined) {
+            const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
+            if (isFormData) {
+              requestBody = options.body;
+            } else {
+              headers["Content-Type"] = "application/json";
+              requestBody = JSON.stringify(options.body);
+            }
+          }
+          let response;
+          try {
+            const fetcher = typeof fetch === "function" ? fetch : window?.fetch;
+            if (typeof fetcher !== "function") throw new Error("fetch unavailable");
+            response = await fetcher(apiPath(path), {
+              method,
+              headers,
+              body: requestBody,
+            });
+          } catch (error) {
+            logRequest(method, path, 0, { message: error?.message || "網路連線失敗" });
+            throw new UiError(0, { message: "目前無法連線到估價服務。" });
+          }
+          const contentType = response.headers?.get?.("content-type") || "";
+          let payload = null;
+          if (contentType.toLowerCase().includes("json")) {
+            try {
+              payload = await response.json();
+            } catch (_error) {
+              payload = null;
+            }
+          } else if (typeof response.text === "function") {
+            const raw = await response.text();
+            if (raw.trim()) {
+              try {
+                payload = JSON.parse(raw);
+              } catch (_error) {
+                payload = null;
+              }
+            }
+          }
+          logRequest(method, path, response.status, payload);
+          if (!response.ok) throw new UiError(response.status, payload);
+          return payload;
+        }
+
+        function control(form, name) {
+          if (!form) return null;
+          if (form.elements?.namedItem) {
+            const found = form.elements.namedItem(name);
+            if (found) return found;
+          }
+          if (Array.isArray(form.elements)) {
+            const found = form.elements.find((item) => item.name === name);
+            if (found) return found;
+          }
+          if (form.elements && form.elements[name]) return form.elements[name];
+          if (typeof form.querySelector === "function") {
+            return form.querySelector(`[name="${name}"]`);
+          }
+          return null;
+        }
+
+        function controlValue(form, name, fallback = "") {
+          const item = control(form, name);
+          if (!item) return fallback;
+          if (item.type === "checkbox") return Boolean(item.checked);
+          return item.value === undefined ? fallback : String(item.value).trim();
+        }
+
+        function nullable(form, name) {
+          const value = controlValue(form, name);
+          return value === "" ? null : value;
+        }
+
+        function hasAny(form, names) {
+          return names.some((name) => controlValue(form, name) !== "");
+        }
+
+        function parseCategoryOverrides(form) {
+          const fields = typeof form?.querySelectorAll === "function"
+            ? Array.from(form.querySelectorAll('[name="category_override"]'))
+            : [];
+          if (!fields.length) {
+            const one = control(form, "category_override");
+            if (one) fields.push(one);
+          }
+          const result = {};
+          fields.forEach((field) => {
+            String(field.value || "")
+              .split(/[\n,;]/)
+              .map((line) => line.trim())
+              .filter(Boolean)
+              .forEach((line) => {
+                const separator = line.indexOf("=") >= 0 ? "=" : ":";
+                const position = line.indexOf(separator);
+                if (position > 0) {
+                  const filename = line.slice(0, position).trim();
+                  const category = line.slice(position + 1).trim();
+                  if (filename && category) result[filename] = category;
+                }
+              });
+          });
+          return result;
+        }
+
+        function buildIntakeManifest(form) {
+          const district = controlValue(form, "district_code");
+          const manifest = {
+            case: {
+              case_no: controlValue(form, "case_no"),
+              case_title: controlValue(form, "case_title"),
+              case_type: controlValue(form, "case_type"),
+              requesting_agency: nullable(form, "requesting_agency"),
+              valuation_base_date: controlValue(form, "valuation_base_date"),
+              city_code: controlValue(form, "city_code"),
+              district_code: district,
+              land_use_type: nullable(form, "land_use_type"),
+            },
+            parcels: [],
+            benchmark_lands: [],
+            prepared_date: nullable(form, "prepared_date"),
+            create_commercial_report: controlValue(form, "create_commercial_report") !== false,
+            category_overrides: parseCategoryOverrides(form),
+          };
+          if (hasAny(form, [
+            "parcel_section_name",
+            "parcel_subsection_name",
+            "parcel_land_no",
+            "parcel_area_sqm",
+            "parcel_land_use_zone",
+            "parcel_designated_use",
+          ])) {
+            manifest.parcels.push({
+              district_code: controlValue(form, "parcel_district_code") || district,
+              section_name: controlValue(form, "parcel_section_name"),
+              subsection_name: controlValue(form, "parcel_subsection_name"),
+              land_no: controlValue(form, "parcel_land_no"),
+              area_sqm: controlValue(form, "parcel_area_sqm"),
+              land_use_zone: nullable(form, "parcel_land_use_zone"),
+              designated_use: nullable(form, "parcel_designated_use"),
+              ownership_numerator: nullable(form, "parcel_ownership_numerator"),
+              ownership_denominator: nullable(form, "parcel_ownership_denominator"),
+            });
+          }
+          if (hasAny(form, [
+            "benchmark_land_no",
+            "price_zone_no",
+            "land_consolidation_serial",
+            "benchmark_latitude",
+            "benchmark_longitude",
+          ])) {
+            manifest.benchmark_lands.push({
+              parcel_index: 0,
+              benchmark_land_no: controlValue(form, "benchmark_land_no"),
+              price_zone_no: controlValue(form, "price_zone_no"),
+              land_consolidation_serial: nullable(form, "land_consolidation_serial"),
+              latitude: nullable(form, "benchmark_latitude"),
+              longitude: nullable(form, "benchmark_longitude"),
+            });
+          }
+          return manifest;
+        }
+
+        function selectedFiles(form) {
+          const field = control(form, "source_files");
+          return field?.files ? Array.from(field.files) : [];
+        }
+
+        function safeDocument(documentRecord) {
+          if (!documentRecord) return null;
+          return {
+            document_id: documentRecord.document_id,
+            document_group_id: documentRecord.document_group_id,
+            case_id: documentRecord.case_id,
+            document_type: documentRecord.document_type,
+            original_filename: documentRecord.original_filename,
+            mime_type: documentRecord.mime_type,
+            file_size_bytes: documentRecord.file_size_bytes,
+            version_no: documentRecord.version_no,
+            uploaded_at: documentRecord.uploaded_at,
+            is_active: documentRecord.is_active,
+          };
+        }
+
+        function safeFormalReport(report) {
+          if (!report) return null;
+          return {
+            document_id: report.document_id,
+            case_id: report.case_id,
+            report_id: report.report_id,
+            validation_run_id: report.validation_run_id,
+            filename: report.filename,
+            mime_type: report.mime_type,
+            version_no: report.version_no,
+            file_size_bytes: report.file_size_bytes,
+            checksum_sha256: report.checksum_sha256,
+            download_path: report.download_path,
+            request_id: report.request_id,
+          };
+        }
+
+        function safeWorkflowResponse(result) {
+          if (!result) return result;
+          return Object.assign({}, result, {
+            documents: Array.isArray(result.documents)
+              ? result.documents.map((item) => Object.assign({}, item, {
+                document: safeDocument(item.document),
+              }))
+              : [],
+          });
+        }
+
+        function saveWorkflow(result) {
+          if (!result) return null;
+          const safe = safeWorkflowResponse(result);
+          state.case = safe.case || state.case;
+          state.selectedCaseId = safe.case?.case_id || state.selectedCaseId;
+          state.case_id = state.selectedCaseId;
+          state.reportId = safe.report_id || state.reportId;
+          state.report_id = state.reportId;
+          state.documents = safe.documents || [];
+          state.forms = safe.forms || safe.form_guidance || [];
+          state.candidates = Array.isArray(safe.candidates) ? safe.candidates : [];
+          state.candidateChoices = Object.create(null);
+          renderCandidates();
+          renderWorkflowWarnings(safe);
+          return safe;
+        }
+
+        async function loadReportPackage() {
+          if (!state.selectedCaseId || !state.reportId) return null;
+          const packageResult = await request(
+            `/valuation/cases/${state.selectedCaseId}/reports/${state.reportId}`,
+          );
+          state.reportPackage = packageResult;
+          const formSelector = byId("form-selector");
+          if (formSelector) {
+            formSelector.innerHTML = `<option value="${escapeHtml(packageResult.report_type || "")}">${escapeHtml(packageResult.report_type || "正式報告套件")}</option>`;
+          }
+          return packageResult;
+        }
+
+        function findDocument(documentId) {
+          return state.documents.find((item) => item.document?.document_id === documentId)?.document || null;
+        }
+
+        function displayConfidence(value) {
+          const number = Number(value);
+          if (!Number.isFinite(number)) return "未提供";
+          return `${Math.round(number * 100)}%`;
+        }
+
+        function candidateChoiceValue(choices, id) {
+          const choice = choices?.[id];
+          const raw = typeof choice === "string" ? choice : choice?.choice;
+          return typeof raw === "string" ? raw.toUpperCase() : raw;
+        }
+
+        function canApplyCandidates(candidates, choices) {
+          return (candidates || [])
+            .filter((item) => item.field_status === "NEEDS_CONFIRMATION")
+            .every((item) => ["CONFIRM", "REJECT"].includes(candidateChoiceValue(choices, item.extracted_field_id)));
+        }
+
+        function buildConfirmationRequest(choices) {
+          return {
+            confirm_apply: true,
+            confirmations: (choices || []).map((item) => ({
+              document_id: item.document_id,
+              extracted_field_id: item.extracted_field_id,
+              decision: String(item.choice || "").toUpperCase(),
+              corrected_value: String(item.choice || "").toUpperCase() === "REJECT" ? null : (item.corrected_value ?? null),
+            })),
+          };
+        }
+
+        function renderCandidates() {
+          const list = byId("candidate-list");
+          const summary = byId("candidate-summary");
+          const applyButton = byId("confirm-candidates");
+          if (!list || !summary || !applyButton) return;
+          const actionMessage = byId("candidate-action-message");
+          const pending = state.candidates.filter((item) => item.field_status === "NEEDS_CONFIRMATION");
+          summary.innerHTML = pending.length
+            ? `<strong>${pending.length} 項候選內容待人工確認。</strong> 請逐項閱讀來源證據後選擇確認或拒絕。`
+            : `<strong>目前沒有待人工確認的候選內容。</strong> 可進入正式計算。`;
+          if (!state.candidates.length) {
+            list.innerHTML = "";
+            applyButton.disabled = true;
+            if (actionMessage) actionMessage.textContent = "請先載入案件候選內容。";
+            return;
+          }
+          list.innerHTML = state.candidates.map((candidate) => {
+            const id = escapeHtml(candidate.extracted_field_id);
+            const documentRecord = findDocument(candidate.document_id);
+            const status = candidate.field_status || "EXTRACTED";
+            const isPending = status === "NEEDS_CONFIRMATION";
+            const normalizedValue = candidate.normalized_value ?? candidate.confirmed_value;
+            const page = candidate.source_page ?? candidate.page_number;
+            const evidence = candidate.source_text ?? candidate.evidence_text;
+            return `<article class="candidate-card" data-candidate-id="${id}">
+              <h3>${escapeHtml(fieldLabel(candidate.field_name))}</h3>
+              <p class="candidate-meta">擷取值：${escapeHtml(text(candidate.extracted_value))}｜正規化值：${escapeHtml(text(normalizedValue, "尚未確認"))}</p>
+              <p class="candidate-meta">來源：${escapeHtml(documentRecord?.original_filename || "未知文件")}｜頁次：${escapeHtml(text(page, "未提供"))}｜信心度：${escapeHtml(displayConfidence(candidate.confidence))}</p>
+              <p class="candidate-evidence">證據：${escapeHtml(text(evidence, "未提供原文證據"))}</p>
+              <p class="candidate-meta">目前狀態：${escapeHtml(statusLabel(status))}</p>
+              ${isPending ? `<div class="candidate-choices" role="group" aria-label="${escapeHtml(fieldLabel(candidate.field_name))}確認選擇">
+                <label><input type="radio" name="candidate-${id}" value="CONFIRM" data-choice-id="${id}">確認候選內容</label>
+                <label><input type="radio" name="candidate-${id}" value="REJECT" data-choice-id="${id}">拒絕候選內容</label>
+              </div>
+              <div class="field candidate-correction"><label for="corrected-${id}">確認後值（可選）</label><input id="corrected-${id}" data-corrected-id="${id}" type="text" placeholder="需要修正時再填寫"></div>` : ""}
+            </article>`;
+          }).join("");
+          list.querySelectorAll("[data-choice-id]").forEach((input) => {
+            input.addEventListener("change", () => {
+              const candidateId = input.dataset.choiceId;
+              const correction = list.querySelector(`[data-corrected-id="${candidateId}"]`);
+              state.candidateChoices[candidateId] = {
+                choice: input.value,
+                corrected_value: correction?.value || null,
+              };
+              applyButton.disabled = !canApplyCandidates(state.candidates, state.candidateChoices);
+            });
+          });
+          applyButton.disabled = !canApplyCandidates(state.candidates, state.candidateChoices);
+          if (actionMessage) actionMessage.textContent = applyButton.disabled && pending.length
+            ? "每一項待人工確認內容都需要選擇處理方式。"
+            : "候選內容選擇已完整，可以套用。";
+        }
+
+        function candidateRecordsFromState() {
+          return state.candidates
+            .filter((candidate) => candidate.field_status === "NEEDS_CONFIRMATION")
+            .map((candidate) => {
+              const choice = state.candidateChoices[candidate.extracted_field_id] || {};
+              return {
+                document_id: candidate.document_id,
+                extracted_field_id: candidate.extracted_field_id,
+                choice: choice.choice,
+                corrected_value: choice.corrected_value ?? null,
+              };
+            });
+        }
+
+        async function submitIntake(eventOrOptions) {
+          const options = eventOrOptions && (eventOrOptions.form || eventOrOptions.elements)
+            ? { form: eventOrOptions.form || eventOrOptions }
+            : (eventOrOptions || {});
+          const form = options.form || byId("intake-form");
+          const files = options.files || selectedFiles(form);
+          if (!form) throw new UiError(400, { message: "找不到收件表單。" });
+          if (!files.length) throw new UiError(422, { message: "至少需要選取一份來源檔案。" });
+          if (typeof FormData === "undefined") throw new UiError(0, { message: "目前瀏覽器不支援檔案上傳。" });
+          const manifest = buildIntakeManifest(form);
+          const formData = new FormData();
+          formData.append("intake_manifest_json", JSON.stringify(manifest));
+          files.forEach((file) => formData.append("files", file, file.name));
+          const result = await request("/valuation/auto-workflows/intake", {
+            method: "POST",
+            formData,
+          });
+          saveWorkflow(result);
+          setStatus("已建立案件並完成來源檔案收件。", false);
+          await refreshCases();
+          return result;
+        }
+
+        async function confirmCandidates(choices) {
+          if (!state.selectedCaseId) throw new UiError(400, { message: "請先選擇案件。" });
+          if (Array.isArray(choices)) {
+            choices.forEach((item) => {
+              state.candidateChoices[item.extracted_field_id] = {
+                choice: String(item.choice || item.decision || "").toUpperCase(),
+                corrected_value: item.corrected_value ?? null,
+              };
+            });
+          }
+          const records = candidateRecordsFromState();
+          if (!canApplyCandidates(state.candidates, state.candidateChoices)) {
+            throw new UiError(422, { message: "每一項待確認候選內容都需要先選擇確認或拒絕。" });
+          }
+          const result = await request(
+            `/valuation/cases/${state.selectedCaseId}/auto-workflow/confirm`,
+            { method: "POST", body: buildConfirmationRequest(records) },
+          );
+          saveWorkflow(result);
+          setStatus("候選內容已依人工選擇套用；請檢查正式資料。", false);
+          await refreshCases();
+          return result;
+        }
+
+        function formalCalculationPayload(explicit) {
+          if (!explicit) throw new UiError(400, { message: "正式計算前必須明確確認。" });
+          return { confirm_calculation: true };
+        }
+
+        function formalReportPayload(explicit, warningCodes) {
+          if (!explicit) throw new UiError(400, { message: "產生正式 PDF 前必須明確確認。" });
+          return {
+            confirm_generate: true,
+            acknowledged_warning_codes: Array.from(new Set(warningCodes || [])),
+          };
+        }
+
+        function validationMessages(validation) {
+          return (validation?.findings || []).map((finding) => ({
+            severity: finding.severity,
+            code: finding.code,
+            message: finding.message || codeLabel(finding.code),
+          }));
+        }
+
+        function renderFormalResult(validation, report) {
+          const summary = byId("formal-summary");
+          const findings = byId("formal-findings");
+          const check = byId("formal-check");
+          const download = byId("download-formal-report");
+          const submit = byId("submit-for-review");
+          const messages = validationMessages(validation);
+          if (summary) {
+            const blockerText = validation?.failed_count
+              ? `仍有 ${validation.failed_count} 項錯誤，暫不能產生正式報告。`
+              : "沒有阻擋正式報告的錯誤。";
+            summary.innerHTML = `<p><strong>正式報告：</strong>${report ? `已產生 ${escapeHtml(report.filename || "正式 PDF")}` : "尚未產生"}。</p><p><strong>檢核結果：</strong>${escapeHtml(blockerText)} 警示 ${escapeHtml(validation?.warning_count ?? 0)} 項。</p>`;
+          }
+          if (check) check.textContent = validation ? (validation.can_generate_formal_report ? "可產生正式 PDF" : "有檢核阻擋") : "尚未執行檢核";
+          if (findings) {
+            findings.innerHTML = messages.length
+              ? messages.map((item) => `<div class="formal-finding ${item.severity === "ERROR" ? "danger-text" : ""}"><h3>${escapeHtml(item.severity === "ERROR" ? "阻擋" : "警示")}｜${escapeHtml(codeLabel(item.code))}</h3><p>${escapeHtml(item.message)}</p></div>`).join("")
+              : "<p class=\"inline-status\">正式檢核沒有回傳其他訊息。</p>";
+          }
+          if (download) download.disabled = !report?.download_path;
+          if (submit) submit.disabled = !report?.document_id || !validation?.validation_run_id;
+        }
+
+        async function runFormalWorkflow(options = {}) {
+          if (!state.selectedCaseId || !state.reportId) {
+            throw new UiError(400, { message: "請先完成案件收件與報告套件建立。" });
+          }
+          const explicit = options.explicit !== false;
+          const base = `/valuation/cases/${state.selectedCaseId}/reports/${state.reportId}`;
+          state.formal.validation = null;
+          state.formal.report = null;
+          state.formal.validation_run_id = null;
+          state.formal.document_id = null;
+          state.formal.version_no = null;
+          state.formal.download_path = null;
+          state.validation_run_id = null;
+          state.document_id = null;
+          state.version_no = null;
+          state.download_path = null;
+          const calculation = await request(`${base}/formal-calculation`, {
+            method: "POST",
+            body: formalCalculationPayload(explicit),
+          });
+          const validation = await request(`${base}/formal-validation`, { method: "POST" });
+          state.formal.validation = validation;
+          renderFormalResult(validation, null);
+          if (!validation.can_generate_formal_report) {
+            setStatus("正式檢核有阻擋項目，請先依中文提示補正資料。", true);
+            return { calculation, validation, report: null };
+          }
+          const warningCodes = (validation.findings || [])
+            .filter((finding) => finding.severity === "WARNING")
+            .map((finding) => finding.code);
+          if (warningCodes.length && options.acknowledged_warning_codes === undefined && typeof window?.confirm === "function") {
+            const confirmed = window.confirm(`檢核有 ${warningCodes.length} 項警示，確定要產生正式 PDF 嗎？`);
+            if (!confirmed) return { calculation, validation, report: null };
+          }
+          const acknowledged = options.acknowledged_warning_codes || warningCodes;
+          const report = await request(`${base}/formal-pdf`, {
+            method: "POST",
+            body: formalReportPayload(explicit, acknowledged),
+          });
+          state.formal = {
+            validation,
+            report: safeFormalReport(report),
+            validation_run_id: validation.validation_run_id,
+            document_id: report.document_id,
+            version_no: report.version_no,
+            download_path: report.download_path,
+          };
+          state.validation_run_id = validation.validation_run_id;
+          state.document_id = report.document_id;
+          state.version_no = report.version_no;
+          state.download_path = report.download_path;
+          renderFormalResult(validation, state.formal.report);
+          setStatus("正式計算、檢核與 PDF 產生完成，可以送出審查。", false);
+          return { calculation, validation, report: state.formal.report };
+        }
+
+        function makeRequestId() {
+          const source = typeof globalThis !== "undefined" ? globalThis.crypto : null;
+          if (source && typeof source.randomUUID === "function") return source.randomUUID();
+          const random = () => Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0");
+          return `${random()}-${random().slice(0, 4)}-4${random().slice(0, 3)}-${(8 + Math.floor(Math.random() * 4)).toString(16)}${random().slice(0, 3)}-${random()}${random()}`;
+        }
+
+        function buildSubmitCommand(reportPackage, formalValidation, formalReport, requestId) {
+          return {
+            request_id: requestId || makeRequestId(),
+            expected_case_version: reportPackage?.version_no,
+            source_validation_run_id: formalValidation?.validation_run_id,
+            source_report_document_id: formalReport?.document_id,
+          };
+        }
+
+        function safeDownloadPath(path) {
+          return typeof path === "string" && path.startsWith(API_PREFIX + "/valuation/") && !/[?#]/.test(path);
+        }
+
+        async function downloadAuthorizedBlob(downloadPath, filename = "正式報告.pdf") {
+          if (!safeDownloadPath(downloadPath)) throw new UiError(400, { message: "下載路徑格式不安全。" });
+          const token = state.token || getStoredToken();
+          const headers = token ? { Authorization: `Bearer ${token}` } : {};
+          const fetcher = typeof fetch === "function" ? fetch : window?.fetch;
+          if (typeof fetcher !== "function") throw new UiError(0, { message: "目前無法連線到估價服務。" });
+          const response = await fetcher(downloadPath, { method: "GET", headers });
+          logRequest("GET", downloadPath, response.status, { download: true });
+          if (!response.ok) throw new UiError(response.status, { message: "正式 PDF 下載失敗。" });
+          const blob = await response.blob();
+          const objectUrl = URL.createObjectURL(blob);
+          const anchor = document.createElement("a");
+          anchor.href = objectUrl;
+          anchor.download = filename;
+          anchor.textContent = "下載正式 PDF";
+          anchor.hidden = true;
+          document.body.appendChild(anchor);
+          try {
+            anchor.click();
+          } finally {
+            anchor.remove();
+            URL.revokeObjectURL(objectUrl);
+          }
+          return filename;
+        }
+
+        async function refreshHandoff() {
+          if (!state.selectedCaseId) return null;
+          const handoff = await request(`/valuation/cases/${state.selectedCaseId}/review-handoff`);
+          state.handoff = redactForLog(handoff);
+          renderHandoff(handoff);
+          if (["IN_REVIEW", "REVIEW_COMPLETED"].includes(handoff.case_status)) lockEditing(true);
+          return handoff;
+        }
+
+        async function submitForReview() {
+          if (!state.selectedCaseId) throw new UiError(400, { message: "請先選擇案件。" });
+          if (!state.formal.validation_run_id || !state.formal.document_id) {
+            throw new UiError(422, { message: "請先完成正式檢核與 PDF 產生。" });
+          }
+          if (!state.reportPackage) await loadReportPackage();
+          if (!state.reportPackage?.version_no) {
+            throw new UiError(422, { message: "找不到目前報告套件版本。" });
+          }
+          if (!state.submissionRequestId) state.submissionRequestId = makeRequestId();
+          state.request_id = state.submissionRequestId;
+          const command = buildSubmitCommand(
+            state.reportPackage,
+            state.formal.validation,
+            state.formal.report,
+            state.submissionRequestId,
+          );
+          const result = await request(`/valuation/cases/${state.selectedCaseId}/submit-for-review`, {
+            method: "POST",
+            body: command,
+          });
+          state.submissionRequestId = null;
+          state.request_id = null;
+          await refreshHandoff();
+          await refreshCases();
+          lockEditing(true);
+          setStatus("案件已送出審查，編輯功能已鎖定。", false);
+          return result;
+        }
+
+        function renderHandoff(handoff) {
+          const message = byId("correction-message");
+          const missing = byId("missing-items");
+          if (message) {
+            message.textContent = handoff?.correction?.message || "尚未產生修正通知。系統會在審查端指出需要調整的內容。";
+          }
+          if (missing) {
+            const items = handoff?.missing_items || [];
+            missing.innerHTML = items.length
+              ? items.map((item) => `<li>${escapeHtml(item.item_name || item.item_code)}${item.reason ? `：${escapeHtml(item.reason)}` : ""}</li>`).join("")
+              : "<li>目前沒有待補充資料。</li>";
+          }
+        }
+
+        function lockEditing(locked) {
+          state.locked = locked;
+          if (typeof document === "undefined") return;
+          document.querySelectorAll("#intake-form input, #intake-form select, #intake-form textarea, #intake-form button, #confirm-candidates, #run-formal-workflow").forEach((item) => {
+            item.disabled = locked;
+          });
+          const submit = byId("submit-for-review");
+          if (submit && locked) submit.disabled = true;
+        }
+
+        function renderWorkflowWarnings(workflow) {
+          const warnings = workflow?.warnings || workflow?.missing_items || [];
+          if (warnings.length) setStatus(warnings.map(codeLabel).join("；"), true);
+        }
+
+        function setStatus(message, error = false) {
+          const status = byId("status-message");
+          if (status) {
+            status.textContent = message;
+            status.classList.toggle("danger-text", Boolean(error));
+          }
+        }
+
+        function renderCases() {
+          const list = byId("case-items");
+          const selector = byId("case-selector");
+          if (!list) return;
+          const cases = state.cases || [];
+          list.innerHTML = cases.length
+            ? cases.map((item) => `<li><button class="case-item" type="button" data-case-id="${escapeHtml(item.case_id)}" aria-current="${item.case_id === state.selectedCaseId ? "true" : "false"}"><strong>${escapeHtml(item.case_no)}</strong><small>${escapeHtml(item.case_title)}｜${escapeHtml(statusLabel(item.case_status))}</small></button></li>`).join("")
+            : "<li><p class=\"reading-note\">目前沒有可顯示的案件。</p></li>";
+          if (selector) {
+            const selected = state.selectedCaseId;
+            selector.innerHTML = `<option value="">尚未選擇案件</option>` + cases.map((item) => `<option value="${escapeHtml(item.case_id)}"${item.case_id === selected ? " selected" : ""}>${escapeHtml(item.case_no)}｜${escapeHtml(item.case_title)}</option>`).join("");
+          }
+        }
+
+        async function loadCase(caseId) {
+          state.selectedCaseId = caseId;
+          state.case_id = caseId;
+          lockEditing(false);
+          state.reportPackage = null;
+          state.formal = { validation: null, report: null, validation_run_id: null, document_id: null, version_no: null, download_path: null };
+          state.validation_run_id = null;
+          state.document_id = null;
+          state.version_no = null;
+          state.download_path = null;
+          const result = await request(`/valuation/cases/${caseId}/auto-workflow/review`);
+          saveWorkflow(result);
+          if (result.report_id) await loadReportPackage();
+          await refreshHandoff().catch(() => undefined);
+          setStatus(`已載入案件：${result.case?.case_title || "估價案件"}。`, false);
+          renderCases();
+          return result;
+        }
+
+        async function refreshCases() {
+          state.cases = await request("/valuation/cases");
+          renderCases();
+          if (state.selectedCaseId && !state.cases.some((item) => item.case_id === state.selectedCaseId)) {
+            state.selectedCaseId = null;
+          }
+          return state.cases;
+        }
+
+        async function login(username, password) {
+          const result = await request("/auth/login", {
+            method: "POST",
+            body: { username, password },
+          });
+          state.token = result.access_token;
+          try {
+            sessionStorage.setItem("valuation.token", state.token);
+          } catch (_error) {
+            // Session storage is optional for the development test page.
+          }
+          const user = await request("/auth/me");
+          state.user = redactForLog(user);
+          const passwordField = byId("login-password");
+          if (passwordField) passwordField.value = "";
+          showWorkbench();
+          await refreshCases();
+          setStatus(`已登入 ${user.display_name || user.username}，請選擇案件或建立新案件。`, false);
+          return user;
+        }
+
+        function showWorkbench() {
+          const loginView = byId("login-view");
+          const workbench = byId("workbench-shell");
+          if (loginView) loginView.hidden = true;
+          if (workbench) workbench.hidden = false;
+        }
+
+        function showLogin(message) {
+          const loginView = byId("login-view");
+          const workbench = byId("workbench-shell");
+          if (loginView) loginView.hidden = false;
+          if (workbench) workbench.hidden = true;
+          state.token = null;
+          state.user = null;
+          state.selectedCaseId = null;
+          state.locked = false;
+          try {
+            sessionStorage.removeItem("valuation.token");
+          } catch (_error) {
+            // Session storage is optional for the development test page.
+          }
+          if (message) setStatus(message, false);
+        }
+
+        function attachEvents() {
+          const loginForm = byId("login-form");
+          loginForm?.addEventListener("submit", (event) => {
+            event.preventDefault();
+            const username = controlValue(loginForm, "username");
+            const password = controlValue(loginForm, "password");
+            login(username, password).catch((error) => setStatus(error.message, true));
+          });
+          byId("logout-button")?.addEventListener("click", () => showLogin("已登出測試台。"));
+          byId("refresh-cases")?.addEventListener("click", () => refreshCases().catch((error) => setStatus(error.message, true)));
+          byId("case-list")?.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-case-id]");
+            if (button) loadCase(button.dataset.caseId).catch((error) => setStatus(error.message, true));
+          });
+          byId("case-selector")?.addEventListener("change", (event) => {
+            if (event.target.value) loadCase(event.target.value).catch((error) => setStatus(error.message, true));
+          });
+          byId("intake-form")?.addEventListener("submit", (event) => {
+            event.preventDefault();
+            submitIntake({ form: event.currentTarget }).catch((error) => setStatus(error.message, true));
+          });
+          byId("confirm-candidates")?.addEventListener("click", () => confirmCandidates().catch((error) => setStatus(error.message, true)));
+          byId("refresh-candidates")?.addEventListener("click", () => state.selectedCaseId && loadCase(state.selectedCaseId).catch((error) => setStatus(error.message, true)));
+          byId("run-formal-workflow")?.addEventListener("click", () => runFormalWorkflow().catch((error) => setStatus(error.message, true)));
+          byId("download-formal-report")?.addEventListener("click", () => downloadAuthorizedBlob(state.formal.download_path, state.formal.report?.filename).catch((error) => setStatus(error.message, true)));
+          byId("submit-for-review")?.addEventListener("click", () => submitForReview().catch((error) => setStatus(error.message, true)));
+        }
+
+        function initialise() {
+          attachEvents();
+          const token = getStoredToken();
+          if (!token) return;
+          state.token = token;
+          showWorkbench();
+          request("/auth/me")
+            .then((user) => {
+              state.user = redactForLog(user);
+              return refreshCases();
+            })
+            .catch(() => showLogin("登入狀態已失效，請重新登入。"));
+        }
+
+        const valuationUiLogic = {
+          UiError,
+          request,
+          submitIntake,
+          confirmCandidates,
+          runFormalWorkflow,
+          submitForReview,
+          downloadAuthorizedBlob,
+          buildIntakeManifest,
+          buildConfirmationRequest,
+          canApplyCandidates,
+          redactForLog,
+          formalCalculationPayload,
+          formalReportPayload,
+          newRequestId: makeRequestId,
+          buildSubmitCommand,
+          fieldLabel,
+          statusLabel,
+          safeDownloadPath,
+          get state() {
+            return Object.assign({}, state, { token: REDACTED });
+          },
+          setToken(token) { state.token = token; },
+        };
+        if (typeof window !== "undefined") {
+          window.valuationUiLogic = valuationUiLogic;
+          if (typeof document !== "undefined") initialise();
+        }
+      })();
+    </script>
   </body>
 </html>

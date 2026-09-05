@@ -23,6 +23,12 @@ REQUIRED_MARKERS = (
     'id="request-log"',
     'id="status-message"',
     'id="copy-demo-command"',
+    'id="intake-form"',
+    'id="candidate-list"',
+    'id="confirm-candidates"',
+    'id="run-formal-workflow"',
+    'id="submit-for-review"',
+    "window.valuationUiLogic",
     "python -m app.valuation.demo seed",
 )
 
@@ -81,7 +87,8 @@ def test_valuation_test_ui_has_accessible_static_shell(monkeypatch) -> None:
     assert 'for="parcel-selector"' in html
     assert 'for="benchmark-selector"' in html
     assert 'for="document-selector"' in html
-    assert 'for="candidate-decision"' in html
+    assert 'for="source-files"' in html
+    assert 'for="category-override"' in html
     assert 'for="form-selector"' in html
 
 
@@ -114,5 +121,7 @@ def test_valuation_test_ui_does_not_expose_secrets_or_external_assets(monkeypatc
         html,
         re.IGNORECASE,
     )
-    assert "fetch(" not in html
+    assert not re.search(r'name="intake_manifest_json"', html)
+    assert "intake_manifest_json" in html
+    assert "fetch(" in html
     assert "XMLHttpRequest" not in html
