@@ -564,6 +564,34 @@ test("ignores a case response that finishes after logout", async () => {
   assert.equal(elements["request-log"].textContent, "尚無請求紀錄。");
 });
 
+test("ignores a failed case response that finishes after logout", async () => {
+  const elements = casePanelElements();
+  const caseSelector = fakeElement({ value: "case-2" });
+  elements["case-selector"] = caseSelector;
+  let resolveReview;
+  const { logic } = loadLogic({
+    document: fakeDocument(elements),
+    fetch: async (url) => {
+      if (url.endsWith("/auto-workflow/review")) {
+        return new Promise((resolve) => { resolveReview = resolve; });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    },
+  });
+
+  logic.saveWorkflow(candidateWorkflow());
+  caseSelector.getListener("change")({ target: caseSelector });
+  logic.showLogin("已登出測試台。");
+
+  resolveReview(jsonResponse({ message: "舊使用者未授權" }, 401));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(elements["status-message"].textContent, "已登出測試台。");
+  assert.equal(logic.state.case, null);
+  assert.equal(logic.state.selectedCaseId, null);
+  assert.equal(elements["request-log"].textContent, "尚無請求紀錄。");
+});
+
 test("new intake clears the old case before the intake response arrives", async () => {
   const elements = casePanelElements();
   let resolveIntake;

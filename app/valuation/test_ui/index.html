@@ -1207,12 +1207,13 @@
         }
 
         class UiError extends Error {
-          constructor(status, payload) {
+          constructor(status, payload, generation = viewGeneration) {
             const message = payload?.message || payload?.detail || "請求未成功，請查看畫面提示。";
             super(message);
             this.name = "UiError";
             this.status = status;
             this.payload = redactForLog(payload);
+            this.viewGeneration = generation;
           }
         }
 
@@ -1262,7 +1263,7 @@
             });
           } catch (error) {
             if (isCurrentView(generation)) logRequest(method, path, 0, { message: error?.message || "網路連線失敗" });
-            throw new UiError(0, { message: "目前無法連線到估價服務。" });
+            throw new UiError(0, { message: "目前無法連線到估價服務。" }, generation);
           }
           const contentType = response.headers?.get?.("content-type") || "";
           let payload = null;
@@ -1283,7 +1284,7 @@
             }
           }
           if (isCurrentView(generation)) logRequest(method, path, response.status, payload);
-          if (!response.ok) throw new UiError(response.status, payload);
+          if (!response.ok) throw new UiError(response.status, payload, generation);
           return payload;
         }
 
@@ -1819,11 +1820,23 @@
           const headers = token ? { Authorization: `Bearer ${token}` } : {};
           const fetcher = typeof fetch === "function" ? fetch : window?.fetch;
           if (typeof fetcher !== "function") throw new UiError(0, { message: "目前無法連線到估價服務。" });
-          const response = await fetcher(downloadPath, { method: "GET", headers });
+          let response;
+          try {
+            response = await fetcher(downloadPath, { method: "GET", headers });
+          } catch (error) {
+            if (!isCurrentView(generation)) return null;
+            throw new UiError(0, { message: "目前無法連線到估價服務。" }, generation);
+          }
           if (!isCurrentView(generation)) return null;
           logRequest("GET", downloadPath, response.status, { download: true });
-          if (!response.ok) throw new UiError(response.status, { message: "正式 PDF 下載失敗。" });
-          const blob = await response.blob();
+          if (!response.ok) throw new UiError(response.status, { message: "正式 PDF 下載失敗。" }, generation);
+          let blob;
+          try {
+            blob = await response.blob();
+          } catch (error) {
+            if (!isCurrentView(generation)) return null;
+            throw new UiError(0, { message: "正式 PDF 下載失敗。" }, generation);
+          }
           if (!isCurrentView(generation)) return null;
           const objectUrl = URL.createObjectURL(blob);
           const anchor = document.createElement("a");
@@ -1938,6 +1951,11 @@
           }
         }
 
+        function setStatusForError(error) {
+          if (error?.viewGeneration !== undefined && !isCurrentView(error.viewGeneration)) return;
+          setStatus(error?.message || "請求未成功，請查看畫面提示。", true);
+        }
+
         function renderCases() {
           const list = byId("case-items");
           const selector = byId("case-selector");
@@ -2036,26 +2054,26 @@
             event.preventDefault();
             const username = controlValue(loginForm, "username");
             const password = controlValue(loginForm, "password");
-            login(username, password).catch((error) => setStatus(error.message, true));
+            login(username, password).catch(setStatusForError);
           });
           byId("logout-button")?.addEventListener("click", () => showLogin("已登出測試台。"));
-          byId("refresh-cases")?.addEventListener("click", () => refreshCases().catch((error) => setStatus(error.message, true)));
+          byId("refresh-cases")?.addEventListener("click", () => refreshCases().catch(setStatusForError));
           byId("case-list")?.addEventListener("click", (event) => {
             const button = event.target.closest("[data-case-id]");
-            if (button) loadCase(button.dataset.caseId).catch((error) => setStatus(error.message, true));
+            if (button) loadCase(button.dataset.caseId).catch(setStatusForError);
           });
           byId("case-selector")?.addEventListener("change", (event) => {
-            if (event.target.value) loadCase(event.target.value).catch((error) => setStatus(error.message, true));
+            if (event.target.value) loadCase(event.target.value).catch(setStatusForError);
           });
           byId("intake-form")?.addEventListener("submit", (event) => {
             event.preventDefault();
-            submitIntake({ form: event.currentTarget }).catch((error) => setStatus(error.message, true));
+            submitIntake({ form: event.currentTarget }).catch(setStatusForError);
           });
-          byId("confirm-candidates")?.addEventListener("click", () => confirmCandidates().catch((error) => setStatus(error.message, true)));
-          byId("refresh-candidates")?.addEventListener("click", () => state.selectedCaseId && loadCase(state.selectedCaseId).catch((error) => setStatus(error.message, true)));
-          byId("run-formal-workflow")?.addEventListener("click", () => runFormalWorkflow().catch((error) => setStatus(error.message, true)));
-          byId("download-formal-report")?.addEventListener("click", () => downloadAuthorizedBlob(state.formal.download_path, state.formal.report?.filename).catch((error) => setStatus(error.message, true)));
-          byId("submit-for-review")?.addEventListener("click", () => submitForReview().catch((error) => setStatus(error.message, true)));
+          byId("confirm-candidates")?.addEventListener("click", () => confirmCandidates().catch(setStatusForError));
+          byId("refresh-candidates")?.addEventListener("click", () => state.selectedCaseId && loadCase(state.selectedCaseId).catch(setStatusForError));
+          byId("run-formal-workflow")?.addEventListener("click", () => runFormalWorkflow().catch(setStatusForError));
+          byId("download-formal-report")?.addEventListener("click", () => downloadAuthorizedBlob(state.formal.download_path, state.formal.report?.filename).catch(setStatusForError));
+          byId("submit-for-review")?.addEventListener("click", () => submitForReview().catch(setStatusForError));
         }
 
         function initialise() {
