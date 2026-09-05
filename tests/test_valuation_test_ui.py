@@ -123,5 +123,6 @@ def test_valuation_test_ui_does_not_expose_secrets_or_external_assets(monkeypatc
     )
     assert not re.search(r'name="intake_manifest_json"', html)
     assert "intake_manifest_json" in html
-    assert "fetch(" in html
+    assert 'const fetcher = typeof fetch === "function" ? fetch : window?.fetch;' in html
+    assert "response = await fetcher(apiPath(path)" in html
     assert "XMLHttpRequest" not in html
