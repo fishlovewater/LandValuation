@@ -1,0 +1,43 @@
+{
+  "description": "Expected records created by python -m app.history.demo seed",
+  "cases": [
+    {
+      "case_id": "71000000-0000-4000-8000-000000000001",
+      "case_no": "HIST-VAL-001",
+      "city_code": "31",
+      "city_name": "新北市",
+      "district_code": "3101",
+      "district_name": "板橋區",
+      "expected_visible_modules": ["valuation"],
+      "has_structured_data": true,
+      "has_document_metadata": false,
+      "history_result": "CORRECTION"
+    },
+    {
+      "case_id": "71000000-0000-4000-8000-000000000002",
+      "case_no": "HIST-REV-001",
+      "city_code": "31",
+      "city_name": "新北市",
+      "district_code": "3102",
+      "district_name": "三重區",
+      "expected_visible_modules": ["review"],
+      "has_structured_data": true,
+      "has_document_metadata": true,
+      "history_result": "PASSED",
+      "download_expected": "DOCUMENT_OBJECT_MISSING"
+    },
+    {
+      "case_id": "71000000-0000-4000-8000-000000000003",
+      "case_no": "HIST-BOTH-001",
+      "city_code": "31",
+      "city_name": "新北市",
+      "district_code": "3104",
+      "district_name": "中和區",
+      "expected_visible_modules": ["valuation", "review"],
+      "has_structured_data": true,
+      "has_document_metadata": true,
+      "history_result": "IN_PROGRESS",
+      "download_expected": "success"
+    }
+  ]
+}
