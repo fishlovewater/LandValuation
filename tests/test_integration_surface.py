@@ -9,3 +9,7 @@ def test_valuation_and_review_routes_coexist():
     assert "/api/v1/ai-assistant/sessions" in paths
     assert "/api/v1/valuation/cases/{case_id}/calculations" in paths
     assert "/api/v1/history/cases" in paths
+    assert "/api/v1/knowledge/search" in paths
+    assert "/api/v1/knowledge/ask" in paths
+    assert "/api/v1/knowledge/provider-status" in paths
+    assert "/api/v1/knowledge/cases/{case_id}/context" in paths

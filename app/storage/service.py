@@ -78,6 +78,18 @@ class StorageService:
         except S3Error as exc:
             raise StorageError("MinIO 下載失敗") from exc
 
+    async def list_objects(self, prefix: str) -> list:
+        if prefix != "knowledge/":
+            raise ValueError("only the knowledge/ prefix may be listed")
+        try:
+            return await run_in_threadpool(
+                lambda: list(
+                    self.client.list_objects(self.bucket, prefix=prefix, recursive=True)
+                )
+            )
+        except S3Error as exc:
+            raise StorageError("無法列出 MinIO 知識文件") from exc
+
     async def delete(self, object_key: str) -> None:
         key = validate_object_key(object_key)
         try:
