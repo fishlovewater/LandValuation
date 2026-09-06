@@ -361,7 +361,7 @@ async def test_revision_and_recheck_sessions_follow_case_review_correction_lock_
     locks = _RaceLocks()
 
     review = state.review
-    review.review_status = "IN_REVIEW"
+    review.review_status = "RETURNED_FOR_REVISION"
     request = SimpleNamespace(
         correction_request_id=uuid4(),
         review_id=review.review_id,

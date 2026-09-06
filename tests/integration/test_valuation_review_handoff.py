@@ -873,7 +873,15 @@ async def test_appraiser_submission_handoff_is_reviewable_and_statuses_pair(
 
         return_submission = submissions[1]
         return_case = handoff_data.cases[1]
-        original_return_fingerprint = return_submission.input_fingerprint
+        return_snapshot_record = await ReviewRepository(
+            session
+        ).get_submission_snapshot_record(
+            return_submission.submission_id,
+            review_id=return_submission.review_id,
+            case_id=return_case.case_id,
+        )
+        assert return_snapshot_record is not None
+        original_return_fingerprint = return_snapshot_record["input_fingerprint"]
         return_detail = await workbench.detail(return_submission.review_id)
         assert return_detail.submission_id == return_submission.submission_id
         assert return_detail.submission_no == 1
@@ -1084,7 +1092,7 @@ async def test_two_sessions_serialize_revision_and_recheck_locks(
         (case.case_id,),
     )
     admin_cursor.execute(
-        "UPDATE review.reviews SET review_status = 'IN_REVIEW' "
+        "UPDATE review.reviews SET review_status = 'RETURNED_FOR_REVISION' "
         "WHERE review_id = %s",
         (first.review_id,),
     )
@@ -1231,8 +1239,9 @@ async def test_revision_response_registration_rolls_back_submission_on_lineage_f
             ),
             reviewer.user_id,
         )
+        draft_request_id = draft.correction_request_id
         await session.commit()
-        await corrections.send(draft.correction_request_id, reviewer.user_id, uuid4())
+        await corrections.send(draft_request_id, reviewer.user_id, uuid4())
         await session.commit()
 
         response_document_id, response_validation_run_id = (
@@ -1284,7 +1293,7 @@ async def test_revision_response_registration_rolls_back_submission_on_lineage_f
                     "WHERE c.case_id = :case_id "
                     "  AND r.correction_request_id = :request_id"
                 ),
-                {"case_id": case.case_id, "request_id": draft.correction_request_id},
+                {"case_id": case.case_id, "request_id": draft_request_id},
             )
         ).one()
         restored_fingerprint = (
