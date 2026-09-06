@@ -54,6 +54,7 @@ class BedrockKnowledgeProvider:
             )
         try:
             import boto3
+            from botocore.config import Config
         except ImportError as exc:
             raise AppError(
                 "AI_PROVIDER_UNAVAILABLE",
@@ -62,7 +63,15 @@ class BedrockKnowledgeProvider:
             ) from exc
 
         def invoke() -> dict:
-            client = boto3.client("bedrock-runtime", region_name=self.settings.bedrock_region)
+            client = boto3.client(
+                "bedrock-runtime",
+                region_name=self.settings.bedrock_region,
+                config=Config(
+                    connect_timeout=5,
+                    read_timeout=self.settings.bedrock_timeout_seconds,
+                    retries={"max_attempts": 2, "mode": "standard"},
+                ),
+            )
             return client.converse(
                 modelId=self.settings.bedrock_model_id,
                 system=[

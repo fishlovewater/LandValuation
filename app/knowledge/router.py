@@ -56,7 +56,9 @@ async def _retrieval_candidates(
 ):
     repository = KnowledgeRepository(session)
     settings = get_settings()
-    object_infos = await storage.list_objects("knowledge/")
+    object_infos = await storage.list_objects(
+        "knowledge/", limit=settings.knowledge_runtime_max_objects
+    )
     metadata_by_key = await repository.documents_by_object_key()
     inventory = {
         object_info.object_name: metadata_by_key.get(object_info.object_name)
@@ -98,7 +100,9 @@ async def _source_document(document_id: UUID, repository: KnowledgeRepository, s
     if document is not None:
         return document
     settings = get_settings()
-    for object_info in await storage.list_objects("knowledge/"):
+    for object_info in await storage.list_objects(
+        "knowledge/", limit=settings.knowledge_runtime_max_objects
+    ):
         if object_info.object_name.endswith("/"):
             continue
         virtual_document = virtual_document_from_object(settings.minio_bucket, object_info)

@@ -78,7 +78,7 @@ class CaseContextRepository:
                             f.title, f.description, f.status, f.created_at
                      FROM review.findings f
                      WHERE f.review_id = :review_id
-                       AND f.validation_run_id = :validation_run_id
+                       AND f.validation_run_id IS NOT DISTINCT FROM :validation_run_id
                     ORDER BY CASE severity
                         WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2
                         WHEN 'MEDIUM' THEN 3 ELSE 4 END,

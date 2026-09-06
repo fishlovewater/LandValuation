@@ -317,6 +317,67 @@ def test_provider_factory_supports_codex_and_bedrock_without_credentials() -> No
     assert bedrock.configured() is True
 
 
+@pytest.mark.asyncio
+async def test_bedrock_provider_configures_bounded_socket_timeouts_and_retries(
+    monkeypatch,
+) -> None:
+    item = candidate("市價查估應依明確法源辦理。")
+    chunk_id = str(item.chunk.chunk_id)
+    captured = {}
+
+    class FakeClient:
+        def converse(self, **_kwargs):
+            return {
+                "output": {
+                    "message": {
+                        "content": [
+                            {
+                                "text": json.dumps(
+                                    {
+                                        "answer": "市價查估應依明確法源辦理。【來源1】",
+                                        "cited_chunk_ids": [chunk_id],
+                                        "evidence": [
+                                            {
+                                                "chunk_id": chunk_id,
+                                                "supporting_quote": "市價查估應依明確法源辦理。",
+                                                "supported_claim": "市價查估應依明確法源辦理。",
+                                            }
+                                        ],
+                                        "needs_clarification": False,
+                                        "clarification_question": None,
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            }
+                        ]
+                    }
+                }
+            }
+
+    def fake_client(*args, **kwargs):
+        captured.update(kwargs)
+        return FakeClient()
+
+    import boto3
+
+    monkeypatch.setattr(boto3, "client", fake_client)
+    settings = Settings(
+        app_env="test",
+        bedrock_region="ap-northeast-1",
+        bedrock_model_id="example-model-id",
+        bedrock_timeout_seconds=42,
+    )
+
+    await BedrockKnowledgeProvider(settings).answer(
+        question="市價查估依據是什麼？", candidates=[item]
+    )
+
+    config = captured["config"]
+    assert config.connect_timeout == 5
+    assert config.read_timeout == 42
+    assert config.retries == {"max_attempts": 2, "mode": "standard"}
+
+
 @pytest.mark.parametrize("app_env", ["production", "staging"])
 def test_provider_factory_rejects_codex_cli_outside_development_and_test(app_env) -> None:
     try:

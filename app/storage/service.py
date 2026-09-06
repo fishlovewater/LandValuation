@@ -1,6 +1,7 @@
 import hashlib
 import re
 from datetime import timedelta
+from itertools import islice
 from typing import BinaryIO
 
 from fastapi.concurrency import run_in_threadpool
@@ -78,15 +79,22 @@ class StorageService:
         except S3Error as exc:
             raise StorageError("MinIO 下載失敗") from exc
 
-    async def list_objects(self, prefix: str) -> list:
+    async def list_objects(self, prefix: str, *, limit: int | None = None) -> list:
         if prefix != "knowledge/":
             raise ValueError("only the knowledge/ prefix may be listed")
-        try:
-            return await run_in_threadpool(
-                lambda: list(
-                    self.client.list_objects(self.bucket, prefix=prefix, recursive=True)
-                )
+        if limit is not None and limit < 0:
+            raise ValueError("limit must be non-negative")
+
+        def collect_objects() -> list:
+            objects = self.client.list_objects(
+                self.bucket, prefix=prefix, recursive=True
             )
+            if limit is None:
+                return list(objects)
+            return list(islice(objects, limit + 1))
+
+        try:
+            return await run_in_threadpool(collect_objects)
         except S3Error as exc:
             raise StorageError("無法列出 MinIO 知識文件") from exc
 

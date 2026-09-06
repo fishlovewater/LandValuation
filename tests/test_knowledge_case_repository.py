@@ -86,11 +86,19 @@ class _Session:
             return _Result([row])
         if "FROM review.findings" in sql:
             rows = self.findings
-            if "validation_run_id = :validation_run_id" in sql:
+            if "validation_run_id IS NOT DISTINCT FROM :validation_run_id" in sql:
                 rows = [
                     row
                     for row in rows
                     if row["validation_run_id"] == params["validation_run_id"]
+                ]
+            elif "validation_run_id = :validation_run_id" in sql:
+                # PostgreSQL's ``NULL = NULL`` is UNKNOWN, not TRUE.
+                run_id = params["validation_run_id"]
+                rows = [
+                    row
+                    for row in rows
+                    if run_id is not None and row["validation_run_id"] == run_id
                 ]
             return _Result(rows)
         if "FROM review.missing_items" in sql:
@@ -140,6 +148,38 @@ async def test_latest_review_excludes_stale_findings_but_keeps_review_missing_it
     )
     assert findings_call is not None
     assert findings_call[1]["validation_run_id"] == current_run_id
+
+
+@pytest.mark.asyncio
+async def test_latest_review_includes_legacy_findings_when_latest_run_is_null():
+    review_id = uuid4()
+    stale_run_id = uuid4()
+    legacy_finding_id = uuid4()
+    session = _Session(
+        {
+            "review_id": review_id,
+            "review_type": "AI_ASSISTED",
+            "review_status": "REVIEW_REQUIRED",
+            "started_at": "2026-09-06T00:00:00Z",
+            "completed_at": None,
+            "latest_validation_run_id": None,
+        },
+        [
+            {"finding_id": uuid4(), "validation_run_id": stale_run_id},
+            {"finding_id": legacy_finding_id, "validation_run_id": None},
+        ],
+        [],
+    )
+
+    result = await CaseContextRepository(session).latest_review(uuid4())
+
+    assert [item["finding_id"] for item in result["findings"]] == [legacy_finding_id]
+    findings_sql = next(
+        sql for sql, _params in session.calls if "FROM review.findings" in sql
+    )
+    assert "f.validation_run_id IS NOT DISTINCT FROM :validation_run_id" in " ".join(
+        findings_sql.split()
+    )
 
 
 @pytest.mark.asyncio
