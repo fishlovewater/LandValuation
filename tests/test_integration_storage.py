@@ -27,7 +27,7 @@ async def test_minio_upload_download_delete_round_trip() -> None:
             len(payload),
             "text/plain",
         )
-        assert result["bucket_name"] == "land-valuation"
+        assert result["bucket_name"] == service.bucket
         assert result["object_key"] == object_key
 
         response = await service.download(object_key)

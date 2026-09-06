@@ -79,6 +79,7 @@ services:
     command: ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"]
     environment:
       APP_ENV: test
+      RUN_INTEGRATION: "1"
       TEST_RUN_ID: ${TEST_RUN_ID}
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
