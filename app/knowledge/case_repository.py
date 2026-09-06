@@ -39,18 +39,24 @@ class CaseContextRepository:
                     SELECT r.review_id, r.review_type, r.review_status,
                            r.started_at, r.completed_at,
                            r.latest_validation_run_id,
-                           rs.overall_risk_level, rs.risk_score, rs.summary,
-                           COALESCE(rs.category_scores, '{}'::jsonb) AS category_scores
+                           risk.overall_risk_level, risk.risk_score, risk.summary,
+                           COALESCE(risk.category_scores, '{}'::jsonb) AS category_scores
                     FROM review.reviews r
-                    LEFT JOIN review.risk_summaries rs
-                        ON rs.review_id = r.review_id
-                       AND (
-                           rs.validation_run_id = r.latest_validation_run_id
-                           OR (
-                               r.latest_validation_run_id IS NULL
-                               AND rs.validation_run_id IS NULL
-                           )
-                       )
+                    LEFT JOIN LATERAL (
+                        SELECT rs.overall_risk_level, rs.risk_score, rs.summary,
+                               rs.category_scores
+                        FROM review.risk_summaries rs
+                        WHERE rs.review_id = r.review_id
+                          AND (
+                              rs.validation_run_id = r.latest_validation_run_id
+                              OR (
+                                  r.latest_validation_run_id IS NULL
+                                  AND rs.validation_run_id IS NULL
+                              )
+                          )
+                        ORDER BY rs.generated_at DESC, rs.risk_summary_id DESC
+                        LIMIT 1
+                    ) risk ON true
                     WHERE r.case_id = :case_id
                     ORDER BY r.started_at DESC, r.review_id DESC
                     LIMIT 1

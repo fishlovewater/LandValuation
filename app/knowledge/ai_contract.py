@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import unicodedata
 from dataclasses import dataclass
 from typing import Iterable, Protocol
 from uuid import UUID
@@ -133,7 +132,7 @@ def source_grounding_instructions() -> str:
 
 【輸出規格】
 只回傳符合 JSON schema 的 JSON，不要 Markdown、程式碼區塊、推理過程或額外欄位。
-- answer：直接、可讀、保守的答案。每個重要結論後使用【來源1】、【來源2】等標記，順序必須對應 cited_chunk_ids 與 evidence 的順序。
+- answer：直接、可讀、保守的答案。每個重要結論後使用【來源1】、【來源2】等標記，順序必須對應 cited_chunk_ids 與 evidence 的順序。只要 cited_chunk_ids 或 evidence 非空（即使 needs_clarification 為 true），也必須保留這些標記。
 - cited_chunk_ids：只列出實際直接支持答案的 chunk_id；不可重複、不可列出未使用的候選。
 - evidence：每一筆必含 chunk_id、supporting_quote、supported_claim。supporting_quote 必須是原始 content 中連續且逐字可找到的文字，至少 8 個字元；supported_claim 必須是 answer 中由該引文直接支持的那一項主張。
 - evidence 的 chunk_id 集合與 cited_chunk_ids 必須完全相同，且順序相同。
@@ -226,7 +225,7 @@ def parse_answer(output: str, packet: list[dict]) -> AiAnswer:
         validation_errors.append("EVIDENCE_QUOTE_NOT_VERIFIABLE_IN_SOURCE")
     if not needs_clarification and not cited_chunk_ids:
         validation_errors.append("SUPPORTED_ANSWER_WITHOUT_CITATION")
-    if not needs_clarification:
+    if cited_chunk_ids or evidence:
         marker_tokens = re.findall(r"【來源([^】]*)】", answer)
         marker_numbers = [int(token) for token in marker_tokens if token.isdigit()]
         expected_marker_numbers = set(range(1, len(cited_chunk_ids) + 1))
@@ -254,7 +253,6 @@ def parse_answer(output: str, packet: list[dict]) -> AiAnswer:
 
 
 def _normalise_for_evidence(value: str) -> str:
-    # PDF extraction and model output commonly differ only in full-width
-    # punctuation or whitespace. NFKC keeps the check text-grounded without
-    # requiring a visually identical rendering of those characters.
-    return "".join(unicodedata.normalize("NFKC", value).split())
+    # Allow only newline representation differences. Keep all other spaces and
+    # paragraph boundaries so a quote cannot be assembled from separate text.
+    return value.replace("\r\n", "\n").replace("\r", "\n")

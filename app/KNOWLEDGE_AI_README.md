@@ -14,6 +14,15 @@ Knowledge AI 是第四子系統。它提供「有來源可查」的法規、規�
 
 MinIO 保存原始檔。對沒有 `knowledge.chunks` 的文件，系統會在提問時直接下載、臨時擷取文字並只在記憶體中切成可引用片段；它不會寫入 chunk，也不會改動文件狀態。已存在的 chunks 只作為可重用快取。
 
+為避免一次請求因 MinIO 物件過多或檔案過大耗盡資源，runtime 擷取有明確上限：
+`KNOWLEDGE_RUNTIME_MAX_OBJECTS`（預設 100）、
+`KNOWLEDGE_RUNTIME_MAX_OBJECT_BYTES`（預設 10 MiB）、
+`KNOWLEDGE_RUNTIME_MAX_TOTAL_BYTES`（預設 50 MiB）及
+`KNOWLEDGE_RUNTIME_MAX_TOTAL_CHARACTERS`（預設 200,000）。MinIO 列舉 metadata
+若提供物件大小，會先在下載前拒絕超限來源；未知大小仍以 defensive read cap
+限制下載。超限來源會略過並回傳為 unreadable source，不會改變既有 Valuation／Review
+storage contract 或寫入 `knowledge.chunks`。
+
 ## 2. 可信來源規則
 
 知識搜尋和問答只納入同時符合下列條件的文件：
@@ -71,7 +80,7 @@ MinIO 保存原始檔。對沒有 `knowledge.chunks` 的文件，系統會在提
 驗證答案；它不是 `SUPPORTED`。`SUPPORTED` 只會在 AI 回傳下列完整證據鏈時出現：
 
 1. `answer` 的每個重要結論都附有 `【來源1】`、`【來源2】` 等標記；
-2. 每個 citation 的 `supporting_quote` 是該 chunk 原文中可逐字找到、至少八個字的連續文字；
+2. 每個 citation 的 `supporting_quote` 是該 chunk 原文中可逐字找到、至少八個字的連續文字；後端只正規化 CRLF/LF 行尾表示，不會移除語義空白或段落邊界；
 3. 每個 citation 的 `supported_claim` 說明它支持答案中的哪一項主張；
 4. 後端確認 citation 的 chunk ID 是本次經權限篩選後提供給模型的來源，且 `supporting_quote` 確實存在於該 chunk；
 5. 若模型只能找到程序、經費、表單或關鍵字相近文字，而不是問題所問的法源／條件／公式，必須回傳 `CLARIFICATION_REQUIRED`，不能標為 `SUPPORTED`。
@@ -137,6 +146,10 @@ CODEX_CLI_COMMAND=codex
 # CODEX_CLI_MODEL=
 CODEX_CLI_TIMEOUT_SECONDS=180
 KNOWLEDGE_AI_MAX_SOURCE_CHARACTERS=60000
+KNOWLEDGE_RUNTIME_MAX_OBJECTS=100
+KNOWLEDGE_RUNTIME_MAX_OBJECT_BYTES=10485760
+KNOWLEDGE_RUNTIME_MAX_TOTAL_BYTES=52428800
+KNOWLEDGE_RUNTIME_MAX_TOTAL_CHARACTERS=200000
 ```
 
 先呼叫 `GET /api/v1/knowledge/provider-status`。Codex 模式中，只有

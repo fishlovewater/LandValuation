@@ -59,6 +59,14 @@ multi-agent/login shell 的 CLI 設定，以及 allowlisted subprocess environme
 共同限制邊界。完整 provider 設定與使用方式見
 [app/KNOWLEDGE_AI_README.md](app/KNOWLEDGE_AI_README.md)。
 
+Knowledge AI 對沒有既有 chunks 的 MinIO 文件採按請求擷取。可在 `.env` 以
+`KNOWLEDGE_RUNTIME_MAX_OBJECTS`、`KNOWLEDGE_RUNTIME_MAX_OBJECT_BYTES`、
+`KNOWLEDGE_RUNTIME_MAX_TOTAL_BYTES` 與 `KNOWLEDGE_RUNTIME_MAX_TOTAL_CHARACTERS`
+限制單次處理的物件數、單一文件 bytes、總下載 bytes 與總文字字元數；預設值分別
+為 100、10 MiB、50 MiB、200,000；可設定範圍分別為 1–1,000、1 KiB–100 MiB、
+1 KiB–500 MiB、1,000–2,000,000。MinIO 列舉的物件大小會在下載前檢查，未知大小的
+來源仍以讀取上限防護，超過限制的來源會略過並列入 unreadable sources。
+
 若現有 PostgreSQL volume 已由舊版 `database/init` SQL 建好相同結構，不可再執行初始 migration；請先備份並核對 schema，然後執行：
 
 ```powershell

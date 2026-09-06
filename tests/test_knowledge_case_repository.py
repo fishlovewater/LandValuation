@@ -41,29 +41,34 @@ class _Session:
                 normalized_sql = " ".join(sql.split())
                 if "rs.validation_run_id = r.latest_validation_run_id" in normalized_sql:
                     if row["latest_validation_run_id"] is not None:
-                        summary = next(
-                            (
-                                item
-                                for item in self.risk_summaries
-                                if item["validation_run_id"]
-                                == row["latest_validation_run_id"]
-                            ),
-                            None,
-                        )
+                        summaries = [
+                            item
+                            for item in self.risk_summaries
+                            if item["validation_run_id"]
+                            == row["latest_validation_run_id"]
+                        ]
                     elif (
                         "r.latest_validation_run_id IS NULL" in normalized_sql
                         and "rs.validation_run_id IS NULL" in normalized_sql
                     ):
-                        summary = next(
-                            (
-                                item
-                                for item in self.risk_summaries
-                                if item["validation_run_id"] is None
-                            ),
-                            None,
-                        )
+                        summaries = [
+                            item
+                            for item in self.risk_summaries
+                            if item["validation_run_id"] is None
+                        ]
                     else:
-                        summary = None
+                        summaries = []
+                    summary = (
+                        max(
+                            summaries,
+                            key=lambda item: (
+                                item.get("generated_at") or "",
+                                str(item.get("risk_summary_id") or ""),
+                            ),
+                        )
+                        if "LEFT JOIN LATERAL" in normalized_sql and summaries
+                        else (summaries[0] if summaries else None)
+                    )
                 else:
                     summary = self.risk_summaries[0] if self.risk_summaries else None
                 row.update(
@@ -263,3 +268,49 @@ async def test_latest_review_uses_null_legacy_risk_summary_only_when_latest_run_
     assert result["risk_score"] == 20
     assert result["summary"] == "legacy summary"
     assert result["category_scores"] == {"legacy": True}
+
+
+@pytest.mark.asyncio
+async def test_latest_review_selects_one_deterministic_legacy_risk_summary():
+    session = _Session(
+        {
+            "review_id": uuid4(),
+            "review_type": "AI_ASSISTED",
+            "review_status": "REVIEW_REQUIRED",
+            "started_at": "2026-09-06T00:00:00Z",
+            "completed_at": None,
+            "latest_validation_run_id": None,
+        },
+        [],
+        [],
+        [
+            {
+                "validation_run_id": None,
+                "overall_risk_level": "LOW",
+                "risk_score": 10,
+                "summary": "older legacy summary",
+                "category_scores": {},
+                "generated_at": "2026-09-05T00:00:00Z",
+                "risk_summary_id": uuid4(),
+            },
+            {
+                "validation_run_id": None,
+                "overall_risk_level": "HIGH",
+                "risk_score": 90,
+                "summary": "newer legacy summary",
+                "category_scores": {},
+                "generated_at": "2026-09-06T00:00:00Z",
+                "risk_summary_id": uuid4(),
+            },
+        ],
+    )
+
+    result = await CaseContextRepository(session).latest_review(uuid4())
+
+    review_sql = next(
+        sql for sql, _params in session.calls if "FROM review.reviews" in sql
+    )
+    normalized_sql = " ".join(review_sql.split())
+    assert "LEFT JOIN LATERAL" in normalized_sql
+    assert "ORDER BY rs.generated_at DESC, rs.risk_summary_id DESC LIMIT 1" in normalized_sql
+    assert result["summary"] == "newer legacy summary"

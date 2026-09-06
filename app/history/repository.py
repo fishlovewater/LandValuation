@@ -369,7 +369,7 @@ class HistoryRepository:
             return {"reviews": [], "findings": [], "risk_summaries": [], "decisions": []}
         review_ids = tuple(row["review_id"] for row in reviews)
         findings = await self._review_rows("review.findings", review_ids)
-        risks = await self._review_rows("review.risk_summaries", review_ids)
+        risks = await self._risk_summary_rows(review_ids)
         decisions = await self._review_rows("review.decisions", review_ids)
         return {
             "reviews": reviews,
@@ -391,6 +391,28 @@ class HistoryRepository:
                 text(f"SELECT * FROM {table} WHERE review_id IN :review_ids").bindparams(
                     bindparam("review_ids", expanding=True)
                 ),
+                {"review_ids": review_ids},
+            )
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
+    async def _risk_summary_rows(self, review_ids: tuple[UUID, ...]):
+        rows = (
+            await self.session.execute(
+                text(
+                    """SELECT rs.*
+                       FROM review.risk_summaries rs
+                       JOIN review.reviews r ON r.review_id = rs.review_id
+                       WHERE rs.review_id IN :review_ids
+                         AND (
+                             rs.validation_run_id = r.latest_validation_run_id
+                             OR (
+                                 r.latest_validation_run_id IS NULL
+                                 AND rs.validation_run_id IS NULL
+                             )
+                         )
+                       ORDER BY rs.generated_at DESC, rs.risk_summary_id DESC"""
+                ).bindparams(bindparam("review_ids", expanding=True)),
                 {"review_ids": review_ids},
             )
         ).mappings().all()

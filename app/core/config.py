@@ -43,6 +43,16 @@ class Settings(BaseSettings):
 
     knowledge_answer_provider: str = "evidence_only"
     knowledge_ai_max_source_characters: int = Field(default=60000, ge=2000, le=200000)
+    knowledge_runtime_max_objects: int = Field(default=100, ge=1, le=1000)
+    knowledge_runtime_max_object_bytes: int = Field(
+        default=10 * 1024 * 1024, ge=1024, le=100 * 1024 * 1024
+    )
+    knowledge_runtime_max_total_bytes: int = Field(
+        default=50 * 1024 * 1024, ge=1024, le=500 * 1024 * 1024
+    )
+    knowledge_runtime_max_total_characters: int = Field(
+        default=200000, ge=1000, le=2000000
+    )
     codex_cli_command: str = "codex"
     codex_cli_model: str | None = None
     codex_cli_timeout_seconds: int = Field(default=180, ge=10, le=900)

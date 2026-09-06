@@ -46,3 +46,30 @@ def test_knowledge_answer_provider_defaults_to_evidence_only(monkeypatch):
     settings = Settings(app_env="test", _env_file=None)
 
     assert settings.knowledge_answer_provider == "evidence_only"
+
+
+def test_knowledge_runtime_limits_have_bounded_defaults():
+    settings = Settings(app_env="test", _env_file=None)
+
+    assert settings.knowledge_runtime_max_objects == 100
+    assert settings.knowledge_runtime_max_object_bytes == 10 * 1024 * 1024
+    assert settings.knowledge_runtime_max_total_bytes == 50 * 1024 * 1024
+    assert settings.knowledge_runtime_max_total_characters == 200000
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("knowledge_runtime_max_objects", 0),
+        ("knowledge_runtime_max_objects", 1001),
+        ("knowledge_runtime_max_object_bytes", 1023),
+        ("knowledge_runtime_max_object_bytes", 100 * 1024 * 1024 + 1),
+        ("knowledge_runtime_max_total_bytes", 1023),
+        ("knowledge_runtime_max_total_bytes", 500 * 1024 * 1024 + 1),
+        ("knowledge_runtime_max_total_characters", 999),
+        ("knowledge_runtime_max_total_characters", 2000001),
+    ],
+)
+def test_knowledge_runtime_limits_reject_out_of_bounds(field, value):
+    with pytest.raises(ValidationError):
+        Settings(app_env="test", _env_file=None, **{field: value})
