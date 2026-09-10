@@ -1,0 +1,15 @@
+* { box-sizing: border-box; }
+html { color: var(--text); background: var(--bg); font-family: Inter, "Noto Sans TC", system-ui, sans-serif; }
+body { margin: 0; min-width: 320px; }
+button, input, select, textarea { font: inherit; }
+button, a { min-height: 44px; }
+input, select, textarea { width: 100%; min-height: 44px; padding: .7rem .8rem; border: 1px solid var(--border); border-radius: 9px; background: #fff; color: var(--text); }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .6; }
+:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 2px; }
+.primary-button { border: 0; border-radius: 9px; padding: .7rem 1rem; background: var(--accent); color: white; font-weight: 700; }
+.primary-button:hover { background: var(--accent-strong); }
+.text-button { border: 1px solid var(--border); border-radius: 9px; padding: .55rem .8rem; background: var(--surface); color: var(--text); }
+.eyebrow { color: var(--accent); font-size: .76rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.form-error { color: var(--danger); }
+.state-card { padding: 2rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }

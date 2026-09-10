@@ -1,0 +1,1 @@
+<template><section class="state-card"><h1>沒有存取權限</h1><p>此帳號未具備智慧審查所需權限。</p></section></template>
