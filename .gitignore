@@ -25,3 +25,16 @@ Thumbs.db
 
 # Controller scratch artifacts
 .superpowers/
+
+# Frontend generated artifacts
+frontend/node_modules/
+frontend/dist/
+
+# Local workspace/tool state
+.worktrees/
+.serena/
+.tmp/
+
+# Frontend test artifacts
+frontend/test-results/
+frontend/playwright-report/
