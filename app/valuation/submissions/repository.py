@@ -437,7 +437,11 @@ class SubmissionRepository:
             UUID(selection.rule.rule_version_id),
             case_context["form_codes"],
         )
-        if not validation_rules:
+        # The immutable Valuation formal-validation snapshot is authoritative
+        # for this handoff.  Legacy submissions without that snapshot still
+        # require Review-specific field rules, but a completed formal report
+        # may legitimately have no additional F01-only Review rules.
+        if not validation_rules and not validation_run.input_snapshot:
             raise AppError(
                 "SUBMISSION_VALIDATION_RULES_REQUIRED",
                 "送審前正式規則版本必須有啟用的審查規則",

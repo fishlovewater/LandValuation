@@ -341,6 +341,42 @@ class ComparisonTargetRecord(Base):
     condition_notes: Mapped[str | None] = mapped_column(Text)
 
 
+class TransactionCaseRecord(Base):
+    __tablename__ = "transaction_cases"
+    __table_args__ = {"schema": "valuation"}
+
+    transaction_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    case_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True))
+    form_instance_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    transaction_no: Mapped[str] = mapped_column(String(80))
+    price_period: Mapped[str | None] = mapped_column(String(50))
+    price_zone_no: Mapped[str | None] = mapped_column(String(30))
+    transaction_date: Mapped[date] = mapped_column(Date)
+    subject_address: Mapped[str | None] = mapped_column(String(500))
+    transaction_total_price: Mapped[Decimal] = mapped_column(Numeric(20, 2))
+    normal_total_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
+    land_area_sqm: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))
+    building_cost_total: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
+    land_rights_unit_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
+    normal_land_unit_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
+    article_7_8_adjustment_rate: Mapped[Decimal] = mapped_column(
+        Numeric(9, 6), default=0, server_default=text("0")
+    )
+    article_7_8_reason: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
+    record_status: Mapped[str] = mapped_column(
+        String(20), default="DRAFT", server_default=text("'DRAFT'")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class ComparisonFactorValueRecord(Base):
     __tablename__ = "comparison_factor_values"
     __table_args__ = {"schema": "valuation"}
@@ -606,6 +642,11 @@ class RuleVersionRecord(Base):
     source_checksum_sha256: Mapped[str | None] = mapped_column(String(64))
     notes: Mapped[str | None] = mapped_column(Text)
     source_document_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    applicable_case_type: Mapped[str | None] = mapped_column(String(50))
+    applicable_district_code: Mapped[str | None] = mapped_column(String(20))
+    selection_priority: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0")
+    )
     jurisdiction_code: Mapped[str | None] = mapped_column(String(50))
     district_scope: Mapped[dict | None] = mapped_column(JSONB)
     land_use_types: Mapped[list] = mapped_column(

@@ -41,6 +41,58 @@ def test_formal_rule_guard_accepts_verified_citywide_commercial_rule():
     assert FormalReportService._validate_rule(_case(), _rule()) == "COMMERCIAL"
 
 
+def test_formal_validation_snapshot_preserves_blank_values_and_map_identity():
+    case_id = uuid4()
+    report_id = uuid4()
+    document_id = uuid4()
+    group_id = uuid4()
+    records = {
+        code: SimpleNamespace(
+            form_instance_id=uuid4(), version_no=2, form_status="DRAFT"
+        )
+        for code in ("S01", "F02-RF", "F02")
+    }
+    s01 = SimpleNamespace(model_dump=lambda **_kwargs: {"district_name": None})
+    regional = SimpleNamespace(model_dump=lambda **_kwargs: {"factor_rows": []})
+    comparison = SimpleNamespace(
+        model_dump=lambda **_kwargs: {"benchmark_notes": None},
+        calculation_snapshot={"benchmark_comparison_price": "109000"},
+    )
+    document = SimpleNamespace(
+        document_id=document_id,
+        document_group_id=group_id,
+        version_no=2,
+        checksum_sha256="a" * 64,
+        original_filename="map.png",
+        mime_type="image/png",
+    )
+    case = SimpleNamespace(
+        case_id=case_id,
+        case_no="CASE-1",
+        case_title="Test case",
+        case_type="valuation",
+        valuation_base_date=date(2026, 9, 8),
+        city_code="65000000",
+        district_code="65000010",
+        land_use_type="COMMERCIAL",
+    )
+
+    snapshot = FormalReportService._validation_input_snapshot(
+        case=case,
+        report_id=report_id,
+        records=records,
+        s01=s01,
+        regional=regional,
+        comparison=comparison,
+        documents={"map-section-sketch": document},
+        fingerprint="fingerprint-1",
+    )
+
+    assert snapshot["case_version"] == 2
+    assert snapshot["report"]["data"]["S01"]["district_name"] is None
+    assert snapshot["map_documents"]["map-section-sketch"]["document_id"] == str(document_id)
+
+
 @pytest.mark.parametrize(
     ("case", "rule", "expected_code"),
     [
@@ -128,3 +180,78 @@ async def test_formal_validation_rechecks_request_after_case_lock():
         ("case_lock", True),
         "request_lookup",
     ]
+
+
+@pytest.mark.asyncio
+async def test_formal_calculation_can_skip_optional_comparison_analysis():
+    case_id = uuid4()
+    report_id = uuid4()
+    user = SimpleNamespace(user_id=uuid4())
+    case = _case(case_id=case_id)
+    case.case_no = "CASE-OPTIONAL"
+    case.case_title = "Optional comparison"
+    case.case_type = "valuation"
+    case.city_code = "65000000"
+    regional = SimpleNamespace(
+        rule_version_id=uuid4(),
+        benchmark_land_id=None,
+        comparison_analysis_id=None,
+        factor_rows=[],
+        calculation_status="NOT_CALCULATED",
+        calculation_snapshot={},
+        calculated_at=None,
+        calculated_by_user_id=None,
+        regional_adjustment_rates={},
+        model_dump=lambda **_: {},
+    )
+    comparison = SimpleNamespace(
+        comparison_workflow_enabled=False,
+        comparison_targets=[],
+        benchmark_comparison_price=None,
+        calculation_status="NOT_CALCULATED",
+        calculation_snapshot={},
+        calculated_at=None,
+        calculated_by_user_id=None,
+        benchmark_notes="",
+        model_dump=lambda **_: {},
+    )
+    records = {"F02-RF": object(), "F02": object()}
+    rule = _rule(rule_version_id=regional.rule_version_id, version_no=1)
+    saved = []
+
+    class _Pages:
+        async def _ensure_default_formal_rule(self, case, record, data, user):
+            del case, record, user
+            return data
+
+        async def _save_data(self, record, data, user):
+            del record, user
+            saved.append(data)
+
+    class _Repository:
+        async def get_rule_version(self, rule_version_id):
+            assert rule_version_id == rule.rule_version_id
+            return rule
+
+    service = FormalReportService(
+        None,
+        pages=_Pages(),
+        repository=_Repository(),
+    )
+    response = await service._calculate_without_comparison(
+        case_id=case_id,
+        report_id=report_id,
+        case=case,
+        records=records,
+        regional=regional,
+        comparison=comparison,
+        user=user,
+    )
+
+    assert response.comparison_analysis_id is None
+    assert response.benchmark_comparison_price is None
+    assert response.targets == []
+    assert regional.calculation_status == "CALCULATED"
+    assert comparison.calculation_status == "CALCULATED"
+    assert comparison.calculation_snapshot["comparison_workflow_enabled"] is False
+    assert saved == [regional, comparison]

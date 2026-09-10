@@ -39,6 +39,13 @@ from app.valuation.f03_schemas import (
     F03DraftUpdate,
 )
 from app.valuation.f03_service import F03Service
+from app.valuation.comparison_setup import (
+    ComparisonSetupApply,
+    ComparisonSetupContext,
+    ComparisonSetupCreate,
+    ComparisonSetupResponse,
+    ComparisonSetupService,
+)
 from app.valuation.f01_f04_schemas import (
     F01DraftUpdate,
     F04DraftUpdate,
@@ -69,7 +76,11 @@ ValuationEditor = Annotated[User, Depends(require_permissions("valuation.update"
 async def valuation_test_ui() -> FileResponse:
     if get_settings().app_env.lower() != "development":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    return FileResponse(TEST_UI_PATH, media_type="text/html; charset=utf-8")
+    return FileResponse(
+        TEST_UI_PATH,
+        media_type="text/html; charset=utf-8",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @router.get("/form-types", response_model=list[FormRequirementResponse])
@@ -288,6 +299,45 @@ async def list_benchmark_lands(
 ) -> list[BenchmarkLandResponse]:
     records = await F03Service(session).list_benchmark_lands(case_id, user)
     return [BenchmarkLandResponse.model_validate(record) for record in records]
+
+
+@router.get(
+    "/cases/{case_id}/comparison-setup",
+    response_model=ComparisonSetupContext,
+)
+async def comparison_setup_context(
+    case_id: UUID,
+    session: DbSession,
+    user: CaseReader,
+) -> ComparisonSetupContext:
+    return await ComparisonSetupService(session).context(case_id, user)
+
+
+@router.post(
+    "/cases/{case_id}/comparison-setup",
+    response_model=ComparisonSetupResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_comparison_setup(
+    case_id: UUID,
+    payload: ComparisonSetupCreate,
+    session: DbSession,
+    user: ValuationEditor,
+) -> ComparisonSetupResponse:
+    return await ComparisonSetupService(session).create(case_id, payload, user)
+
+
+@router.post(
+    "/cases/{case_id}/comparison-setup/apply",
+    response_model=ComparisonSetupResponse,
+)
+async def apply_comparison_setup(
+    case_id: UUID,
+    payload: ComparisonSetupApply,
+    session: DbSession,
+    user: ValuationEditor,
+) -> ComparisonSetupResponse:
+    return await ComparisonSetupService(session).apply(case_id, payload, user)
 
 
 @router.post(

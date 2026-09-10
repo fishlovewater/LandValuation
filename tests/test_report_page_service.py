@@ -103,6 +103,10 @@ class FakeReportRepository:
         del rule_version_id
         return None
 
+    async def select_default_formal_rule(self, case):
+        del case
+        return None
+
 
 def page_service_fixture():
     user = SimpleNamespace(user_id=uuid4(), roles=[])

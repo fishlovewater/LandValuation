@@ -115,7 +115,10 @@ class ReportPageService:
         self, case_id: UUID, report_id: UUID, user: User
     ) -> F02RFPageResponse:
         case, records = await self._read_records(case_id, report_id, user)
-        return await self._f02_rf_response(case, report_id, records["F02-RF"])
+        comparison = self._read_data(records["F02"], F02DraftData)
+        return await self._f02_rf_response(
+            case, report_id, records["F02-RF"], comparison.comparison_workflow_enabled
+        )
 
     async def update_f02_rf(
         self,
@@ -127,6 +130,9 @@ class ReportPageService:
         case, records = await self._editable_records(case_id, report_id, user)
         record = records["F02-RF"]
         current = self._read_data(record, F02RFDraftData)
+        current = await self._ensure_default_formal_rule(
+            case, record, current, user
+        )
         updated = self._merge(current, payload, F02RFDraftData)
         self._invalidate_f02_rf_calculation(updated)
         await self._validate_f02_rf(case, updated)
@@ -134,7 +140,9 @@ class ReportPageService:
         f02_data = self._read_data(records["F02"], F02DraftData)
         self._validate_cross_page_ids(updated, f02_data)
         await self._save_data(record, updated, user)
-        return await self._f02_rf_response(case, report_id, record)
+        return await self._f02_rf_response(
+            case, report_id, record, f02_data.comparison_workflow_enabled
+        )
 
     async def apply_extracted_candidates(
         self,
@@ -145,6 +153,9 @@ class ReportPageService:
         case, records = await self._editable_records(case_id, report_id, user)
         record = records["F02-RF"]
         current = self._read_data(record, F02RFDraftData)
+        current = await self._ensure_default_formal_rule(
+            case, record, current, user
+        )
 
         # Query all CONFIRMED F02-RF candidates for this case
         stmt = (
@@ -159,12 +170,6 @@ class ReportPageService:
         if not candidates:
             raise AppError("NO_CONFIRMED_FIELDS", "沒有已確認的 F02-RF 候選欄位可套用", 422)
 
-        if current.rule_version_id is None:
-            raise AppError(
-                "FORMAL_RULE_VERSION_REQUIRED",
-                "套用 AI 因素前必須先選擇已發布且已驗證的正式規則版本",
-                422,
-            )
         rule = await self.repository.get_rule_version(current.rule_version_id)
         if (
             rule is None
@@ -244,7 +249,9 @@ class ReportPageService:
             )
 
         await self.repository.session.flush()
-        return await self._f02_rf_response(case, report_id, record)
+        return await self._f02_rf_response(
+            case, report_id, record, f02_data.comparison_workflow_enabled
+        )
 
     async def confirm_manual_walking_distance(
         self,
@@ -270,12 +277,9 @@ class ReportPageService:
         rf_record = records["F02-RF"]
         s01 = self._read_data(s01_record, S01DraftData)
         regional = self._read_data(rf_record, F02RFDraftData)
-        if regional.rule_version_id is None:
-            raise AppError(
-                "FORMAL_RULE_VERSION_REQUIRED",
-                "儲存距離等級前必須先選擇已發布且已驗證的正式規則",
-                422,
-            )
+        regional = await self._ensure_default_formal_rule(
+            case, rf_record, regional, user
+        )
         rule = await self.repository.get_rule_version(regional.rule_version_id)
         if (
             rule is None
@@ -497,28 +501,24 @@ class ReportPageService:
         s01 = self._read_data(records["S01"], S01DraftData)
         f02_rf = self._read_data(records["F02-RF"], F02RFDraftData)
         f02 = self._read_data(records["F02"], F02DraftData)
-        blockers = []
-        if not any(item.confirmed_by_user for item in s01.observations):
-            blockers.append("S01_CONFIRMED_OBSERVATIONS_MISSING")
-        if not f02_rf.factor_rows:
-            blockers.append("F02_RF_FACTOR_ROWS_MISSING")
-        if not f02.comparison_targets:
-            blockers.append("F02_COMPARISON_TARGETS_MISSING")
-        if f02_rf.rule_version_id is None:
-            blockers.append("FORMAL_RULE_VERSION_MISSING")
-        if f02_rf.calculation_status != "CALCULATED":
-            blockers.append("FORMAL_F02_RF_CALCULATION_REQUIRED")
-        if f02.calculation_status != "CALCULATED":
-            blockers.append("FORMAL_F02_CALCULATION_REQUIRED")
-        validation = await self.repository.latest_report_validation(
-            case_id, report_id
-        )
-        if validation is None or validation.failed_count > 0:
-            blockers.append("FORMAL_SIX_PAGE_VALIDATION_REQUIRED")
-
+        blockers: list[str] = []
         warnings = [
             "DRAFT_PREVIEW_DOES_NOT_WRITE_TO_MINIO",
         ]
+        if not any(item.confirmed_by_user for item in s01.observations):
+            warnings.append("S01_CONFIRMED_OBSERVATIONS_MISSING")
+        if not f02_rf.factor_rows:
+            warnings.append("F02_RF_FACTOR_ROWS_MISSING")
+        if not f02.comparison_targets:
+            warnings.append("F02_COMPARISON_TARGETS_MISSING")
+        if f02_rf.rule_version_id is None:
+            warnings.append("FORMAL_RULE_VERSION_MISSING")
+        validation = await self.repository.latest_report_validation(
+            case_id, report_id
+        )
+        if validation and validation.failed_count > 0:
+            blockers.append("FORMAL_SIX_PAGE_VALIDATION_REQUIRED")
+
         return ReportDraftReadinessResponse(
             report_id=report_id,
             case_id=case_id,
@@ -632,19 +632,21 @@ class ReportPageService:
         case: CaseRecord,
         report_id: UUID,
         record: FormInstanceRecord,
+        comparison_workflow_enabled: bool = True,
     ) -> F02RFPageResponse:
         data = self._read_data(record, F02RFDraftData)
         warnings: list[str] = []
-        if data.benchmark_land_id is None:
-            warnings.append("BENCHMARK_LAND_MISSING")
-        if data.comparison_analysis_id is None:
-            warnings.append("COMPARISON_ANALYSIS_MISSING")
-        if data.rule_version_id is None:
-            warnings.append("FORMAL_FACTOR_RULE_VERSION_MISSING")
-        if not data.factor_rows:
-            warnings.append("FACTOR_ROWS_MISSING")
-        if data.calculation_status != "CALCULATED":
-            warnings.append("FORMAL_ADJUSTMENT_CALCULATION_REQUIRED")
+        if comparison_workflow_enabled:
+            if data.benchmark_land_id is None:
+                warnings.append("BENCHMARK_LAND_MISSING")
+            if data.comparison_analysis_id is None:
+                warnings.append("COMPARISON_ANALYSIS_MISSING")
+            if data.rule_version_id is None:
+                warnings.append("FORMAL_FACTOR_RULE_VERSION_MISSING")
+            if not data.factor_rows:
+                warnings.append("FACTOR_ROWS_MISSING")
+            if data.calculation_status != "CALCULATED":
+                warnings.append("FORMAL_ADJUSTMENT_CALCULATION_REQUIRED")
         return F02RFPageResponse(
             **await self._base_response(case, report_id, record, warnings),
             page_code=ReportPageCode.F02_RF,
@@ -659,14 +661,15 @@ class ReportPageService:
     ) -> F02PageResponse:
         data = self._read_data(record, F02DraftData)
         warnings: list[str] = []
-        if data.benchmark_land_id is None:
-            warnings.append("BENCHMARK_LAND_MISSING")
-        if data.comparison_analysis_id is None:
-            warnings.append("COMPARISON_ANALYSIS_MISSING")
-        if not data.comparison_targets:
-            warnings.append("COMPARISON_TARGETS_MISSING")
-        if data.calculation_status != "CALCULATED":
-            warnings.append("FORMAL_COMPARISON_CALCULATION_REQUIRED")
+        if data.comparison_workflow_enabled:
+            if data.benchmark_land_id is None:
+                warnings.append("BENCHMARK_LAND_MISSING")
+            if data.comparison_analysis_id is None:
+                warnings.append("COMPARISON_ANALYSIS_MISSING")
+            if not data.comparison_targets:
+                warnings.append("COMPARISON_TARGETS_MISSING")
+            if data.calculation_status != "CALCULATED":
+                warnings.append("FORMAL_COMPARISON_CALCULATION_REQUIRED")
         return F02PageResponse(
             **await self._base_response(case, report_id, record, warnings),
             page_code=ReportPageCode.F02,
@@ -864,6 +867,22 @@ class ReportPageService:
         record.form_content = content
         record.updated_by_user_id = user.user_id
         await self.repository.save_form(record)
+
+    async def _ensure_default_formal_rule(
+        self,
+        case: CaseRecord,
+        record: FormInstanceRecord,
+        data: F02RFDraftData,
+        user: User,
+    ) -> F02RFDraftData:
+        if data.rule_version_id is not None:
+            return data
+        rule = await self.repository.select_default_formal_rule(case)
+        if rule is None:
+            return data
+        data.rule_version_id = rule.rule_version_id
+        await self._save_data(record, data, user)
+        return data
 
     @staticmethod
     def _invalidate_f02_rf_calculation(data: F02RFDraftData) -> None:

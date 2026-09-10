@@ -168,7 +168,12 @@ class ExtractionService:
             if candidate is None:
                 raise ResourceNotFoundError("候選欄位")
             if candidate.field_status == "APPLIED":
-                raise AppError("FIELD_ALREADY_APPLIED", "已套用欄位不可重新確認", 409)
+                # A user may reopen an applied candidate from the review
+                # workbench and submit a corrected value. The next apply
+                # operation will replace the previous value on the formal
+                # draft and mark this candidate applied again.
+                candidate.applied_form_instance_id = None
+                candidate.applied_at = None
 
             candidate.confirmed_by_user_id = user.user_id
             candidate.confirmed_at = datetime.now(UTC)

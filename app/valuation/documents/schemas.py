@@ -35,3 +35,7 @@ class DocumentResponse(BaseModel):
     uploaded_by_user_id: UUID | None
     uploaded_at: datetime
     is_active: bool
+
+
+class DocumentCategoryUpdate(BaseModel):
+    category: DocumentCategory

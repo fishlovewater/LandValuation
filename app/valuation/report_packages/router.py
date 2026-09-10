@@ -43,6 +43,7 @@ from app.valuation.report_packages.formal_schemas import (
     FormalReportRequest,
     FormalReportResponse,
     FormalValidationResponse,
+    FormalWorkflowStatusResponse,
 )
 from app.valuation.report_packages.formal_service import FormalReportService
 from app.valuation.report_packages.service import ReportPackageService
@@ -376,6 +377,21 @@ async def calculate_complete_report(
 ) -> FormalCalculationResponse:
     del payload
     return await FormalReportService(session).calculate(case_id, report_id, user)
+
+
+@router.get(
+    "/cases/{case_id}/reports/{report_id}/formal-status",
+    response_model=FormalWorkflowStatusResponse,
+    summary="讀取既有正式檢核與報告成果",
+)
+async def get_formal_workflow_status(
+    case_id: UUID,
+    report_id: UUID,
+    session: DbSession,
+    storage: Storage,
+    user: ValuationReader,
+) -> FormalWorkflowStatusResponse:
+    return await FormalReportService(session, storage).status(case_id, report_id, user)
 
 
 @router.post(

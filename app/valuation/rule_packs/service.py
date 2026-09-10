@@ -828,6 +828,12 @@ class RulePackService:
         rule.verified_at = now
         for _, source_document in sources:
             source_document.publication_status = "PUBLISHED"
+            # A source is already read/imported and manually verified before a
+            # rule pack can be published.  Keep its lifecycle in sync with the
+            # published rule so the same fixed rule can be used by formal
+            # calculation and review handoff.  Leaving this at PENDING made
+            # every otherwise-valid published rule fail submission preflight.
+            source_document.extraction_status = "COMPLETED"
             source_document.approved_by_user_id = user.user_id
             source_document.approved_at = now
             source_document.updated_at = now

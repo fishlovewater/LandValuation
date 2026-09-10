@@ -262,6 +262,20 @@ def test_codex_prompt_requires_verbatim_value_and_source_text() -> None:
     assert "不可使用徵收宗地" in prompt
 
 
+def test_field_analysis_prompt_includes_shared_markdown_and_selected_form_rules() -> None:
+    prompt = field_analysis_prompt(
+        "交易日期：114年5月28日",
+        "F01",
+        {"transaction_date": "交易日期"},
+    )
+
+    assert "field_rules_markdown" in prompt
+    assert "field-rules-md-v1" in prompt
+    assert "| `land_area` |" in prompt
+    assert "## F01" in prompt
+    assert "\n## F02\n" not in prompt
+
+
 def test_codex_import_keeps_codex_provenance() -> None:
     extraction = extraction_record("實例編號:2")
     payload = CodexCandidateImportRequest(

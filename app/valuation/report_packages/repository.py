@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.valuation.models import (
     BenchmarkLandRecord,
+    CaseRecord,
     CaseEventRecord,
     ComparisonAnalysisRecord,
     ComparisonFactorValueRecord,
@@ -16,6 +17,7 @@ from app.valuation.models import (
     RuleVersionRecord,
     ValidationRunRecord,
 )
+from app.valuation.rule_packs.coverage import rule_covers
 from app.valuation.report_packages.requirements import (
     REPORT_COMPARISON_COMMERCIAL,
     REPORT_ROOT_FORM_CODE,
@@ -182,6 +184,54 @@ class ReportPackageRepository:
                 RuleVersionRecord.status == "PUBLISHED",
             )
         )
+
+    async def select_default_formal_rule(
+        self, case: CaseRecord
+    ) -> RuleVersionRecord | None:
+        """Return the highest-priority verified rule that covers this case.
+
+        A formal report records the selected version when it is created or first
+        used.  This lookup is only the system-wide default policy; it never
+        falls back to a draft, legacy, or out-of-scope rule.
+        """
+        raw_land_use = str(case.land_use_type or "").strip()
+        land_use = {
+            "住宅用地": "RESIDENTIAL",
+            "商業用地": "COMMERCIAL",
+            "工業用地": "INDUSTRIAL",
+            "農業用地": "AGRICULTURAL",
+            "其他": "OTHER",
+        }.get(raw_land_use, raw_land_use.upper())
+        if not case.district_code or not land_use:
+            return None
+
+        candidates = await self.session.scalars(
+            select(RuleVersionRecord)
+            .where(
+                RuleVersionRecord.status == "PUBLISHED",
+                RuleVersionRecord.import_status == "VERIFIED",
+                RuleVersionRecord.verified_at.is_not(None),
+                RuleVersionRecord.source_document_id.is_not(None),
+                RuleVersionRecord.source_checksum_sha256.is_not(None),
+                RuleVersionRecord.formula_code == "NTPC_COMPARISON_V1",
+                RuleVersionRecord.rounding_code == "NTPC_LAND_PRICE_V1",
+            )
+            .order_by(
+                RuleVersionRecord.selection_priority.desc(),
+                RuleVersionRecord.effective_from.desc(),
+                RuleVersionRecord.version_no.desc(),
+                RuleVersionRecord.rule_version_id,
+            )
+        )
+        for rule in candidates:
+            if rule_covers(
+                rule,
+                district_code=case.district_code,
+                land_use_type=land_use,
+                valuation_date=case.valuation_base_date,
+            ):
+                return rule
+        return None
 
     async def list_factor_levels(
         self,

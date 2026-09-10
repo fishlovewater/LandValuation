@@ -2,14 +2,18 @@ from typing import Annotated
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Response, UploadFile, status
 from fastapi.background import BackgroundTasks
 from fastapi.responses import StreamingResponse
 
 from app.auth.dependencies import DbSession, require_permissions
 from app.auth.models import User
 from app.storage.dependencies import Storage
-from app.valuation.documents.schemas import DocumentCategory, DocumentResponse
+from app.valuation.documents.schemas import (
+    DocumentCategory,
+    DocumentCategoryUpdate,
+    DocumentResponse,
+)
 from app.valuation.documents.service import DocumentService
 
 router = APIRouter()
@@ -54,6 +58,41 @@ async def list_documents(
 ) -> list[DocumentResponse]:
     records = await DocumentService(session, storage).list_documents(case_id, user)
     return [DocumentResponse.model_validate(record) for record in records]
+
+
+@router.delete(
+    "/cases/{case_id}/documents/{document_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_source_document(
+    case_id: UUID,
+    document_id: UUID,
+    session: DbSession,
+    storage: Storage,
+    user: DocumentUploader,
+) -> Response:
+    await DocumentService(session, storage).delete_source_document(
+        case_id, document_id, user
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch(
+    "/cases/{case_id}/documents/{document_id}/category",
+    response_model=DocumentResponse,
+)
+async def reclassify_source_document(
+    case_id: UUID,
+    document_id: UUID,
+    payload: DocumentCategoryUpdate,
+    session: DbSession,
+    storage: Storage,
+    user: DocumentUploader,
+) -> DocumentResponse:
+    record = await DocumentService(session, storage).reclassify_source_document(
+        case_id, document_id, payload.category, user
+    )
+    return DocumentResponse.model_validate(record)
 
 
 @router.get("/cases/{case_id}/documents/{document_id}/download")

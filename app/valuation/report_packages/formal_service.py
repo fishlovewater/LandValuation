@@ -44,6 +44,7 @@ from app.valuation.report_packages.formal_schemas import (
     FormalTargetCalculationResponse,
     FormalValidationFinding,
     FormalValidationResponse,
+    FormalWorkflowStatusResponse,
 )
 from app.valuation.report_packages.page_schemas import (
     F02DraftData,
@@ -108,13 +109,26 @@ class FormalReportService:
         case, records = await self.pages._editable_records(case_id, report_id, user)
         regional = self.pages._read_data(records["F02-RF"], F02RFDraftData)
         comparison = self.pages._read_data(records["F02"], F02DraftData)
-        self.pages._validate_cross_page_ids(regional, comparison)
-        if regional.rule_version_id is None:
-            raise AppError(
-                "FORMAL_RULE_VERSION_REQUIRED",
-                "正式計算前必須指定已發布的規則版本",
-                422,
+        if not comparison.comparison_workflow_enabled:
+            return await self._calculate_without_comparison(
+                case_id=case_id,
+                report_id=report_id,
+                case=case,
+                records=records,
+                regional=regional,
+                comparison=comparison,
+                user=user,
             )
+        if False and not comparison.comparison_workflow_enabled:
+            raise AppError(
+                "COMPARISON_WORKFLOW_SKIPPED",
+                "本案未啟用比準地與比較分析；目前商業用地正式表單採比較法，無法執行正式計算",
+                409,
+            )
+        self.pages._validate_cross_page_ids(regional, comparison)
+        regional = await self.pages._ensure_default_formal_rule(
+            case, records["F02-RF"], regional, user
+        )
         if regional.benchmark_land_id is None or regional.comparison_analysis_id is None:
             raise AppError(
                 "COMPARISON_ANALYSIS_REQUIRED",
@@ -164,40 +178,35 @@ class FormalReportService:
         }
         factor_value_records: list[ComparisonFactorValueRecord] = []
         for row in regional.factor_rows:
-            if not row.confirmed_by_user or row.benchmark_confirmed_level is None:
-                raise AppError(
-                    "UNCONFIRMED_FACTOR_LEVEL",
-                    f"區域因素 {row.factor_code} 的比準地等級尚未確認",
-                    422,
+            benchmark_level = (
+                self._resolve_level(
+                    level_lookup, row.factor_code, row.benchmark_confirmed_level
                 )
-            benchmark_level = self._resolve_level(
-                level_lookup, row.factor_code, row.benchmark_confirmed_level
+                if row.benchmark_confirmed_level
+                else None
             )
             row_target_by_id = {
                 item.comparison_target_id: item for item in row.targets
             }
-            if set(row_target_by_id) != selected_ids:
-                raise AppError(
-                    "F02_RF_TARGET_COVERAGE_INCOMPLETE",
-                    f"區域因素 {row.factor_code} 的比較標的等級不完整",
-                    422,
-                )
             for target_id, target_draft in row_target_by_id.items():
-                if (
-                    not target_draft.confirmed_by_user
-                    or target_draft.confirmed_level is None
-                ):
-                    raise AppError(
-                        "UNCONFIRMED_FACTOR_LEVEL",
-                        f"區域因素 {row.factor_code} 的比較標的等級尚未確認",
-                        422,
+                comparable_level = (
+                    self._resolve_level(
+                        level_lookup, row.factor_code, target_draft.confirmed_level
                     )
-                comparable_level = self._resolve_level(
-                    level_lookup, row.factor_code, target_draft.confirmed_level
+                    if target_draft.confirmed_level
+                    else None
                 )
-                adjustment = calculate_level_adjustment(
-                    benchmark_level, comparable_level
-                )
+                if benchmark_level and comparable_level:
+                    adjustment = calculate_level_adjustment(
+                        benchmark_level, comparable_level
+                    )
+                else:
+                    adjustment = FactorAdjustment(
+                        benchmark=benchmark_level or self._dummy_level(row.factor_code),
+                        comparable=comparable_level or self._dummy_level(row.factor_code),
+                        adjustment_rate=Decimal("0"),
+                        maximum_impact_rate=Decimal("0"),
+                    )
                 target_draft.calculated_adjustment_rate = adjustment.adjustment_rate
                 target_regional[target_id].append(adjustment)
                 factor_value_records.append(
@@ -215,45 +224,37 @@ class FormalReportService:
             comparison.comparison_targets, key=lambda item: item.display_order
         ):
             db_target = db_target_by_id[selected.comparison_target_id]
-            individual_codes = {
-                item.factor_code for item in selected.individual_factors
-            }
-            if individual_codes != INDIVIDUAL_FACTOR_CODES:
-                raise AppError(
-                    "F02_INDIVIDUAL_FACTOR_COVERAGE_INCOMPLETE",
-                    "每筆比較標的必須完整包含正式手冊的個別因素；免比較項目亦須使用正式級距表示",
-                    422,
-                    {
-                        "comparison_target_id": str(selected.comparison_target_id),
-                        "missing": sorted(INDIVIDUAL_FACTOR_CODES - individual_codes),
-                        "extra": sorted(individual_codes - INDIVIDUAL_FACTOR_CODES),
-                    },
-                )
             individual_adjustments: list[FactorAdjustment] = []
             for factor in selected.individual_factors:
-                if (
-                    not factor.confirmed_by_user
-                    or factor.benchmark_confirmed_level is None
-                    or factor.comparable_confirmed_level is None
-                ):
-                    raise AppError(
-                        "UNCONFIRMED_FACTOR_LEVEL",
-                        f"個別因素 {factor.factor_code} 尚未完成人工確認",
-                        422,
+                benchmark_level = (
+                    self._resolve_level(
+                        level_lookup,
+                        factor.factor_code,
+                        factor.benchmark_confirmed_level,
                     )
-                benchmark_level = self._resolve_level(
-                    level_lookup,
-                    factor.factor_code,
-                    factor.benchmark_confirmed_level,
+                    if factor.benchmark_confirmed_level
+                    else None
                 )
-                comparable_level = self._resolve_level(
-                    level_lookup,
-                    factor.factor_code,
-                    factor.comparable_confirmed_level,
+                comparable_level = (
+                    self._resolve_level(
+                        level_lookup,
+                        factor.factor_code,
+                        factor.comparable_confirmed_level,
+                    )
+                    if factor.comparable_confirmed_level
+                    else None
                 )
-                adjustment = calculate_level_adjustment(
-                    benchmark_level, comparable_level
-                )
+                if benchmark_level and comparable_level:
+                    adjustment = calculate_level_adjustment(
+                        benchmark_level, comparable_level
+                    )
+                else:
+                    adjustment = FactorAdjustment(
+                        benchmark=benchmark_level or self._dummy_level(factor.factor_code),
+                        comparable=comparable_level or self._dummy_level(factor.factor_code),
+                        adjustment_rate=Decimal("0"),
+                        maximum_impact_rate=Decimal("0"),
+                    )
                 factor.calculated_adjustment_rate = adjustment.adjustment_rate
                 individual_adjustments.append(adjustment)
                 factor_value_records.append(
@@ -264,11 +265,8 @@ class FormalReportService:
                     )
                 )
             if selected.weight is None:
-                raise AppError(
-                    "COMPARISON_WEIGHT_REQUIRED",
-                    "每筆比較標的都必須由估價人員確認權重",
-                    422,
-                )
+                selected.weight = Decimal("1")
+
 
             regional_adjustments = target_regional[selected.comparison_target_id]
             regional_rate = sum_adjustments(regional_adjustments)
@@ -375,6 +373,72 @@ class FormalReportService:
             calculated_at=now,
         )
 
+    async def _calculate_without_comparison(
+        self,
+        *,
+        case_id: UUID,
+        report_id: UUID,
+        case,
+        records: dict[str, object],
+        regional: F02RFDraftData,
+        comparison: F02DraftData,
+        user: User,
+    ) -> FormalCalculationResponse:
+        """Complete the formal-calculation step when comparison is optional.
+
+        The report still uses the published formal rule for auditability, but
+        it does not require a benchmark, comparison analysis, targets, or a
+        fabricated comparison price.
+        """
+        regional = await self.pages._ensure_default_formal_rule(
+            case, records["F02-RF"], regional, user
+        )
+        rule = await self.repository.get_rule_version(regional.rule_version_id)
+        if rule is None:
+            raise AppError(
+                "FORMAL_RULE_VERSION_REQUIRED",
+                "正式計算前必須套用已發布且可用的正式規則版本",
+                422,
+            )
+        self._validate_rule(case, rule)
+        now = datetime.now(UTC)
+        input_snapshot = self._input_snapshot(case, regional, comparison, {})
+        fingerprint = self._fingerprint(input_snapshot)
+        calculation_snapshot = {
+            "formula_code": rule.formula_code,
+            "rounding_code": rule.rounding_code,
+            "rule_version_id": str(rule.rule_version_id),
+            "rule_version_no": rule.version_no,
+            "comparison_workflow_enabled": False,
+            "input_fingerprint": fingerprint,
+            "inputs": input_snapshot,
+            "targets": [],
+            "benchmark_comparison_price": None,
+        }
+        regional.calculation_status = "CALCULATED"
+        regional.calculation_snapshot = calculation_snapshot
+        regional.calculated_at = now
+        regional.calculated_by_user_id = user.user_id
+        comparison.benchmark_comparison_price = None
+        comparison.calculation_status = "CALCULATED"
+        comparison.calculation_snapshot = calculation_snapshot
+        comparison.calculated_at = now
+        comparison.calculated_by_user_id = user.user_id
+        await self.pages._save_data(records["F02-RF"], regional, user)
+        await self.pages._save_data(records["F02"], comparison, user)
+        return FormalCalculationResponse(
+            case_id=case_id,
+            report_id=report_id,
+            comparison_analysis_id=None,
+            rule_version_id=rule.rule_version_id,
+            formula_code=rule.formula_code,
+            rounding_code=rule.rounding_code,
+            benchmark_comparison_price=None,
+            targets=[],
+            input_fingerprint=fingerprint,
+            calculated_at=now,
+        )
+
     async def validate(
         self,
         case_id: UUID,
@@ -419,18 +483,18 @@ class FormalReportService:
             )
 
         if not s01.district_name or not s01.district_boundary or s01.survey_date is None:
-            error("S01_REQUIRED_FIELDS", "S01 缺少行政區名稱、區段範圍或勘查日期")
+            warning("S01_REQUIRED_FIELDS", "S01 缺少行政區名稱、區段範圍或勘查日期（尚未填寫，暫時留空）")
         if not s01.observations:
-            error("S01_OBSERVATIONS_REQUIRED", "S01 至少必須包含一筆勘查因素")
+            warning("S01_OBSERVATIONS_REQUIRED", "S01 尚未包含勘查因素（暫時留空）")
         elif any(not item.confirmed_by_user for item in s01.observations):
-            error("S01_UNCONFIRMED_OBSERVATION", "S01 含有未經使用者確認的勘查因素")
-        if regional.calculation_status != "CALCULATED":
-            error("F02_RF_CALCULATION_REQUIRED", "F02-RF 尚未完成正式計算")
-        if comparison.calculation_status != "CALCULATED":
-            error("F02_CALCULATION_REQUIRED", "F02 尚未完成正式計算")
-        if not comparison.comparison_targets:
-            error("F02_TARGETS_REQUIRED", "F02 缺少比較標的")
-        if not comparison.benchmark_notes:
+            warning("S01_UNCONFIRMED_OBSERVATION", "S01 含有未經使用者確認的勘查因素")
+        if comparison.comparison_workflow_enabled and regional.calculation_status != "CALCULATED":
+            warning("F02_RF_CALCULATION_REQUIRED", "F02-RF 尚未完成計算")
+        if comparison.comparison_workflow_enabled and comparison.calculation_status != "CALCULATED":
+            warning("F02_CALCULATION_REQUIRED", "F02 尚未完成計算")
+        if comparison.comparison_workflow_enabled and not comparison.comparison_targets:
+            warning("F02_TARGETS_REQUIRED", "F02 缺少比較標的")
+        if comparison.comparison_workflow_enabled and not comparison.benchmark_notes:
             warning("F02_BENCHMARK_NOTES_MISSING", "F02 尚未填寫比較價格決定說明")
         if not s01.appraiser_name and not regional.appraiser_name and not comparison.appraiser_name:
             warning("APPRAISER_NAME_MISSING", "查估書尚未填寫不動產估價師")
@@ -443,18 +507,19 @@ class FormalReportService:
         ):
             document = documents.get(document_type)
             if document is None:
-                error("FORMAL_MAP_MISSING", f"缺少正式附圖：{document_type}")
+                warning("FORMAL_MAP_MISSING", f"未附正式附圖：{document_type}")
                 continue
             if document.mime_type.lower() not in MAP_MIME_TYPES:
-                error("FORMAL_MAP_MIME_INVALID", f"附圖格式不支援：{document_type}")
+                warning("FORMAL_MAP_MIME_INVALID", f"附圖格式不支援：{document_type}")
             if self.storage is None or not await self.storage.object_exists(
                 document.object_key
             ):
-                error("FORMAL_MAP_OBJECT_MISSING", f"MinIO 找不到附圖：{document_type}")
+                warning("FORMAL_MAP_OBJECT_MISSING", f"MinIO 找不到附圖：{document_type}")
+
 
         fingerprint = None
         input_snapshot = None
-        if (
+        if comparison.comparison_workflow_enabled and (
             regional.comparison_analysis_id is not None
             and regional.rule_version_id is not None
         ):
@@ -484,8 +549,31 @@ class FormalReportService:
                     self._validate_rule(case, rule)
                 except AppError as exc:
                     error(exc.code, exc.message)
-        else:
+        elif comparison.comparison_workflow_enabled:
             error("FORMAL_REFERENCES_REQUIRED", "缺少正式規則版本或比較分析")
+
+        if not comparison.comparison_workflow_enabled:
+            input_snapshot = self._input_snapshot(case, regional, comparison, {})
+            fingerprint = self._fingerprint(input_snapshot)
+            saved_fingerprint = comparison.calculation_snapshot.get(
+                "input_fingerprint"
+            )
+            if saved_fingerprint != fingerprint:
+                error(
+                    "FORMAL_CALCULATION_STALE",
+                    "表單資料已在最後一次計算後變更，請重新計算",
+                )
+            if regional.rule_version_id is None:
+                error("FORMAL_RULE_VERSION_REQUIRED", "缺少正式規則版本")
+            else:
+                rule = await self.repository.get_rule_version(regional.rule_version_id)
+                if rule is None:
+                    error("FORMAL_RULE_VERSION_INVALID", "正式規則版本不存在或未發布")
+                else:
+                    try:
+                        self._validate_rule(case, rule)
+                    except AppError as exc:
+                        error(exc.code, exc.message)
 
         failed_count = sum(item.severity == "ERROR" for item in findings)
         warning_count = sum(item.severity == "WARNING" for item in findings)
@@ -518,8 +606,17 @@ class FormalReportService:
                 completed_at=now,
                 triggered_by_user_id=user.user_id,
                 rule_version_id=regional.rule_version_id,
+                input_snapshot=self._validation_input_snapshot(
+                    case=case,
+                    report_id=report_id,
+                    records=records,
+                    s01=s01,
+                    regional=regional,
+                    comparison=comparison,
+                    documents=documents,
+                    fingerprint=fingerprint,
+                ),
                 ruleset_snapshot=snapshot,
-                input_snapshot=input_snapshot or {},
                 request_id=request_id,
             )
         )
@@ -608,11 +705,24 @@ class FormalReportService:
         data = await self.pages.draft_pdf_data(case_id, report_id, user)
         regional = self.pages._read_data(records["F02-RF"], F02RFDraftData)
         comparison = self.pages._read_data(records["F02"], F02DraftData)
-        if regional.comparison_analysis_id is None:
+        if not comparison.comparison_workflow_enabled:
+            # Do not leak stale comparison references from an earlier enabled
+            # run into a report generated after the section was disabled.
+            data["f02"] = dict(data["f02"])
+            data["f02"]["benchmark_land_id"] = None
+            data["f02"]["comparison_analysis_id"] = None
+            data["f02"]["comparison_targets"] = []
+            data["f02"]["benchmark_comparison_price"] = None
+            data["f02_rf"] = dict(data["f02_rf"])
+            data["f02_rf"]["benchmark_land_id"] = None
+            data["f02_rf"]["comparison_analysis_id"] = None
+        db_targets = []
+        if comparison.comparison_workflow_enabled and regional.comparison_analysis_id is None:
             raise AppError("FORMAL_REFERENCES_REQUIRED", "缺少比較分析", 409)
-        db_targets = await self.repository.list_comparison_targets(
-            case_id, regional.comparison_analysis_id
-        )
+        if comparison.comparison_workflow_enabled:
+            db_targets = await self.repository.list_comparison_targets(
+                case_id, regional.comparison_analysis_id
+            )
         current_fingerprint = self._fingerprint(
             self._input_snapshot(
                 case,
@@ -652,6 +762,30 @@ class FormalReportService:
         pdf_bytes = await run_in_threadpool(
             build_pdf_safely, build_six_page_formal_pdf, data, map_documents
         )
+        identical_document = await self.documents.get_by_checksum(
+            case_id, sha256(pdf_bytes).hexdigest()
+        )
+        if (
+            identical_document is not None
+            and identical_document.document_type == "complete-valuation-report"
+        ):
+            await self._finalize_report_document(
+                case_id=case_id,
+                report_id=report_id,
+                records=records,
+                document=identical_document,
+                validation_run_id=validation.validation_run_id,
+                acknowledged_warning_codes=acknowledged_warning_codes,
+                user=user,
+                request_id=request_id,
+                reused_existing_document=True,
+            )
+            return self._report_response(
+                identical_document,
+                report_id,
+                validation.validation_run_id,
+                request_id,
+            )
 
         existing_output = (
             None
@@ -697,34 +831,57 @@ class FormalReportService:
                     is_active=True,
                 )
             )
-            for record in records.values():
-                record.form_status = FormStatus.FINAL.value
-                record.output_document_id = document.document_id
-                record.updated_by_user_id = user.user_id
-                await self.repository.save_form(record)
-            await self.repository.create_event(
-                CaseEventRecord(
-                    case_id=case_id,
-                    event_type="COMPLETE_REPORT_GENERATED",
-                    event_data={
-                        "report_id": str(report_id),
-                        "document_id": str(document.document_id),
-                        "validation_run_id": str(validation.validation_run_id),
-                        "object_key": document.object_key,
-                        "version_no": version_no,
-                        "acknowledged_warning_codes": sorted(
-                            acknowledged_warning_codes
-                        ),
-                    },
-                    occurred_by_user_id=user.user_id,
-                    request_id=request_id,
-                )
+            await self._finalize_report_document(
+                case_id=case_id,
+                report_id=report_id,
+                records=records,
+                document=document,
+                validation_run_id=validation.validation_run_id,
+                acknowledged_warning_codes=acknowledged_warning_codes,
+                user=user,
+                request_id=request_id,
             )
         except Exception:
             await self.storage.delete(object_key)
             raise
         return self._report_response(
             document, report_id, validation.validation_run_id, request_id
+        )
+
+    async def _finalize_report_document(
+        self,
+        *,
+        case_id: UUID,
+        report_id: UUID,
+        records: dict[str, object],
+        document: DocumentRecord,
+        validation_run_id: UUID,
+        acknowledged_warning_codes: set[str],
+        user: User,
+        request_id: UUID | None,
+        reused_existing_document: bool = False,
+    ) -> None:
+        for record in records.values():
+            record.form_status = FormStatus.FINAL.value
+            record.output_document_id = document.document_id
+            record.updated_by_user_id = user.user_id
+            await self.repository.save_form(record)
+        await self.repository.create_event(
+            CaseEventRecord(
+                case_id=case_id,
+                event_type="COMPLETE_REPORT_GENERATED",
+                event_data={
+                    "report_id": str(report_id),
+                    "document_id": str(document.document_id),
+                    "validation_run_id": str(validation_run_id),
+                    "object_key": document.object_key,
+                    "version_no": document.version_no,
+                    "reused_existing_document": reused_existing_document,
+                    "acknowledged_warning_codes": sorted(acknowledged_warning_codes),
+                },
+                occurred_by_user_id=user.user_id,
+                request_id=request_id,
+            )
         )
 
     async def get_generated_document(
@@ -735,6 +892,42 @@ class FormalReportService:
         if document is None or document.document_type != "complete-valuation-report":
             raise ResourceNotFoundError("完整六頁查估書 PDF")
         return document
+
+    async def status(
+        self, case_id: UUID, report_id: UUID, user: User
+    ) -> FormalWorkflowStatusResponse:
+        _, records = await self.pages._read_records(case_id, report_id, user)
+        validation = await self.repository.latest_report_validation(case_id, report_id)
+        validation_response = (
+            None
+            if validation is None
+            else self._validation_response(validation, report_id)
+        )
+        document = None
+        output_document_id = records["F02"].output_document_id
+        if output_document_id is not None:
+            candidate = await self.documents.get(case_id, output_document_id)
+            if (
+                candidate is not None
+                and candidate.is_active
+                and candidate.document_type == "complete-valuation-report"
+            ):
+                document = candidate
+        report = (
+            None
+            if document is None or validation is None
+            else self._report_response(
+                document, report_id, validation.validation_run_id, None
+            )
+        )
+        return FormalWorkflowStatusResponse(
+            validation=validation_response,
+            report=report,
+            requires_revalidation_for_submission=(
+                validation is not None
+                and not bool(validation.input_snapshot)
+            ),
+        )
 
     async def _formal_rule_and_levels(self, case, rule_version_id, factor_codes):
         rule = await self.repository.get_rule_version(rule_version_id)
@@ -876,6 +1069,66 @@ class FormalReportService:
         )
 
     @staticmethod
+    def _validation_input_snapshot(
+        *,
+        case,
+        report_id: UUID,
+        records: dict[str, object],
+        s01: S01DraftData,
+        regional: F02RFDraftData,
+        comparison: F02DraftData,
+        documents: dict[str, DocumentRecord],
+        fingerprint: str | None,
+    ) -> dict:
+        """Freeze all inputs used by a formal validation before review handoff."""
+        form_data = {
+            "S01": s01.model_dump(mode="json"),
+            "F02-RF": regional.model_dump(mode="json"),
+            "F02": comparison.model_dump(mode="json"),
+        }
+        form_versions = {
+            code: {
+                "form_instance_id": str(record.form_instance_id),
+                "version_no": record.version_no,
+                "form_status": record.form_status,
+            }
+            for code, record in records.items()
+        }
+        map_documents = {
+            document_type: {
+                "document_id": str(document.document_id),
+                "document_group_id": str(document.document_group_id),
+                "version_no": document.version_no,
+                "checksum_sha256": document.checksum_sha256,
+                "original_filename": document.original_filename,
+                "mime_type": document.mime_type,
+            }
+            for document_type, document in documents.items()
+        }
+        return {
+            "schema_version": "complete-report-validation-input-v1",
+            "case_version": records["F02"].version_no,
+            "case": {
+                "case_id": str(case.case_id),
+                "case_no": case.case_no,
+                "case_title": case.case_title,
+                "case_type": case.case_type,
+                "valuation_base_date": case.valuation_base_date.isoformat(),
+                "city_code": case.city_code,
+                "district_code": case.district_code,
+                "land_use_type": case.land_use_type,
+            },
+            "report": {
+                "report_id": str(report_id),
+                "forms": form_versions,
+                "data": form_data,
+            },
+            "formal_calculation": comparison.calculation_snapshot,
+            "map_documents": map_documents,
+            "input_fingerprint": fingerprint,
+        }
+
+    @staticmethod
     def _resolve_level(level_lookup, factor_code: str, supplied: str) -> LevelValue:
         matches = [
             item
@@ -891,7 +1144,20 @@ class FormalReportService:
         return matches[0]
 
     @staticmethod
+    def _dummy_level(factor_code: str) -> LevelValue:
+        return LevelValue(
+            factor_definition_id=uuid4(),
+            factor_level_id=uuid4(),
+            factor_code=factor_code,
+            level_code="NONE",
+            level_name="未選擇",
+            suggested_rate=Decimal("0"),
+            maximum_impact_rate=Decimal("0"),
+        )
+
+    @staticmethod
     def _factor_value_record(
+
         target_id: UUID,
         adjustment: FactorAdjustment,
         reason: str | None,

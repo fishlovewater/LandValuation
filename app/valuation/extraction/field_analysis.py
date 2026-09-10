@@ -3,6 +3,8 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from decimal import Decimal
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -102,6 +104,32 @@ _F01_SOURCE_ROLE_MARKERS = (
     "比較標的",
     "比較實例",
 )
+_FIELD_RULES_PATH = Path(__file__).with_name("field_rules.md")
+
+
+@lru_cache(maxsize=1)
+def _read_field_rules_markdown() -> str:
+    try:
+        return _FIELD_RULES_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(
+            f"估價表單 AI 欄位規則文件不存在或無法讀取：{_FIELD_RULES_PATH}"
+        ) from exc
+
+
+def _field_rules_markdown_for_form(form_code: str) -> str:
+    """Return the shared rules plus only the requested form's rule section."""
+    markdown = _read_field_rules_markdown()
+    section = re.search(
+        rf"(?ms)^##\s+{re.escape(form_code)}\s*\n.*?(?=^##\s+|\Z)",
+        markdown,
+    )
+    if section is None:
+        raise RuntimeError(f"估價表單 AI 欄位規則文件缺少 {form_code} 章節")
+
+    first_form = re.search(r"(?m)^##\s+F01\s*$", markdown)
+    shared_rules = markdown[: first_form.start()] if first_form else markdown
+    return f"{shared_rules.rstrip()}\n\n{section.group(0).strip()}"
 
 
 def _analysis_source_text(extracted_text: str, form_code: str) -> str:
@@ -146,6 +174,8 @@ def field_analysis_prompt(
             "task": "從各種格式的估價原始文件、對照表、登記謄本、勘查紀錄或試算表 OCR 中，精準泛化對應並識別目標表單欄位",
             "form_code": form_code,
             "allowed_fields": allowed_fields,
+            "field_rules_markdown": _field_rules_markdown_for_form(form_code),
+            "field_rules_instruction": "以 field_rules_markdown 的通用規則及目前表單章節為辨識依據；不可使用其他表單章節的欄位或資料角色。",
             "instructions": [
                 "1. 語意泛化與同義詞識別：文件格式與標題可能與標準表單不同（例如欄位名稱為簡稱、同義字、非標準標頭、表格欄位或段落敘述），請依據 allowed_fields 的語意進行靈活對應與理解。",
                 "2. 證據出處 (source_text)：必須是 ocr_text 中真實存在的連續或近乎連續之原始文字段落（保留該行或該句的原始標點與換行），絕不可自創不存在的段落。",

@@ -112,6 +112,14 @@ class AutomatedConfirmRequest(BaseModel):
         return self
 
 
+class ManualFieldValuesRequest(BaseModel):
+    """Non-empty values entered by a user in the confirmation workbench."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    values: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
 class AutomatedFormGuidance(BaseModel):
     form_code: str
     form_instance_id: UUID | None = None
@@ -145,6 +153,7 @@ class AutomatedWorkflowResponse(BaseModel):
     blank_fields_remain: bool
     missing_items: list[str] = Field(default_factory=list)
     warnings: list[str]
+    ignored_duplicate_files: list[str] = Field(default_factory=list)
     next_action: str
     draft_pages_1_3_url: str | None = None
     draft_pages_1_6_url: str | None = None
@@ -152,3 +161,7 @@ class AutomatedWorkflowResponse(BaseModel):
     automatic_pdf_generation_enabled: bool = False
     automatic_confirmation_export_enabled: bool = True
     confirmation_export: AutomatedConfirmationExport | None = None
+    manual_fields_saved: list[str] = Field(default_factory=list)
+    manual_fields_ignored: list[str] = Field(default_factory=list)
+    manual_field_errors: dict[str, str] = Field(default_factory=dict)
+    manual_field_values: dict[str, dict[str, Any]] = Field(default_factory=dict)

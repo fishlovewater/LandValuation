@@ -44,6 +44,11 @@ class FakeReportRepository:
     def __init__(self) -> None:
         self.forms = {}
         self.document_types = set()
+        self.default_formal_rule = None
+
+    async def select_default_formal_rule(self, case):
+        del case
+        return self.default_formal_rule
 
     async def next_version(self, case_id, form_codes):
         del case_id, form_codes
@@ -143,6 +148,25 @@ async def test_create_report_builds_three_linked_form_instances() -> None:
         record = repository.forms[component.form_instance_id]
         assert record.version_no == response.version_no
         assert record.form_content["report_id"] == str(response.report_id)
+
+
+@pytest.mark.asyncio
+async def test_create_report_assigns_the_system_default_formal_rule() -> None:
+    service, repository, case, user = service_fixture()
+    default_rule = SimpleNamespace(rule_version_id=uuid4())
+    repository.default_formal_rule = default_rule
+
+    response = await service.create(
+        case.case_id,
+        ReportPackageCreate(prepared_date=date(2026, 8, 26)),
+        user,
+    )
+
+    component = next(item for item in response.components if item.code == "F02-RF")
+    form = repository.forms[component.form_instance_id]
+    assert form.form_content["data"]["rule_version_id"] == str(
+        default_rule.rule_version_id
+    )
 
 
 @pytest.mark.asyncio

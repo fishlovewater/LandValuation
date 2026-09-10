@@ -12,6 +12,7 @@ from app.valuation.automation.schemas import (
     AutomatedConfirmRequest,
     AutomatedIntakeManifest,
     AutomatedWorkflowResponse,
+    ManualFieldValuesRequest,
 )
 from app.valuation.automation.service import AutomatedWorkflowService
 
@@ -132,6 +133,29 @@ async def confirm_automated_intake(
     user: WorkflowEditor,
 ) -> AutomatedWorkflowResponse:
     return await AutomatedWorkflowService(session, storage).confirm(
+        case_id,
+        payload,
+        user,
+    )
+
+
+@router.post(
+    "/cases/{case_id}/auto-workflow/manual-fields",
+    response_model=AutomatedWorkflowResponse,
+    summary="載入簡易前端手動補充欄位",
+    description=(
+        "保存使用者在 OCR／AI 候選確認區輸入的非空欄位。未填寫欄位保持空白，"
+        "可部分載入；成功載入後會重新產生確認用 Excel。"
+    ),
+)
+async def save_manual_fields(
+    case_id: UUID,
+    payload: ManualFieldValuesRequest,
+    session: DbSession,
+    storage: Storage,
+    user: WorkflowEditor,
+) -> AutomatedWorkflowResponse:
+    return await AutomatedWorkflowService(session, storage).save_manual_fields(
         case_id,
         payload,
         user,

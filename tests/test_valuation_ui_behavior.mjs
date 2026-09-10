@@ -122,6 +122,7 @@ function casePanelElements() {
     "formal-check",
     "formal-summary",
     "formal-findings",
+    "formal-action-reason",
     "run-formal-workflow",
     "download-formal-report",
     "submit-for-review",
@@ -293,6 +294,75 @@ test("requires an explicit choice for every pending candidate", () => {
   );
 });
 
+test("uses selected case metadata and appends files without requiring it again", () => {
+  const { logic } = loadLogic();
+  logic.state.cases.push({
+    case_id: "case-existing",
+    case_no: "CASE-EXISTING",
+    case_title: "既有案件",
+    case_type: "土地徵收補償市價查估",
+    requesting_agency: "測試機關",
+    valuation_base_date: "2025-09-01",
+    city_code: "65000000",
+    district_code: "65000010",
+    land_use_type: "COMMERCIAL",
+  });
+  const form = fakeForm({
+    existing_case_id: "case-existing",
+    category_override: "新文件.pdf=land-register",
+    create_commercial_report: false,
+  });
+
+  assert.deepEqual(logic.buildIntakeManifest(form), {
+    case: {
+      case_no: "CASE-EXISTING",
+      case_title: "既有案件",
+      case_type: "土地徵收補償市價查估",
+      requesting_agency: "測試機關",
+      valuation_base_date: "2025-09-01",
+      city_code: "65000000",
+      district_code: "65000010",
+      land_use_type: "COMMERCIAL",
+    },
+    parcels: [],
+    benchmark_lands: [],
+    prepared_date: null,
+    create_commercial_report: true,
+    category_overrides: { "新文件.pdf": "land-register" },
+  });
+});
+
+test("requires one selected answer when a field has conflicting document candidates", () => {
+  const { logic } = loadLogic();
+  const candidates = [
+    {
+      extracted_field_id: "candidate-a",
+      form_code: "F03",
+      field_name: "benchmark_land_no",
+      extracted_value: "P001-00",
+      field_status: "NEEDS_CONFIRMATION",
+    },
+    {
+      extracted_field_id: "candidate-b",
+      form_code: "F03",
+      field_name: "benchmark_land_no",
+      extracted_value: "P002-00",
+      field_status: "NEEDS_CONFIRMATION",
+    },
+  ];
+
+  logic.saveWorkflow(candidateWorkflow({ candidates }));
+  assert.equal(logic.candidateHasMultipleAnswers(candidates[0]), true);
+  assert.equal(logic.canApplyCandidates(candidates, {
+    "candidate-a": { choice: "CONFIRM" },
+    "candidate-b": { choice: "CONFIRM" },
+  }), false);
+  assert.equal(logic.canApplyCandidates(candidates, {
+    "candidate-a": { choice: "CONFIRM" },
+    "candidate-b": { choice: "REJECT" },
+  }), true);
+});
+
 test("formal workflow payloads require explicit confirmations", () => {
   const { logic } = loadLogic();
 
@@ -305,6 +375,26 @@ test("formal workflow payloads require explicit confirmations", () => {
   });
   assert.throws(() => logic.formalCalculationPayload(false), /確認/);
   assert.throws(() => logic.formalReportPayload(false, []), /確認/);
+});
+
+test("requires a successful formal validation before enabling final artifacts", () => {
+  const { logic } = loadLogic();
+
+  assert.equal(logic.hasSuccessfulFormalValidation(), false);
+  assert.equal(logic.canSubmitForReview(), false);
+
+  logic.state.formal.validation = {
+    validation_run_id: "validation-1",
+    can_generate_formal_report: false,
+  };
+  logic.state.formal.report = { document_id: "formal-pdf-1" };
+  logic.state.formal.validation_run_id = "validation-1";
+  assert.equal(logic.hasSuccessfulFormalValidation(), false);
+  assert.equal(logic.canSubmitForReview(), false);
+
+  logic.state.formal.validation.can_generate_formal_report = true;
+  assert.equal(logic.hasSuccessfulFormalValidation(), true);
+  assert.equal(logic.canSubmitForReview(), true);
 });
 
 test("builds submission command from current version and server IDs", () => {
@@ -334,6 +424,37 @@ test("labels candidate fields and workflow statuses for appraisers", () => {
   assert.equal(logic.codeLabel("UNKNOWN_WORKFLOW_CODE"), "系統檢核項目");
   assert.equal(logic.statusLabel("IN_REVIEW"), "審查中");
   assert.equal(logic.statusLabel("REVISION_REQUIRED"), "退回補正");
+});
+
+test("shows durable report progress instead of treating 製作中 as a finished report", () => {
+  const { logic } = loadLogic();
+  const baseProgress = {
+    report_id: "report-1",
+    sections: [
+      { form_instance_id: "s01", status: "IN_PROGRESS" },
+      { form_instance_id: "f02rf", status: "IN_PROGRESS" },
+      { form_instance_id: "f02", status: "IN_PROGRESS" },
+      { document_type: "map-section-sketch", status: "MISSING" },
+      { document_type: "map-zoning", status: "MISSING" },
+      { document_type: "map-land-value-section", status: "MISSING" },
+    ],
+  };
+
+  const inProgress = logic.buildWorkflowProgress(baseProgress, { case_status: "PROCESSING" });
+  assert.equal(inProgress.steps[0].complete, true);
+  assert.equal(inProgress.steps[1].complete, false);
+  assert.match(inProgress.summary, /尚未完成正式計算與檢核/);
+
+  const complete = logic.buildWorkflowProgress(
+    {
+      ...baseProgress,
+      sections: baseProgress.sections.map((section) => ({ ...section, status: "COMPLETED" })),
+    },
+    { case_status: "DRAFT" },
+    { components: [{ form_status: "FINAL" }, { form_status: "FINAL" }, { form_status: "FINAL" }] },
+  );
+  assert.equal(complete.steps[3].complete, true);
+  assert.match(complete.summary, /可以送出審查/);
 });
 
 test("keeps a correction typed after choosing confirmation", () => {
@@ -386,6 +507,18 @@ test("locks and unlocks candidate radios and correction fields with the case", (
   logic.lockEditing(false);
   assert.equal(radio.disabled, false);
   assert.equal(correction.disabled, false);
+});
+
+test("explains why formal calculation is unavailable", () => {
+  const { logic } = loadLogic();
+
+  assert.match(logic.formalActionReason(), /選擇案件/);
+
+  logic.saveWorkflow(candidateWorkflow({ report_id: null }));
+  assert.match(logic.formalActionReason(), /正式表單/);
+
+  logic.lockEditing(true);
+  assert.match(logic.formalActionReason(), /鎖定/);
 });
 
 test("clears a previous report id when workflow response has no report", () => {
@@ -441,6 +574,15 @@ test("does not generate a PDF when warning acknowledgement cannot be explicit", 
           },
         };
       }
+      if (url.endsWith("/reports/report-1")) {
+        return jsonResponse({
+          report_id: "report-1",
+          components: [{ form_status: "CHECKED" }, { form_status: "CHECKED" }, { form_status: "CHECKED" }],
+        });
+      }
+      if (url.endsWith("/report-progress")) {
+        return jsonResponse({ report_id: "report-1", sections: [] });
+      }
       throw new Error("formal PDF must not be requested");
     },
   });
@@ -449,8 +591,52 @@ test("does not generate a PDF when warning acknowledgement cannot be explicit", 
   const result = await logic.runFormalWorkflow();
 
   assert.equal(result.report, null);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 4);
   assert.ok(calls.every(({ url }) => !url.endsWith("/formal-pdf")));
+});
+
+test("revalidates checked or final forms without trying to calculate them again", async () => {
+  const calls = [];
+  const { logic } = loadLogic({
+    fetch: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith("/formal-calculation")) throw new Error("calculation must be skipped");
+      if (url.endsWith("/formal-validation")) {
+        return jsonResponse({
+          can_generate_formal_report: true,
+          failed_count: 0,
+          warning_count: 0,
+          validation_run_id: "run-2",
+          findings: [],
+        });
+      }
+      if (url.endsWith("/formal-pdf")) {
+        return jsonResponse({
+          document_id: "formal-pdf-2",
+          filename: "complete-report.pdf",
+          version_no: 2,
+          download_path: "/api/v1/valuation/cases/case-1/complete-reports/formal-pdf-2/download",
+        });
+      }
+      if (url.endsWith("/reports/report-1")) {
+        return jsonResponse({
+          report_id: "report-1",
+          components: [{ form_status: "FINAL" }, { form_status: "FINAL" }, { form_status: "FINAL" }],
+        });
+      }
+      if (url.endsWith("/report-progress")) return jsonResponse({ report_id: "report-1", sections: [] });
+      throw new Error(`unexpected request: ${url}`);
+    },
+  });
+
+  logic.saveWorkflow(candidateWorkflow({ candidates: [] }));
+  await logic.loadReportPackage();
+  const result = await logic.runFormalWorkflow({ acknowledged_warning_codes: [] });
+
+  assert.equal(result.report.document_id, "formal-pdf-2");
+  assert.ok(calls.some(({ url }) => url.endsWith("/formal-validation")));
+  assert.ok(calls.some(({ url }) => url.endsWith("/formal-pdf")));
+  assert.ok(calls.every(({ url }) => !url.endsWith("/formal-calculation")));
 });
 
 test("logout clears case state, workflow IDs, and rendered panels", () => {
@@ -714,6 +900,17 @@ test("treats inherited identifiers as unknown labels with escaped detail", () =>
   assert.match(elements["candidate-list"].innerHTML, /欄位代碼：constructor/);
   assert.match(elements["status-message"].innerHTML, /系統檢核項目/);
   assert.match(elements["status-message"].innerHTML, /檢核代碼：toString/);
+});
+
+test("uses Chinese labels for candidate fields in every supported form", () => {
+  const { logic } = loadLogic();
+
+  assert.equal(logic.candidateFieldLabel("F01", "transaction_total_price"), "交易總價（元）");
+  assert.equal(logic.candidateFieldLabel("F02", "target_1_trial_price"), "比較標的－試算價格（元／㎡）");
+  assert.equal(logic.candidateFieldLabel("F03", "benchmark_land_price"), "比準地地價（元／㎡）");
+  assert.equal(logic.candidateFieldLabel("F04", "parcel_2_parcel_total_value"), "宗地－宗地總價（元）");
+  assert.equal(logic.candidateFieldLabel("F02-RF", "urban_plan_status"), "都市計畫（內、外）");
+  assert.equal(logic.candidateFieldLabel("S01", "zone_boundary_description"), "區段範圍");
 });
 
 test("renders a Chinese report type label in the report selector", async () => {

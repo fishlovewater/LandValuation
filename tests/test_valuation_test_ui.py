@@ -24,9 +24,17 @@ REQUIRED_MARKERS = (
     'id="status-message"',
     'id="copy-demo-command"',
     'id="intake-form"',
+    'id="case-document-list"',
+    'data-document-reclassify',
     'id="candidate-list"',
+    'id="candidate-form-filter"',
+    'id="candidate-answer-filter"',
     'id="confirm-candidates"',
+    'id="load-manual-fields"',
+    'id="comparison-workflow-enabled"',
     'id="run-formal-workflow"',
+    'id="formal-action-reason"',
+    '/formal-status',
     'id="submit-for-review"',
     "window.valuationUiLogic",
     "python -m app.valuation.demo seed",
@@ -90,6 +98,10 @@ def test_valuation_test_ui_has_accessible_static_shell(monkeypatch) -> None:
     assert 'for="source-files"' in html
     assert 'for="category-override"' in html
     assert 'for="form-selector"' in html
+    assert '<option value="F02-RF">' in html
+    assert '<option value="S01">' in html
+    assert "candidateFieldLabel" in html
+    assert "手動欄位載入成功" in html
 
 
 def test_valuation_test_ui_does_not_expose_secrets_or_external_assets(monkeypatch) -> None:
@@ -125,4 +137,8 @@ def test_valuation_test_ui_does_not_expose_secrets_or_external_assets(monkeypatc
     assert "intake_manifest_json" in html
     assert 'const fetcher = typeof fetch === "function" ? fetch : window?.fetch;' in html
     assert "response = await fetcher(apiPath(path)" in html
+    assert "candidate-confirmation-export" in html
+    assert "/documents/${documentRecord.document_id}/download" in html
+    assert "需要先建立並載入正式表單" in html
+    assert "目前系統只會自動建立「商業用地比較報告」" in html
     assert "XMLHttpRequest" not in html

@@ -403,6 +403,7 @@ class F02IndividualFactorDraft(DraftModel):
 
 
 class F02DraftData(DraftModel):
+    comparison_workflow_enabled: bool = True
     benchmark_land_id: UUID | None = None
     comparison_analysis_id: UUID | None = None
     comparison_targets: list[F02TargetSelection] = Field(
@@ -436,6 +437,7 @@ class F02DraftData(DraftModel):
 
 
 class F02DraftUpdate(DraftModel):
+    comparison_workflow_enabled: bool | None = None
     benchmark_land_id: UUID | None = None
     comparison_analysis_id: UUID | None = None
     comparison_targets: list[F02TargetSelection] | None = Field(

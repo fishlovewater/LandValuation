@@ -27,6 +27,7 @@ from app.valuation.automation.schemas import (
     AutomatedFormGuidance,
     AutomatedWorkflowResponse,
     AutomatedWorkflowStatus,
+    ManualFieldValuesRequest,
 )
 from app.valuation.automation.confirmation_export_excel import (
     build_confirmation_export_xlsx,
@@ -45,20 +46,30 @@ from app.valuation.extraction.schemas import (
     FieldAnalysisRequest,
 )
 from app.valuation.extraction.service import ExtractionService
-from app.valuation.f01_f04_schemas import F01DraftUpdate
+from app.valuation.f01_f04_schemas import F01DraftUpdate, F04DraftUpdate
 from app.valuation.f01_f04_service import F01F04Service
 from app.valuation.f03_schemas import F03DraftUpdate
 from app.valuation.f03_service import F03Service
-from app.valuation.models import BenchmarkLandRecord, DocumentRecord, ExtractedFieldRecord
+from app.valuation.models import (
+    BenchmarkLandRecord,
+    CaseRecord,
+    DocumentRecord,
+    ExtractedFieldRecord,
+)
 from app.valuation.report_packages.draft_pdf_builder import (
     build_three_page_draft_pdf,
     build_three_page_source_preserved_draft_pdf,
 )
 from app.valuation.pdf_errors import build_pdf_safely
 from app.valuation.report_packages.page_service import ReportPageService
+from app.valuation.report_packages.page_schemas import (
+    S01DraftUpdate,
+    S01Observation,
+)
+from app.valuation.report_packages.factor_catalog import TEMPLATE_FACTOR_CODES
 from app.valuation.report_packages.schemas import ReportPackageCreate, ReportType
 from app.valuation.report_packages.service import ReportPackageService
-from app.valuation.schemas import CaseResponse, FormCode, FormCreate
+from app.valuation.schemas import CaseResponse, FormCode, FormCreate, FormStatus
 from app.valuation.requirements import FORM_REQUIREMENTS
 from app.valuation.service import ValuationService
 
@@ -149,6 +160,7 @@ class AutomatedWorkflowService:
         self.extraction_repository = ExtractionRepository(session)
         self.f03 = F03Service(session)
         self.report_packages = ReportPackageService(session)
+        self.pages = ReportPageService(session)
 
     async def intake(
         self,
@@ -162,59 +174,123 @@ class AutomatedWorkflowService:
         uploaded_object_keys: list[str] = []
         document_results: list[AutomatedDocumentResult] = []
         warnings: list[str] = []
+        ignored_duplicate_files: list[str] = []
         try:
-            case = await self.valuation.create_case(manifest.case, user)
-            parcels = [
-                await self.valuation.create_parcel(case.case_id, payload, user)
-                for payload in manifest.parcels
-            ]
-            benchmark_lands = [
-                await self.f03.create_benchmark_land(
-                    case.case_id,
-                    payload.as_create(parcels[payload.parcel_index].parcel_id),
-                    user,
+            existing_case = await self.session.scalar(
+                select(CaseRecord.case_id).where(
+                    CaseRecord.case_no == manifest.case.case_no
                 )
-                for payload in manifest.benchmark_lands
-            ]
-
-            f03_form = await self.valuation.create_form(
-                case.case_id,
-                FormCreate(
-                    form_code=FormCode.F03,
-                    prepared_date=manifest.prepared_date,
-                ),
-                user,
             )
-            if benchmark_lands:
-                await self.f03.update_draft(
-                    case.case_id,
-                    f03_form.form_instance_id,
-                    F03DraftUpdate(
-                        benchmark_land_id=benchmark_lands[0].benchmark_land_id,
-                        valuation_base_date=case.valuation_base_date,
-                    ),
-                    user,
-                )
-            else:
-                warnings.append("BENCHMARK_LAND_NOT_SUPPLIED_F03_REMAINS_BLANK")
+            if existing_case is None:
+                case = await self.valuation.create_case(manifest.case, user)
+                parcels = [
+                    await self.valuation.create_parcel(case.case_id, payload, user)
+                    for payload in manifest.parcels
+                ]
+                benchmark_lands = [
+                    await self.f03.create_benchmark_land(
+                        case.case_id,
+                        payload.as_create(parcels[payload.parcel_index].parcel_id),
+                        user,
+                    )
+                    for payload in manifest.benchmark_lands
+                ]
 
-            report_id: UUID | None = None
-            normalized_land_use = str(case.land_use_type or "").strip().upper()
-            commercial = normalized_land_use in {"COMMERCIAL", "商業用地"}
-            if manifest.create_commercial_report and commercial:
-                package = await self.report_packages.create(
+                f03_form = await self.valuation.create_form(
                     case.case_id,
-                    ReportPackageCreate(
-                        report_type=ReportType.REPORT_COMPARISON_COMMERCIAL,
+                    FormCreate(
+                        form_code=FormCode.F03,
                         prepared_date=manifest.prepared_date,
                     ),
                     user,
                 )
-                report_id = package.report_id
-            elif manifest.create_commercial_report:
-                warnings.append("COMMERCIAL_TEMPLATE_SKIPPED_FOR_OTHER_LAND_USE")
+                if benchmark_lands:
+                    await self.f03.update_draft(
+                        case.case_id,
+                        f03_form.form_instance_id,
+                        F03DraftUpdate(
+                            benchmark_land_id=benchmark_lands[0].benchmark_land_id,
+                            valuation_base_date=case.valuation_base_date,
+                        ),
+                        user,
+                    )
+                else:
+                    warnings.append("BENCHMARK_LAND_NOT_SUPPLIED_F03_REMAINS_BLANK")
 
+                report_id: UUID | None = None
+                normalized_land_use = str(case.land_use_type or "").strip().upper()
+                commercial = normalized_land_use in {"COMMERCIAL", "商業用地"}
+                if manifest.create_commercial_report and commercial:
+                    package = await self.report_packages.create(
+                        case.case_id,
+                        ReportPackageCreate(
+                            report_type=ReportType.REPORT_COMPARISON_COMMERCIAL,
+                            prepared_date=manifest.prepared_date,
+                        ),
+                        user,
+                    )
+                    report_id = package.report_id
+                elif manifest.create_commercial_report:
+                    warnings.append("COMMERCIAL_TEMPLATE_SKIPPED_FOR_OTHER_LAND_USE")
+            else:
+                # Reusing an existing case only appends evidence files; never
+                # overwrite the established case, parcel, or benchmark data.
+                case = await self.valuation.get_case(existing_case, user)
+                parcels = []
+                benchmark_lands = []
+                warnings.append("EXISTING_CASE_DOCUMENTS_APPENDED")
+                if manifest.parcels or manifest.benchmark_lands:
+                    warnings.append("EXISTING_CASE_METADATA_IGNORED")
+
+                forms = await self.valuation.list_forms(case.case_id, user)
+                f03_form = next((item for item in forms if item.form_code == "F03"), None)
+                if f03_form is None:
+                    f03_form = await self.valuation.create_form(
+                        case.case_id,
+                        FormCreate(
+                            form_code=FormCode.F03,
+                            prepared_date=manifest.prepared_date,
+                        ),
+                        user,
+                    )
+                report_root = next(
+                    (
+                        item
+                        for item in forms
+                        if item.form_code == "F02"
+                        and isinstance(item.form_content, dict)
+                        and item.form_content.get("report_type")
+                        == "REPORT_COMPARISON_COMMERCIAL"
+                    ),
+                    None,
+                )
+                report_id = report_root.form_instance_id if report_root else None
+                normalized_land_use = str(case.land_use_type or "").strip().upper()
+                commercial = normalized_land_use in {"COMMERCIAL", "商業用地"}
+                if report_id is None and manifest.create_commercial_report and commercial:
+                    package = await self.report_packages.create(
+                        case.case_id,
+                        ReportPackageCreate(
+                            report_type=ReportType.REPORT_COMPARISON_COMMERCIAL,
+                            prepared_date=manifest.prepared_date,
+                        ),
+                        user,
+                    )
+                    report_id = package.report_id
+                elif report_id is None and manifest.create_commercial_report:
+                    warnings.append("COMMERCIAL_TEMPLATE_SKIPPED_FOR_OTHER_LAND_USE")
+
+            uploaded_checksums: dict[str, str] = {}
             for file in files:
+                checksum = self._source_file_checksum(file)
+                filename = Path(file.filename or "未命名檔案").name
+                if checksum in uploaded_checksums:
+                    ignored_duplicate_files.append(filename)
+                    continue
+                if await self.documents.repository.get_by_checksum(case.case_id, checksum):
+                    ignored_duplicate_files.append(filename)
+                    continue
+                uploaded_checksums[checksum] = filename
                 override = manifest.category_overrides.get(Path(file.filename or "").name)
                 category, source = classify_document(
                     file.filename,
@@ -261,6 +337,9 @@ class AutomatedWorkflowService:
                     )
                 )
 
+            if ignored_duplicate_files:
+                warnings.append("DUPLICATE_SOURCE_FILE_IGNORED")
+
             return await self._response(
                 case.case_id,
                 user,
@@ -271,6 +350,7 @@ class AutomatedWorkflowService:
                 report_id=report_id,
                 document_results=document_results,
                 warnings=warnings,
+                ignored_duplicate_files=ignored_duplicate_files,
             )
         except Exception:
             for object_key in reversed(uploaded_object_keys):
@@ -279,6 +359,17 @@ class AutomatedWorkflowService:
                 except Exception:
                     pass
             raise
+
+    @staticmethod
+    def _source_file_checksum(file: UploadFile) -> str:
+        """Hash an upload without changing the position seen by later processing."""
+        stream = file.file
+        stream.seek(0)
+        digest = hashlib.sha256()
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+        stream.seek(0)
+        return digest.hexdigest()
 
     async def review(self, case_id: UUID, user: User) -> AutomatedWorkflowResponse:
         await self.valuation.get_case(case_id, user)
@@ -357,6 +448,13 @@ class AutomatedWorkflowService:
             warnings,
         )
         if report_root is not None:
+            await self._apply_confirmed_s01_candidates(
+                case_id,
+                report_root.form_instance_id,
+                user,
+                warnings,
+            )
+        if report_root is not None:
             has_factor_candidate = await self.session.scalar(
                 select(ExtractedFieldRecord.extracted_field_id)
                 .where(
@@ -386,6 +484,289 @@ class AutomatedWorkflowService:
         )
         return response
 
+    async def save_manual_fields(
+        self,
+        case_id: UUID,
+        payload: ManualFieldValuesRequest,
+        user: User,
+    ) -> AutomatedWorkflowResponse:
+        """Persist non-empty workbench values without requiring a full form."""
+        await self.valuation._owned_editable_case(case_id, user)
+        forms = await self.valuation.list_forms(case_id, user)
+        forms_by_code: dict[str, object] = {}
+        for form in forms:
+            forms_by_code.setdefault(str(form.form_code), form)
+
+        report_root = next(
+            (
+                form for form in forms
+                if str(form.form_code) == "F02"
+                and isinstance(form.form_content, dict)
+                and form.form_content.get("report_type") == "REPORT_COMPARISON_COMMERCIAL"
+            ),
+            None,
+        )
+        # A new manual value supersedes the previous value.  If a formal
+        # report was already generated, reopen its three report pages so the
+        # new value can be written into the formal S01 page and recalculated.
+        # The previous PDF remains in storage as history, but is no longer
+        # treated as the current downloadable/submittable report.
+        has_new_values = any(
+            any(value is not None and str(value).strip() != "" for value in (fields or {}).values())
+            for fields in (payload.values or {}).values()
+        )
+        if has_new_values and report_root is not None:
+            _, report_records = await self.pages._read_records(
+                case_id, report_root.form_instance_id, user
+            )
+            if any(
+                record.form_status != FormStatus.DRAFT.value
+                for record in report_records.values()
+            ):
+                for record in report_records.values():
+                    record.form_status = FormStatus.DRAFT.value
+                    record.output_document_id = None
+                    record.updated_by_user_id = user.user_id
+                    await self.valuation.repository.save_form(record)
+
+        saved: list[str] = []
+        ignored: list[str] = []
+        errors: dict[str, str] = {}
+        direct_updates: dict[str, dict[str, object]] = {
+            "F01": {}, "F03": {}, "F04": {},
+        }
+        direct_allowed = {
+            "F01": set(F01DraftUpdate.model_fields),
+            "F03": set(F03DraftUpdate.model_fields),
+        }
+        # F04 uses the same dedicated service as F01, but its draft has a
+        # different update model and must not receive arbitrary catalogue keys.
+        direct_allowed["F04"] = {
+            "valuation_base_date", "price_zone_no", "rule_version_id", "notes",
+            "filled_date", "handler_name", "section_head_name", "director_name",
+            "appraiser_name",
+        }
+
+        for form_code, fields in (payload.values or {}).items():
+            form = forms_by_code.get(form_code)
+            if form is None:
+                ignored.extend(f"{form_code}.{name}" for name in fields)
+                continue
+            non_empty = {
+                name: value
+                for name, value in (fields or {}).items()
+                if value is not None and str(value).strip() != ""
+            }
+            if not non_empty:
+                continue
+            saved.extend(f"{form_code}.{name}" for name in non_empty)
+            accepted = {
+                name: value
+                for name, value in non_empty.items()
+                if name in direct_allowed.get(form_code, set())
+            }
+            if accepted:
+                direct_updates[form_code].update(accepted)
+
+            # Keep every accepted catalogue value, including fields that are
+            # not yet represented by a formal page schema, for audit/export.
+            content = dict(form.form_content or {})
+            overrides = dict(content.get("manual_overrides") or {})
+            overrides.update(non_empty)
+            content["manual_overrides"] = overrides
+            form.form_content = content
+            form.updated_by_user_id = user.user_id
+            await self.valuation.repository.save_form(form)
+
+        for form_code, values in direct_updates.items():
+            if not values:
+                continue
+            form = forms_by_code.get(form_code)
+            if form is None:
+                continue
+            try:
+                if form_code == "F01":
+                    await F01F04Service(self.session).update(
+                        case_id, form.form_instance_id, "F01",
+                        F01DraftUpdate.model_validate(values), user,
+                    )
+                elif form_code == "F03":
+                    await F03Service(self.session).update_draft(
+                        case_id, form.form_instance_id,
+                        F03DraftUpdate.model_validate(values), user,
+                    )
+                else:
+                    await F01F04Service(self.session).update(
+                        case_id, form.form_instance_id, "F04",
+                        F04DraftUpdate.model_validate(values), user,
+                    )
+            except Exception as exc:
+                message = getattr(exc, "message", str(exc))
+                for name in values:
+                    errors[f"{form_code}.{name}"] = message
+
+        # The AI catalogue uses descriptive field codes while the formal S01
+        # page stores a smaller set of direct fields plus observation rows.
+        # Translate the user-entered catalogue values before formal checking;
+        # otherwise a completed S01 in the workbench would still look empty.
+        s01_values = {
+            name: value
+            for name, value in (payload.values or {}).get("S01", {}).items()
+            if value is not None and str(value).strip() != ""
+        }
+        if s01_values and report_root is not None:
+            try:
+                current_page = await self.pages.get_s01(
+                    case_id, report_root.form_instance_id, user
+                )
+                current_data = current_page.data.model_dump(mode="json")
+                numeric_targets = {
+                    "building_coverage_rate",
+                    "floor_area_ratio",
+                    "main_road_width_m",
+                    "average_road_width_m",
+                }
+
+                def normalize_s01_value(source: str, target: str, value: object):
+                    if target in numeric_targets:
+                        raw = str(value).strip().replace(",", "").replace("％", "%")
+                        if raw.endswith("%"):
+                            raw = raw[:-1].strip()
+                        for suffix in ("公尺", "m", "M"):
+                            if raw.endswith(suffix):
+                                raw = raw[: -len(suffix)].strip()
+                                break
+                        try:
+                            return Decimal(raw)
+                        except (InvalidOperation, ValueError):
+                            errors[f"S01.{source}"] = (
+                                f"{source} 必須是數字；目前輸入「{value}」已保留在手動資料，"
+                                "正式 S01 欄位暫時留空"
+                            )
+                            return None
+                    if target == "survey_date":
+                        raw = str(value).strip().replace("/", "-")
+                        try:
+                            return date.fromisoformat(raw)
+                        except ValueError:
+                            errors[f"S01.{source}"] = (
+                                f"{source} 必須是 YYYY-MM-DD 日期；目前輸入「{value}」已保留在手動資料，"
+                                "正式 S01 欄位暫時留空"
+                            )
+                            return None
+                    return value
+
+                direct_map = {
+                    "administrative_area": "district_name",
+                    "zone_boundary_description": "district_boundary",
+                    "survey_date": "survey_date",
+                    "urban_plan_status": "urban_plan_status",
+                    "urban_plan_scope": "urban_plan_status",
+                    "land_use_zone": "land_use_zone",
+                    "land_use_zone_category": "land_use_zone",
+                    "building_coverage_rate": "building_coverage_rate",
+                    "building_coverage_ratio": "building_coverage_rate",
+                    "floor_area_ratio": "floor_area_ratio",
+                    "prohibited_building": "prohibited_building",
+                    "building_prohibition_status": "prohibited_building",
+                    "restricted_building": "restricted_building",
+                    "building_restriction_status": "restricted_building",
+                    "building_restriction_details": "restricted_building",
+                    "main_road_name": "main_road_name",
+                    "main_road_width_m": "main_road_width_m",
+                    "average_internal_road_width_m": "average_road_width_m",
+                    "internal_road_width_m": "average_road_width_m",
+                    "handler_name": "handler_name",
+                    "section_chief_name": "section_head_name",
+                    "director_name": "director_name",
+                    "appraiser_name": "appraiser_name",
+                }
+                s01_payload = {
+                    target: normalized
+                    for source, target in direct_map.items()
+                    if source in s01_values
+                    for normalized in [normalize_s01_value(source, target, s01_values[source])]
+                    if normalized is not None
+                }
+                observation_map = {
+                    "urban_plan_status": "urban_plan_status",
+                    "urban_plan_scope": "urban_plan_status",
+                    "land_use_zone": "land_use_zone",
+                    "land_use_zone_category": "land_use_zone",
+                    "building_coverage_rate": "building_coverage_rate",
+                    "building_coverage_ratio": "building_coverage_rate",
+                    "floor_area_ratio": "floor_area_ratio",
+                    "prohibited_building": "prohibited_building",
+                    "building_prohibition_status": "prohibited_building",
+                    "restricted_building": "restricted_building",
+                    "building_restriction_status": "restricted_building",
+                    "building_restriction_details": "restricted_building",
+                    "main_road_width_m": "main_road_width",
+                    "internal_road_width_m": "average_road_width",
+                    "average_internal_road_width_m": "average_road_width",
+                    "road_planning_development_level": "road_plan",
+                    "drainage_level": "drainage",
+                    "terrain_level": "terrain",
+                    "slope_level": "terrain",
+                    "consumer_market_proximity": "market_proximity",
+                    "settlement_proximity_level": "settlement_proximity",
+                    "park_proximity_level": "park_proximity",
+                    "major_station_distance_m": "mass_transit_proximity",
+                    "major_station_type": "mass_transit_proximity",
+                    "interchange_distance_m": "interchange_proximity",
+                    "commercial_facility_distance_m": "department_store",
+                    "commercial_facility_count": "department_store",
+                    "pollution_distance_m": "environmental_pollution",
+                    "wastewater_waste_facility_present": "waste_facility",
+                }
+                observations = list(current_data.get("observations") or [])
+                by_code = {item.get("item_code"): item for item in observations}
+                for source, item_code in observation_map.items():
+                    if source not in s01_values or item_code not in TEMPLATE_FACTOR_CODES:
+                        continue
+                    normalized = normalize_s01_value(
+                        source,
+                        direct_map.get(source, item_code),
+                        s01_values[source],
+                    )
+                    if normalized is None:
+                        continue
+                    row = by_code.get(item_code, {"item_code": item_code})
+                    row.update({
+                        "raw_value": normalized,
+                        "source_type": "MANUAL_CONFIRMED",
+                        "source_notes": "簡易前端手動輸入並載入",
+                        "confirmed_by_user": True,
+                    })
+                    by_code[item_code] = row
+                if by_code:
+                    s01_payload["observations"] = list(by_code.values())
+                if s01_payload:
+                    await self.pages.update_s01(
+                        case_id,
+                        report_root.form_instance_id,
+                        S01DraftUpdate.model_validate(s01_payload),
+                        user,
+                    )
+            except Exception as exc:
+                message = getattr(exc, "message", str(exc))
+                errors["S01"] = f"正式 S01 同步失敗：{message}"
+
+        await self._save_confirmation_export(case_id, user)
+        response = await self.review(case_id, user)
+        response.manual_fields_saved = saved
+        response.manual_fields_ignored = ignored
+        response.manual_field_errors = errors
+        response.manual_field_values = {
+            str(form.form_code): dict(
+                (form.form_content or {}).get("manual_overrides") or {}
+            )
+            for form in await self.valuation.list_forms(case_id, user)
+            if isinstance(form.form_content, dict)
+            and isinstance(form.form_content.get("manual_overrides"), dict)
+        }
+        return response
+
     async def _save_confirmation_export(
         self,
         case_id: UUID,
@@ -410,6 +791,15 @@ class AutomatedWorkflowService:
                 )
             ).all()
         )
+        forms = await self.valuation.list_forms(case_id, user)
+        manual_values = {
+            str(form.form_code): dict(
+                (form.form_content or {}).get("manual_overrides") or {}
+            )
+            for form in forms
+            if isinstance(form.form_content, dict)
+            and isinstance(form.form_content.get("manual_overrides"), dict)
+        }
         generated_at = datetime.now(UTC)
         xlsx_bytes = await run_in_threadpool(
             build_confirmation_export_xlsx,
@@ -417,6 +807,7 @@ class AutomatedWorkflowService:
             case_title=case.case_title,
             generated_at=generated_at,
             candidates=candidates,
+            manual_values=manual_values,
         )
         repository = DocumentRepository(self.session)
         group_id = uuid5(
@@ -693,9 +1084,19 @@ class AutomatedWorkflowService:
             if warning not in warnings:
                 warnings.append(warning)
             return
-        form_codes = [FormCode.F03, FormCode.F01, FormCode.F02, FormCode.F04]
-        if has_commercial_report:
-            form_codes.extend((FormCode.S01, FormCode.F02_RF))
+        # Every uploaded source may contain evidence for any official form.
+        # Analyze the complete form set and leave a form empty when the source
+        # contains no grounded evidence, rather than treating its report type
+        # as a reason to skip the analysis entirely.
+        del has_commercial_report
+        form_codes = [
+            FormCode.F01,
+            FormCode.F02,
+            FormCode.F02_RF,
+            FormCode.F03,
+            FormCode.F04,
+            FormCode.S01,
+        ]
         for form_code in form_codes:
             try:
                 await FieldAnalysisService(self.session).analyze(
@@ -797,6 +1198,154 @@ class AutomatedWorkflowService:
         for candidate in used:
             await self.extraction_repository.apply_candidate(candidate, form_id)
 
+    async def _apply_confirmed_s01_candidates(
+        self,
+        case_id: UUID,
+        report_id: UUID,
+        user: User,
+        warnings: list[str],
+    ) -> None:
+        """Apply confirmed OCR/AI S01 candidates to the formal S01 page."""
+        candidates = list(
+            (
+                await self.session.scalars(
+                    select(ExtractedFieldRecord)
+                    .where(
+                        ExtractedFieldRecord.case_id == case_id,
+                        ExtractedFieldRecord.form_code == "S01",
+                        ExtractedFieldRecord.field_status == "CONFIRMED",
+                        ExtractedFieldRecord.confirmed_value.is_not(None),
+                    )
+                    .order_by(ExtractedFieldRecord.confirmed_at.desc())
+                )
+            ).all()
+        )
+        if not candidates:
+            return
+
+        _, records = await self.pages._read_records(case_id, report_id, user)
+        s01_form_id = records["S01"].form_instance_id
+        if any(
+            record.form_status != FormStatus.DRAFT.value
+            for record in records.values()
+        ):
+            for record in records.values():
+                record.form_status = FormStatus.DRAFT.value
+                record.output_document_id = None
+                record.updated_by_user_id = user.user_id
+                await self.valuation.repository.save_form(record)
+
+        current_page = await self.pages.get_s01(case_id, report_id, user)
+        current_data = current_page.data.model_dump(mode="json")
+        direct_map = {
+            "administrative_area": "district_name",
+            "zone_boundary_description": "district_boundary",
+            "survey_date": "survey_date",
+            "urban_plan_scope": "urban_plan_status",
+            "land_use_zone_category": "land_use_zone",
+            "building_coverage_ratio": "building_coverage_rate",
+            "floor_area_ratio": "floor_area_ratio",
+            "building_prohibition_status": "prohibited_building",
+            "building_restriction_status": "restricted_building",
+            "building_restriction_details": "restricted_building",
+            "main_road_name": "main_road_name",
+            "main_road_width_m": "main_road_width_m",
+            "average_internal_road_width_m": "average_road_width_m",
+            "internal_road_width_m": "average_road_width_m",
+            "handler_name": "handler_name",
+            "section_chief_name": "section_head_name",
+            "director_name": "director_name",
+            "appraiser_name": "appraiser_name",
+        }
+        observation_map = {
+            "urban_plan_scope": "urban_plan_status",
+            "land_use_zone_category": "land_use_zone",
+            "building_coverage_ratio": "building_coverage_rate",
+            "floor_area_ratio": "floor_area_ratio",
+            "building_prohibition_status": "prohibited_building",
+            "building_restriction_status": "restricted_building",
+            "building_restriction_details": "restricted_building",
+            "main_road_width_m": "main_road_width",
+            "internal_road_width_m": "average_road_width",
+            "average_internal_road_width_m": "average_road_width",
+            "road_planning_development_level": "road_plan",
+            "drainage_level": "drainage",
+            "terrain_level": "terrain",
+            "slope_level": "terrain",
+            "consumer_market_proximity": "market_proximity",
+            "major_station_distance_m": "mass_transit_proximity",
+            "major_station_type": "mass_transit_proximity",
+            "interchange_distance_m": "interchange_proximity",
+            "commercial_facility_distance_m": "department_store",
+            "commercial_facility_count": "department_store",
+            "pollution_distance_m": "environmental_pollution",
+            "wastewater_waste_facility_present": "waste_facility",
+        }
+        numeric_targets = {
+            "building_coverage_rate",
+            "floor_area_ratio",
+            "main_road_width_m",
+            "average_road_width_m",
+        }
+        direct_values: dict[str, object] = {}
+        observations = list(current_data.get("observations") or [])
+        by_code = {item.get("item_code"): item for item in observations}
+        applied: list[ExtractedFieldRecord] = []
+
+        for candidate in candidates:
+            source = str(candidate.field_name)
+            value: object = candidate.confirmed_value
+            target = direct_map.get(source)
+            if target == "survey_date":
+                raw = str(value).strip().replace("/", "-")
+                roc = re.fullmatch(r"(\d{2,3})年(\d{1,2})月(\d{1,2})日", str(value).strip())
+                if roc:
+                    raw = f"{int(roc.group(1)) + 1911:04d}-{int(roc.group(2)):02d}-{int(roc.group(3)):02d}"
+                try:
+                    value = date.fromisoformat(raw)
+                except ValueError:
+                    warnings.append("CONFIRMED_S01_SURVEY_DATE_INVALID_REQUIRES_CORRECTION")
+                    continue
+            elif target in numeric_targets:
+                try:
+                    value = Decimal(str(value).strip().replace(",", "").replace("%", ""))
+                except (InvalidOperation, ValueError):
+                    warnings.append("CONFIRMED_S01_NUMERIC_VALUE_INVALID_REQUIRES_CORRECTION")
+                    continue
+            if target is not None:
+                direct_values[target] = value
+
+            item_code = observation_map.get(source)
+            if item_code in TEMPLATE_FACTOR_CODES:
+                row = by_code.get(item_code, {"item_code": item_code})
+                row.update({
+                    "raw_value": value,
+                    "source_type": "DOCUMENT_CONFIRMED",
+                    "source_document_id": candidate.document_id,
+                    "source_notes": "AI/OCR 候選內容經使用者確認",
+                    "confirmed_by_user": True,
+                })
+                by_code[item_code] = row
+            if target is not None or item_code in TEMPLATE_FACTOR_CODES:
+                applied.append(candidate)
+
+        if by_code:
+            direct_values["observations"] = list(by_code.values())
+        if not direct_values:
+            return
+        try:
+            await self.pages.update_s01(
+                case_id,
+                report_id,
+                S01DraftUpdate.model_validate(direct_values),
+                user,
+            )
+        except (ValueError, AppError):
+            warnings.append("CONFIRMED_S01_VALUE_INVALID_REQUIRES_CORRECTION")
+            return
+        for candidate in applied:
+            await self.extraction_repository.apply_candidate(candidate, s01_form_id)
+
     async def _form_guidance(
         self,
         case_id: UUID,
@@ -893,17 +1442,30 @@ class AutomatedWorkflowService:
         benchmark_land_ids: list[UUID] | None = None,
         document_results: list[AutomatedDocumentResult] | None = None,
         warnings: list[str] | None = None,
+        ignored_duplicate_files: list[str] | None = None,
     ) -> AutomatedWorkflowResponse:
         case = await self.valuation.get_case(case_id, user)
         parcels = await self.valuation.list_parcels(case_id, user)
         benchmarks = await self.f03.list_benchmark_lands(case_id, user)
-        results = document_results or await self._document_results(case_id, user)
+        # The workbench must always receive every active document and its latest
+        # extraction.  Passing only the files from the most recent upload made
+        # older candidates disappear from the UI even though they remained in
+        # PostgreSQL.
+        results = await self._document_results(case_id, user)
         candidates = [
             candidate
             for result in results
             if result.extraction is not None
             for candidate in result.extraction.candidates
         ]
+        manual_field_values = {
+            str(form.form_code): dict(
+                (form.form_content or {}).get("manual_overrides") or {}
+            )
+            for form in await self.valuation.list_forms(case_id, user)
+            if isinstance(form.form_content, dict)
+            and isinstance(form.form_content.get("manual_overrides"), dict)
+        }
         pending = sum(item.field_status == "NEEDS_CONFIRMATION" for item in candidates)
         draft_1_3 = None
         draft_1_6 = None
@@ -962,6 +1524,7 @@ class AutomatedWorkflowService:
             blank_fields_remain=bool(missing_items),
             missing_items=missing_items,
             warnings=current_warnings,
+            ignored_duplicate_files=ignored_duplicate_files or [],
             next_action=next_action,
             draft_pages_1_3_url=draft_1_3,
             draft_pages_1_6_url=draft_1_6,
@@ -980,6 +1543,7 @@ class AutomatedWorkflowService:
                     ),
                 )
             ),
+            manual_field_values=manual_field_values,
         )
     @staticmethod
     def _workflow_missing_items(
@@ -1009,7 +1573,7 @@ class AutomatedWorkflowService:
         case_id: UUID,
         user: User,
     ) -> list[AutomatedDocumentResult]:
-        records = await self.documents.list_documents(case_id, user)
+        records = await self.documents.list_active_documents(case_id, user)
         results: list[AutomatedDocumentResult] = []
         for record in records:
             extraction = await self.extraction_repository.latest_for_document(

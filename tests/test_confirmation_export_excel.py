@@ -65,10 +65,12 @@ def test_confirmation_export_xlsx_lists_all_fields_with_chinese_labels() -> None
     assert ws.cell(row=2, column=1).value == "案件：QA-CASE-001 確認結果測試"
 
     # Header is at row 5
-    headers = [ws.cell(row=5, column=col).value for col in range(1, 12)]
+    headers = [ws.cell(row=5, column=col).value for col in range(1, 15)]
     assert headers == [
         "表單",
         "欄位代碼",
+        "候選群組",
+        "不同候選答案數",
         "欄位中文名稱",
         "狀態",
         "確認/修正值",
@@ -78,6 +80,7 @@ def test_confirmation_export_xlsx_lists_all_fields_with_chinese_labels() -> None
         "分析來源",
         "信心度",
         "建立時間",
+        "計算／缺值備註",
     ]
 
     row_count = ws.max_row
@@ -89,8 +92,8 @@ def test_confirmation_export_xlsx_lists_all_fields_with_chinese_labels() -> None
     for row_idx in range(6, row_count + 1):
         form_code = ws.cell(row=row_idx, column=1).value
         field_name = ws.cell(row=row_idx, column=2).value
-        label_zh = ws.cell(row=row_idx, column=3).value
-        status = ws.cell(row=row_idx, column=4).value
+        label_zh = ws.cell(row=row_idx, column=5).value
+        status = ws.cell(row=row_idx, column=6).value
 
         if form_code == "F03" and field_name == "benchmark_land_no":
             found_f03_bm = True
@@ -102,3 +105,127 @@ def test_confirmation_export_xlsx_lists_all_fields_with_chinese_labels() -> None
 
     assert found_f03_bm
     assert found_s01_drainage
+
+
+def test_confirmation_export_calculates_only_when_no_direct_answer() -> None:
+    xlsx_bytes = build_confirmation_export_xlsx(
+        case_no="QA-CASE-002",
+        case_title="formula fallback",
+        generated_at=datetime(2026, 9, 8, 9, 0, tzinfo=UTC),
+        candidates=[
+            SimpleNamespace(
+                form_code="F02",
+                field_name="normal_land_unit_price",
+                field_status="CONFIRMED",
+                confirmed_value="100",
+                extracted_value="100",
+                source_text="normal price",
+                page_number=1,
+                analysis_provider="CODEX",
+                confidence_score=0.95,
+                created_at=datetime(2026, 9, 8, 9, 0, tzinfo=UTC),
+            ),
+            SimpleNamespace(
+                form_code="F02",
+                field_name="date_adjustment_rate",
+                field_status="CONFIRMED",
+                confirmed_value="2%",
+                extracted_value="2%",
+                source_text="date rate",
+                page_number=1,
+                analysis_provider="CODEX",
+                confidence_score=0.95,
+                created_at=datetime(2026, 9, 8, 9, 0, tzinfo=UTC),
+            ),
+        ],
+    )
+
+    ws = openpyxl.load_workbook(BytesIO(xlsx_bytes)).active
+    rows = [
+        [ws.cell(row=row_idx, column=column).value for column in range(1, 15)]
+        for row_idx in range(6, ws.max_row + 1)
+    ]
+    adjusted = next(
+        row for row in rows
+        if row[0] == "F02" and row[1] == "adjusted_unit_price_display"
+    )
+    assert adjusted[5] == "FORMULA_CALCULATED"
+    assert adjusted[6] == "102"
+    assert adjusted[10] == "FORMULA"
+
+    trial = next(
+        row for row in rows
+        if row[0] == "F02" and row[1] == "trial_price"
+    )
+    assert trial[5] == "FORMULA_INPUT_MISSING"
+
+
+def test_confirmation_export_marks_multiple_answers_for_one_field() -> None:
+    xlsx_bytes = build_confirmation_export_xlsx(
+        case_no="QA-CASE-003",
+        case_title="multiple answers",
+        generated_at=datetime(2026, 9, 8, 9, 0, tzinfo=UTC),
+        candidates=[
+            SimpleNamespace(
+                form_code="F03",
+                field_name="benchmark_land_no",
+                field_status="CONFIRMED",
+                confirmed_value="P001-00",
+                extracted_value="P001-00",
+                source_text="document A",
+                page_number=1,
+                analysis_provider="OCR",
+                confidence_score=0.9,
+                created_at=datetime(2026, 9, 8, 9, 0, tzinfo=UTC),
+            ),
+            SimpleNamespace(
+                form_code="F03",
+                field_name="benchmark_land_no",
+                field_status="REJECTED",
+                confirmed_value=None,
+                extracted_value="P002-00",
+                source_text="document B",
+                page_number=1,
+                analysis_provider="OCR",
+                confidence_score=0.8,
+                created_at=datetime(2026, 9, 8, 9, 0, tzinfo=UTC),
+            ),
+        ],
+    )
+
+    ws = openpyxl.load_workbook(BytesIO(xlsx_bytes)).active
+    rows = [
+        [ws.cell(row=row_idx, column=column).value for column in range(1, 15)]
+        for row_idx in range(6, ws.max_row + 1)
+        if ws.cell(row=row_idx, column=1).value == "F03"
+        and ws.cell(row=row_idx, column=2).value == "benchmark_land_no"
+    ]
+
+    assert len(rows) == 2
+    assert {row[2] for row in rows} == {"F03.benchmark_land_no"}
+    assert {row[3] for row in rows} == {2}
+    assert all("請只確認一筆正確答案" in row[13] for row in rows)
+
+
+def test_confirmation_export_includes_loaded_manual_values() -> None:
+    xlsx_bytes = build_confirmation_export_xlsx(
+        case_no="QA-CASE-MANUAL",
+        case_title="manual values",
+        generated_at=datetime(2026, 9, 10, 9, 0, tzinfo=UTC),
+        candidates=[],
+        manual_values={"S01": {"administrative_area": "65000010"}},
+    )
+
+    ws = openpyxl.load_workbook(BytesIO(xlsx_bytes)).active
+    rows = [
+        [ws.cell(row=row_idx, column=column).value for column in range(1, 15)]
+        for row_idx in range(6, ws.max_row + 1)
+    ]
+    manual = next(
+        row for row in rows
+        if row[0] == "S01" and row[1] == "administrative_area"
+    )
+    assert manual[4] == "行政區"
+    assert manual[5] == "MANUAL_CONFIRMED"
+    assert manual[6] == "65000010"
+    assert manual[10] == "MANUAL"

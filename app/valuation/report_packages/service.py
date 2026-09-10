@@ -103,6 +103,7 @@ class ReportPackageService:
         form_codes = tuple(
             page.form_code for page in definition.pages if page.form_code is not None
         )
+        default_formal_rule = await self.repository.select_default_formal_rule(case)
         version_no = await self.repository.next_version(case_id, form_codes)
         component_ids = {form_code: uuid4() for form_code in form_codes}
         report_id = component_ids[REPORT_ROOT_FORM_CODE]
@@ -131,11 +132,20 @@ class ReportPackageService:
                         "F02-RF": "f02-rf-draft-v1",
                         "F02": "f02-draft-v1",
                     }[form_code],
-                    "data": {
-                        "S01": S01DraftData,
-                        "F02-RF": F02RFDraftData,
-                        "F02": F02DraftData,
-                    }[form_code]().model_dump(mode="json"),
+                    "data": (
+                        F02RFDraftData(
+                            rule_version_id=(
+                                None
+                                if default_formal_rule is None
+                                else default_formal_rule.rule_version_id
+                            )
+                        )
+                        if form_code == "F02-RF"
+                        else {
+                            "S01": S01DraftData,
+                            "F02": F02DraftData,
+                        }[form_code]()
+                    ).model_dump(mode="json"),
                 },
                 prepared_date=payload.prepared_date,
                 created_by_user_id=user.user_id,

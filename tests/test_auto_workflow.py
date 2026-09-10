@@ -1,8 +1,12 @@
 import json
 from datetime import date
 from decimal import Decimal
+from io import BytesIO
+from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
+from fastapi import UploadFile
 from pydantic import ValidationError
 
 from app.valuation.automation.schemas import AutomatedIntakeManifest
@@ -11,6 +15,7 @@ from app.valuation.automation.service import (
     AutomatedWorkflowService,
     classify_document,
 )
+import app.valuation.automation.service as automation_service
 from app.valuation.documents.schemas import DocumentCategory
 from app.valuation.requirements import FORM_REQUIREMENTS
 from app.main import app
@@ -121,6 +126,52 @@ def test_automated_intake_extracts_pdf_and_xlsx_sources() -> None:
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         in AUTO_EXTRACT_MIME_TYPES
     )
+
+
+def test_intake_file_checksum_is_repeatable_and_rewinds_upload() -> None:
+    upload = UploadFile(filename="duplicate.pdf", file=BytesIO(b"same source bytes"))
+
+    checksum = AutomatedWorkflowService._source_file_checksum(upload)
+
+    assert checksum == AutomatedWorkflowService._source_file_checksum(upload)
+    assert upload.file.read() == b"same source bytes"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_field_analysis_scans_every_official_form(monkeypatch) -> None:
+    analyzed_form_codes: list[str] = []
+
+    class FakeFieldAnalysisService:
+        def __init__(self, session) -> None:
+            assert session is None
+
+        async def analyze(self, _case_id, _document_id, payload, _user) -> None:
+            analyzed_form_codes.append(payload.form_code.value)
+
+    monkeypatch.setattr(
+        automation_service,
+        "get_settings",
+        lambda: SimpleNamespace(ai_provider="bedrock"),
+    )
+    monkeypatch.setattr(
+        automation_service,
+        "FieldAnalysisService",
+        FakeFieldAnalysisService,
+    )
+    service = object.__new__(AutomatedWorkflowService)
+    service.session = None
+    warnings: list[str] = []
+
+    await service._optional_ai_analysis(
+        uuid4(),
+        uuid4(),
+        False,
+        SimpleNamespace(),
+        warnings,
+    )
+
+    assert analyzed_form_codes == ["F01", "F02", "F02-RF", "F03", "F04", "S01"]
+    assert warnings == []
 
 
 def test_missing_items_are_based_on_actual_requirements_not_report_presence() -> None:

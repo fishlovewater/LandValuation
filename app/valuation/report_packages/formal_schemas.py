@@ -34,11 +34,11 @@ class FormalTargetCalculationResponse(BaseModel):
 class FormalCalculationResponse(BaseModel):
     case_id: UUID
     report_id: UUID
-    comparison_analysis_id: UUID
-    rule_version_id: UUID
+    comparison_analysis_id: UUID | None = None
+    rule_version_id: UUID | None = None
     formula_code: str
     rounding_code: str
-    benchmark_comparison_price: Decimal
+    benchmark_comparison_price: Decimal | None = None
     targets: list[FormalTargetCalculationResponse]
     input_fingerprint: str
     calculated_at: datetime
@@ -94,3 +94,9 @@ class FormalReportResponse(BaseModel):
     file_size_bytes: int
     download_path: str
     request_id: UUID | None = None
+
+
+class FormalWorkflowStatusResponse(BaseModel):
+    validation: FormalValidationResponse | None = None
+    report: FormalReportResponse | None = None
+    requires_revalidation_for_submission: bool = False

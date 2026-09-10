@@ -830,7 +830,10 @@ class ReviewService:
         require_date(rule_source["effective_to"])
 
         validation_rules = rule_selection["validation_rules"]
-        if not isinstance(validation_rules, list) or not validation_rules:
+        # A Valuation formal-validation snapshot is authoritative at handoff.
+        # A fixed rule pack can therefore legitimately omit the legacy
+        # F01-only Review comparison rules and produce a zero-extra-check run.
+        if not isinstance(validation_rules, list):
             raise invalid()
         rule_keys = {
             "validation_rule_id",

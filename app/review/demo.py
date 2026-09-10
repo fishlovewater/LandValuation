@@ -184,6 +184,14 @@ def _reset_database(connection) -> tuple[dict[str, UUID | None], list[str]]:
                 "DELETE FROM review.decisions WHERE review_id IN (SELECT review_id FROM review.reviews WHERE case_id = %s)",
                 (case_id,),
             )
+            # A decision may retain the Demo user as its decider even when
+            # its review link has already been cleared by an older fixture.
+            # Remove only this Demo user's decisions before removing the user.
+            if user_id:
+                cursor.execute(
+                    "DELETE FROM review.decisions WHERE decided_by_user_id = %s",
+                    (user_id,),
+                )
             cursor.execute(
                 "DELETE FROM review.risk_summaries WHERE review_id IN (SELECT review_id FROM review.reviews WHERE case_id = %s)",
                 (case_id,),
@@ -249,6 +257,13 @@ def _reset_database(connection) -> tuple[dict[str, UUID | None], list[str]]:
                 (knowledge_id,),
             )
         if user_id:
+            # Older Review demo runs can outlive the Demo case after a
+            # partial reset.  Keep those immutable audit runs, but remove the
+            # obsolete actor reference so the Demo account can be recreated.
+            cursor.execute(
+                "UPDATE valuation.validation_runs SET triggered_by_user_id = NULL WHERE triggered_by_user_id = %s",
+                (user_id,),
+            )
             cursor.execute("DELETE FROM auth.users WHERE user_id = %s", (user_id,))
     return ids, object_keys
 
