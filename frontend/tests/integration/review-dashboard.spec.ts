@@ -8,22 +8,25 @@ import ReviewCaseTable from '../../src/modules/review/components/ReviewCaseTable
 describe('review dashboard transport and table', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('maps the real summary DTO and serializes only verified queue query params', async () => {
+  it('maps the current summary DTO and serializes only verified queue query params', async () => {
     const get = vi.spyOn(http, 'get')
-    get.mockResolvedValueOnce({ data: { total_count: 8, pending_count: 2, in_review_count: 3, action_required_count: 1, completed_count: 2, urgent_count: 1 } } as never)
+    get.mockResolvedValueOnce({ data: { status_counts: { RECEIVED: 2, REVIEW_REQUIRED: 3, REVIEW_COMPLETED: 3 }, high_risk_count: 2, open_finding_count: 5, missing_item_count: 1 } } as never)
     const summary = await reviewApi.getWorkbenchSummary()
     expect(summary.totalCount).toBe(8)
+    expect(summary.openFindingCount).toBe(5)
 
     get.mockResolvedValueOnce({ data: { items: [], total: 0, limit: 20, offset: 20 } } as never)
-    await reviewApi.listWorkbenchCases({ q: '板橋', statusGroup: 'ACTIVE', riskLevel: 'HIGH', limit: 20, offset: 20 })
+    await reviewApi.listWorkbenchCases({ q: '板橋', statusGroup: 'in_progress', riskLevel: 'HIGH', limit: 20, offset: 20 })
     expect(get).toHaveBeenLastCalledWith('/api/v1/review/workbench/cases', {
-      params: { q: '板橋', status_group: 'ACTIVE', risk_level: 'HIGH', limit: 20, offset: 20 },
+      params: { q: '板橋', status_group: 'in_progress', risk_level: 'HIGH', limit: 20, offset: 20 },
     })
   })
 
   it('emits the selected review id from a queue row', async () => {
     const wrapper = mount(ReviewCaseTable, { props: { items: [{
-      reviewId:'r1', caseId:'c1', caseNo:'CASE-001', title:'板橋案件', district:'板橋區', status:'IN_REVIEW', statusLabel:'審查中', riskLevel:'HIGH', riskLabel:'高風險', missingItemCount:1, updatedAt:'2026-09-10T09:00:00+08:00', raw:{status:'IN_REVIEW',riskLevel:'HIGH'},
+      reviewId:'r1', caseId:'c1', caseNo:'CASE-001', title:'板橋案件', district:'3101', status:'REVIEW_REQUIRED', statusLabel:'需人工審查', riskLevel:'HIGH', riskLabel:'高風險', missingItemCount:1,
+      highCount:1, mediumCount:0, lowCount:0, receivedAt:'2026-09-10T08:00:00+08:00', dueAt:undefined, reviewerName:'審查員', latestRunId:'run-1', urgencyLevel:'NORMAL', remainingDays:3, correctionRound:0,
+      raw:{status:'REVIEW_REQUIRED',riskLevel:'HIGH'},
     }] } })
     await wrapper.get('button[data-review-id="r1"]').trigger('click')
     expect(wrapper.emitted('open')?.[0]).toEqual(['r1'])

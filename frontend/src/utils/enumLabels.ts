@@ -1,6 +1,15 @@
 const STATUS: Record<string, string> = {
-  RECEIVED: '待分派', ASSIGNED: '已分派', IN_REVIEW: '審查中', CORRECTION_REQUIRED: '待補正',
-  RESUBMITTED: '已補正', APPROVED: '已通過', REJECTED: '未通過', CLOSED: '已結案',
+  RECEIVED: '已收件',
+  PREPROCESSING: '前處理中',
+  PENDING_MATERIALS: '待補資料',
+  READY_FOR_REVIEW: '待審查',
+  ANALYZING: '分析中',
+  REVIEW_REQUIRED: '需人工審查',
+  RETURNED_FOR_REVISION: '退回修正',
+  SUPPLEMENT_REQUIRED: '要求補正',
+  EXPERT_REVIEW: '專家審查',
+  APPROVED: '已通過',
+  REVIEW_COMPLETED: '審查完成',
 }
 const RISK: Record<string, string> = { LOW: '低風險', MEDIUM: '中風險', HIGH: '高風險', CRITICAL: '重大風險' }
 

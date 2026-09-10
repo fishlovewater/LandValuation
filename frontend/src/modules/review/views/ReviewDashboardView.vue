@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '../../../components/common/PageHeader.vue'
 import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
@@ -8,13 +8,15 @@ import ErrorState from '../../../components/common/ErrorState.vue'
 import ReviewSummary from '../components/ReviewSummary.vue'
 import ReviewCaseTable from '../components/ReviewCaseTable.vue'
 import { reviewApi } from '../review.api'
-import type { ReviewCasePage, ReviewSummary as Summary } from '../review.types'
+import type { ReviewCasePage, ReviewCaseQuery, ReviewSummary as Summary } from '../review.types'
 
 const route = useRoute(); const router = useRouter()
 const summary = ref<Summary | null>(null); const page = ref<ReviewCasePage | null>(null)
 const loading = ref(true); const error = ref('')
 const q = ref(typeof route.query.q === 'string' ? route.query.q : '')
-const statusGroup = ref(typeof route.query.status_group === 'string' ? route.query.status_group : '')
+const statusGroup = ref<ReviewCaseQuery['statusGroup'] | ''>(
+  typeof route.query.status_group === 'string' ? route.query.status_group as ReviewCaseQuery['statusGroup'] : '',
+)
 const riskLevel = ref(typeof route.query.risk_level === 'string' ? route.query.risk_level : '')
 const offset = ref(Number(route.query.offset ?? 0) || 0); const limit = 20
 const hasPrevious = computed(() => offset.value > 0); const hasNext = computed(() => page.value ? page.value.offset + page.value.limit < page.value.total : false)
@@ -35,7 +37,6 @@ async function applyFilters() { offset.value = 0; await syncQuery(); await load(
 async function syncQuery() { await router.replace({ query:{ ...(q.value && {q:q.value}), ...(statusGroup.value && {status_group:statusGroup.value}), ...(riskLevel.value && {risk_level:riskLevel.value}), ...(offset.value && {offset:String(offset.value)}) } }) }
 async function move(delta:number) { offset.value = Math.max(0, offset.value + delta * limit); await syncQuery(); await load() }
 function openCase(reviewId:string) { void router.push(`/app/review/cases/${reviewId}`) }
-watch(() => route.query, () => {}, { deep:true })
 onMounted(load)
 </script>
 <template>
@@ -47,7 +48,7 @@ onMounted(load)
       <ReviewSummary v-if="summary" :summary="summary" />
       <form class="filter-bar" @submit.prevent="applyFilters">
         <label>搜尋<input v-model="q" placeholder="案件編號、標題或地區" /></label>
-        <label>工作群組<select v-model="statusGroup"><option value="">全部</option><option value="PENDING">待處理</option><option value="ACTIVE">進行中</option><option value="ACTION_REQUIRED">需處理</option><option value="COMPLETED">已完成</option></select></label>
+        <label>工作群組<select v-model="statusGroup"><option value="">全部</option><option value="pending">待處理</option><option value="in_progress">進行中</option><option value="needs_input">需補件/處理</option><option value="completed">已完成</option><option value="risk">風險案件</option></select></label>
         <label>風險<select v-model="riskLevel"><option value="">全部</option><option value="CRITICAL">重大</option><option value="HIGH">高</option><option value="MEDIUM">中</option><option value="LOW">低</option></select></label>
         <button class="primary-button" type="submit">套用</button>
       </form>

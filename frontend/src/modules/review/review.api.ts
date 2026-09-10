@@ -14,8 +14,11 @@ export const reviewApi = {
   async getWorkbenchSummary(): Promise<ReviewSummary> {
     const { data } = await http.get<WorkbenchSummaryDto>('/api/v1/review/workbench/summary')
     return {
-      totalCount:data.total_count, pendingCount:data.pending_count, inReviewCount:data.in_review_count,
-      actionRequiredCount:data.action_required_count, completedCount:data.completed_count, urgentCount:data.urgent_count,
+      statusCounts: data.status_counts,
+      totalCount: Object.values(data.status_counts).reduce((sum, count) => sum + count, 0),
+      highRiskCount: data.high_risk_count,
+      openFindingCount: data.open_finding_count,
+      missingItemCount: data.missing_item_count,
     }
   },
 
