@@ -1,5 +1,5 @@
 import { http } from '../../api/http'
-import { mapReviewCase, mapWorkbenchDetail } from './review.mappers'
+import { mapReviewCase, mapWorkbenchDetail, mapWorkbenchStart } from './review.mappers'
 import type {
   ReviewCaseDetail,
   ReviewCasePage,
@@ -8,6 +8,8 @@ import type {
   WorkbenchCaseListDto,
   WorkbenchDetailDto,
   WorkbenchSummaryDto,
+  WorkbenchStartDto,
+  ReviewStartResult,
 } from './review.types'
 
 export const reviewApi = {
@@ -37,5 +39,18 @@ export const reviewApi = {
   async getWorkbenchCase(reviewId: string): Promise<ReviewCaseDetail> {
     const { data } = await http.get<WorkbenchDetailDto>(`/api/v1/review/workbench/cases/${reviewId}`)
     return mapWorkbenchDetail(data)
+  },
+
+  async startWorkbenchCase(reviewId: string): Promise<ReviewStartResult> {
+    const { data } = await http.post<WorkbenchStartDto>(`/api/v1/review/workbench/cases/${reviewId}/start`)
+    return mapWorkbenchStart(data)
+  },
+
+  async getDocumentContent(reviewId: string, documentId: string): Promise<Blob> {
+    const { data } = await http.get<Blob>(
+      `/api/v1/review/workbench/cases/${reviewId}/documents/${documentId}/content`,
+      { responseType: 'blob' },
+    )
+    return data
   },
 }
