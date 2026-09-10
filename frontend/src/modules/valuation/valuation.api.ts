@@ -1,7 +1,9 @@
 import { isAxiosError } from 'axios'
 import { ForbiddenError, http } from '../../api/http'
 import type {
+  AutomatedConfirmRequestDto,
   AutomatedWorkflowResponseDto,
+  BenchmarkLandCreateDto,
   BenchmarkLandResponseDto,
   CalculationRequestDto,
   CalculationResponseDto,
@@ -19,6 +21,10 @@ import type {
   FormRequirementResponseDto,
   FormCreateDto,
   FormResponseDto,
+  ExtractionResponseDto,
+  ParcelCreateDto,
+  ParcelResponseDto,
+  ParcelUpdateDto,
   ReportPageCode,
   ReportPageResponseDto,
   ReportPackageCreateDto,
@@ -62,6 +68,17 @@ export const valuationApi = {
     return response.data
   },
 
+  async confirmWorkflowCandidates(
+    caseId: string,
+    payload: AutomatedConfirmRequestDto,
+  ): Promise<AutomatedWorkflowResponseDto> {
+    const response = await http.post<AutomatedWorkflowResponseDto>(
+      `/valuation/cases/${caseId}/auto-workflow/confirm`,
+      payload,
+    )
+    return response.data
+  },
+
   async getReviewHandoff(caseId: string): Promise<ValuationReviewHandoffDto> {
     const response = await http.get<ValuationReviewHandoffDto>(
       `/valuation/cases/${caseId}/review-handoff`,
@@ -92,6 +109,28 @@ export const valuationApi = {
 
   async getCase(caseId: string): Promise<CaseResponseDto> {
     const response = await http.get<CaseResponseDto>(`/valuation/cases/${caseId}`)
+    return response.data
+  },
+
+  async listParcels(caseId: string): Promise<ParcelResponseDto[]> {
+    const response = await http.get<ParcelResponseDto[]>(`/valuation/cases/${caseId}/parcels`)
+    return response.data
+  },
+
+  async createParcel(caseId: string, payload: ParcelCreateDto): Promise<ParcelResponseDto> {
+    const response = await http.post<ParcelResponseDto>(`/valuation/cases/${caseId}/parcels`, payload)
+    return response.data
+  },
+
+  async updateParcel(
+    caseId: string,
+    parcelId: string,
+    payload: ParcelUpdateDto,
+  ): Promise<ParcelResponseDto> {
+    const response = await http.patch<ParcelResponseDto>(
+      `/valuation/cases/${caseId}/parcels/${parcelId}`,
+      payload,
+    )
     return response.data
   },
 
@@ -142,6 +181,17 @@ export const valuationApi = {
     return response.data
   },
 
+  async createBenchmarkLand(
+    caseId: string,
+    payload: BenchmarkLandCreateDto,
+  ): Promise<BenchmarkLandResponseDto> {
+    const response = await http.post<BenchmarkLandResponseDto>(
+      `/valuation/cases/${caseId}/benchmark-lands`,
+      payload,
+    )
+    return response.data
+  },
+
   async listDocuments(caseId: string): Promise<DocumentResponseDto[]> {
     const response = await http.get<DocumentResponseDto[]>(
       `/valuation/cases/${caseId}/documents`,
@@ -160,6 +210,20 @@ export const valuationApi = {
     const response = await http.post<DocumentResponseDto>(`/valuation/cases/${caseId}/documents`, body, {
       headers: { 'Content-Type': undefined },
     })
+    return response.data
+  },
+
+  async startDocumentExtraction(caseId: string, documentId: string): Promise<ExtractionResponseDto> {
+    const response = await http.post<ExtractionResponseDto>(
+      `/valuation/cases/${caseId}/documents/${documentId}/extract`,
+    )
+    return response.data
+  },
+
+  async getDocumentExtraction(caseId: string, documentId: string): Promise<ExtractionResponseDto> {
+    const response = await http.get<ExtractionResponseDto>(
+      `/valuation/cases/${caseId}/documents/${documentId}/extraction`,
+    )
     return response.data
   },
 

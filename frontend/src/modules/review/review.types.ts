@@ -275,6 +275,25 @@ export interface CorrectionRequestItemDto {
   rechecked_at: string | null
 }
 
+export interface WorkbenchFieldVersionDto {
+  document_id: string
+  document_group_id: string
+  document_version: number
+  field_code: string
+  field_path: string | null
+  normalized_value: unknown
+  raw_text: string | null
+  page_number: number | null
+}
+
+export interface FieldVersionDiffDto {
+  document_group_id: string
+  field_code: string
+  field_path: string | null
+  previous: WorkbenchFieldVersionDto
+  current: WorkbenchFieldVersionDto
+}
+
 export interface WorkbenchCaseDetailDto {
   case: WorkbenchCaseSummaryDto
   review: ReviewDto
@@ -288,7 +307,7 @@ export interface WorkbenchCaseDetailDto {
   findings: FindingDto[]
   risk_summary: RiskSummaryDto | null
   decisions: DecisionDto[]
-  version_diffs: unknown[]
+  version_diffs: FieldVersionDiffDto[]
   report_document: GeneratedReportDto | null
   generated_reports: GeneratedReportDto[]
   correction_requests: CorrectionRequestDto[]
@@ -432,6 +451,21 @@ export interface ReviewDecisionModel {
   decidedAt: string
 }
 
+export interface ReviewVersionDiffModel {
+  key: string
+  fieldCode: string
+  fieldPath: string | null
+  fieldLabel: string
+  previousDocumentVersion: number
+  previousValue: string
+  previousRawText: string | null
+  previousPageNumber: number | null
+  currentDocumentVersion: number
+  currentValue: string
+  currentRawText: string | null
+  currentPageNumber: number | null
+}
+
 export interface ReviewDetailModel {
   caseId: string
   caseNo: string
@@ -454,5 +488,6 @@ export interface ReviewDetailModel {
   reportDocument: GeneratedReportDto | null
   generatedReports: GeneratedReportDto[]
   correctionRequests: CorrectionRequestDto[]
+  versionDiffs: ReviewVersionDiffModel[]
   unresolvedFindingCount: number
 }

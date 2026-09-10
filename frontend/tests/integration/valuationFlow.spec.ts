@@ -47,9 +47,12 @@ const appraiser: AuthUser = {
   roles: ['APPRAISER'],
   permissions: [
     'case.read',
+    'case.create',
+    'case.update',
     'valuation.read',
     'valuation.update',
     'valuation.submit_review',
+    'document.upload',
     'document.download',
   ],
 }
@@ -145,6 +148,23 @@ const benchmarkDto = {
   latitude: '24.9567',
   longitude: '121.5034',
   is_active: true,
+  created_at: '2026-09-07T01:00:00Z',
+  updated_at: '2026-09-07T01:00:00Z',
+}
+
+const parcelDto = {
+  parcel_id: ids.parcel,
+  case_id: ids.case,
+  district_code: '65000030',
+  section_name: '安康段',
+  subsection_name: '',
+  land_no: '123-4',
+  area_sqm: '100.5000',
+  land_use_zone: '住宅區',
+  designated_use: null,
+  ownership_numerator: null,
+  ownership_denominator: null,
+  source_document_id: ids.sourceDocument,
   created_at: '2026-09-07T01:00:00Z',
   updated_at: '2026-09-07T01:00:00Z',
 }
@@ -407,6 +427,7 @@ describe('valuation demo flow', () => {
         return response([authoritativeFormDto, f03], config)
       }
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/f03`) return response(f03Dto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/parcels`) return response([parcelDto], config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([benchmarkDto], config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response(documentsDto, config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) return response(reportProgressDto, config)
@@ -981,6 +1002,8 @@ describe('valuation demo flow', () => {
       if (config.method === 'get' && config.url === `/valuation/cases/${caseBId}/forms`) return response([formB], config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/f03`) return response(f03A, config)
       if (config.method === 'get' && config.url === `/valuation/cases/${caseBId}/forms/${f03BId}/f03`) return response(f03B, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/parcels`) return response([{ ...parcelDto }], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${caseBId}/parcels`) return response([{ ...parcelDto, case_id: caseBId }], config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([{ ...benchmarkDto }], config)
       if (config.method === 'get' && config.url === `/valuation/cases/${caseBId}/benchmark-lands`) return response([{ ...benchmarkDto, case_id: caseBId }], config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response([], config)
@@ -1114,6 +1137,7 @@ describe('valuation demo flow', () => {
       }
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/f03`) return response(f03Dto, config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms/${newF03Id}/f03`) return response(newF03Dto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/parcels`) return response([parcelDto], config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([benchmarkDto], config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response(documentsDto, config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/review-handoff`) return response(handoff, config)
@@ -1185,6 +1209,365 @@ describe('valuation demo flow', () => {
     expect(requests.some((request) => request.url === `/valuation/cases/${ids.case}/forms` && request.method === 'post')).toBe(true)
     expect(requests.some((request) => request.url === `/valuation/cases/${ids.case}/report-packages` && request.method === 'post')).toBe(true)
     expect(requests.filter((request) => request.url?.startsWith(`/valuation/cases/${ids.case}/reports/${newReportId}/pages/`) && request.method === 'patch')).toHaveLength(3)
+    wrapper.unmount()
+  })
+
+  it('reviews an extracted candidate, preserves its evidence, and sends only the explicit human decision', async () => {
+    const extractionId = '22222222-2222-4222-8222-222222222222'
+    const candidateId = '23232323-2323-4232-8232-232323232323'
+    const sourceDocument = {
+      ...documentsDto[0],
+      document_id: ids.sourceDocument,
+      document_group_id: '24242424-2424-4242-8242-242424242424',
+      document_type: 'original',
+      original_filename: 'source-valuation.pdf',
+      object_key: 'cases/internal/source-valuation.pdf',
+      checksum_sha256: 'source-not-rendered',
+      version_no: 1,
+    }
+    const candidate = {
+      extracted_field_id: candidateId,
+      extraction_id: extractionId,
+      document_id: ids.sourceDocument,
+      form_code: 'F03',
+      field_name: 'valuation_base_date',
+      extracted_value: '2026-08-02',
+      confidence: '0.96',
+      source_page: 2,
+      source_text: 'valuation base date: 2026-08-02',
+      analysis_provider: 'PDF_TEXT',
+      model_id: null,
+      prompt_version: null,
+      field_status: 'NEEDS_CONFIRMATION',
+      confirmed_value: null,
+      confirmed_by_user_id: null,
+      confirmed_at: null,
+      applied_form_instance_id: null,
+      applied_at: null,
+    }
+    let candidatePending = false
+    let confirmationBody: Record<string, any> | null = null
+    const workflow = () => ({
+      status: candidatePending ? 'NEEDS_CONFIRMATION' : 'READY',
+      case: caseDto,
+      parcel_ids: [ids.parcel],
+      benchmark_land_ids: [ids.benchmarkLand],
+      f03_form_instance_id: ids.f03,
+      report_id: null,
+      documents: [],
+      candidates: candidatePending ? [candidate] : [{ ...candidate, field_status: 'APPLIED', confirmed_value: '2026-08-03' }],
+      pending_candidate_count: candidatePending ? 1 : 0,
+      blank_fields_remain: false,
+      missing_items: [],
+      warnings: [],
+      next_action: candidatePending ? 'REVIEW_CANDIDATES' : 'RUN_FORM_CALCULATION',
+      draft_pages_1_3_url: null,
+      draft_pages_1_6_url: null,
+      form_guidance: [],
+      automatic_pdf_generation_enabled: false,
+      automatic_confirmation_export_enabled: false,
+      confirmation_export: null,
+    })
+
+    http.defaults.adapter = vi.fn(async (config) => {
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}`) return response(caseDto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms`) return response([formDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/f03`) return response(f03Dto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/parcels`) return response([parcelDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([benchmarkDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response([sourceDocument], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) {
+        return response({ ...reportProgressDto, report_id: null, version_no: null }, config)
+      }
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/auto-workflow/review`) return response(workflow(), config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/review-handoff`) {
+        return response({
+          case_id: ids.case,
+          case_status: 'PROCESSING',
+          display_status: 'PROCESSING',
+          review_id: null,
+          review_status: null,
+          latest_submission: null,
+          correction: null,
+          missing_items: [],
+        }, config)
+      }
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/documents/${ids.sourceDocument}/extract`) {
+        candidatePending = true
+        return response({
+          extraction_id: extractionId,
+          case_id: ids.case,
+          document_id: ids.sourceDocument,
+          provider: 'PDF_TEXT',
+          extraction_status: 'COMPLETED',
+          page_count: 3,
+          extracted_text: null,
+          error_message: null,
+          started_at: '2026-09-11T00:00:00Z',
+          completed_at: '2026-09-11T00:00:01Z',
+          candidates: [candidate],
+        }, config)
+      }
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/auto-workflow/confirm`) {
+        confirmationBody = requestBody(config.data)
+        candidatePending = false
+        return response(workflow(), config)
+      }
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/valuation/cases/${ids.case}/prepare`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.find(`[data-testid="extract-document-${ids.sourceDocument}"]`).exists()).toBe(true))
+
+    await wrapper.get(`[data-testid="extract-document-${ids.sourceDocument}"]`).trigger('click')
+    await vi.waitFor(() => expect(wrapper.find(`[data-testid="candidate-${candidateId}"]`).exists()).toBe(true))
+    const candidateCard = wrapper.get(`[data-testid="candidate-${candidateId}"]`)
+    expect(candidateCard.text()).toContain('source-valuation.pdf')
+    expect(candidateCard.text()).toContain('96%')
+    expect(candidateCard.text()).toContain('valuation base date: 2026-08-02')
+
+    await wrapper.get(`[data-testid="candidate-value-${candidateId}"]`).setValue('2026-08-03')
+    await wrapper.get(`[data-testid="candidate-confirm-${candidateId}"]`).trigger('click')
+    await wrapper.get('[data-testid="submit-candidate-decisions"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find(`[data-testid="candidate-${candidateId}"]`).exists()).toBe(false))
+
+    expect(confirmationBody).toEqual({
+      confirmations: [{
+        document_id: ids.sourceDocument,
+        extracted_field_id: candidateId,
+        decision: 'CONFIRM',
+        corrected_value: '2026-08-03',
+      }],
+      confirm_apply: true,
+    })
+    expect(wrapper.get('[data-testid="valuation-candidate-workspace"]').text()).toContain('0')
+    wrapper.unmount()
+  })
+
+  it('creates and edits parcels and creates a benchmark land through the existing backend contracts', async () => {
+    const newParcelId = '25252525-2525-4252-8252-252525252525'
+    const newBenchmarkId = '26262626-2626-4262-8262-262626262626'
+    let parcelState: typeof parcelDto | null = null
+    let benchmarkState: typeof benchmarkDto | null = null
+    const writes: Array<{ method?: string; url?: string; body: Record<string, any> }> = []
+    const workflow = () => ({
+      status: 'COMPLETE_WORKFLOW_REQUIREMENTS',
+      case: caseDto,
+      parcel_ids: parcelState ? [parcelState.parcel_id] : [],
+      benchmark_land_ids: benchmarkState ? [benchmarkState.benchmark_land_id] : [],
+      f03_form_instance_id: ids.f03,
+      report_id: null,
+      documents: [],
+      candidates: [],
+      pending_candidate_count: 0,
+      blank_fields_remain: true,
+      missing_items: [
+        ...(parcelState ? [] : ['parcel']),
+        ...(benchmarkState ? [] : ['benchmark_land']),
+      ],
+      warnings: [],
+      next_action: 'COMPLETE_WORKFLOW_REQUIREMENTS',
+      draft_pages_1_3_url: null,
+      draft_pages_1_6_url: null,
+      form_guidance: [],
+      automatic_pdf_generation_enabled: false,
+      automatic_confirmation_export_enabled: false,
+      confirmation_export: null,
+    })
+
+    http.defaults.adapter = vi.fn(async (config) => {
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}`) return response(caseDto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/parcels`) return response(parcelState ? [parcelState] : [], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response(benchmarkState ? [benchmarkState] : [], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) {
+        return response({ ...reportProgressDto, report_id: null, version_no: null }, config)
+      }
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/auto-workflow/review`) return response(workflow(), config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/review-handoff`) {
+        return response({
+          case_id: ids.case,
+          case_status: 'PROCESSING',
+          display_status: 'PROCESSING',
+          review_id: null,
+          review_status: null,
+          latest_submission: null,
+          correction: null,
+          missing_items: [],
+        }, config)
+      }
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/parcels`) {
+        const body = requestBody(config.data)
+        writes.push({ method: config.method, url: config.url, body })
+        parcelState = {
+          ...parcelDto,
+          parcel_id: newParcelId,
+          section_name: String(body.section_name),
+          land_no: String(body.land_no),
+          area_sqm: String(body.area_sqm),
+          source_document_id: null,
+        }
+        return response(parcelState, config, 201)
+      }
+      if (config.method === 'patch' && config.url === `/valuation/cases/${ids.case}/parcels/${newParcelId}`) {
+        const body = requestBody(config.data)
+        writes.push({ method: config.method, url: config.url, body })
+        parcelState = { ...parcelState!, area_sqm: String(body.area_sqm) }
+        return response(parcelState, config)
+      }
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) {
+        const body = requestBody(config.data)
+        writes.push({ method: config.method, url: config.url, body })
+        benchmarkState = {
+          ...benchmarkDto,
+          benchmark_land_id: newBenchmarkId,
+          parcel_id: String(body.parcel_id),
+          benchmark_land_no: String(body.benchmark_land_no),
+          price_zone_no: String(body.price_zone_no),
+        }
+        return response(benchmarkState, config, 201)
+      }
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/valuation/cases/${ids.case}/prepare`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="valuation-land-context"]').exists()).toBe(true))
+
+    expect((wrapper.get('[data-testid="parcel-district-code"]').element as HTMLInputElement).value).toBe('65000030')
+    await wrapper.get('[data-testid="parcel-section-name"]').setValue('Test Section')
+    await wrapper.get('[data-testid="parcel-land-no"]').setValue('100-1')
+    await wrapper.get('[data-testid="parcel-area-sqm"]').setValue('300.50')
+    await wrapper.get('[data-testid="save-parcel"]').trigger('submit')
+    await vi.waitFor(() => expect(wrapper.find(`[data-testid="edit-parcel-${newParcelId}"]`).exists()).toBe(true))
+
+    await wrapper.get(`[data-testid="edit-parcel-${newParcelId}"]`).trigger('click')
+    await wrapper.get('[data-testid="parcel-area-sqm"]').setValue('301.25')
+    await wrapper.get('[data-testid="save-parcel"]').trigger('submit')
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="valuation-land-context"]').text()).toContain('301.25'))
+
+    await wrapper.get('[data-testid="benchmark-no"]').setValue('BENCH-NEW')
+    await wrapper.get('[data-testid="benchmark-zone"]').setValue('ZONE-NEW')
+    await wrapper.get('[data-testid="save-benchmark"]').trigger('submit')
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="valuation-land-context"]').text()).toContain('BENCH-NEW'))
+
+    expect(writes[0]).toEqual(expect.objectContaining({
+      method: 'post',
+      url: `/valuation/cases/${ids.case}/parcels`,
+      body: expect.objectContaining({
+        district_code: '65000030',
+        section_name: 'Test Section',
+        land_no: '100-1',
+        area_sqm: '300.50',
+      }),
+    }))
+    expect(writes[1]).toEqual(expect.objectContaining({
+      method: 'patch',
+      url: `/valuation/cases/${ids.case}/parcels/${newParcelId}`,
+      body: expect.objectContaining({ area_sqm: '301.25' }),
+    }))
+    expect(writes[2]).toEqual(expect.objectContaining({
+      method: 'post',
+      url: `/valuation/cases/${ids.case}/benchmark-lands`,
+      body: expect.objectContaining({
+        parcel_id: newParcelId,
+        benchmark_land_no: 'BENCH-NEW',
+        price_zone_no: 'ZONE-NEW',
+      }),
+    }))
+    wrapper.unmount()
+  })
+
+  it('shows only formally requested Review missing items to the appraiser', async () => {
+    const handoff = {
+      case_id: ids.case,
+      case_status: 'IN_REVIEW',
+      display_status: '審查中',
+      review_id: ids.review,
+      review_status: 'UNDER_REVIEW',
+      latest_submission: {
+        submission_id: ids.submission,
+        submission_no: 1,
+        submitted_at: '2026-09-11T00:00:00Z',
+      },
+      correction: null,
+      missing_items: [
+        {
+          item_code: 'DOC_LAND_REGISTER',
+          item_name: '土地登記謄本',
+          document_type: 'land-register',
+          severity: 'HIGH',
+          status: 'OPEN',
+          reason: '請補上最新謄本。',
+          due_at: '2026-09-20T04:00:00Z',
+          notification_status: 'PENDING',
+          notified_at: null,
+        },
+        {
+          item_code: 'INTERNAL_NOT_REQUESTED',
+          item_name: '尚未正式通知的內部缺件',
+          document_type: null,
+          severity: 'MEDIUM',
+          status: 'OPEN',
+          reason: 'Reviewer 尚未送出補件要求。',
+          due_at: null,
+          notification_status: null,
+          notified_at: null,
+        },
+      ],
+    }
+
+    http.defaults.adapter = vi.fn(async (config) => {
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}`) return response(caseDto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms`) return response([formDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/f03`) return response(f03Dto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/parcels`) return response([parcelDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([benchmarkDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response(documentsDto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) {
+        return response({ ...reportProgressDto, report_id: null, version_no: null }, config)
+      }
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/auto-workflow/review`) {
+        return response({
+          status: 'READY',
+          case: caseDto,
+          parcel_ids: [ids.parcel],
+          benchmark_land_ids: [ids.benchmarkLand],
+          f03_form_instance_id: ids.f03,
+          report_id: null,
+          documents: [],
+          candidates: [],
+          pending_candidate_count: 0,
+          blank_fields_remain: false,
+          missing_items: [],
+          warnings: [],
+          next_action: 'RUN_FORM_CALCULATION',
+          draft_pages_1_3_url: null,
+          draft_pages_1_6_url: null,
+          form_guidance: [],
+          automatic_pdf_generation_enabled: false,
+          automatic_confirmation_export_enabled: false,
+          confirmation_export: null,
+        }, config)
+      }
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/review-handoff`) return response(handoff, config)
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/valuation/cases/${ids.case}/prepare`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="valuation-supplement-request"]').exists()).toBe(true))
+
+    const panel = wrapper.get('[data-testid="valuation-supplement-request"]')
+    expect(panel.text()).toContain('土地登記謄本')
+    expect(panel.text()).toContain('請補上最新謄本')
+    expect(panel.text()).not.toContain('尚未正式通知的內部缺件')
+    expect(panel.findAll('button').some((button) => button.text().includes('前往文件補件'))).toBe(true)
     wrapper.unmount()
   })
 

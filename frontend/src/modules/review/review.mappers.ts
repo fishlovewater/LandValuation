@@ -10,6 +10,7 @@ import type {
   ReviewReferenceModel,
   ReviewRunModel,
   ReviewSummaryModel,
+  ReviewVersionDiffModel,
   RiskSummaryDto,
   WorkbenchCaseDetailDto,
   WorkbenchCaseListItemDto,
@@ -398,6 +399,41 @@ export function mapDecision(dto: DecisionDto): ReviewDecisionModel {
   }
 }
 
+function diffDisplayValue(value: unknown): string {
+  const scalar = displayScalar(value)
+  if (scalar !== null) return scalar
+  if (value === null || value === undefined) return '—'
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return '已提供結構化資料'
+  }
+}
+
+export function mapVersionDiff(
+  dto: WorkbenchCaseDetailDto['version_diffs'][number],
+): ReviewVersionDiffModel {
+  const mappedFieldPath = dto.field_path ?? dto.current.field_path ?? dto.previous.field_path
+  const pathLabel = mappedFieldPath ? fieldPathLabel(mappedFieldPath) : '其他檢核欄位'
+  const fieldLabel = pathLabel === '其他檢核欄位'
+    ? findingCodeLabel(dto.field_code)
+    : pathLabel
+  return {
+    key: `${dto.document_group_id}-${dto.field_code}-${dto.previous.document_version}-${dto.current.document_version}`,
+    fieldCode: dto.field_code,
+    fieldPath: mappedFieldPath,
+    fieldLabel,
+    previousDocumentVersion: dto.previous.document_version,
+    previousValue: diffDisplayValue(dto.previous.normalized_value),
+    previousRawText: dto.previous.raw_text,
+    previousPageNumber: dto.previous.page_number,
+    currentDocumentVersion: dto.current.document_version,
+    currentValue: diffDisplayValue(dto.current.normalized_value),
+    currentRawText: dto.current.raw_text,
+    currentPageNumber: dto.current.page_number,
+  }
+}
+
 export function mapRiskSummary(dto: RiskSummaryDto | null): {
   level: string
   score: string | null
@@ -441,6 +477,7 @@ export function mapWorkbenchDetail(dto: WorkbenchCaseDetailDto): ReviewDetailMod
     reportDocument: dto.report_document,
     generatedReports: dto.generated_reports,
     correctionRequests: dto.correction_requests,
+    versionDiffs: (dto.version_diffs ?? []).map(mapVersionDiff),
     unresolvedFindingCount: findings.filter(isUnresolvedFinding).length,
   }
 }

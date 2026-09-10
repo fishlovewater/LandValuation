@@ -44,6 +44,38 @@ export interface CaseResponseDto {
   updated_at: string
 }
 
+export interface ParcelResponseDto {
+  parcel_id: string
+  case_id: string
+  district_code: string
+  section_name: string
+  subsection_name: string
+  land_no: string
+  area_sqm: string
+  land_use_zone: string | null
+  designated_use: string | null
+  ownership_numerator: string | null
+  ownership_denominator: string | null
+  source_document_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ParcelCreateDto {
+  district_code: string
+  section_name: string
+  subsection_name?: string
+  land_no: string
+  area_sqm: string
+  land_use_zone?: string | null
+  designated_use?: string | null
+  ownership_numerator?: string | null
+  ownership_denominator?: string | null
+  source_document_id?: string | null
+}
+
+export type ParcelUpdateDto = Partial<ParcelCreateDto>
+
 export interface FormRequirementResponseDto {
   form_type: FormCode
   form_name: string
@@ -179,7 +211,7 @@ export interface AutomatedWorkflowResponseDto {
   f03_form_instance_id: string
   report_id: string | null
   documents: unknown[]
-  candidates: unknown[]
+  candidates: ExtractedFieldResponseDto[]
   pending_candidate_count: number
   blank_fields_remain: boolean
   missing_items: string[]
@@ -195,6 +227,55 @@ export interface AutomatedWorkflowResponseDto {
     filename: string
     download_path: string
   } | null
+}
+
+export type ExtractionCandidateDecision = 'CONFIRM' | 'REJECT'
+
+export interface ExtractedFieldResponseDto {
+  extracted_field_id: string
+  extraction_id: string
+  document_id: string
+  form_code: string
+  field_name: string
+  extracted_value: unknown
+  confidence: string
+  source_page: number | null
+  source_text: string | null
+  analysis_provider: string
+  model_id: string | null
+  prompt_version: string | null
+  field_status: string
+  confirmed_value: unknown | null
+  confirmed_by_user_id: string | null
+  confirmed_at: string | null
+  applied_form_instance_id: string | null
+  applied_at: string | null
+}
+
+export interface ExtractionResponseDto {
+  extraction_id: string
+  case_id: string
+  document_id: string
+  provider: string
+  extraction_status: string
+  page_count: number | null
+  extracted_text: string | null
+  error_message: string | null
+  started_at: string
+  completed_at: string | null
+  candidates: ExtractedFieldResponseDto[]
+}
+
+export interface AutomatedCandidateConfirmationDto {
+  document_id: string
+  extracted_field_id: string
+  decision: ExtractionCandidateDecision
+  corrected_value?: unknown
+}
+
+export interface AutomatedConfirmRequestDto {
+  confirmations: AutomatedCandidateConfirmationDto[]
+  confirm_apply: true
 }
 
 export interface ValuationReviewHandoffDto {
@@ -228,8 +309,11 @@ export interface ValuationReviewHandoffDto {
     item_name: string
     document_type: string | null
     severity: string
+    status: string
     reason: string | null
     due_at: string | null
+    notification_status: string | null
+    notified_at: string | null
   }>
 }
 
@@ -344,6 +428,15 @@ export interface BenchmarkLandResponseDto {
   is_active: boolean
   created_at: string
   updated_at: string
+}
+
+export interface BenchmarkLandCreateDto {
+  parcel_id: string
+  benchmark_land_no: string
+  price_zone_no: string
+  land_consolidation_serial?: string | null
+  latitude?: string | null
+  longitude?: string | null
 }
 
 export interface CalculationRequestDto {

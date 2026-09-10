@@ -520,6 +520,100 @@ describe('review demo flow', () => {
     wrapper.unmount()
   })
 
+  it('turns completeness gaps into a formal supplement request and renders backend version diffs', async () => {
+    const missingItemId = '19191919-1919-4191-8191-191919191919'
+    const documentGroupId = '20202020-2020-4202-8202-202020202020'
+    const detailDto: any = structuredClone(detailBase)
+    detailDto.review.review_status = 'PENDING_MATERIALS'
+    detailDto.review.missing_item_count = 1
+    detailDto.findings = []
+    detailDto.missing_items = [{
+      missing_item_id: missingItemId,
+      review_id: idsWithDetail.review,
+      item_code: 'LAND_REGISTER_REQUIRED',
+      item_name: '土地登記謄本',
+      document_type: 'land-register',
+      severity: 'ERROR',
+      status: 'OPEN',
+      field_path: 'documents.land_register',
+      reason: '正式審查缺少必要土地登記資料。',
+      affected_rule_codes: ['COMPLETENESS-LAND-REGISTER'],
+      due_at: null,
+      notified_at: null,
+      notification_status: null,
+      created_at: '2026-09-07T01:01:00Z',
+    }]
+    detailDto.version_diffs = [{
+      document_group_id: documentGroupId,
+      field_code: 'ADJUSTMENT_RATE',
+      field_path: 'comparison.adjustment_rate',
+      previous: {
+        document_id: idsWithDetail.document,
+        document_group_id: documentGroupId,
+        document_version: 1,
+        field_code: 'ADJUSTMENT_RATE',
+        field_path: 'comparison.adjustment_rate',
+        normalized_value: '-12',
+        raw_text: '調整率 -12%',
+        page_number: 3,
+      },
+      current: {
+        document_id: '21212121-2121-4212-8212-212121212121',
+        document_group_id: documentGroupId,
+        document_version: 2,
+        field_code: 'ADJUSTMENT_RATE',
+        field_path: 'comparison.adjustment_rate',
+        normalized_value: '-5',
+        raw_text: '調整率 -5%',
+        page_number: 3,
+      },
+    }]
+    const requests: Array<{ method?: string; url?: string; data?: unknown }> = []
+
+    http.defaults.adapter = vi.fn(async (config) => {
+      requests.push({ method: config.method, url: config.url, data: config.data })
+      if (config.method === 'get' && config.url === `/review/workbench/cases/${idsWithDetail.review}`) {
+        return response(detailDto, config)
+      }
+      if (config.method === 'get' && config.url === '/review/workbench/summary') return response({ ...summaryDto, missing_item_count: 1 }, config)
+      if (config.method === 'get' && config.url === '/review/workbench/cases') {
+        return response({ items: [{ ...queueItemDto, missing_item_count: 1 }], total: 1, limit: 20, offset: 0 }, config)
+      }
+      if (config.method === 'post' && config.url === `/review/cases/${idsWithDetail.review}/supplement-request`) {
+        const body = requestBody(config.data)
+        expect(new Date(String(body.due_at)).getTime()).toBeGreaterThan(Date.now())
+        detailDto.missing_items = detailDto.missing_items.map((item: any) => ({
+          ...item,
+          status: 'OPEN',
+          due_at: body.due_at,
+          notification_status: 'PENDING',
+        }))
+        return response(detailDto.missing_items, config)
+      }
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/review/workbench/${idsWithDetail.review}`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="review-missing-items"]').text()).toContain('土地登記謄本'))
+
+    const diffPanel = wrapper.get('[data-testid="review-version-diffs"]')
+    expect(diffPanel.text()).toContain('補正前後欄位差異')
+    expect(diffPanel.text()).toContain('-12')
+    expect(diffPanel.text()).toContain('-5')
+
+    expect(wrapper.get('[data-testid="finalize-review"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="request-supplement"]').trigger('click')
+    expect(wrapper.get('[data-testid="supplement-request-form"]').text()).toContain('土地登記謄本')
+    await wrapper.get('[data-testid="supplement-request-form"]').trigger('submit')
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="review-missing-items"]').text()).toContain('已要求補件'))
+
+    expect(requests.filter((request) => request.url?.endsWith('/supplement-request'))).toHaveLength(1)
+    expect(wrapper.get('[data-testid="finalize-review"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
   it('renders an empty queue and a recoverable error without exposing transport details', async () => {
     http.defaults.adapter = vi.fn(async (config) => {
       if (config.url === '/review/workbench/summary') return response(summaryDto, config)

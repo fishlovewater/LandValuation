@@ -56,8 +56,11 @@ class HandoffMissingItemRead(BaseModel):
     item_name: str
     document_type: str | None
     severity: str
+    status: str
     reason: str | None
     due_at: datetime | None
+    notification_status: str | None
+    notified_at: datetime | None
 
 
 class ValuationReviewHandoffRead(BaseModel):

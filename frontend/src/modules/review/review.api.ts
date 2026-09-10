@@ -15,6 +15,7 @@ import type {
   WorkbenchCaseListDto,
   WorkbenchPreflightDto,
   WorkbenchStartDto,
+  MissingItemDto,
 } from './review.types'
 
 export interface ListReviewCasesParams {
@@ -59,6 +60,14 @@ export const reviewApi = {
 
   async startCase(reviewId: string): Promise<WorkbenchStartDto> {
     const response = await http.post<WorkbenchStartDto>(`/review/workbench/cases/${reviewId}/start`)
+    return response.data
+  },
+
+  async requestSupplement(reviewId: string, dueAt: string): Promise<MissingItemDto[]> {
+    const response = await http.post<MissingItemDto[]>(
+      `/review/cases/${reviewId}/supplement-request`,
+      { due_at: dueAt },
+    )
     return response.data
   },
 

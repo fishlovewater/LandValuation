@@ -24,9 +24,14 @@ import {
 import {
   resetValuationFlow,
   valuationFlowState,
+  type AutomatedCandidateConfirmationDto,
   type AutomatedWorkflowResponseDto,
+  type BenchmarkLandCreateDto,
   type DocumentCategory,
+  type ExtractedFieldResponseDto,
   type F03EditableValues,
+  type ParcelCreateDto,
+  type ParcelResponseDto,
   type ReportPageCode,
   type ReportProgressResponseDto,
   type ValidationFindingModel,
@@ -52,6 +57,34 @@ const reportProgress = ref<ReportProgressResponseDto | null>(null)
 const revisionInitializing = ref(false)
 const uploadCategory = ref<DocumentCategory>('original')
 const uploadFile = ref<File | null>(null)
+const parcels = ref<ParcelResponseDto[]>([])
+const extractionCandidates = ref<ExtractedFieldResponseDto[]>([])
+const extractionBusyDocumentId = ref<string | null>(null)
+const confirmingCandidates = ref(false)
+const candidateDecision = reactive<Record<string, 'CONFIRM' | 'REJECT' | ''>>({})
+const candidateValue = reactive<Record<string, string>>({})
+const landContextSaving = ref(false)
+const editingParcelId = ref<string | null>(null)
+
+const parcelDraft = reactive({
+  districtCode: '',
+  sectionName: '',
+  subsectionName: '',
+  landNo: '',
+  areaSqm: '',
+  landUseZone: '',
+  designatedUse: '',
+  sourceDocumentId: '',
+})
+
+const benchmarkDraft = reactive({
+  parcelId: '',
+  benchmarkLandNo: '',
+  priceZoneNo: '',
+  landConsolidationSerial: '',
+  latitude: '',
+  longitude: '',
+})
 
 const draft = reactive<F03EditableValues>({
   benchmarkLandId: null,
@@ -93,7 +126,14 @@ const revisionDraftReady = computed(() => Boolean(
     && latestReportForms.value.every((form) => form.status === 'DRAFT'),
 ))
 const canEditF03 = computed(() => f03Form.value?.status === 'DRAFT')
+const canEditLandContext = computed(() => auth.permissions.includes('case.update'))
 type CorrectionItem = NonNullable<ValuationReviewHandoffDto['correction']>['items'][number]
+type HandoffMissingItem = ValuationReviewHandoffDto['missing_items'][number]
+const formalSupplementMissingItems = computed(() =>
+  reviewHandoff.value?.missing_items.filter((item) =>
+    item.status === 'OPEN' && ['PENDING', 'SENT', 'ACKNOWLEDGED'].includes(item.notification_status ?? ''),
+  ) ?? [],
+)
 const calculatedSource = sourceForCalculatedValue()
 const canUpload = computed(() => auth.permissions.includes('document.upload'))
 const canReadAutomatedWorkflow = computed(() => [
@@ -113,6 +153,19 @@ const canProceedToSubmit = computed(() => Boolean(flow.validation?.canGenerateRe
 const f03Guidance = computed(() => workflowGuidance.value?.form_guidance.find((item) => item.form_code === 'F03') ?? null)
 const workflowMissingItems = computed(() => workflowGuidance.value?.missing_items ?? [])
 const workflowWarnings = computed(() => workflowGuidance.value?.warnings ?? [])
+const pendingCandidates = computed(() => {
+  const merged = new Map<string, ExtractedFieldResponseDto>()
+  for (const candidate of workflowGuidance.value?.candidates ?? []) {
+    merged.set(candidate.extracted_field_id, candidate)
+  }
+  for (const candidate of extractionCandidates.value) {
+    merged.set(candidate.extracted_field_id, candidate)
+  }
+  return [...merged.values()].filter((candidate) => candidate.field_status === 'NEEDS_CONFIRMATION')
+})
+const selectedCandidateCount = computed(() => pendingCandidates.value.filter(
+  (candidate) => Boolean(candidateDecision[candidate.extracted_field_id]),
+).length)
 const workflowNextActionLabel = computed(() => {
   if (isRevisionRequired.value) {
     if (!revisionDraftReady.value) {
@@ -189,6 +242,76 @@ function emptyDraft(): F03EditableValues {
   }
 }
 
+function clearReactiveRecord(record: Record<string, unknown>): void {
+  for (const key of Object.keys(record)) delete record[key]
+}
+
+function resetParcelDraft(): void {
+  editingParcelId.value = null
+  Object.assign(parcelDraft, {
+    districtCode: flow.case?.districtCode ?? '',
+    sectionName: '',
+    subsectionName: '',
+    landNo: '',
+    areaSqm: '',
+    landUseZone: '',
+    designatedUse: '',
+    sourceDocumentId: '',
+  })
+}
+
+function resetBenchmarkDraft(): void {
+  Object.assign(benchmarkDraft, {
+    parcelId: parcels.value[0]?.parcel_id ?? '',
+    benchmarkLandNo: '',
+    priceZoneNo: '',
+    landConsolidationSerial: '',
+    latitude: '',
+    longitude: '',
+  })
+}
+
+function displayCandidateValue(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value)
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return ''
+  }
+}
+
+function candidateDocumentName(documentId: string): string {
+  return flow.documents.find((document) => document.documentId === documentId)?.filename ?? '來源文件'
+}
+
+function canExtractDocument(document: { mimeType: string; isActive: boolean }): boolean {
+  const mime = document.mimeType.toLowerCase()
+  return document.isActive && auth.permissions.includes('valuation.update') && (
+    mime === 'application/pdf'
+    || mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  )
+}
+
+function candidateConfidenceLabel(candidate: ExtractedFieldResponseDto): string {
+  const confidence = Number(candidate.confidence)
+  if (!Number.isFinite(confidence)) return candidate.confidence || '未提供'
+  const percent = confidence <= 1 ? confidence * 100 : confidence
+  return `${percent.toFixed(percent >= 10 ? 0 : 1)}%`
+}
+
+function initializeCandidateInputs(candidates: ExtractedFieldResponseDto[]): void {
+  for (const candidate of candidates) {
+    if (!(candidate.extracted_field_id in candidateValue)) {
+      candidateValue[candidate.extracted_field_id] = displayCandidateValue(candidate.extracted_value)
+    }
+    if (!(candidate.extracted_field_id in candidateDecision)) {
+      candidateDecision[candidate.extracted_field_id] = ''
+    }
+  }
+}
+
 function isCurrentCase(token: number, requestedCaseId: string): boolean {
   return token === activeCaseToken && requestedCaseId === caseId.value
 }
@@ -213,7 +336,10 @@ async function loadWorkflowGuidance(token = activeCaseToken, requestedCaseId = c
   }
   try {
     const response = await valuationApi.getWorkflowReview(requestedCaseId)
-    if (isCurrentCase(token, requestedCaseId)) workflowGuidance.value = response
+    if (isCurrentCase(token, requestedCaseId)) {
+      workflowGuidance.value = response
+      initializeCandidateInputs(response.candidates)
+    }
   } catch {
     // The workflow helper only exists for cases initialized through the automated
     // intake. The regular valuation flow remains usable when it is unavailable.
@@ -404,7 +530,7 @@ function goToWorkflowNextAction(): void {
     return
   }
   if (workflowGuidance.value?.pending_candidate_count) {
-    void focusElementById('f03-data-section', '目前仍有待確認候選資料；請先確認來源資料，再完成 F03 正式欄位。')
+    void focusElementById('valuation-candidate-workspace', '目前仍有待確認候選資料；請逐筆確認、修改後採用，或拒絕。')
     return
   }
   if (workflowMissingItems.value.some((item) => item.toLowerCase().includes('document'))) {
@@ -417,6 +543,10 @@ function goToWorkflowNextAction(): void {
   }
   if (canProceedToSubmit.value) {
     goToSubmit()
+    return
+  }
+  if (!parcels.value.length || !flow.benchmarks.length) {
+    void focusElementById('valuation-land-context', '請先補齊宗地與比準地資料。')
     return
   }
   void focusElementById(flow.f03 ? 'f03-data-section' : 'valuation-document-workspace')
@@ -432,6 +562,20 @@ async function goToCorrectionItem(item: CorrectionItem): Promise<void> {
     return
   }
   await focusElementById('f03-data-section', `修正要求：${item.requested_correction}`)
+}
+
+function goToMissingItem(item: HandoffMissingItem): void {
+  if (item.document_type) {
+    void focusElementById(
+      'valuation-document-workspace',
+      `審查要求補件：${item.item_name}${item.reason ? `｜${item.reason}` : ''}`,
+    )
+    return
+  }
+  void focusElementById(
+    'valuation-land-context',
+    `審查要求補資料：${item.item_name}${item.reason ? `｜${item.reason}` : ''}`,
+  )
 }
 
 function focusRequestedRouteTarget(): void {
@@ -460,6 +604,14 @@ async function loadData(): Promise<void> {
   workflowGuidance.value = null
   reviewHandoff.value = null
   reportProgress.value = null
+  parcels.value = []
+  extractionCandidates.value = []
+  extractionBusyDocumentId.value = null
+  confirmingCandidates.value = false
+  clearReactiveRecord(candidateDecision)
+  clearReactiveRecord(candidateValue)
+  resetParcelDraft()
+  resetBenchmarkDraft()
 
   if (!requestedCaseId) {
     error.value = '找不到案件識別資訊，請從估價案件清單重新進入。'
@@ -469,8 +621,9 @@ async function loadData(): Promise<void> {
 
   loading.value = true
   try {
-    const [caseDto, formDtos, benchmarkDtos, documentDtos, reportProgressDto] = await Promise.all([
+    const [caseDto, parcelDtos, formDtos, benchmarkDtos, documentDtos, reportProgressDto] = await Promise.all([
       valuationApi.getCase(requestedCaseId),
+      valuationApi.listParcels(requestedCaseId),
       valuationApi.listForms(requestedCaseId),
       valuationApi.listBenchmarkLands(requestedCaseId),
       valuationApi.listDocuments(requestedCaseId),
@@ -489,6 +642,9 @@ async function loadData(): Promise<void> {
     const authoritative = selectAuthoritativeF02(forms, documents, reportProgressDto)
 
     flow.case = mapCaseResponse(caseDto)
+    parcels.value = parcelDtos
+    resetParcelDraft()
+    resetBenchmarkDraft()
     flow.forms = forms
     flow.benchmarks = benchmarkDtos.map(mapBenchmarkLandResponse)
     flow.documents = documents
@@ -542,6 +698,219 @@ async function uploadSourceDocument(): Promise<void> {
     error.value = safeValuationErrorMessage(caught)
   } finally {
     uploading.value = false
+  }
+}
+
+async function extractDocument(documentId: string): Promise<void> {
+  const requestedCaseId = caseId.value
+  const token = activeCaseToken
+  if (
+    extractionBusyDocumentId.value
+    || !auth.permissions.includes('valuation.update')
+    || !isCurrentCase(token, requestedCaseId)
+  ) return
+
+  extractionBusyDocumentId.value = documentId
+  error.value = ''
+  notice.value = ''
+  try {
+    const result = await valuationApi.startDocumentExtraction(requestedCaseId, documentId)
+    if (!isCurrentCase(token, requestedCaseId)) return
+    extractionCandidates.value = [
+      ...extractionCandidates.value.filter((candidate) => candidate.document_id !== documentId),
+      ...result.candidates,
+    ]
+    initializeCandidateInputs(result.candidates)
+    await loadWorkflowGuidance(token, requestedCaseId)
+    const pending = result.candidates.filter((candidate) => candidate.field_status === 'NEEDS_CONFIRMATION').length
+    notice.value = pending
+      ? `文件擷取完成，找到 ${pending} 筆待人工確認候選。`
+      : '文件擷取完成，目前沒有待人工確認候選。'
+    if (pending) void focusElementById('valuation-candidate-workspace')
+  } catch (caught: unknown) {
+    if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
+  } finally {
+    if (isCurrentCase(token, requestedCaseId)) extractionBusyDocumentId.value = null
+  }
+}
+
+function chooseCandidateDecision(candidateId: string, decision: 'CONFIRM' | 'REJECT'): void {
+  candidateDecision[candidateId] = decision
+}
+
+async function submitCandidateDecisions(): Promise<void> {
+  const requestedCaseId = caseId.value
+  const token = activeCaseToken
+  if (confirmingCandidates.value || !selectedCandidateCount.value || !isCurrentCase(token, requestedCaseId)) return
+
+  const confirmations = pendingCandidates.value.flatMap<AutomatedCandidateConfirmationDto>((candidate) => {
+    const decision = candidateDecision[candidate.extracted_field_id]
+    if (!decision) return []
+    const inputValue = candidateValue[candidate.extracted_field_id] ?? ''
+    const originalValue = displayCandidateValue(candidate.extracted_value)
+    return [{
+      document_id: candidate.document_id,
+      extracted_field_id: candidate.extracted_field_id,
+      decision,
+      ...(decision === 'CONFIRM' && inputValue !== originalValue ? { corrected_value: inputValue } : {}),
+    }]
+  })
+  if (!confirmations.length) return
+
+  confirmingCandidates.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    const response = await valuationApi.confirmWorkflowCandidates(requestedCaseId, {
+      confirmations,
+      confirm_apply: true,
+    })
+    if (!isCurrentCase(token, requestedCaseId)) return
+    workflowGuidance.value = response
+    extractionCandidates.value = response.candidates
+    for (const confirmation of confirmations) {
+      delete candidateDecision[confirmation.extracted_field_id]
+      delete candidateValue[confirmation.extracted_field_id]
+    }
+    initializeCandidateInputs(response.candidates)
+    const form = f03Form.value
+    if (form) {
+      try {
+        await loadF03(form, token, requestedCaseId)
+      } catch {
+        // Some confirmations are for non-F03 forms or F03 may still lack its
+        // two initialization fields. The workflow response remains authoritative.
+      }
+    }
+    notice.value = response.pending_candidate_count
+      ? `已保存本次判定；尚有 ${response.pending_candidate_count} 筆候選需要人工確認。`
+      : '候選資料已全部完成人工判定；可繼續確認正式採用值。'
+  } catch (caught: unknown) {
+    if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
+  } finally {
+    if (isCurrentCase(token, requestedCaseId)) confirmingCandidates.value = false
+  }
+}
+
+function startParcelEdit(parcel: ParcelResponseDto): void {
+  editingParcelId.value = parcel.parcel_id
+  Object.assign(parcelDraft, {
+    districtCode: parcel.district_code,
+    sectionName: parcel.section_name,
+    subsectionName: parcel.subsection_name,
+    landNo: parcel.land_no,
+    areaSqm: parcel.area_sqm,
+    landUseZone: parcel.land_use_zone ?? '',
+    designatedUse: parcel.designated_use ?? '',
+    sourceDocumentId: parcel.source_document_id ?? '',
+  })
+  void focusElementById('parcel-editor')
+}
+
+function parcelPayload(): ParcelCreateDto {
+  return {
+    district_code: parcelDraft.districtCode.trim(),
+    section_name: parcelDraft.sectionName.trim(),
+    subsection_name: parcelDraft.subsectionName.trim(),
+    land_no: parcelDraft.landNo.trim(),
+    area_sqm: parcelDraft.areaSqm.trim(),
+    land_use_zone: parcelDraft.landUseZone.trim() || null,
+    designated_use: parcelDraft.designatedUse.trim() || null,
+    source_document_id: parcelDraft.sourceDocumentId || null,
+  }
+}
+
+async function saveParcel(): Promise<void> {
+  const requestedCaseId = caseId.value
+  const token = activeCaseToken
+  const payload = parcelPayload()
+  if (
+    landContextSaving.value
+    || !canEditLandContext.value
+    || !payload.district_code
+    || !payload.section_name
+    || !payload.land_no
+    || !payload.area_sqm
+    || !isCurrentCase(token, requestedCaseId)
+  ) return
+
+  landContextSaving.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    if (editingParcelId.value) {
+      await valuationApi.updateParcel(requestedCaseId, editingParcelId.value, payload)
+      notice.value = '宗地資料已更新。'
+    } else {
+      await valuationApi.createParcel(requestedCaseId, payload)
+      notice.value = '宗地資料已建立。'
+    }
+    if (!isCurrentCase(token, requestedCaseId)) return
+    parcels.value = await valuationApi.listParcels(requestedCaseId)
+    if (!isCurrentCase(token, requestedCaseId)) return
+    resetParcelDraft()
+    resetBenchmarkDraft()
+    await loadWorkflowGuidance(token, requestedCaseId)
+  } catch (caught: unknown) {
+    if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
+  } finally {
+    if (isCurrentCase(token, requestedCaseId)) landContextSaving.value = false
+  }
+}
+
+function benchmarkPayload(): BenchmarkLandCreateDto {
+  return {
+    parcel_id: benchmarkDraft.parcelId,
+    benchmark_land_no: benchmarkDraft.benchmarkLandNo.trim(),
+    price_zone_no: benchmarkDraft.priceZoneNo.trim(),
+    land_consolidation_serial: benchmarkDraft.landConsolidationSerial.trim() || null,
+    latitude: benchmarkDraft.latitude.trim() || null,
+    longitude: benchmarkDraft.longitude.trim() || null,
+  }
+}
+
+async function saveBenchmarkLand(): Promise<void> {
+  const requestedCaseId = caseId.value
+  const token = activeCaseToken
+  const payload = benchmarkPayload()
+  if (
+    landContextSaving.value
+    || !canEditLandContext.value
+    || !payload.parcel_id
+    || !payload.benchmark_land_no
+    || !payload.price_zone_no
+    || !isCurrentCase(token, requestedCaseId)
+  ) return
+
+  landContextSaving.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    const created = await valuationApi.createBenchmarkLand(requestedCaseId, payload)
+    if (!isCurrentCase(token, requestedCaseId)) return
+    const benchmarkDtos = await valuationApi.listBenchmarkLands(requestedCaseId)
+    if (!isCurrentCase(token, requestedCaseId)) return
+    flow.benchmarks = benchmarkDtos.map(mapBenchmarkLandResponse)
+    resetBenchmarkDraft()
+
+    const form = f03Form.value
+    if (form?.status === 'DRAFT' && !flow.f03) {
+      await valuationApi.updateF03(requestedCaseId, form.formInstanceId, {
+        benchmark_land_id: created.benchmark_land_id,
+        valuation_base_date: flow.case?.valuationBaseDate ?? null,
+      })
+      await loadF03(form, token, requestedCaseId)
+      notice.value = '比準地已建立，並以案件基準日初始化 F03 草稿。'
+    } else {
+      notice.value = flow.f03
+        ? '比準地已建立。既有 F03 草稿仍保留原比準地，以避免未確認地改寫正式估價來源。'
+        : '比準地已建立。'
+    }
+    await loadWorkflowGuidance(token, requestedCaseId)
+  } catch (caught: unknown) {
+    if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
+  } finally {
+    if (isCurrentCase(token, requestedCaseId)) landContextSaving.value = false
   }
 }
 
@@ -670,7 +1039,7 @@ watch(caseId, () => {
     <PageHeader
       eyebrow="CASE PREPARATION"
       title="確認估價資料"
-      description="保留六步驟作業心智模型；Demo 僅編輯 API 明確支援的 F03 確認欄位。"
+      description="第 2 步整合來源文件擷取、候選人工確認、宗地／比準地與正式採用值；所有寫入均使用後端既有契約。"
     />
 
     <LoadingSkeleton v-if="loading" :rows="7" label="案件估價資料載入中" />
@@ -705,9 +1074,9 @@ watch(caseId, () => {
             </button>
           </li>
         </ul>
-        <div v-if="reviewHandoff.missing_items.length" class="revision-panel__missing">
+        <div v-if="formalSupplementMissingItems.length" class="revision-panel__missing">
           <strong>審查缺件</strong>
-          <span v-for="item in reviewHandoff.missing_items" :key="item.item_code">
+          <span v-for="item in formalSupplementMissingItems" :key="item.item_code">
             {{ item.item_name }}{{ item.reason ? `：${item.reason}` : '' }}
           </span>
         </div>
@@ -733,6 +1102,36 @@ watch(caseId, () => {
           </button>
           <small>舊送審版本保持不可變；補正會建立較新的 F03 與正式報告版本。</small>
         </div>
+      </section>
+
+      <section
+        v-if="formalSupplementMissingItems.length && !reviewHandoff?.correction"
+        v-liquid-glass
+        data-lg
+        class="valuation-surface supplement-panel lg"
+        data-testid="valuation-supplement-request"
+        aria-labelledby="supplement-panel-title"
+      >
+        <div class="surface-heading">
+          <div>
+            <p class="valuation-eyebrow">SUPPLEMENT REQUIRED</p>
+            <h2 id="supplement-panel-title">審查補件要求</h2>
+          </div>
+          <span class="value-kind">{{ formalSupplementMissingItems.length }} 項待補</span>
+        </div>
+        <p class="supplement-panel__intro">審查端已完成完整性檢查並提出補件要求。請逐項補齊後，再依正常送審流程建立新版正式輸出。</p>
+        <ul class="supplement-panel__list">
+          <li v-for="item in formalSupplementMissingItems" :key="item.item_code">
+            <div>
+              <strong>{{ item.item_name }}</strong>
+              <span v-if="item.reason">{{ item.reason }}</span>
+              <small v-if="item.due_at">期限：{{ new Date(item.due_at).toLocaleString('zh-TW') }}</small>
+            </div>
+            <button class="finding-action" type="button" @click="goToMissingItem(item)">
+              {{ item.document_type ? '前往文件補件' : '前往資料補正' }}
+            </button>
+          </li>
+        </ul>
       </section>
 
       <section v-liquid-glass data-lg class="valuation-surface workflow-guide lg" data-testid="valuation-workflow-guide" aria-labelledby="workflow-guide-title">
@@ -801,7 +1200,19 @@ watch(caseId, () => {
           <ul v-if="flow.documents.length" class="document-list">
             <li v-for="document in flow.documents" :key="document.documentId">
               <div><strong>{{ document.filename }}</strong><span>{{ document.documentType }} · v{{ document.versionNo }}</span></div>
-              <span>{{ document.isActive ? '已上傳' : '非作用版本' }}</span>
+              <div class="document-list__actions">
+                <span>{{ document.isActive ? '已上傳' : '非作用版本' }}</span>
+                <button
+                  v-if="canExtractDocument(document)"
+                  class="finding-action"
+                  type="button"
+                  :data-testid="`extract-document-${document.documentId}`"
+                  :disabled="Boolean(extractionBusyDocumentId)"
+                  @click="extractDocument(document.documentId)"
+                >
+                  {{ extractionBusyDocumentId === document.documentId ? '擷取中…' : '擷取候選資料' }}
+                </button>
+              </div>
             </li>
           </ul>
           <p v-else class="empty-copy">尚未上傳案件來源文件。</p>
@@ -825,6 +1236,174 @@ watch(caseId, () => {
           </form>
         </div>
         <p class="source-note">來源證據：案件原始資料（由後端案件讀取結果提供）</p>
+      </section>
+
+      <section
+        id="valuation-candidate-workspace"
+        v-liquid-glass
+        data-lg
+        class="valuation-surface candidate-workspace lg"
+        data-testid="valuation-candidate-workspace"
+        tabindex="-1"
+        aria-labelledby="candidate-workspace-title"
+      >
+        <div class="surface-heading">
+          <div>
+            <p class="valuation-eyebrow">EXTRACTION REVIEW</p>
+            <h2 id="candidate-workspace-title">文件擷取候選人工確認</h2>
+          </div>
+          <span class="value-kind">待確認 {{ pendingCandidates.length }} 筆</span>
+        </div>
+        <p v-if="!pendingCandidates.length" class="empty-copy">
+          目前沒有待確認候選。若要從 PDF / XLSX 取得候選資料，請在上方來源文件按「擷取候選資料」。
+        </p>
+        <div v-else class="candidate-list">
+          <article
+            v-for="candidate in pendingCandidates"
+            :key="candidate.extracted_field_id"
+            class="candidate-card"
+            :data-testid="`candidate-${candidate.extracted_field_id}`"
+          >
+            <div class="candidate-card__heading">
+              <div>
+                <strong>{{ candidate.form_code }} · {{ candidate.field_name }}</strong>
+                <span>{{ candidateDocumentName(candidate.document_id) }}{{ candidate.source_page ? ` · 第 ${candidate.source_page} 頁` : '' }}</span>
+              </div>
+              <small>信心度 {{ candidateConfidenceLabel(candidate) }} · {{ candidate.analysis_provider }}</small>
+            </div>
+            <blockquote v-if="candidate.source_text" class="candidate-card__source">{{ candidate.source_text }}</blockquote>
+            <label class="candidate-card__value">
+              <span>擷取／修正後採用值</span>
+              <input
+                v-model="candidateValue[candidate.extracted_field_id]"
+                :data-testid="`candidate-value-${candidate.extracted_field_id}`"
+                type="text"
+                :disabled="candidateDecision[candidate.extracted_field_id] === 'REJECT'"
+              >
+            </label>
+            <div class="candidate-card__actions" role="group" :aria-label="`${candidate.field_name} 人工判定`">
+              <button
+                type="button"
+                :class="{ 'is-selected': candidateDecision[candidate.extracted_field_id] === 'CONFIRM' }"
+                :data-testid="`candidate-confirm-${candidate.extracted_field_id}`"
+                @click="chooseCandidateDecision(candidate.extracted_field_id, 'CONFIRM')"
+              >
+                確認採用
+              </button>
+              <button
+                type="button"
+                :class="{ 'is-selected is-reject': candidateDecision[candidate.extracted_field_id] === 'REJECT' }"
+                :data-testid="`candidate-reject-${candidate.extracted_field_id}`"
+                @click="chooseCandidateDecision(candidate.extracted_field_id, 'REJECT')"
+              >
+                拒絕候選
+              </button>
+            </div>
+          </article>
+          <div class="candidate-submit">
+            <span>已選擇 {{ selectedCandidateCount }} / {{ pendingCandidates.length }} 筆判定</span>
+            <button
+              class="solid-button solid-button--primary"
+              type="button"
+              data-testid="submit-candidate-decisions"
+              :disabled="!selectedCandidateCount || confirmingCandidates"
+              @click="submitCandidateDecisions"
+            >
+              {{ confirmingCandidates ? '保存判定中…' : '保存已選判定並套用' }}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="valuation-land-context"
+        v-liquid-glass
+        data-lg
+        class="valuation-surface land-context lg"
+        data-testid="valuation-land-context"
+        tabindex="-1"
+        aria-labelledby="land-context-title"
+      >
+        <div class="surface-heading">
+          <div>
+            <p class="valuation-eyebrow">LAND CONTEXT</p>
+            <h2 id="land-context-title">宗地與比準地</h2>
+          </div>
+          <span class="value-kind">宗地 {{ parcels.length }} · 比準地 {{ flow.benchmarks.length }}</span>
+        </div>
+        <div class="land-context__grid">
+          <section class="land-context__panel">
+            <div class="land-context__panel-heading"><strong>宗地資料</strong><span>後端支援新增與修改</span></div>
+            <ul v-if="parcels.length" class="land-context__records">
+              <li v-for="parcel in parcels" :key="parcel.parcel_id">
+                <div>
+                  <strong>{{ parcel.section_name }} {{ parcel.land_no }}</strong>
+                  <span>{{ parcel.area_sqm }} m² · {{ parcel.district_code }}</span>
+                </div>
+                <button v-if="canEditLandContext" type="button" :data-testid="`edit-parcel-${parcel.parcel_id}`" @click="startParcelEdit(parcel)">修改</button>
+              </li>
+            </ul>
+            <p v-else class="empty-copy">尚未建立宗地；請直接使用下方表單建立。</p>
+            <form id="parcel-editor" class="land-context__form" tabindex="-1" @submit.prevent="saveParcel">
+              <h3>{{ editingParcelId ? '修改宗地' : '新增宗地' }}</h3>
+              <div class="land-context__fields">
+                <label><span>行政區代碼 *</span><input v-model="parcelDraft.districtCode" data-testid="parcel-district-code" required></label>
+                <label><span>段名 *</span><input v-model="parcelDraft.sectionName" data-testid="parcel-section-name" required></label>
+                <label><span>小段</span><input v-model="parcelDraft.subsectionName"></label>
+                <label><span>地號 *</span><input v-model="parcelDraft.landNo" data-testid="parcel-land-no" required></label>
+                <label><span>面積 m² *</span><input v-model="parcelDraft.areaSqm" data-testid="parcel-area-sqm" inputmode="decimal" required></label>
+                <label><span>使用分區</span><input v-model="parcelDraft.landUseZone"></label>
+                <label><span>指定用途</span><input v-model="parcelDraft.designatedUse"></label>
+                <label><span>來源文件</span>
+                  <select v-model="parcelDraft.sourceDocumentId">
+                    <option value="">不指定</option>
+                    <option v-for="document in flow.documents" :key="document.documentId" :value="document.documentId">{{ document.filename }}</option>
+                  </select>
+                </label>
+              </div>
+              <div class="land-context__form-actions">
+                <button v-if="editingParcelId" type="button" class="solid-button" @click="resetParcelDraft">取消修改</button>
+                <button class="solid-button solid-button--primary" type="submit" data-testid="save-parcel" :disabled="!canEditLandContext || landContextSaving">
+                  {{ landContextSaving ? '儲存中…' : editingParcelId ? '儲存宗地修改' : '建立宗地' }}
+                </button>
+              </div>
+            </form>
+          </section>
+
+          <section class="land-context__panel">
+            <div class="land-context__panel-heading"><strong>比準地資料</strong><span>後端目前支援新增；既有比準地不提供直接修改</span></div>
+            <ul v-if="flow.benchmarks.length" class="land-context__records">
+              <li v-for="benchmark in flow.benchmarks" :key="benchmark.benchmarkLandId">
+                <div>
+                  <strong>{{ benchmark.benchmarkLandNo }}</strong>
+                  <span>地價區段 {{ benchmark.priceZoneNo }}</span>
+                </div>
+              </li>
+            </ul>
+            <p v-else class="empty-copy">尚未建立比準地；建立後才能初始化／選擇 F03 基準地。</p>
+            <form class="land-context__form" @submit.prevent="saveBenchmarkLand">
+              <h3>新增比準地</h3>
+              <div class="land-context__fields">
+                <label><span>來源宗地 *</span>
+                  <select v-model="benchmarkDraft.parcelId" data-testid="benchmark-parcel" required>
+                    <option value="">請選擇宗地</option>
+                    <option v-for="parcel in parcels" :key="parcel.parcel_id" :value="parcel.parcel_id">{{ parcel.section_name }} {{ parcel.land_no }}</option>
+                  </select>
+                </label>
+                <label><span>比準地編號 *</span><input v-model="benchmarkDraft.benchmarkLandNo" data-testid="benchmark-no" required></label>
+                <label><span>地價區段 *</span><input v-model="benchmarkDraft.priceZoneNo" data-testid="benchmark-zone" required></label>
+                <label><span>重劃序號</span><input v-model="benchmarkDraft.landConsolidationSerial"></label>
+                <label><span>緯度</span><input v-model="benchmarkDraft.latitude" inputmode="decimal"></label>
+                <label><span>經度</span><input v-model="benchmarkDraft.longitude" inputmode="decimal"></label>
+              </div>
+              <div class="land-context__form-actions">
+                <button class="solid-button solid-button--primary" type="submit" data-testid="save-benchmark" :disabled="!canEditLandContext || !parcels.length || landContextSaving">
+                  {{ landContextSaving ? '儲存中…' : '建立比準地' }}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
       </section>
 
       <section v-if="!flow.f03" v-liquid-glass data-lg class="valuation-surface setup-required lg" aria-labelledby="setup-required-title">
@@ -1079,10 +1658,53 @@ watch(caseId, () => {
 .document-list li div { display: grid; gap: 2px; min-width: 0; }
 .document-list li strong { overflow: hidden; color: var(--app-ink); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .document-list li span { color: var(--app-muted); font-size: 10px; }
+.document-list__actions { display: flex !important; align-items: flex-end; gap: 6px !important; }
+.document-list__actions .finding-action { margin-top: 0; white-space: nowrap; }
 .upload-form { display: grid; grid-template-columns: 180px minmax(0,1fr) auto; align-items: end; gap: 10px; }
 .upload-form label { display: grid; gap: 5px; color: var(--app-ink-soft); font-size: 11px; font-weight: 800; }
 .upload-form select,
 .upload-form input { min-height: 44px; padding: 8px 10px; border: 1px solid var(--app-line); border-radius: 9px; color: var(--app-ink); background: rgba(255,255,255,.82); }
+.supplement-panel { border-color: rgba(214,166,62,.32); background: rgba(255,250,240,.88); }
+.supplement-panel__intro { margin: -4px 0 14px; color: var(--app-ink-soft); font-size: 12px; line-height: 1.65; }
+.supplement-panel__list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.supplement-panel__list li { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 12px; border: 1px solid rgba(214,166,62,.2); border-radius: 9px; background: rgba(255,255,255,.76); }
+.supplement-panel__list li > div { display: grid; gap: 4px; min-width: 0; }
+.supplement-panel__list strong { color: var(--app-ink); font-size: 12px; }
+.supplement-panel__list span { color: var(--app-ink-soft); font-size: 12px; line-height: 1.55; }
+.supplement-panel__list small { color: var(--app-muted); font-size: 10px; }
+.candidate-workspace { border-color: rgba(46,89,132,.18); }
+.candidate-list { display: grid; gap: 10px; }
+.candidate-card { display: grid; gap: 12px; padding: 15px; border: 1px solid var(--app-line); border-radius: 11px; background: #fbfcfe; }
+.candidate-card__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.candidate-card__heading > div { display: grid; gap: 4px; min-width: 0; }
+.candidate-card__heading strong { color: var(--app-ink); font-size: 13px; }
+.candidate-card__heading span, .candidate-card__heading small { color: var(--app-muted); font-size: 10px; }
+.candidate-card__source { margin: 0; padding: 10px 12px; border-left: 3px solid rgba(46,89,132,.35); color: var(--app-ink-soft); background: #f3f7fb; font-size: 12px; line-height: 1.65; white-space: pre-wrap; }
+.candidate-card__value { display: grid; gap: 5px; color: var(--app-ink-soft); font-size: 11px; font-weight: 800; }
+.candidate-card__value input { width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink); background: #fff; }
+.candidate-card__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.candidate-card__actions button { min-height: 38px; padding: 7px 12px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: #fff; cursor: pointer; font-size: 11px; font-weight: 900; }
+.candidate-card__actions button.is-selected { border-color: rgba(59,129,102,.4); color: var(--app-green); background: rgba(59,129,102,.08); }
+.candidate-card__actions button.is-reject { border-color: rgba(200,91,67,.35); color: var(--app-accent-deep); background: rgba(200,91,67,.07); }
+.candidate-submit { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 4px; }
+.candidate-submit > span { color: var(--app-muted); font-size: 11px; }
+.land-context__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.land-context__panel { display: grid; align-content: start; gap: 12px; padding: 15px; border: 1px solid var(--app-line); border-radius: 11px; background: #fbfcfe; }
+.land-context__panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.land-context__panel-heading strong { color: var(--app-ink); font-size: 13px; }
+.land-context__panel-heading span { color: var(--app-muted); font-size: 10px; text-align: right; }
+.land-context__records { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.land-context__records li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border-radius: 8px; background: #fff; }
+.land-context__records li > div { display: grid; gap: 3px; min-width: 0; }
+.land-context__records strong { color: var(--app-ink); font-size: 12px; }
+.land-context__records span { color: var(--app-muted); font-size: 10px; }
+.land-context__records button { min-height: 34px; padding: 5px 9px; border: 1px solid var(--app-line); border-radius: 7px; color: var(--app-accent-deep); background: #fff; cursor: pointer; font-size: 10px; font-weight: 900; }
+.land-context__form { display: grid; gap: 10px; padding-top: 11px; border-top: 1px solid var(--app-line); }
+.land-context__form h3 { margin: 0; color: var(--app-ink); font-size: 13px; }
+.land-context__fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.land-context__fields label { display: grid; gap: 5px; color: var(--app-ink-soft); font-size: 10px; font-weight: 800; }
+.land-context__fields input, .land-context__fields select { width: 100%; min-height: 42px; padding: 8px 9px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink); background: #fff; }
+.land-context__form-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .setup-required { display: grid; gap: 10px; border-color: rgba(214,166,62,.28); background: rgba(255,250,240,.78); }
 .setup-required h2 { margin: 0; color: var(--app-ink); }
 .setup-required p:last-child { margin: 0; color: var(--app-ink-soft); line-height: 1.7; }
@@ -1134,6 +1756,9 @@ watch(caseId, () => {
   .workflow-guide > .solid-button { width: 100%; justify-self: stretch; }
   .summary-grid, .field-grid { grid-template-columns: 1fr; }
   .upload-form { grid-template-columns: 1fr; }
+  .document-list li, .supplement-panel__list li, .candidate-card__heading, .candidate-submit { align-items: stretch; flex-direction: column; }
+  .document-list__actions { align-items: stretch; }
+  .land-context__grid, .land-context__fields { grid-template-columns: 1fr; }
   .field-grid__wide { grid-column: auto; }
   .form-heading, .action-row { align-items: stretch; flex-direction: column; }
   .solid-button { width: 100%; }

@@ -97,8 +97,11 @@ def _records(*, correction_status="SENT", include_review=True, include_submissio
         item_name="土地登記謄本",
         document_type="land-register",
         severity="HIGH",
+        status="OPEN",
         reason="必要文件尚未提供",
         due_at=datetime(2026, 9, 10, tzinfo=UTC),
+        notification_status="PENDING",
+        notified_at=None,
     )
     rows = ((missing,),)
     if correction_status in {"SENT", "RESUBMITTED"}:
@@ -121,6 +124,8 @@ async def test_handoff_status_returns_only_appraiser_safe_correction_data():
     assert result.correction.message == "請修正價格日期並補上謄本"
     assert result.correction.items[0].requested_correction == "更正價格日期"
     assert result.missing_items[0].item_name == "土地登記謄本"
+    assert result.missing_items[0].status == "OPEN"
+    assert result.missing_items[0].notification_status == "PENDING"
     body = result.model_dump(mode="json")
     serialized = str(body)
     assert "input_snapshot" not in serialized

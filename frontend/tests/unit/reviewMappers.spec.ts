@@ -140,4 +140,85 @@ describe('review mappers', () => {
       { document_id: 'review', case_id: ids.case, document_type: 'review-report', original_filename: 'review-risk-report.docx', mime_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', checksum_sha256: 'b', file_size_bytes: 1, version_no: 2 },
     ])?.document_id).toBe('review')
   })
+
+  it('maps backend version diffs into explicit before/after values for the reviewer', () => {
+    const detail = mapWorkbenchDetail({
+      case: {
+        case_id: ids.case,
+        case_no: 'NB-2026-0008',
+        case_title: '測試案件',
+        district_code: '新店區',
+        valuation_base_date: '2026-08-01',
+        case_status: 'IN_REVIEW',
+      },
+      review: {
+        review_id: ids.review,
+        case_id: ids.case,
+        review_type: 'FORMAL',
+        review_status: 'REVIEW_REQUIRED',
+        started_by_user_id: null,
+        started_at: '2026-09-07T01:00:00Z',
+        completed_at: null,
+        received_at: '2026-09-07T01:00:00Z',
+        due_at: null,
+        assigned_reviewer_id: null,
+        manual_priority: 0,
+        manual_priority_reason: null,
+        current_risk_level: 'MEDIUM',
+        high_count: 0,
+        medium_count: 1,
+        low_count: 0,
+        missing_item_count: 0,
+        latest_validation_run_id: ids.run,
+      },
+      submission_id: null,
+      submission_no: null,
+      submitted_at: null,
+      input_fingerprint: null,
+      documents: [],
+      missing_items: [],
+      runs: [],
+      findings: [],
+      risk_summary: null,
+      decisions: [],
+      version_diffs: [{
+        document_group_id: '12121212-1212-4121-8121-121212121212',
+        field_code: 'ADJUSTMENT_RATE',
+        field_path: 'comparison.adjustment_rate',
+        previous: {
+          document_id: '13131313-1313-4131-8131-131313131313',
+          document_group_id: '12121212-1212-4121-8121-121212121212',
+          document_version: 1,
+          field_code: 'ADJUSTMENT_RATE',
+          field_path: 'comparison.adjustment_rate',
+          normalized_value: '-12',
+          raw_text: '調整率 -12%',
+          page_number: 3,
+        },
+        current: {
+          document_id: '14141414-1414-4141-8141-141414141414',
+          document_group_id: '12121212-1212-4121-8121-121212121212',
+          document_version: 2,
+          field_code: 'ADJUSTMENT_RATE',
+          field_path: 'comparison.adjustment_rate',
+          normalized_value: '-5',
+          raw_text: '調整率 -5%',
+          page_number: 3,
+        },
+      }],
+      report_document: null,
+      generated_reports: [],
+      correction_requests: [],
+    })
+
+    expect(detail.versionDiffs).toEqual([
+      expect.objectContaining({
+        fieldLabel: '調整率',
+        previousDocumentVersion: 1,
+        previousValue: '-12',
+        currentDocumentVersion: 2,
+        currentValue: '-5',
+      }),
+    ])
+  })
 })
