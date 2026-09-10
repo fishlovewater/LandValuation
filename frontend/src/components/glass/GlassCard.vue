@@ -1,0 +1,1 @@
+<template><section class="glass-card"><slot /></section></template>
