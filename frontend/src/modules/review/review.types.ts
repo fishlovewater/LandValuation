@@ -378,3 +378,52 @@ export interface ReviewStartResult {
   findings: FindingViewModel[]
   riskSummary?: ReviewRiskSummary
 }
+
+export type FindingTriageDecision = 'CONFIRMED_ISSUE' | 'DISMISSED_FALSE_POSITIVE' | 'EXPERT_REVIEW'
+
+export interface ReportDecisionDto {
+  decision_id: string
+  finding_id: string | null
+  decision: string
+  reason: string
+  decided_by_user_id: string | null
+  decided_at: string
+  before_value: Record<string, unknown> | null
+  after_value: Record<string, unknown> | null
+}
+
+export interface ReportFindingDto {
+  finding_id: string
+  finding_code: string
+  finding_type: string
+  severity: string
+  title: string
+  description: string
+  status: string
+  source_evidence: unknown[]
+  reported_text: string | null
+  reported_value: string | null
+  legal_basis: unknown[]
+  reported_grade: string | null
+  system_grade: string | null
+  reported_adjustment_rate: string | number | null
+  system_adjustment_rate: string | number | null
+  comparison_result: Record<string, unknown>
+  recommended_action: Record<string, unknown>
+  supersedes_finding_id: string | null
+  ai_assessment: { status: string; reasoning_summary: string | null; confidence: string | number | null }
+  decisions: ReportDecisionDto[]
+}
+
+export interface ReviewReportDto {
+  case: { case_id:string; case_no:string; case_title:string; valuation_base_date:string; district_code:string }
+  run: { validation_run_id:string; run_no:number; run_status:string; rule_version_id:string|null; model_id:string|null; prompt_version:string|null; started_at:string; completed_at:string|null }
+  review_status: string
+  missing_item_count: number
+  findings: ReportFindingDto[]
+  risk_summary: { overall_risk_level:string; high_count:number; medium_count:number; low_count:number; missing_item_count:number; risk_reasons:unknown[] }
+  case_decisions: ReportDecisionDto[]
+  urgency: { level:string; remaining_days:number|null; due_at:string|null } | null
+  correction_requests: unknown[]
+  history: unknown[]
+}

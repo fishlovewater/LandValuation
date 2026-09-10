@@ -10,6 +10,11 @@ import type {
   WorkbenchSummaryDto,
   WorkbenchStartDto,
   ReviewStartResult,
+  FindingTriageDecision,
+  DecisionDto,
+  CorrectionRequestDto,
+  GeneratedReportDto,
+  ReviewReportDto,
 } from './review.types'
 
 export const reviewApi = {
@@ -51,6 +56,52 @@ export const reviewApi = {
       `/api/v1/review/workbench/cases/${reviewId}/documents/${documentId}/content`,
       { responseType: 'blob' },
     )
+    return data
+  },
+
+  async triageFinding(reviewId: string, findingId: string, decision: FindingTriageDecision, reason: string): Promise<DecisionDto> {
+    const { data } = await http.post<DecisionDto>(`/api/v1/review/findings/${findingId}/triage`, {
+      review_id: reviewId,
+      decision,
+      reason,
+    })
+    return data
+  },
+
+  async createAndSendCorrection(reviewId: string, message: string, dueAt: string): Promise<CorrectionRequestDto> {
+    const { data: created } = await http.post<CorrectionRequestDto>(`/api/v1/review/cases/${reviewId}/correction-requests`, {
+      message,
+      due_at: dueAt,
+    })
+    const { data: sent } = await http.post<CorrectionRequestDto>(
+      `/api/v1/review/correction-requests/${created.correction_request_id}/send`,
+      {},
+    )
+    return sent
+  },
+
+  async completeReview(reviewId: string, reason: string): Promise<DecisionDto> {
+    const { data } = await http.post<DecisionDto>(`/api/v1/review/cases/${reviewId}/complete-review`, { reason })
+    return data
+  },
+
+  async getStructuredReport(runId: string): Promise<ReviewReportDto> {
+    const { data } = await http.get<ReviewReportDto>(`/api/v1/review/runs/${runId}/report`)
+    return data
+  },
+
+  async generatePdfReport(runId: string): Promise<GeneratedReportDto> {
+    const { data } = await http.post<GeneratedReportDto>(`/api/v1/review/runs/${runId}/report/pdf`)
+    return data
+  },
+
+  async generateReport(runId: string, format: 'xlsx' | 'docx'): Promise<GeneratedReportDto> {
+    const { data } = await http.post<GeneratedReportDto>(`/api/v1/review/runs/${runId}/reports`, { format })
+    return data
+  },
+
+  async downloadReport(documentId: string): Promise<Blob> {
+    const { data } = await http.get<Blob>(`/api/v1/review/reports/${documentId}/download`, { responseType:'blob' })
     return data
   },
 }
