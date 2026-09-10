@@ -1,107 +1,136 @@
-import { http } from '../../api/http'
-import { mapReviewCase, mapWorkbenchDetail, mapWorkbenchStart } from './review.mappers'
+import { isAxiosError } from 'axios'
+import { ForbiddenError, http } from '../../api/http'
 import type {
-  ReviewCaseDetail,
-  ReviewCasePage,
-  ReviewCaseQuery,
-  ReviewSummary,
-  WorkbenchCaseListDto,
-  WorkbenchDetailDto,
-  WorkbenchSummaryDto,
-  WorkbenchStartDto,
-  ReviewStartResult,
-  FindingTriageDecision,
   DecisionDto,
-  CorrectionRequestDto,
+  FindingDto,
+  FindingTriageRequestDto,
+  GeneratedReportCreateDto,
   GeneratedReportDto,
+  ReviewCompletionRequestDto,
   ReviewReportDto,
+  WorkbenchSummaryDto,
+  WorkbenchCaseDetailDto,
+  WorkbenchCaseListDto,
+  WorkbenchPreflightDto,
+  WorkbenchStartDto,
 } from './review.types'
 
+export interface ListReviewCasesParams {
+  q?: string
+  status?: string
+  riskLevel?: string
+  statusGroup?: string
+  limit?: number
+  offset?: number
+}
+
 export const reviewApi = {
-  async getWorkbenchSummary(): Promise<ReviewSummary> {
-    const { data } = await http.get<WorkbenchSummaryDto>('/api/v1/review/workbench/summary')
-    return {
-      statusCounts: data.status_counts,
-      totalCount: Object.values(data.status_counts).reduce((sum, count) => sum + count, 0),
-      highRiskCount: data.high_risk_count,
-      openFindingCount: data.open_finding_count,
-      missingItemCount: data.missing_item_count,
-    }
+  async getSummary(signal?: AbortSignal): Promise<WorkbenchSummaryDto> {
+    const response = await http.get<WorkbenchSummaryDto>('/review/workbench/summary', { signal })
+    return response.data
   },
 
-  async listWorkbenchCases(query: ReviewCaseQuery): Promise<ReviewCasePage> {
-    const params: Record<string, string | number> = {}
-    if (query.q) params.q = query.q
-    if (query.status) params.status = query.status
-    if (query.riskLevel) params.risk_level = query.riskLevel
-    if (query.statusGroup) params.status_group = query.statusGroup
-    if (query.limit != null) params.limit = query.limit
-    if (query.offset != null) params.offset = query.offset
-    const { data } = await http.get<WorkbenchCaseListDto>('/api/v1/review/workbench/cases', { params })
-    return { items:data.items.map(mapReviewCase), total:data.total, limit:data.limit, offset:data.offset }
+  async listCases(params: ListReviewCasesParams = {}, signal?: AbortSignal): Promise<WorkbenchCaseListDto> {
+    const response = await http.get<WorkbenchCaseListDto>('/review/workbench/cases', {
+      signal,
+      params: {
+        q: params.q,
+        status: params.status,
+        risk_level: params.riskLevel,
+        status_group: params.statusGroup,
+        limit: params.limit ?? 20,
+        offset: params.offset ?? 0,
+      },
+    })
+    return response.data
   },
 
-  async getWorkbenchCase(reviewId: string): Promise<ReviewCaseDetail> {
-    const { data } = await http.get<WorkbenchDetailDto>(`/api/v1/review/workbench/cases/${reviewId}`)
-    return mapWorkbenchDetail(data)
+  async getCase(reviewId: string): Promise<WorkbenchCaseDetailDto> {
+    const response = await http.get<WorkbenchCaseDetailDto>(`/review/workbench/cases/${reviewId}`)
+    return response.data
   },
 
-  async startWorkbenchCase(reviewId: string): Promise<ReviewStartResult> {
-    const { data } = await http.post<WorkbenchStartDto>(`/api/v1/review/workbench/cases/${reviewId}/start`)
-    return mapWorkbenchStart(data)
+  async preflightCase(reviewId: string): Promise<WorkbenchPreflightDto> {
+    const response = await http.post<WorkbenchPreflightDto>(`/review/workbench/cases/${reviewId}/start/preflight`)
+    return response.data
+  },
+
+  async startCase(reviewId: string): Promise<WorkbenchStartDto> {
+    const response = await http.post<WorkbenchStartDto>(`/review/workbench/cases/${reviewId}/start`)
+    return response.data
   },
 
   async getDocumentContent(reviewId: string, documentId: string): Promise<Blob> {
-    const { data } = await http.get<Blob>(
-      `/api/v1/review/workbench/cases/${reviewId}/documents/${documentId}/content`,
+    const response = await http.get<Blob>(
+      `/review/workbench/cases/${reviewId}/documents/${documentId}/content`,
       { responseType: 'blob' },
     )
-    return data
+    return response.data
   },
 
-  async triageFinding(reviewId: string, findingId: string, decision: FindingTriageDecision, reason: string): Promise<DecisionDto> {
-    const { data } = await http.post<DecisionDto>(`/api/v1/review/findings/${findingId}/triage`, {
-      review_id: reviewId,
-      decision,
-      reason,
-    })
-    return data
+  async listFindings(validationRunId: string): Promise<FindingDto[]> {
+    const response = await http.get<FindingDto[]>(`/review/runs/${validationRunId}/findings`)
+    return response.data
   },
 
-  async createAndSendCorrection(reviewId: string, message: string, dueAt: string): Promise<CorrectionRequestDto> {
-    const { data: created } = await http.post<CorrectionRequestDto>(`/api/v1/review/cases/${reviewId}/correction-requests`, {
-      message,
-      due_at: dueAt,
-    })
-    const { data: sent } = await http.post<CorrectionRequestDto>(
-      `/api/v1/review/correction-requests/${created.correction_request_id}/send`,
-      {},
+  async triageFinding(findingId: string, payload: FindingTriageRequestDto): Promise<DecisionDto> {
+    const response = await http.post<DecisionDto>(`/review/findings/${findingId}/triage`, payload)
+    return response.data
+  },
+
+  async completeReview(reviewId: string, payload: ReviewCompletionRequestDto): Promise<DecisionDto> {
+    const response = await http.post<DecisionDto>(`/review/cases/${reviewId}/complete-review`, payload)
+    return response.data
+  },
+
+  async getReport(validationRunId: string): Promise<ReviewReportDto> {
+    const response = await http.get<ReviewReportDto>(`/review/runs/${validationRunId}/report`)
+    return response.data
+  },
+
+  async generateReportPdf(validationRunId: string): Promise<GeneratedReportDto> {
+    const response = await http.post<GeneratedReportDto>(`/review/runs/${validationRunId}/report/pdf`)
+    return response.data
+  },
+
+  async generateReport(
+    validationRunId: string,
+    payload: GeneratedReportCreateDto,
+  ): Promise<GeneratedReportDto> {
+    const response = await http.post<GeneratedReportDto>(
+      `/review/runs/${validationRunId}/reports`,
+      payload,
     )
-    return sent
-  },
-
-  async completeReview(reviewId: string, reason: string): Promise<DecisionDto> {
-    const { data } = await http.post<DecisionDto>(`/api/v1/review/cases/${reviewId}/complete-review`, { reason })
-    return data
-  },
-
-  async getStructuredReport(runId: string): Promise<ReviewReportDto> {
-    const { data } = await http.get<ReviewReportDto>(`/api/v1/review/runs/${runId}/report`)
-    return data
-  },
-
-  async generatePdfReport(runId: string): Promise<GeneratedReportDto> {
-    const { data } = await http.post<GeneratedReportDto>(`/api/v1/review/runs/${runId}/report/pdf`)
-    return data
-  },
-
-  async generateReport(runId: string, format: 'xlsx' | 'docx'): Promise<GeneratedReportDto> {
-    const { data } = await http.post<GeneratedReportDto>(`/api/v1/review/runs/${runId}/reports`, { format })
-    return data
+    return response.data
   },
 
   async downloadReport(documentId: string): Promise<Blob> {
-    const { data } = await http.get<Blob>(`/api/v1/review/reports/${documentId}/download`, { responseType:'blob' })
-    return data
+    const response = await http.get<Blob>(`/review/reports/${documentId}/download`, {
+      responseType: 'blob',
+    })
+    return response.data
   },
+}
+
+export function safeReviewErrorMessage(error: unknown): string {
+  if (error instanceof ForbiddenError) return error.message
+  if (isAxiosError(error) && error.response?.status === 404) {
+    return '找不到目前審查案件，請重新整理後再試。'
+  }
+  if (isAxiosError(error) && error.response?.status === 409) {
+    const code = error.response.data?.error?.code
+    const knownMessages: Record<string, string> = {
+      REVIEW_STATE_CONFLICT: '案件狀態已變更，請重新整理後再試。',
+      FINDING_DECISION_CONFLICT: '此疑點已被其他流程更新，請重新整理後確認目前狀態。',
+      REVIEW_COMPLETION_BLOCKED: '案件仍有未完成的審查項目，請先處理阻擋項目。',
+      REVIEW_ALREADY_COMPLETED: '此案件已完成審查，畫面已切換為唯讀。',
+      REVIEW_SUBMISSION_STALE: '目前檢核不是最新送審版本，請重新執行最新版本檢核。',
+      REVIEW_REPORT_NOT_AVAILABLE: '審查報告須在案件完成且最新檢核完成後產生。',
+      CORRECTION_REQUEST_BLOCKED: '目前無法送出修正通知，請先完成疑點判定或前一筆修正通知。',
+      REVIEW_DECISION_INVALID: '請補充審查理由或必要內容。',
+      DATA_CONFLICT: '資料狀態已變更，請重新整理後再試。',
+    }
+    return knownMessages[code] ?? '案件狀態不允許此操作，請重新整理後確認。'
+  }
+  return '審查服務目前無法完成此操作，請稍後再試。'
 }

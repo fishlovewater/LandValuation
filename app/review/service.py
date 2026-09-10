@@ -41,7 +41,11 @@ from app.review.reports import (
 )
 from app.review.urgency import classify_urgency
 from app.review.schemas import FindingRead
-from app.review.rule_selection import RuleCandidate, select_effective_rule
+from app.review.rule_selection import (
+    RuleCandidate,
+    rule_versions_are_handoff_compatible,
+    select_effective_rule,
+)
 from app.review.trusted_inputs import (
     TrustedField,
     required_field_problems,
@@ -740,11 +744,15 @@ class ReviewService:
             if item.form_code not in form_codes:
                 raise invalid()
 
-        rule_selection = require_dict(
-            context,
-            "rule_selection",
-            {"rule_version", "rule_source", "validation_rules"},
-        )
+        rule_selection = context.get("rule_selection")
+        legacy_selection_keys = {"rule_version", "rule_source", "validation_rules"}
+        paired_selection_keys = legacy_selection_keys | {"source_rule_version"}
+        if (
+            not isinstance(rule_selection, dict)
+            or set(rule_selection) not in (legacy_selection_keys, paired_selection_keys)
+        ):
+            raise invalid()
+
         rule_version_keys = {
             "rule_version_id",
             "rule_set_code",
@@ -758,22 +766,49 @@ class ReviewService:
             "selection_priority",
             "source_document_id",
         }
-        rule_version = require_dict(rule_selection, "rule_version", rule_version_keys)
+        rule_version_keys_with_summary = rule_version_keys | {"import_summary"}
+
+        def validate_rule_version_snapshot(key: str) -> dict:
+            value = rule_selection.get(key)
+            if (
+                not isinstance(value, dict)
+                or set(value) not in (rule_version_keys, rule_version_keys_with_summary)
+            ):
+                raise invalid()
+            require_uuid(value["rule_version_id"])
+            if value["status"] != "PUBLISHED":
+                raise invalid()
+            require_text(value["rule_set_code"])
+            require_int(value["version_no"], minimum=1)
+            require_text(value["version_name"])
+            require_date(value["effective_from"])
+            require_date(value["effective_to"])
+            if (
+                value["applicable_case_type"] != case_context["case_type"]
+                or value["applicable_district_code"]
+                != case_context["district_code"]
+            ):
+                raise invalid()
+            require_int(value["selection_priority"])
+            require_uuid(value["source_document_id"])
+            if "import_summary" in value and not isinstance(value["import_summary"], dict):
+                raise invalid()
+            return dict(value)
+
+        rule_version = validate_rule_version_snapshot("rule_version")
         rule_version_id = require_uuid(rule_version["rule_version_id"])
-        if rule_version_id != source_rule_version_id or rule_version["status"] != "PUBLISHED":
+        if "source_rule_version" in rule_selection:
+            source_rule_version = validate_rule_version_snapshot("source_rule_version")
+            if require_uuid(source_rule_version["rule_version_id"]) != source_rule_version_id:
+                raise invalid()
+            if not rule_versions_are_handoff_compatible(source_rule_version, rule_version):
+                raise invalid()
+        elif rule_version_id != source_rule_version_id:
+            # Legacy v1 snapshots carried one rule version for both validation
+            # and Review execution. Keep accepting those immutable snapshots,
+            # but fail closed if the source run points anywhere else.
             raise invalid()
-        require_text(rule_version["rule_set_code"])
-        require_int(rule_version["version_no"], minimum=1)
-        require_text(rule_version["version_name"])
-        require_date(rule_version["effective_from"])
-        require_date(rule_version["effective_to"])
-        if (
-            rule_version["applicable_case_type"] != case_context["case_type"]
-            or rule_version["applicable_district_code"]
-            != case_context["district_code"]
-        ):
-            raise invalid()
-        require_int(rule_version["selection_priority"])
+
         source_document_id = require_uuid(rule_version["source_document_id"])
 
         rule_source_keys = {
@@ -832,7 +867,7 @@ class ReviewService:
             not isinstance(validation, dict)
             or require_uuid(validation.get("validation_run_id")) != source_run_id
             or require_uuid(validation.get("form_instance_id")) != report_form["form_instance_id"]
-            or require_uuid(validation.get("rule_version_id")) != rule_version_id
+            or require_uuid(validation.get("rule_version_id")) != source_rule_version_id
         ):
             raise invalid()
 

@@ -19,6 +19,45 @@ def review_integration_prerequisites():
 
 
 @pytest.fixture(autouse=True)
+def review_submission_fixture_mutability():
+    """Allow Review fixtures to fabricate and clean immutable submissions.
+
+    Production immutability is covered by migration integration tests.  Some
+    Review API tests intentionally corrupt a submitted snapshot or delete it
+    during teardown, so only their isolated TEST_RUN_ID database temporarily
+    disables the row-mutation trigger for the lifetime of one test.
+    """
+    if not os.environ.get("TEST_RUN_ID"):
+        yield
+        return
+
+    connection = psycopg.connect(
+        host=os.environ["POSTGRES_HOST"],
+        port=int(os.environ.get("POSTGRES_PORT", "5432")),
+        dbname=os.environ["POSTGRES_DB"],
+        user=os.environ["POSTGRES_USER"],
+        password=os.environ["POSTGRES_PASSWORD"],
+    )
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "ALTER TABLE valuation.review_submissions "
+                "DISABLE TRIGGER trg_review_submissions_immutable"
+            )
+        connection.commit()
+        yield
+    finally:
+        connection.rollback()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "ALTER TABLE valuation.review_submissions "
+                "ENABLE TRIGGER trg_review_submissions_immutable"
+            )
+        connection.commit()
+        connection.close()
+
+
+@pytest.fixture(autouse=True)
 def development_only_demo_settings():
     """Keep Demo production guards while enabling integration fixtures."""
     if not os.environ.get("TEST_RUN_ID"):

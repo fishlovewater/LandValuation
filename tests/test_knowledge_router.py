@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.core.config import get_settings
+from app.knowledge import answer_service as knowledge_answer_service
 from app.knowledge import router as knowledge_router
 from app.knowledge.schemas import KnowledgeSearchRequest
 from app.knowledge.runtime_extraction import RuntimeKnowledgeExtractor
@@ -134,10 +135,14 @@ async def test_retrieval_bounds_listing_and_applies_persisted_size_limit(monkeyp
             raise AssertionError("oversized persisted source must not be downloaded")
 
     storage = _Storage()
-    monkeypatch.setattr(knowledge_router, "get_settings", lambda: settings)
-    monkeypatch.setattr(knowledge_router, "KnowledgeRepository", lambda _session: _Repository())
+    monkeypatch.setattr(knowledge_answer_service, "get_settings", lambda: settings)
     monkeypatch.setattr(
-        knowledge_router,
+        knowledge_answer_service,
+        "KnowledgeRepository",
+        lambda _session: _Repository(),
+    )
+    monkeypatch.setattr(
+        knowledge_answer_service,
         "RuntimeKnowledgeExtractor",
         lambda value: RuntimeKnowledgeExtractor(value, settings=settings),
     )

@@ -1,3 +1,26 @@
+import type { CaseSummary } from '../../types/case'
+
+export type ReviewStatusCode =
+  | 'RECEIVED'
+  | 'PREPROCESSING'
+  | 'PENDING_MATERIALS'
+  | 'READY_FOR_REVIEW'
+  | 'ANALYZING'
+  | 'REVIEW_REQUIRED'
+  | 'RETURNED_FOR_REVISION'
+  | 'SUPPLEMENT_REQUIRED'
+  | 'EXPERT_REVIEW'
+  | 'APPROVED'
+  | 'REVIEW_COMPLETED'
+  | string
+
+export type RiskLevelCode = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | string
+export type WorkbenchStatusGroup = 'pending' | 'in_progress' | 'needs_input' | 'completed' | 'risk'
+export type FindingTriageDecision =
+  | 'CONFIRMED_ISSUE'
+  | 'DISMISSED_FALSE_POSITIVE'
+  | 'EXPERT_REVIEW'
+
 export interface WorkbenchSummaryDto {
   status_counts: Record<string, number>
   high_risk_count: number
@@ -11,7 +34,7 @@ export interface WorkbenchLatestRunDto {
   run_status: string
 }
 
-export interface WorkbenchCaseDto {
+export interface WorkbenchCaseListItemDto {
   review_id: string
   case_id: string
   case_no: string
@@ -27,14 +50,14 @@ export interface WorkbenchCaseDto {
   due_at: string | null
   assigned_reviewer_display_name: string | null
   latest_run: WorkbenchLatestRunDto | null
-  urgency_level: 'OVERDUE' | 'URGENT' | 'DUE_SOON' | 'NORMAL' | 'NOT_SET'
+  urgency_level: string
   remaining_days: number | null
   correction_round: number
   latest_correction_status: string | null
 }
 
 export interface WorkbenchCaseListDto {
-  items: WorkbenchCaseDto[]
+  items: WorkbenchCaseListItemDto[]
   total: number
   limit: number
   offset: number
@@ -49,7 +72,7 @@ export interface WorkbenchCaseSummaryDto {
   case_status: string
 }
 
-export interface ReviewReadDto {
+export interface ReviewDto {
   review_id: string
   case_id: string
   review_type: string
@@ -68,6 +91,17 @@ export interface ReviewReadDto {
   low_count: number
   missing_item_count: number
   latest_validation_run_id: string | null
+  latest_submission_id?: string | null
+}
+
+export interface WorkbenchDocumentDto {
+  document_id: string
+  document_type: string
+  original_filename: string
+  mime_type: string
+  version_no: number
+  is_active: boolean
+  uploaded_at: string
 }
 
 export interface MissingItemDto {
@@ -87,17 +121,7 @@ export interface MissingItemDto {
   created_at: string
 }
 
-export interface WorkbenchDocumentDto {
-  document_id: string
-  document_type: string
-  original_filename: string
-  mime_type: string
-  version_no: number
-  is_active: boolean
-  uploaded_at: string
-}
-
-export interface ValidationRunDto {
+export interface WorkbenchRunDto {
   validation_run_id: string
   case_id: string
   review_id: string | null
@@ -110,11 +134,14 @@ export interface ValidationRunDto {
   completed_at: string | null
   triggered_by_user_id: string | null
   rule_version_id: string | null
-  input_snapshot: Record<string, unknown>
   model_id: string | null
   prompt_version: string | null
   error_code: string | null
   error_message: string | null
+  submission_id?: string | null
+  submission_no?: number | null
+  submitted_at?: string | null
+  input_fingerprint?: string | null
 }
 
 export interface FindingDto {
@@ -137,12 +164,12 @@ export interface FindingDto {
   legal_basis: unknown[]
   reported_grade: string | null
   system_grade: string | null
-  reported_adjustment_rate: string | number | null
-  system_adjustment_rate: string | number | null
+  reported_adjustment_rate: string | null
+  system_adjustment_rate: string | null
   comparison_result: Record<string, unknown>
   recommended_action: Record<string, unknown>
   ai_reasoning_summary: string | null
-  ai_confidence: string | number | null
+  ai_confidence: string | null
   ai_status: string
   supersedes_finding_id: string | null
   rule_version_id: string | null
@@ -154,7 +181,7 @@ export interface RiskSummaryDto {
   review_id: string
   validation_run_id: string | null
   overall_risk_level: string
-  risk_score: string | number | null
+  risk_score: string | null
   summary: string
   high_count: number
   medium_count: number
@@ -162,6 +189,27 @@ export interface RiskSummaryDto {
   missing_item_count: number
   risk_reasons: unknown[]
   generated_at: string
+}
+
+export interface WorkbenchCompletenessDto {
+  ready: boolean
+  review_status: string
+  missing_item_count: number
+  blocked_rule_codes: string[]
+  items: MissingItemDto[]
+}
+
+export interface WorkbenchPreflightDto {
+  outcome: 'READY' | 'BLOCKED'
+  completeness: WorkbenchCompletenessDto
+}
+
+export interface WorkbenchStartDto {
+  outcome: 'BLOCKED' | 'COMPLETED'
+  completeness: WorkbenchCompletenessDto
+  run: WorkbenchRunDto | null
+  findings: FindingDto[]
+  risk_summary: RiskSummaryDto | null
 }
 
 export interface DecisionDto {
@@ -204,15 +252,39 @@ export interface CorrectionRequestDto {
   resubmitted_by_user_id: string | null
   resubmitted_at: string | null
   rechecked_at: string | null
-  items: unknown[]
+  items: CorrectionRequestItemDto[]
 }
 
-export interface WorkbenchDetailDto {
+export interface CorrectionRequestItemDto {
+  correction_request_item_id: string
+  finding_id: string
+  finding_code: string
+  finding_type: string
+  severity: string
+  document_id: string | null
+  document_version: number | null
+  page_number: number | null
+  reported_text: string | null
+  reported_value: string | null
+  legal_basis_snapshot: unknown[]
+  source_evidence_snapshot: unknown[]
+  issue_summary: string
+  requested_correction: string
+  recheck_outcome: string
+  resulting_finding_id: string | null
+  rechecked_at: string | null
+}
+
+export interface WorkbenchCaseDetailDto {
   case: WorkbenchCaseSummaryDto
-  review: ReviewReadDto
+  review: ReviewDto
+  submission_id: string | null
+  submission_no: number | null
+  submitted_at: string | null
+  input_fingerprint: string | null
   documents: WorkbenchDocumentDto[]
   missing_items: MissingItemDto[]
-  runs: ValidationRunDto[]
+  runs: WorkbenchRunDto[]
   findings: FindingDto[]
   risk_summary: RiskSummaryDto | null
   decisions: DecisionDto[]
@@ -222,208 +294,160 @@ export interface WorkbenchDetailDto {
   correction_requests: CorrectionRequestDto[]
 }
 
-export interface CompletenessDto {
-  ready: boolean
+export interface FindingTriageRequestDto {
+  review_id: string
+  decision: FindingTriageDecision
+  reason: string
+}
+
+export interface ReviewCompletionRequestDto {
+  reason: string
+}
+
+export interface GeneratedReportCreateDto {
+  format: 'xlsx' | 'docx'
+}
+
+export interface ReviewReportDto {
+  case: Record<string, unknown>
+  run: Record<string, unknown>
   review_status: string
   missing_item_count: number
-  blocked_rule_codes: string[]
-  items: MissingItemDto[]
+  findings: unknown[]
+  risk_summary: Record<string, unknown>
+  case_decisions: unknown[]
+  urgency?: Record<string, unknown> | null
+  correction_requests?: unknown[]
+  history?: unknown[]
 }
 
-export interface WorkbenchStartDto {
-  outcome: 'BLOCKED' | 'COMPLETED'
-  completeness: CompletenessDto
-  run: ValidationRunDto | null
-  findings: FindingDto[]
-  risk_summary: RiskSummaryDto | null
-}
-
-export interface ReviewSummary {
+export interface ReviewSummaryModel {
   statusCounts: Record<string, number>
-  totalCount: number
   highRiskCount: number
   openFindingCount: number
   missingItemCount: number
 }
 
-export interface ReviewCaseSummary {
+export interface ReviewQueueItemModel extends CaseSummary {
   reviewId: string
-  caseId: string
-  caseNo: string
-  title: string
-  district?: string
-  status: string
-  statusLabel: string
-  riskLevel?: string
-  riskLabel: string
+  reviewStatusCode: string
+  reviewStatusLabel: string
+  latestValidationRunId: string | null
+  riskLevelCode: string | null
+  riskLevelLabel: string
   missingItemCount: number
   highCount: number
   mediumCount: number
   lowCount: number
-  receivedAt?: string
-  dueAt?: string
-  reviewerName?: string
-  latestRunId?: string
-  urgencyLevel: string
-  remainingDays?: number
-  correctionRound: number
-  raw: { status: string; riskLevel?: string }
+  receivedAt: string
+  dueAt: string | null
+  assignedReviewerName: string | null
+  latestRunId: string | null
+  latestRunStatusCode: string | null
+  latestRunStatusLabel: string
+  urgencyLabel: string
 }
 
-export interface ReviewDocument {
+export interface ReviewDocumentModel {
   documentId: string
   documentType: string
+  documentTypeLabel: string
   filename: string
   mimeType: string
+  mimeTypeLabel: string
   versionNo: number
   isActive: boolean
   uploadedAt: string
-  contentAvailable: boolean
 }
 
-export interface MissingItem {
-  missingItemId: string
-  itemCode: string
-  itemName: string
-  severity: string
-  status: string
-  reason?: string
-}
-
-export interface ReviewRun {
-  runId: string
-  runNo?: number
-  status: string
+export interface ReviewRunModel {
+  validationRunId: string
+  reviewId: string | null
+  runNo: number | null
+  runStatusCode: string
+  runStatusLabel: string
   passedCount: number
   warningCount: number
   failedCount: number
   startedAt: string
-  completedAt?: string
+  completedAt: string | null
 }
 
-export interface FindingViewModel {
+export interface ReviewReferenceModel {
+  key: string
+  title: string
+  detail: string | null
+  documentId: string | null
+  documentVersion: number | null
+  pageNumber: number | null
+  verificationStatus: string | null
+}
+
+export interface ReviewFindingModel {
   findingId: string
   reviewId: string
-  runId?: string
+  validationRunId: string | null
   findingCode: string
+  findingCodeLabel: string
   findingType: string
-  severity: string
+  findingTypeLabel: string
+  severityCode: string
   severityLabel: string
   title: string
   description: string
-  status: string
-  documentId?: string
-  documentVersion?: number
-  pageNumber?: number
-  fieldPath?: string
-  reportedText?: string
-  reportedValue?: string
-  reportedGrade?: string
-  systemGrade?: string
-  reportedAdjustmentRate?: string
-  systemAdjustmentRate?: string
-  aiReasoningSummary?: string
-  aiConfidence?: string
-  aiStatus: string
+  statusCode: string
+  statusLabel: string
+  documentId: string | null
+  documentVersion: number | null
+  pageNumber: number | null
+  fieldPath: string | null
+  fieldPathLabel: string
+  reportedText: string | null
+  reportedValue: string | null
+  systemValue: string | null
+  reportedGrade: string | null
+  systemGrade: string | null
+  reportedAdjustmentRate: string | null
+  systemAdjustmentRate: string | null
+  aiReasoningSummary: string | null
+  aiConfidence: string | null
+  aiStatusLabel: string
+  recommendedActionLabel: string | null
+  sourceEvidence: ReviewReferenceModel[]
+  legalBasis: ReviewReferenceModel[]
 }
 
-export interface ReviewRiskSummary {
-  riskSummaryId: string
+export interface ReviewDecisionModel {
+  decisionId: string
   reviewId: string
-  runId?: string
-  riskLevel: string
-  riskLabel: string
-  riskScore?: string
-  summary: string
-  highCount: number
-  mediumCount: number
-  lowCount: number
-  missingItemCount: number
-  generatedAt: string
+  findingId: string | null
+  decisionCode: string
+  decisionLabel: string
+  reason: string | null
+  decidedAt: string
 }
 
-export interface ReviewCaseDetail extends ReviewCaseSummary {
+export interface ReviewDetailModel {
+  caseId: string
+  caseNo: string
+  caseTitle: string
+  districtCode: string
   valuationBaseDate: string
-  caseStatus: string
-  documents: ReviewDocument[]
-  missingItems: MissingItem[]
-  runs: ReviewRun[]
-  findings: FindingViewModel[]
-  riskSummary?: ReviewRiskSummary
-  decisions: DecisionDto[]
-  reports: GeneratedReportDto[]
+  caseStatusCode: string
+  caseStatusLabel: string
+  reviewId: string
+  reviewStatusCode: string
+  reviewStatusLabel: string
+  latestValidationRunId: string | null
+  riskLevelCode: string | null
+  riskLevelLabel: string
+  documents: ReviewDocumentModel[]
+  missingItems: MissingItemDto[]
+  runs: ReviewRunModel[]
+  findings: ReviewFindingModel[]
+  decisions: ReviewDecisionModel[]
+  reportDocument: GeneratedReportDto | null
+  generatedReports: GeneratedReportDto[]
   correctionRequests: CorrectionRequestDto[]
-}
-
-export interface ReviewCaseQuery {
-  q?: string
-  status?: string
-  riskLevel?: string
-  statusGroup?: 'pending' | 'in_progress' | 'needs_input' | 'completed' | 'risk'
-  limit?: number
-  offset?: number
-}
-
-export interface ReviewCasePage {
-  items: ReviewCaseSummary[]
-  total: number
-  limit: number
-  offset: number
-}
-
-export interface ReviewStartResult {
-  outcome: 'BLOCKED' | 'COMPLETED'
-  missingItems: MissingItem[]
-  run?: ReviewRun
-  findings: FindingViewModel[]
-  riskSummary?: ReviewRiskSummary
-}
-
-export type FindingTriageDecision = 'CONFIRMED_ISSUE' | 'DISMISSED_FALSE_POSITIVE' | 'EXPERT_REVIEW'
-
-export interface ReportDecisionDto {
-  decision_id: string
-  finding_id: string | null
-  decision: string
-  reason: string
-  decided_by_user_id: string | null
-  decided_at: string
-  before_value: Record<string, unknown> | null
-  after_value: Record<string, unknown> | null
-}
-
-export interface ReportFindingDto {
-  finding_id: string
-  finding_code: string
-  finding_type: string
-  severity: string
-  title: string
-  description: string
-  status: string
-  source_evidence: unknown[]
-  reported_text: string | null
-  reported_value: string | null
-  legal_basis: unknown[]
-  reported_grade: string | null
-  system_grade: string | null
-  reported_adjustment_rate: string | number | null
-  system_adjustment_rate: string | number | null
-  comparison_result: Record<string, unknown>
-  recommended_action: Record<string, unknown>
-  supersedes_finding_id: string | null
-  ai_assessment: { status: string; reasoning_summary: string | null; confidence: string | number | null }
-  decisions: ReportDecisionDto[]
-}
-
-export interface ReviewReportDto {
-  case: { case_id:string; case_no:string; case_title:string; valuation_base_date:string; district_code:string }
-  run: { validation_run_id:string; run_no:number; run_status:string; rule_version_id:string|null; model_id:string|null; prompt_version:string|null; started_at:string; completed_at:string|null }
-  review_status: string
-  missing_item_count: number
-  findings: ReportFindingDto[]
-  risk_summary: { overall_risk_level:string; high_count:number; medium_count:number; low_count:number; missing_item_count:number; risk_reasons:unknown[] }
-  case_decisions: ReportDecisionDto[]
-  urgency: { level:string; remaining_days:number|null; due_at:string|null } | null
-  correction_requests: unknown[]
-  history: unknown[]
+  unresolvedFindingCount: number
 }

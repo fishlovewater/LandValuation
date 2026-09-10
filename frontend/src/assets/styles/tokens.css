@@ -1,5 +1,30 @@
 :root {
-  --bg: #f4f6f8; --surface: #ffffff; --surface-muted: #eef2f5; --text: #17212b; --muted: #62707d;
-  --border: #d8e0e7; --accent: #1f5e72; --accent-strong: #16495a; --danger: #a33232;
-  --radius: 14px; --shadow: 0 12px 32px rgb(16 36 48 / 8%); --sidebar: 220px;
+  --app-ink: #172238;
+  --app-ink-soft: #5b677d;
+  --app-muted: #7c879b;
+  --app-paper: #f7f9fc;
+  --app-paper-strong: #ffffff;
+  --app-line: #dfe5ef;
+  --app-accent: #c85b43;
+  --app-accent-deep: #a84332;
+  --app-accent-soft: #f5e6df;
+  --app-blue: #476d9e;
+  --app-green: #3b8166;
+  --app-violet: #74688f;
+  --app-shadow: 0 20px 52px rgba(41, 57, 85, 0.1);
+  --app-shadow-soft: 0 10px 26px rgba(41, 57, 85, 0.08);
+  --app-radius-sm: 12px;
+  --app-radius-md: 20px;
+  --app-radius-lg: 30px;
+  --app-radius-pill: 999px;
+  --app-container: 1180px;
+  --app-font-body: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  --app-font-display: "Noto Serif TC", "Songti TC", "PMingLiU", serif;
+  font-family: var(--app-font-body);
+  color: var(--app-ink);
+  background: var(--app-paper);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }

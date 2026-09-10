@@ -7,6 +7,8 @@ from app.ai_assistant.schemas import (
     AssistantMessageRequest,
     AssistantMessageResponse,
     AssistantProgressResponse,
+    AssistantQuestionRequest,
+    AssistantQuestionResponse,
     AssistantSessionCreate,
     AssistantSessionResponse,
 )
@@ -17,7 +19,21 @@ from app.storage.dependencies import Storage
 
 router = APIRouter()
 
-AssistantUser = Annotated[User, Depends(require_permissions("valuation.update"))]
+AssistantUser = Annotated[
+    User,
+    Depends(require_permissions("assistant.use", "valuation.read")),
+]
+AssistantQuestionUser = Annotated[
+    User,
+    Depends(
+        require_permissions(
+            "assistant.use",
+            "valuation.read",
+            "knowledge.read",
+            "case.read",
+        )
+    ),
+]
 
 
 def request_uuid(request: Request) -> UUID | None:
@@ -61,6 +77,25 @@ async def get_assistant_progress(
     user: AssistantUser,
 ) -> AssistantProgressResponse:
     return await AssistantService(session).progress(session_id, user)
+
+
+@router.post(
+    "/sessions/{session_id}/questions",
+    response_model=AssistantQuestionResponse,
+)
+async def ask_assistant_question(
+    session_id: UUID,
+    payload: AssistantQuestionRequest,
+    session: DbSession,
+    storage: Storage,
+    user: AssistantQuestionUser,
+) -> AssistantQuestionResponse:
+    return await AssistantService(session, storage=storage).ask_question(
+        session_id,
+        payload,
+        user,
+        storage,
+    )
 
 
 @router.post(

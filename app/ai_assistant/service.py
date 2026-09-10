@@ -6,15 +6,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai_assistant.provider import BedrockConverseProvider
 from app.ai_assistant.repository import AssistantRepository
 from app.ai_assistant.schemas import (
+    AssistantClaim,
+    AssistantCitation,
     AssistantMessageRequest,
     AssistantProgressResponse,
+    AssistantQuestionRequest,
+    AssistantQuestionResponse,
     AssistantSessionCreate,
     ToolExecutionResponse,
 )
 from app.ai_assistant.tools import ALLOWED_TOOL_NAMES, BEDROCK_TOOL_CONFIG
 from app.auth.models import User
+from app.auth.service import permission_codes
 from app.core.config import get_settings
 from app.core.exceptions import AppError, PermissionDeniedError, ResourceNotFoundError
+from app.knowledge.answer_service import answer_knowledge_question
+from app.knowledge.schemas import (
+    KnowledgeAnswerResponse,
+    KnowledgeAnswerStatus,
+    KnowledgeSearchRequest,
+)
 from app.storage.service import StorageService
 from app.valuation.f03_repository import F03Repository
 from app.valuation.f03_schemas import F03DraftUpdate
@@ -26,6 +37,20 @@ from app.valuation.operations.validation_service import ValidationService
 from app.valuation.requirements import FORM_REQUIREMENTS
 from app.valuation.schemas import FormCode
 from app.valuation.service import ValuationService
+
+
+ASSISTANT_TOOL_PERMISSIONS = {
+    "get_case_summary": frozenset({"valuation.read"}),
+    "get_form_requirements": frozenset({"valuation.read"}),
+    "get_missing_items": frozenset({"valuation.read"}),
+    "get_extracted_fields": frozenset({"valuation.read"}),
+    "get_nearest_facility": frozenset({"valuation.read"}),
+    "apply_confirmed_fields": frozenset({"valuation.read", "valuation.update"}),
+    "save_form_draft": frozenset({"valuation.read", "valuation.update"}),
+    "run_calculation": frozenset({"valuation.read", "valuation.update"}),
+    "run_validation": frozenset({"valuation.read", "valuation.update"}),
+    "generate_report_pdf": frozenset({"valuation.read", "valuation.update"}),
+}
 
 
 def normalize_f03_confirmed_fields(values: dict[str, Any]) -> dict[str, Any]:
@@ -47,6 +72,8 @@ def normalize_f03_confirmed_fields(values: dict[str, Any]) -> dict[str, Any]:
 
 
 class AssistantService:
+    _UNSUPPORTED_QUESTION_COPY = "目前沒有足夠的可讀適用來源，無法支持這項回答。"
+
     def __init__(
         self,
         session: AsyncSession,
@@ -111,6 +138,121 @@ class AssistantService:
     ) -> AssistantProgressResponse:
         record = await self.get_session(session_id, user)
         return await self.refresh_progress(record)
+
+    async def ask_question(
+        self,
+        session_id: UUID,
+        payload: AssistantQuestionRequest,
+        user: User,
+        storage: StorageService,
+    ) -> AssistantQuestionResponse:
+        record = await self.get_session(session_id, user)
+        request = KnowledgeSearchRequest(
+            question=payload.question,
+            case_id=record.case_id,
+            as_of_date=payload.as_of_date,
+            document_types=payload.document_types,
+            limit=payload.limit,
+        )
+        result = await answer_knowledge_question(
+            session=self.session,
+            storage=storage,
+            user=user,
+            request=request,
+        )
+        return self._question_response(record, result)
+
+    @classmethod
+    def _question_response(
+        cls,
+        record: AssistantSessionRecord,
+        result: KnowledgeAnswerResponse,
+    ) -> AssistantQuestionResponse:
+        if result.answer_status != KnowledgeAnswerStatus.SUPPORTED:
+            return AssistantQuestionResponse(
+                assistant_session_id=record.assistant_session_id,
+                answer_status=result.answer_status,
+                answer=cls._UNSUPPORTED_QUESTION_COPY,
+                generation_mode=result.generation_mode,
+                next_action=result.next_action,
+                clarification_question=result.clarification_question,
+                unreadable_sources=result.unreadable_sources,
+            )
+
+        citations = [
+            AssistantCitation(
+                citation_id=citation.chunk_id,
+                document_id=citation.document_id,
+                document_title=citation.document_title,
+                document_code=citation.document_code,
+                version_no=citation.version_no,
+                effective_from=citation.effective_from,
+                effective_to=citation.effective_to,
+                page_start=citation.page_start,
+                page_end=citation.page_end,
+                section_title=citation.section_title,
+                article_no=citation.article_no,
+                quoted_text=citation.quoted_text,
+                supporting_quote=citation.supporting_quote,
+                supported_claim=citation.supported_claim,
+            )
+            for citation in result.citations
+        ]
+        citation_ids = [citation.citation_id for citation in citations]
+        citation_ids_by_claim: dict[str, list[UUID]] = {}
+        for citation in citations:
+            claim_text = (citation.supported_claim or "").strip()
+            if not claim_text:
+                continue
+            claim_citation_ids = citation_ids_by_claim.setdefault(claim_text, [])
+            if citation.citation_id not in claim_citation_ids:
+                claim_citation_ids.append(citation.citation_id)
+        claims = [
+            AssistantClaim(text=claim_text, citation_ids=claim_citation_ids)
+            for claim_text, claim_citation_ids in citation_ids_by_claim.items()
+        ]
+        citation_id_set = set(citation_ids)
+        claim_citation_ids = [
+            citation_id
+            for claim in claims
+            for citation_id in claim.citation_ids
+        ]
+        graph_is_complete = (
+            bool(claims)
+            and len(citation_ids) == len(citation_id_set)
+            and all(
+                citation.supported_claim and citation.supported_claim.strip()
+                for citation in citations
+            )
+            and len(claim_citation_ids) == len(citation_ids)
+            and len(claim_citation_ids) == len(set(claim_citation_ids))
+            and set(claim_citation_ids) == citation_id_set
+        )
+        if not graph_is_complete or any(
+            citation_id not in set(citation_ids)
+            for claim in claims
+            for citation_id in claim.citation_ids
+        ):
+            return AssistantQuestionResponse(
+                assistant_session_id=record.assistant_session_id,
+                answer_status=KnowledgeAnswerStatus.EVIDENCE_ONLY,
+                answer=cls._UNSUPPORTED_QUESTION_COPY,
+                generation_mode=result.generation_mode,
+                next_action=result.next_action,
+                clarification_question=result.clarification_question,
+                unreadable_sources=result.unreadable_sources,
+            )
+        return AssistantQuestionResponse(
+            assistant_session_id=record.assistant_session_id,
+            answer_status=result.answer_status,
+            answer=result.answer,
+            generation_mode=result.generation_mode,
+            next_action=result.next_action,
+            clarification_question=result.clarification_question,
+            claims=claims,
+            citations=citations,
+            unreadable_sources=result.unreadable_sources,
+        )
 
     async def refresh_progress(
         self, record: AssistantSessionRecord
@@ -403,6 +545,7 @@ class AssistantService:
         request_id: UUID | None = None,
         tool_input: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        self._require_tool_permissions(user, tool_name)
         tool_input = tool_input or {}
         if tool_name == "get_case_summary":
             case = await self.valuation._case_or_404(record.case_id)
@@ -508,6 +651,14 @@ class AssistantService:
             )
             return {"status": "SUCCESS", **serialized}
         raise AppError("AI_TOOL_NOT_ALLOWED", f"不允許的工具：{tool_name}", 422)
+
+    @staticmethod
+    def _require_tool_permissions(user: User, tool_name: str) -> None:
+        required = ASSISTANT_TOOL_PERMISSIONS.get(tool_name)
+        if required is None:
+            raise AppError("AI_TOOL_NOT_ALLOWED", f"不允許的工具：{tool_name}", 422)
+        if not required.issubset(permission_codes(user)):
+            raise PermissionDeniedError()
 
     async def _apply_confirmed_fields(
         self,

@@ -7,6 +7,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
 
+F03_PRODUCTION_RULE_SET_CODE = "F03_MVP_VALIDATION"
+F03_DEMO_RULE_SET_CODES = frozenset({"DEMO-F03-FORMAL-VALIDATION"})
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -22,6 +26,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     docs_enabled: bool = True
     log_level: str = "INFO"
+    f03_validation_rule_set_code: str = F03_PRODUCTION_RULE_SET_CODE
 
     database_url: str | None = None
     postgres_host: str = "localhost"
@@ -130,6 +135,24 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def validate_f03_rule_set_code(self):
+        code = self.f03_validation_rule_set_code.strip()
+        environment = self.app_env.lower()
+        if environment != "development" and code != F03_PRODUCTION_RULE_SET_CODE:
+            raise ValueError(
+                "F03_VALIDATION_RULE_SET_CODE must be F03_MVP_VALIDATION outside development"
+            )
+        if environment == "development" and code not in {
+            F03_PRODUCTION_RULE_SET_CODE,
+            *F03_DEMO_RULE_SET_CODES,
+        }:
+            raise ValueError(
+                "F03_VALIDATION_RULE_SET_CODE is not an approved production or Demo code"
+            )
+        self.f03_validation_rule_set_code = code
+        return self
+
+    @model_validator(mode="after")
     def validate_ai_provider(self):
         if self.ai_provider == "bedrock" and (
             not self.bedrock_region or not self.bedrock_model_id
@@ -166,6 +189,12 @@ class Settings(BaseSettings):
             port=self.postgres_port,
             database=self.postgres_db,
         ).render_as_string(hide_password=False)
+
+    @property
+    def resolved_f03_validation_rule_set_code(self) -> str:
+        if self.app_env.lower() != "development":
+            return F03_PRODUCTION_RULE_SET_CODE
+        return self.f03_validation_rule_set_code
 
     @property
     def resolved_minio_access_key(self) -> str:

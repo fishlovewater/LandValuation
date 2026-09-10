@@ -1,10 +1,23 @@
 import type { AuthUser } from '../modules/auth/auth.types'
+import { HISTORY_ROLES } from './roleAccess'
 
-export const ROLE_HOME: Record<string, string> = {
+export { HISTORY_ROLES }
+
+export const ROLE_HOME: Readonly<Record<string, string>> = {
+  APPRAISER: '/app/valuation/dashboard',
   REVIEWER: '/app/review/dashboard',
+  INSPECTOR: '/app/history/search',
+  ADMIN: '/app',
+  SYSTEM_ADMIN: '/app',
+  SUPERADMIN: '/app',
 }
 
-export function homeForRole(user: AuthUser): string {
-  if (!user.permissions.includes('review.execute')) return '/app/unauthorized'
-  return user.roles.map((role) => ROLE_HOME[role]).find(Boolean) ?? '/app/unauthorized'
+const UNKNOWN_ROLE_HOME = '/app/unauthorized'
+
+export function homeFor(user: Pick<AuthUser, 'roles'> | null | undefined): string {
+  for (const role of user?.roles ?? []) {
+    const home = ROLE_HOME[role]
+    if (home) return home
+  }
+  return UNKNOWN_ROLE_HOME
 }

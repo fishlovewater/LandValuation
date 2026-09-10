@@ -3,6 +3,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.valuation.models import (
     BenchmarkLandRecord,
     BenchmarkValuationRecord,
@@ -162,9 +163,10 @@ class OperationsRepository:
         )
 
     async def get_rule_version(self) -> RuleVersionRecord | None:
+        rule_set_code = get_settings().resolved_f03_validation_rule_set_code
         return await self.session.scalar(
             select(RuleVersionRecord).where(
-                RuleVersionRecord.rule_set_code == "F03_MVP_VALIDATION",
+                RuleVersionRecord.rule_set_code == rule_set_code,
                 RuleVersionRecord.version_no == 1,
                 RuleVersionRecord.status == "PUBLISHED",
             )

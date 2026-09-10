@@ -1,35 +1,25 @@
 import { http } from '../../api/http'
-import type {
-  AuthUser,
-  CurrentUserResponseDto,
-  LoginRequestDto,
-  TokenResponse,
-  TokenResponseDto,
-} from './auth.types'
+import type { AuthUser, CurrentUserDto, LoginCredentials, TokenResponseDto } from './auth.types'
 
-function mapToken(dto: TokenResponseDto): TokenResponse {
-  return { accessToken: dto.access_token, tokenType: dto.token_type, expiresIn: dto.expires_in }
-}
-
-function mapUser(dto: CurrentUserResponseDto): AuthUser {
+export function mapCurrentUser(dto: CurrentUserDto): AuthUser {
   return {
-    userId: dto.user_id,
+    id: dto.user_id,
     username: dto.username,
+    email: dto.email,
     displayName: dto.display_name,
-    isActive: dto.is_active,
     roles: dto.roles,
     permissions: dto.permissions,
   }
 }
 
 export const authApi = {
-  async login(username: string, password: string): Promise<TokenResponse> {
-    const payload: LoginRequestDto = { username, password }
-    const { data } = await http.post<TokenResponseDto>('/api/v1/auth/login', payload)
-    return mapToken(data)
+  async login(credentials: LoginCredentials): Promise<TokenResponseDto> {
+    const response = await http.post<TokenResponseDto>('/auth/login', credentials)
+    return response.data
   },
+
   async me(): Promise<AuthUser> {
-    const { data } = await http.get<CurrentUserResponseDto>('/api/v1/auth/me')
-    return mapUser(data)
+    const response = await http.get<CurrentUserDto>('/auth/me')
+    return mapCurrentUser(response.data)
   },
 }

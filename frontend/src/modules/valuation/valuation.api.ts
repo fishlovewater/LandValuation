@@ -1,0 +1,258 @@
+import { isAxiosError } from 'axios'
+import { ForbiddenError, http } from '../../api/http'
+import type {
+  BenchmarkLandResponseDto,
+  CalculationRequestDto,
+  CalculationResponseDto,
+  CaseCreateDto,
+  CaseResponseDto,
+  DocumentCategory,
+  DocumentResponseDto,
+  F03DraftResponseDto,
+  F03DraftUpdateDto,
+  FormalReportRequestDto,
+  FormalReportResponseDto,
+  FormalCalculationRequestDto,
+  FormalCalculationResponseDto,
+  FormalValidationResponseDto,
+  FormRequirementResponseDto,
+  FormCreateDto,
+  FormResponseDto,
+  ReportPageCode,
+  ReportPageResponseDto,
+  ReportProgressResponseDto,
+  ReportRequestDto,
+  ReportResponseDto,
+  SubmitForReviewCommandDto,
+  SubmitForReviewResultDto,
+  ValidationRequestDto,
+  ValidationResponseDto,
+} from './valuation.types'
+
+export interface ListCasesParams {
+  caseStatus?: string
+  offset?: number
+  limit?: number
+}
+
+function requestIdFallback(): string {
+  const segment = () => Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0')
+  const random = `${segment()}${segment()}`
+  return `${random.slice(0, 8)}-${random.slice(0, 4)}-4${random.slice(0, 3)}-8${random.slice(0, 3)}-${random.slice(0, 12)}`
+}
+
+export function createValuationRequestId(): string {
+  const cryptoApi = globalThis.crypto
+  return typeof cryptoApi?.randomUUID === 'function' ? cryptoApi.randomUUID() : requestIdFallback()
+}
+
+export function isDefinitiveValuationError(error: unknown): boolean {
+  return error instanceof ForbiddenError || (isAxiosError(error) && Boolean(error.response))
+}
+
+export const valuationApi = {
+  async getFormTypes(): Promise<FormRequirementResponseDto[]> {
+    const response = await http.get<FormRequirementResponseDto[]>('/valuation/form-types')
+    return response.data
+  },
+
+  async listCases(params: ListCasesParams = {}): Promise<CaseResponseDto[]> {
+    const response = await http.get<CaseResponseDto[]>('/valuation/cases', {
+      params: {
+        case_status: params.caseStatus,
+        offset: params.offset ?? 0,
+        limit: params.limit ?? 50,
+      },
+    })
+    return response.data
+  },
+
+  async createCase(payload: CaseCreateDto): Promise<CaseResponseDto> {
+    const response = await http.post<CaseResponseDto>('/valuation/cases', payload)
+    return response.data
+  },
+
+  async getCase(caseId: string): Promise<CaseResponseDto> {
+    const response = await http.get<CaseResponseDto>(`/valuation/cases/${caseId}`)
+    return response.data
+  },
+
+  async listForms(caseId: string): Promise<FormResponseDto[]> {
+    const response = await http.get<FormResponseDto[]>(`/valuation/cases/${caseId}/forms`)
+    return response.data
+  },
+
+  async createForm(caseId: string, payload: FormCreateDto): Promise<FormResponseDto> {
+    const response = await http.post<FormResponseDto>(`/valuation/cases/${caseId}/forms`, {
+      ...payload,
+      form_content: {},
+    })
+    return response.data
+  },
+
+  async getForm(caseId: string, formId: string): Promise<FormResponseDto> {
+    const response = await http.get<FormResponseDto>(`/valuation/cases/${caseId}/forms/${formId}`)
+    return response.data
+  },
+
+  async getF03(caseId: string, formId: string): Promise<F03DraftResponseDto> {
+    const response = await http.get<F03DraftResponseDto>(
+      `/valuation/cases/${caseId}/forms/${formId}/f03`,
+    )
+    return response.data
+  },
+
+  async updateF03(caseId: string, formId: string, payload: F03DraftUpdateDto): Promise<F03DraftResponseDto> {
+    const response = await http.patch<F03DraftResponseDto>(
+      `/valuation/cases/${caseId}/forms/${formId}/f03`,
+      payload,
+    )
+    return response.data
+  },
+
+  async submitForm(caseId: string, formId: string): Promise<FormResponseDto> {
+    const response = await http.post<FormResponseDto>(
+      `/valuation/cases/${caseId}/forms/${formId}/submit`,
+    )
+    return response.data
+  },
+
+  async listBenchmarkLands(caseId: string): Promise<BenchmarkLandResponseDto[]> {
+    const response = await http.get<BenchmarkLandResponseDto[]>(
+      `/valuation/cases/${caseId}/benchmark-lands`,
+    )
+    return response.data
+  },
+
+  async listDocuments(caseId: string): Promise<DocumentResponseDto[]> {
+    const response = await http.get<DocumentResponseDto[]>(
+      `/valuation/cases/${caseId}/documents`,
+    )
+    return response.data
+  },
+
+  async uploadDocument(
+    caseId: string,
+    category: DocumentCategory,
+    file: File,
+  ): Promise<DocumentResponseDto> {
+    const body = new FormData()
+    body.append('category', category)
+    body.append('file', file)
+    const response = await http.post<DocumentResponseDto>(`/valuation/cases/${caseId}/documents`, body, {
+      headers: { 'Content-Type': undefined },
+    })
+    return response.data
+  },
+
+  async getReportProgress(caseId: string): Promise<ReportProgressResponseDto> {
+    const response = await http.get<ReportProgressResponseDto>(
+      `/valuation/cases/${caseId}/report-progress`,
+    )
+    return response.data
+  },
+
+  async getReportPage(
+    caseId: string,
+    reportId: string,
+    pageCode: ReportPageCode,
+  ): Promise<ReportPageResponseDto> {
+    const response = await http.get<ReportPageResponseDto>(
+      `/valuation/cases/${caseId}/reports/${reportId}/pages/${pageCode}`,
+    )
+    return response.data
+  },
+
+  async updateReportPage(
+    caseId: string,
+    reportId: string,
+    pageCode: ReportPageCode,
+    payload: Record<string, unknown>,
+  ): Promise<ReportPageResponseDto> {
+    const response = await http.patch<ReportPageResponseDto>(
+      `/valuation/cases/${caseId}/reports/${reportId}/pages/${pageCode}`,
+      payload,
+    )
+    return response.data
+  },
+
+  async calculateFormalReport(
+    caseId: string,
+    reportId: string,
+    payload: FormalCalculationRequestDto,
+  ): Promise<FormalCalculationResponseDto> {
+    const response = await http.post<FormalCalculationResponseDto>(
+      `/valuation/cases/${caseId}/reports/${reportId}/formal-calculation`,
+      payload,
+    )
+    return response.data
+  },
+
+  async calculate(caseId: string, payload: CalculationRequestDto): Promise<CalculationResponseDto> {
+    const response = await http.post<CalculationResponseDto>(
+      `/valuation/cases/${caseId}/calculations`,
+      payload,
+    )
+    return response.data
+  },
+
+  async validate(caseId: string, payload: ValidationRequestDto): Promise<ValidationResponseDto> {
+    const response = await http.post<ValidationResponseDto>(
+      `/valuation/cases/${caseId}/validations`,
+      payload,
+    )
+    return response.data
+  },
+
+  async getValidation(caseId: string, validationRunId: string): Promise<ValidationResponseDto> {
+    const response = await http.get<ValidationResponseDto>(
+      `/valuation/cases/${caseId}/validations/${validationRunId}`,
+    )
+    return response.data
+  },
+
+  async generateReport(caseId: string, payload: ReportRequestDto): Promise<ReportResponseDto> {
+    const response = await http.post<ReportResponseDto>(`/valuation/cases/${caseId}/reports`, payload)
+    return response.data
+  },
+
+  async formalValidate(caseId: string, reportId: string): Promise<FormalValidationResponseDto> {
+    const response = await http.post<FormalValidationResponseDto>(
+      `/valuation/cases/${caseId}/reports/${reportId}/formal-validation`,
+    )
+    return response.data
+  },
+
+  async generateFormalPdf(
+    caseId: string,
+    reportId: string,
+    payload: FormalReportRequestDto,
+    requestId?: string,
+  ): Promise<FormalReportResponseDto> {
+    const response = await http.post<FormalReportResponseDto>(
+      `/valuation/cases/${caseId}/reports/${reportId}/formal-pdf`,
+      payload,
+      requestId ? { headers: { 'X-Request-ID': requestId } } : undefined,
+    )
+    return response.data
+  },
+
+  async submitForReview(
+    caseId: string,
+    payload: SubmitForReviewCommandDto,
+  ): Promise<SubmitForReviewResultDto> {
+    const response = await http.post<SubmitForReviewResultDto>(
+      `/valuation/cases/${caseId}/submit-for-review`,
+      payload,
+    )
+    return response.data
+  },
+}
+
+export function safeValuationErrorMessage(error: unknown): string {
+  if (error instanceof ForbiddenError) return error.message
+  if (isAxiosError(error) && error.response?.status === 404) {
+    return '找不到目前案件或估價資料，請重新整理後再試。'
+  }
+  return '估價服務目前無法完成此操作，請稍後再試。'
+}

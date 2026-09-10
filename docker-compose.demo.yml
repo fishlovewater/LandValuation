@@ -1,0 +1,27 @@
+services:
+  db:
+    container_name: land_valuation_persistent_demo_db
+    ports: !override
+      - "15432:5432"
+
+  db-role-init:
+    container_name: land_valuation_persistent_demo_db_role_init
+
+  migrate:
+    container_name: land_valuation_persistent_demo_migrate
+
+  minio:
+    container_name: land_valuation_persistent_demo_minio
+    ports: !override
+      - "19000:9000"
+      - "19001:9001"
+
+  minio-init:
+    container_name: land_valuation_persistent_demo_minio_init
+
+  api:
+    container_name: land_valuation_persistent_demo_api
+    ports: !override
+      - "18000:8000"
+    environment:
+      F03_VALIDATION_RULE_SET_CODE: DEMO-F03-FORMAL-VALIDATION

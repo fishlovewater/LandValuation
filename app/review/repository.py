@@ -366,7 +366,7 @@ class ReviewRepository:
                     SELECT rule_version_id, rule_set_code, version_no, version_name,
                            status, effective_from, effective_to,
                            applicable_case_type, applicable_district_code,
-                           selection_priority, source_document_id
+                           selection_priority, source_document_id, import_summary
                     FROM valuation.rule_versions
                     ORDER BY selection_priority DESC, rule_version_id
                     """

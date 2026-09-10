@@ -10,7 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import AppError, ResourceNotFoundError
 from app.review.models import Review, ValidationRun
 from app.review.repository import ReviewRepository
-from app.review.rule_selection import RuleCandidate, select_effective_rule
+from app.review.rule_selection import (
+    RuleCandidate,
+    rule_versions_are_handoff_compatible,
+    select_effective_rule,
+)
 from app.valuation.models import (
     CaseEventRecord,
     CaseRecord,
@@ -409,7 +413,11 @@ class SubmissionRepository:
             str(candidate["rule_version_id"]): candidate for candidate in candidates
         }
         rule_version = candidates_by_id[selection.rule.rule_version_id]
-        if str(validation_run.rule_version_id) != selection.rule.rule_version_id:
+        source_rule_version = candidates_by_id.get(str(validation_run.rule_version_id))
+        if not rule_versions_are_handoff_compatible(
+            source_rule_version,
+            rule_version,
+        ):
             raise AppError(
                 "SUBMISSION_RULE_VERSION_CONFLICT",
                 "來源檢核規則版本與案件適用規則不一致",
@@ -492,6 +500,7 @@ class SubmissionRepository:
                 "document": document_snapshot(report_document),
             },
             "rule_selection": {
+                "source_rule_version": source_rule_version,
                 "rule_version": rule_version,
                 "rule_source": rule_source,
                 "validation_rules": validation_rules,

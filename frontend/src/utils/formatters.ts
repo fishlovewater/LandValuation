@@ -1,13 +1,17 @@
-export function formatDateTime(value?: string | null): string {
+const zhTwDateTime = new Intl.DateTimeFormat('zh-TW', {
+  year: 'numeric',
+  month: 'numeric',
+  day: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+})
+
+export function formatDateZhTw(value: string | Date | null | undefined): string {
   if (!value) return '—'
-  const date = new Date(value)
+
+  const date = value instanceof Date ? value : new Date(value)
   if (Number.isNaN(date.getTime())) return '—'
-  return new Intl.DateTimeFormat('zh-TW', { dateStyle: 'medium', timeStyle: 'short' }).format(date)
+  return zhTwDateTime.format(date)
 }
 
-export function formatBytes(value?: number | null): string {
-  if (value == null) return '—'
-  if (value < 1024) return `${value} B`
-  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`
-  return `${(value / 1024 ** 2).toFixed(1)} MB`
-}
+export const formatDate = formatDateZhTw

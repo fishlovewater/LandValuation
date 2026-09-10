@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import AbstractSet
 from datetime import date
 
@@ -21,6 +22,42 @@ class RuleCandidate:
 class RuleSelection:
     status: str
     rule: RuleCandidate | None
+
+
+def rule_versions_are_handoff_compatible(
+    source_rule: Mapping[str, object] | None,
+    selected_rule: Mapping[str, object] | None,
+) -> bool:
+    """Accept one shared version or an explicitly reciprocal rule-set pair.
+
+    A Valuation validation pack and a Review execution pack may intentionally
+    be distinct.  Distinct versions are compatible only when immutable import
+    metadata on both rule versions points to the other's rule-set code.
+    """
+    if source_rule is None or selected_rule is None:
+        return False
+
+    source_id = str(source_rule.get("rule_version_id") or "")
+    selected_id = str(selected_rule.get("rule_version_id") or "")
+    if not source_id or not selected_id:
+        return False
+    if source_id == selected_id:
+        return True
+
+    source_code = str(source_rule.get("rule_set_code") or "").strip()
+    selected_code = str(selected_rule.get("rule_set_code") or "").strip()
+    if not source_code or not selected_code or source_code == selected_code:
+        return False
+
+    source_summary = source_rule.get("import_summary")
+    selected_summary = selected_rule.get("import_summary")
+    if not isinstance(source_summary, dict) or not isinstance(selected_summary, dict):
+        return False
+
+    return (
+        source_summary.get("paired_rule_set_code") == selected_code
+        and selected_summary.get("paired_rule_set_code") == source_code
+    )
 
 
 def select_effective_rule(

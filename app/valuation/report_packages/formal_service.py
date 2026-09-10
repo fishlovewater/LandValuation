@@ -453,6 +453,7 @@ class FormalReportService:
                 error("FORMAL_MAP_OBJECT_MISSING", f"MinIO 找不到附圖：{document_type}")
 
         fingerprint = None
+        input_snapshot = None
         if (
             regional.comparison_analysis_id is not None
             and regional.rule_version_id is not None
@@ -463,9 +464,10 @@ class FormalReportService:
             db_target_by_id = {
                 item.comparison_target_id: item for item in db_targets
             }
-            fingerprint = self._fingerprint(
-                self._input_snapshot(case, regional, comparison, db_target_by_id)
+            input_snapshot = self._input_snapshot(
+                case, regional, comparison, db_target_by_id
             )
+            fingerprint = self._fingerprint(input_snapshot)
             saved_fingerprint = comparison.calculation_snapshot.get(
                 "input_fingerprint"
             )
@@ -517,6 +519,7 @@ class FormalReportService:
                 triggered_by_user_id=user.user_id,
                 rule_version_id=regional.rule_version_id,
                 ruleset_snapshot=snapshot,
+                input_snapshot=input_snapshot or {},
                 request_id=request_id,
             )
         )
