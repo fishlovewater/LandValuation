@@ -1518,16 +1518,16 @@ def _write_seed_rows(cursor, uploads: _UploadBatch) -> None:
         (
             material.review_adjustment_field_id,
             "adjustment_rate",
-            Jsonb("-5"),
-            "來源文件記載調整率 -5%",
-            Jsonb("-5"),
+            Jsonb("-12"),
+            "來源文件記載調整率 -12%",
+            Jsonb("-12"),
         ),
         (
             material.review_grade_field_id,
             "expert_grade",
-            Jsonb("A"),
-            "來源文件記載級距 A",
-            Jsonb("A"),
+            Jsonb("B"),
+            "來源文件記載級距 B",
+            Jsonb("B"),
         ),
     ):
         cursor.execute(

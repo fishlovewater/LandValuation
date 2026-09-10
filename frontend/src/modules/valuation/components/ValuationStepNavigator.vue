@@ -1,8 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-
-const props = defineProps<{
-  currentStage: 1 | 2 | 3
+defineProps<{
+  currentStep: 1 | 2 | 3 | 4 | 5 | 6
 }>()
 
 const steps = [
@@ -14,11 +12,6 @@ const steps = [
   { number: 6, label: '送審' },
 ]
 
-const activeStep = computed(() => {
-  if (props.currentStage === 1) return 1
-  if (props.currentStage === 2) return 3
-  return 6
-})
 </script>
 
 <template>
@@ -28,9 +21,10 @@ const activeStep = computed(() => {
         v-for="step in steps"
         :key="step.number"
         :class="{
-          'valuation-steps__item--active': step.number === activeStep,
-          'valuation-steps__item--complete': step.number < activeStep,
+          'valuation-steps__item--active': step.number === currentStep,
+          'valuation-steps__item--complete': step.number < currentStep,
         }"
+        :aria-current="step.number === currentStep ? 'step' : undefined"
       >
         <span class="valuation-steps__number" aria-hidden="true">{{ step.number }}</span>
         <span>{{ step.label }}</span>

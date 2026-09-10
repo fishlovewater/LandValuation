@@ -105,7 +105,7 @@ onMounted(() => {
 
 <template>
   <div class="valuation-view">
-    <ValuationStepNavigator :current-stage="1" />
+    <ValuationStepNavigator :current-step="1" />
     <PageHeader
       eyebrow="VALUATION WORKSPACE"
       title="估價作業"

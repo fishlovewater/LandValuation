@@ -1,6 +1,7 @@
 import { isAxiosError } from 'axios'
 import { ForbiddenError, http } from '../../api/http'
 import type {
+  AutomatedWorkflowResponseDto,
   BenchmarkLandResponseDto,
   CalculationRequestDto,
   CalculationResponseDto,
@@ -20,11 +21,14 @@ import type {
   FormResponseDto,
   ReportPageCode,
   ReportPageResponseDto,
+  ReportPackageCreateDto,
+  ReportPackageResponseDto,
   ReportProgressResponseDto,
   ReportRequestDto,
   ReportResponseDto,
   SubmitForReviewCommandDto,
   SubmitForReviewResultDto,
+  ValuationReviewHandoffDto,
   ValidationRequestDto,
   ValidationResponseDto,
 } from './valuation.types'
@@ -51,6 +55,20 @@ export function isDefinitiveValuationError(error: unknown): boolean {
 }
 
 export const valuationApi = {
+  async getWorkflowReview(caseId: string): Promise<AutomatedWorkflowResponseDto> {
+    const response = await http.get<AutomatedWorkflowResponseDto>(
+      `/valuation/cases/${caseId}/auto-workflow/review`,
+    )
+    return response.data
+  },
+
+  async getReviewHandoff(caseId: string): Promise<ValuationReviewHandoffDto> {
+    const response = await http.get<ValuationReviewHandoffDto>(
+      `/valuation/cases/${caseId}/review-handoff`,
+    )
+    return response.data
+  },
+
   async getFormTypes(): Promise<FormRequirementResponseDto[]> {
     const response = await http.get<FormRequirementResponseDto[]>('/valuation/form-types')
     return response.data
@@ -148,6 +166,17 @@ export const valuationApi = {
   async getReportProgress(caseId: string): Promise<ReportProgressResponseDto> {
     const response = await http.get<ReportProgressResponseDto>(
       `/valuation/cases/${caseId}/report-progress`,
+    )
+    return response.data
+  },
+
+  async createReportPackage(
+    caseId: string,
+    payload: ReportPackageCreateDto,
+  ): Promise<ReportPackageResponseDto> {
+    const response = await http.post<ReportPackageResponseDto>(
+      `/valuation/cases/${caseId}/report-packages`,
+      payload,
     )
     return response.data
   },

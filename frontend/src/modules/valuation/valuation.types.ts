@@ -122,6 +122,26 @@ export interface ReportProgressResponseDto {
   blocking_errors: string[]
 }
 
+export interface ReportPackageCreateDto {
+  report_type: 'REPORT_COMPARISON_COMMERCIAL'
+  prepared_date?: string | null
+}
+
+export interface ReportPackageResponseDto {
+  report_id: string
+  case_id: string
+  report_type: 'REPORT_COMPARISON_COMMERCIAL'
+  version_no: number
+  prepared_date: string | null
+  components: Array<{
+    code: string
+    form_instance_id: string
+    form_status: FormStatus
+  }>
+  created_at: string
+  updated_at: string
+}
+
 export type ReportPageCode = 'S01' | 'F02-RF' | 'F02'
 
 export interface ReportPageResponseDto {
@@ -135,6 +155,82 @@ export interface ReportPageResponseDto {
   context: Record<string, unknown>
   warnings: string[]
   data: Record<string, unknown>
+}
+
+export interface AutomatedFormGuidanceDto {
+  form_code: string
+  form_instance_id: string | null
+  required_fields: string[]
+  confirmed_or_applied_fields: string[]
+  pending_confirmation_fields: string[]
+  missing_required_fields: string[]
+  calculation_ready: boolean
+  next_action: string
+  fill_endpoint: string | null
+  calculate_endpoint: string | null
+  validate_endpoint: string | null
+}
+
+export interface AutomatedWorkflowResponseDto {
+  status: string
+  case: CaseResponseDto
+  parcel_ids: string[]
+  benchmark_land_ids: string[]
+  f03_form_instance_id: string
+  report_id: string | null
+  documents: unknown[]
+  candidates: unknown[]
+  pending_candidate_count: number
+  blank_fields_remain: boolean
+  missing_items: string[]
+  warnings: string[]
+  next_action: string
+  draft_pages_1_3_url: string | null
+  draft_pages_1_6_url: string | null
+  form_guidance: AutomatedFormGuidanceDto[]
+  automatic_pdf_generation_enabled: boolean
+  automatic_confirmation_export_enabled: boolean
+  confirmation_export: {
+    document_id: string
+    filename: string
+    download_path: string
+  } | null
+}
+
+export interface ValuationReviewHandoffDto {
+  case_id: string
+  case_status: string
+  display_status: string
+  review_id: string | null
+  review_status: string | null
+  latest_submission: {
+    submission_id: string
+    submission_no: number
+    submitted_at: string
+  } | null
+  correction: {
+    correction_request_id: string
+    request_no: number
+    status: string
+    due_at: string
+    message: string
+    items: Array<{
+      finding_code: string
+      severity: string
+      document_id: string | null
+      page_number: number | null
+      issue_summary: string
+      requested_correction: string
+    }>
+  } | null
+  missing_items: Array<{
+    item_code: string
+    item_name: string
+    document_type: string | null
+    severity: string
+    reason: string | null
+    due_at: string | null
+  }>
 }
 
 export interface FormalCalculationRequestDto {

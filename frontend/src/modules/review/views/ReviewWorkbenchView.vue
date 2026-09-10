@@ -7,6 +7,7 @@ import ErrorState from '../../../components/common/ErrorState.vue'
 import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
 import PageHeader from '../../../components/common/PageHeader.vue'
 import GlassCard from '../../../components/glass/GlassCard.vue'
+import GlassModal from '../../../components/glass/GlassModal.vue'
 import { liquidGlass as vLiquidGlass } from '../../../directives/liquidGlass'
 import { useAuthStore } from '../../../stores/auth.store'
 import EvidenceViewer from '../components/EvidenceViewer.vue'
@@ -27,7 +28,7 @@ import type {
 } from '../review.types'
 
 type DrawerName = 'left' | 'right' | null
-type ConfirmationName = 'finalize' | 'return' | null
+type ConfirmationName = 'finalize' | null
 
 const route = useRoute()
 const router = useRouter()
@@ -41,6 +42,9 @@ const selectedFindingId = ref('')
 const generatedReport = ref<GeneratedReportDto | null>(null)
 const drawer = ref<DrawerName>(null)
 const confirmation = ref<ConfirmationName>(null)
+const correctionOpen = ref(false)
+const correctionMessage = ref('')
+const correctionDueAt = ref('')
 let loadSerial = 0
 const drawerTrigger = ref<HTMLElement | null>(null)
 
@@ -74,6 +78,43 @@ const unresolvedCount = computed(() => detail.value?.unresolvedFindingCount ?? 0
 const latestReport = computed(
   () => generatedReport.value ?? detail.value?.reportDocument ?? (detail.value ? latestGeneratedReport(detail.value.generatedReports) : null),
 )
+const latestCorrection = computed(() => {
+  const requests = detail.value?.correctionRequests ?? []
+  return requests.reduce<typeof requests[number] | null>(
+    (latest, request) => (!latest || request.request_no > latest.request_no ? request : latest),
+    null,
+  )
+})
+const confirmedFindings = computed(() =>
+  detail.value?.findings.filter((finding) => finding.statusCode === 'CONFIRMED_ISSUE') ?? [],
+)
+const correctionGateBlockers = computed(() => {
+  if (!detail.value) return ['尚未載入案件資料。']
+  const blockers: string[] = []
+  if (!canDecide.value) blockers.push('目前帳號沒有要求修正的權限。')
+  if (latestRun.value?.runStatusCode !== 'COMPLETED') blockers.push('最新一次智慧審查尚未完成。')
+  const openCount = detail.value.findings.filter((finding) => ['OPEN', 'REQUIRES_SUPPLEMENT'].includes(finding.statusCode)).length
+  const expertCount = detail.value.findings.filter((finding) => finding.statusCode === 'EXPERT_REVIEW').length
+  if (openCount) blockers.push(`仍有 ${openCount} 項疑點尚未完成判定。`)
+  if (expertCount) blockers.push(`仍有 ${expertCount} 項疑點等待專業覆核。`)
+  if (!confirmedFindings.value.length) blockers.push('至少需要一項已確認問題，才能要求估價端修正。')
+  const active = latestCorrection.value
+  if (active && active.status !== 'RECHECKED') blockers.push('目前已有進行中的修正通知。')
+  return blockers
+})
+const canRequestCorrection = computed(() => correctionGateBlockers.value.length === 0)
+const canSendCorrection = computed(() => Boolean(
+  canDecide.value && latestCorrection.value?.status === 'DRAFT',
+))
+const canRecheckCorrection = computed(() => Boolean(
+  canExecute.value && latestCorrection.value?.status === 'RESUBMITTED',
+))
+const correctionActionReason = computed(() => {
+  if (latestCorrection.value?.status === 'DRAFT') return canSendCorrection.value ? '修正通知草稿已建立，可正式送出並退回估價端。' : '目前帳號沒有送出修正通知的權限。'
+  if (latestCorrection.value?.status === 'SENT') return '修正通知已送出，等待估價端建立較新的正式版本並重新送審。'
+  if (latestCorrection.value?.status === 'RESUBMITTED') return canRecheckCorrection.value ? '估價端已送回新版，可執行新版完整性與規則重檢。' : '目前帳號沒有執行新版重檢的權限。'
+  return correctionGateBlockers.value[0] ?? '建立修正通知並送回估價端。'
+})
 const canTriage = computed(() => Boolean(
   canDecide.value
     && ['REVIEW_REQUIRED', 'EXPERT_REVIEW'].includes(detail.value?.reviewStatusCode ?? '')
@@ -199,6 +240,14 @@ async function saveFindingDecision(value: {
       reason: value.reason,
     })
     await refreshAfterMutation()
+    const handledFinding = detail.value?.findings.find((finding) => finding.findingId === value.findingId)
+    if (handledFinding && handledFinding.statusCode !== 'OPEN') {
+      const nextOpenFinding = detail.value?.findings.find((finding) => finding.statusCode === 'OPEN')
+      if (nextOpenFinding) {
+        selectedFindingId.value = nextOpenFinding.findingId
+        await router.replace({ query: { ...route.query, finding: nextOpenFinding.findingId } })
+      }
+    }
   } catch (caught: unknown) {
     actionError.value = safeReviewErrorMessage(caught)
   } finally {
@@ -209,6 +258,88 @@ async function saveFindingDecision(value: {
 function askFinalize(): void {
   if (!canFinalize.value || mutating.value) return
   confirmation.value = 'finalize'
+}
+
+function defaultCorrectionDueAt(): string {
+  const due = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+  const local = new Date(due.getTime() - due.getTimezoneOffset() * 60_000)
+  return local.toISOString().slice(0, 16)
+}
+
+function askCorrection(): void {
+  if (!canRequestCorrection.value || mutating.value) return
+  correctionMessage.value = confirmedFindings.value
+    .map((finding) => `${finding.title}：${finding.description}`)
+    .join('\n')
+  correctionDueAt.value = defaultCorrectionDueAt()
+  correctionOpen.value = true
+}
+
+async function createAndSendCorrection(): Promise<void> {
+  if (!reviewId.value || !canRequestCorrection.value || mutating.value) return
+  const message = correctionMessage.value.trim()
+  const due = new Date(correctionDueAt.value)
+  if (!message) {
+    actionError.value = '請填寫要通知估價端的修正內容。'
+    return
+  }
+  if (!correctionDueAt.value || Number.isNaN(due.getTime()) || due.getTime() <= Date.now()) {
+    actionError.value = '修正期限必須晚於目前時間。'
+    return
+  }
+  mutating.value = true
+  actionError.value = ''
+  let createdDraftId: string | null = null
+  try {
+    const draft = await reviewApi.createCorrectionRequest(reviewId.value, {
+      message,
+      due_at: due.toISOString(),
+    })
+    createdDraftId = draft.correction_request_id
+    await reviewApi.sendCorrectionRequest(draft.correction_request_id)
+    correctionOpen.value = false
+    await refreshAfterMutation()
+  } catch (caught: unknown) {
+    // Draft creation and sending are two separate server transactions. If the
+    // second call fails, close the create dialog and surface the persisted DRAFT
+    // through the action bar so the reviewer can safely retry only the send.
+    if (createdDraftId) correctionOpen.value = false
+    actionError.value = safeReviewErrorMessage(caught)
+    await refreshAfterMutation().catch(() => undefined)
+  } finally {
+    mutating.value = false
+  }
+}
+
+async function sendExistingCorrection(): Promise<void> {
+  const request = latestCorrection.value
+  if (!request || request.status !== 'DRAFT' || !canSendCorrection.value || mutating.value) return
+  mutating.value = true
+  actionError.value = ''
+  try {
+    await reviewApi.sendCorrectionRequest(request.correction_request_id)
+    await refreshAfterMutation()
+  } catch (caught: unknown) {
+    actionError.value = safeReviewErrorMessage(caught)
+  } finally {
+    mutating.value = false
+  }
+}
+
+async function recheckCorrection(): Promise<void> {
+  const request = latestCorrection.value
+  if (!request || request.status !== 'RESUBMITTED' || !canRecheckCorrection.value || mutating.value) return
+  mutating.value = true
+  actionError.value = ''
+  try {
+    await reviewApi.recheckCorrectionRequest(request.correction_request_id)
+    await refreshAfterMutation()
+  } catch (caught: unknown) {
+    actionError.value = safeReviewErrorMessage(caught)
+    await refreshAfterMutation().catch(() => undefined)
+  } finally {
+    mutating.value = false
+  }
 }
 
 async function startReview(): Promise<void> {
@@ -237,18 +368,10 @@ async function startReview(): Promise<void> {
   }
 }
 
-function askReturn(): void {
-  confirmation.value = 'return'
-}
-
 async function confirmAction(): Promise<void> {
   const requested = confirmation.value
   if (!requested || mutating.value) return
   confirmation.value = null
-  if (requested === 'return') {
-    actionError.value = '目前驗證的 Demo API 未提供案件退回端點；此操作未送出請求。'
-    return
-  }
   if (!reviewId.value || !canFinalize.value) return
   mutating.value = true
   actionError.value = ''
@@ -417,6 +540,11 @@ onBeforeUnmount(() => {
           :can-finalize="canFinalize"
           :can-execute="canExecute"
           :can-generate-report="canGenerateReport"
+          :can-request-correction="canRequestCorrection"
+          :can-send-correction="canSendCorrection"
+          :can-recheck-correction="canRecheckCorrection"
+          :correction-status="latestCorrection?.status ?? null"
+          :correction-action-reason="correctionActionReason"
           :review-status-code="detail.reviewStatusCode"
           :unresolved-finding-count="unresolvedCount"
           :latest-run-id="latestRun?.validationRunId"
@@ -425,11 +553,32 @@ onBeforeUnmount(() => {
           :finalize-action-reason="finalizeActionReason"
           :busy="mutating"
           @finalize-request="askFinalize"
-          @return-request="askReturn"
+          @correction-request="askCorrection"
+          @send-correction="sendExistingCorrection"
+          @recheck-correction="recheckCorrection"
           @generate-report="generateReport"
           @open-result="openResult"
         />
         <p v-if="error || actionError" class="review-workbench__error" role="alert">{{ error || actionError }}</p>
+
+        <section v-if="latestCorrection" class="review-workbench__correction" data-testid="correction-status-panel">
+          <div class="review-workbench__correction-heading">
+            <div>
+              <span>補正流程</span>
+              <strong>第 {{ latestCorrection.request_no }} 次修正通知</strong>
+            </div>
+            <b :data-status="latestCorrection.status">{{ latestCorrection.status }}</b>
+          </div>
+          <p>{{ latestCorrection.message }}</p>
+          <small>期限：{{ new Date(latestCorrection.due_at).toLocaleString('zh-TW') }}</small>
+          <ul v-if="latestCorrection.items.length">
+            <li v-for="item in latestCorrection.items" :key="item.correction_request_item_id">
+              <strong>{{ item.issue_summary }}</strong>
+              <span>要求修正：{{ item.requested_correction }}</span>
+              <small v-if="item.recheck_outcome !== 'NOT_EVALUATED'">重檢：{{ item.recheck_outcome }}</small>
+            </li>
+          </ul>
+        </section>
 
         <div class="review-workbench__mobile-tools" aria-label="輔助面板">
           <button type="button" data-testid="open-review-context" aria-controls="review-context-drawer" :aria-expanded="drawer === 'left'" @click="openDrawer('left', $event)">案件脈絡</button>
@@ -553,6 +702,38 @@ onBeforeUnmount(() => {
       @close="confirmation = null"
       @confirm="confirmAction"
     />
+
+    <GlassModal
+      :open="correctionOpen"
+      id="review-correction-request"
+      title="要求估價端修正"
+      initial-focus="#review-correction-message"
+      @close="correctionOpen = false"
+    >
+      <form class="review-workbench__correction-form" data-testid="correction-request-form" @submit.prevent="createAndSendCorrection">
+        <p>修正通知會保存目前已確認問題的快照，送出後案件會正式退回估價端。估價端必須建立較新的正式版本再重新送審。</p>
+        <label>
+          <span>修正內容 *</span>
+          <textarea id="review-correction-message" v-model="correctionMessage" rows="7" maxlength="4000" required />
+        </label>
+        <label>
+          <span>修正期限 *</span>
+          <input v-model="correctionDueAt" type="datetime-local" required />
+        </label>
+        <section class="review-workbench__correction-preview" aria-label="本次確認問題">
+          <strong>本次會要求修正 {{ confirmedFindings.length }} 項</strong>
+          <ul>
+            <li v-for="finding in confirmedFindings" :key="finding.findingId">
+              {{ finding.title }}｜{{ finding.fieldPathLabel }}
+            </li>
+          </ul>
+        </section>
+        <div class="review-workbench__correction-actions">
+          <button type="button" :disabled="mutating" @click="correctionOpen = false">取消</button>
+          <button type="submit" :disabled="mutating">{{ mutating ? '送出中…' : '建立並送出修正通知' }}</button>
+        </div>
+      </form>
+    </GlassModal>
   </section>
 </template>
 
@@ -565,6 +746,29 @@ onBeforeUnmount(() => {
 .review-workbench__start-panel button:disabled { cursor: not-allowed; opacity: .55; }
 .review-workbench__back { min-height: 42px; padding: 8px 15px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: var(--app-paper-strong); cursor: pointer; font-size: 12px; font-weight: 800; }
 .review-workbench__error { margin: 12px 0 0; color: #ac3c37; font-size: 13px; }
+.review-workbench__correction { display: grid; gap: 10px; margin-top: 12px; padding: 16px 18px; border: 1px solid rgba(206, 147, 48, .28); border-radius: var(--app-radius-sm); background: #fffbf1; }
+.review-workbench__correction-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.review-workbench__correction-heading div { display: grid; gap: 3px; }
+.review-workbench__correction-heading span { color: var(--app-muted); font-size: 10px; font-weight: 800; }
+.review-workbench__correction-heading strong { color: var(--app-ink); font-size: 14px; }
+.review-workbench__correction-heading b { padding: 5px 8px; border-radius: 999px; color: #7a5a15; background: #fff1c9; font-size: 10px; }
+.review-workbench__correction p { margin: 0; color: var(--app-ink-soft); font-size: 12px; line-height: 1.65; }
+.review-workbench__correction > small { color: var(--app-muted); font-size: 11px; }
+.review-workbench__correction ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.review-workbench__correction li { display: grid; gap: 3px; padding: 9px 10px; border-radius: 8px; background: rgba(255,255,255,.72); color: var(--app-ink-soft); font-size: 11px; }
+.review-workbench__correction li strong { color: var(--app-ink); }
+.review-workbench__correction-form { display: grid; gap: 14px; min-width: min(620px, 72vw); }
+.review-workbench__correction-form > p { margin: 0; color: var(--app-muted); font-size: 12px; line-height: 1.7; }
+.review-workbench__correction-form label { display: grid; gap: 6px; color: var(--app-ink-soft); font-size: 12px; font-weight: 800; }
+.review-workbench__correction-form textarea,
+.review-workbench__correction-form input { width: 100%; box-sizing: border-box; padding: 10px 11px; border: 1px solid var(--app-line); border-radius: 9px; color: var(--app-ink); background: #fff; font: inherit; }
+.review-workbench__correction-preview { padding: 12px; border: 1px solid var(--app-line); border-radius: 9px; background: #f7f8fb; }
+.review-workbench__correction-preview > strong { color: var(--app-ink); font-size: 12px; }
+.review-workbench__correction-preview ul { margin: 8px 0 0; padding-left: 18px; color: var(--app-ink-soft); font-size: 11px; }
+.review-workbench__correction-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.review-workbench__correction-actions button { min-height: 42px; padding: 8px 14px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: #fff; cursor: pointer; font-weight: 800; }
+.review-workbench__correction-actions button[type="submit"] { border-color: var(--app-accent); color: #fff; background: var(--app-accent); }
+.review-workbench__correction-actions button:disabled { cursor: not-allowed; opacity: .55; }
 .review-workbench__layout { display: grid; grid-template-columns: minmax(190px, 230px) minmax(380px, 1fr) minmax(320px, 410px); align-items: start; gap: 16px; margin-top: 16px; }
 .review-workbench__left { position: sticky; top: 20px; display: grid; max-height: calc(100vh - 40px); gap: 16px; overflow: auto; padding: 18px; border: 1px solid var(--app-line); border-radius: var(--app-radius-md); background: #f7f8fb; }
 .review-workbench__center { min-width: 0; }

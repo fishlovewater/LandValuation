@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
-import { RouterLink, useRoute } from 'vue-router'
+import { computed, nextTick, ref, watch } from 'vue'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import ErrorState from '../../../components/common/ErrorState.vue'
 import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
 import PageHeader from '../../../components/common/PageHeader.vue'
@@ -25,11 +25,15 @@ import {
 import {
   resetValuationFlow,
   valuationFlowState,
+  type FormalValidationFindingModel,
+  type ReportPageCode,
   type ReportPageResponseDto,
 } from '../valuation.types'
+import ReportPageEditor from '../components/ReportPageEditor.vue'
 import ValuationStepNavigator from '../components/ValuationStepNavigator.vue'
 
 const route = useRoute()
+const router = useRouter()
 const flow = valuationFlowState
 const loading = ref(false)
 const submitting = ref(false)
@@ -47,6 +51,12 @@ const reportPageValidating = ref(false)
 const reportPageSaved = ref(false)
 const reportPageCalculated = ref(false)
 const reportPageConfirmations = ref({ s01: false, f02Rf: false, f02: false })
+const reportPageEditors = ref<Partial<Record<ReportPageCode, ReportPageResponseDto>>>({})
+const reportPageEditorsLoading = ref(false)
+const reportPageEditorSaving = ref<ReportPageCode | null>(null)
+const activeReportPageCode = ref<ReportPageCode>('S01')
+const editorNotice = ref('')
+const REPORT_PAGE_CODES: readonly ReportPageCode[] = ['S01', 'F02-RF', 'F02']
 let activeCaseToken = 0
 
 const caseId = computed(() => String(route.params.caseId ?? ''))
@@ -89,6 +99,7 @@ const formalOutputReady = computed(() => {
       authoritativeF02.outputDocumentId === formalReport.documentId,
   )
 })
+const currentStep = computed<5 | 6>(() => formalOutputReady.value || flow.submission ? 6 : 5)
 const valuationOutputReady = computed(() => Boolean(
   !flow.validation || (flow.validation.canGenerateReport && flow.report),
 ))
@@ -109,6 +120,7 @@ const reportPagesConfirmed = computed(() => {
   const value = reportPageConfirmations.value
   return value.s01 && value.f02Rf && value.f02
 })
+const activeReportPage = computed(() => reportPageEditors.value[activeReportPageCode.value] ?? null)
 const readinessMessage = computed(() => {
   if (!flow.authoritativeF02) return '尚未取得 F02 最終表單，無法建立權威送審來源。'
   if (!flow.reportPackageId) return 'F02 尚未提供正式報告包識別碼。'
@@ -201,6 +213,135 @@ function saveF02Payload(page: ReportPageResponseDto): Record<string, unknown> {
     director_name: data.director_name,
     appraiser_name: data.appraiser_name,
   }
+}
+
+async function loadReportPageEditors(): Promise<void> {
+  const requestedCaseId = caseId.value
+  const token = activeCaseToken
+  const reportId = reportPageDraftId.value
+  if (!reportId || reportPageEditorsLoading.value || !isCurrentCase(token, requestedCaseId)) return
+
+  reportPageEditorsLoading.value = true
+  editorNotice.value = ''
+  error.value = ''
+  try {
+    const [s01, f02Rf, f02] = await Promise.all([
+      valuationApi.getReportPage(requestedCaseId, reportId, 'S01'),
+      valuationApi.getReportPage(requestedCaseId, reportId, 'F02-RF'),
+      valuationApi.getReportPage(requestedCaseId, reportId, 'F02'),
+    ])
+    if (!isCurrentCase(token, requestedCaseId)) return
+    reportPageEditors.value = { S01: s01, 'F02-RF': f02Rf, F02: f02 }
+    editorNotice.value = '三頁草稿已由伺服器載入。可修改後逐頁儲存，再進行三頁確認、正式計算與檢核。'
+  } catch (caught: unknown) {
+    if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
+  } finally {
+    if (isCurrentCase(token, requestedCaseId)) reportPageEditorsLoading.value = false
+  }
+}
+
+function resetPageConfirmation(pageCode: ReportPageCode): void {
+  reportPageConfirmations.value = {
+    ...reportPageConfirmations.value,
+    s01: pageCode === 'S01' ? false : reportPageConfirmations.value.s01,
+    f02Rf: pageCode === 'F02-RF' ? false : reportPageConfirmations.value.f02Rf,
+    f02: pageCode === 'F02' ? false : reportPageConfirmations.value.f02,
+  }
+}
+
+async function saveReportPageEditor(value: {
+  pageCode: ReportPageCode
+  payload: Record<string, unknown>
+}): Promise<void> {
+  const requestedCaseId = caseId.value
+  const token = activeCaseToken
+  const reportId = reportPageDraftId.value
+  if (!reportId || reportPageEditorSaving.value || !isCurrentCase(token, requestedCaseId)) return
+
+  reportPageEditorSaving.value = value.pageCode
+  editorNotice.value = ''
+  error.value = ''
+  try {
+    const updated = await valuationApi.updateReportPage(requestedCaseId, reportId, value.pageCode, value.payload)
+    if (!isCurrentCase(token, requestedCaseId)) return
+    reportPageEditors.value = { ...reportPageEditors.value, [value.pageCode]: updated }
+    resetPageConfirmation(value.pageCode)
+    reportPageSaved.value = false
+    reportPageCalculated.value = false
+    flow.formalValidation = null
+    flow.formalReport = null
+    acknowledgedWarningCodes.value = []
+    editorNotice.value = `${value.pageCode} 已儲存。因輸入已變更，請重新確認本頁並重新執行正式計算與檢核。`
+  } catch (caught: unknown) {
+    if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
+  } finally {
+    if (isCurrentCase(token, requestedCaseId)) reportPageEditorSaving.value = null
+  }
+}
+
+function formalFindingTarget(finding: FormalValidationFindingModel): { pageCode?: ReportPageCode; field?: string; documents?: boolean; calculation?: boolean } {
+  if (finding.fieldCode) {
+    const inS01 = new Set([
+      'district_name', 'district_boundary', 'survey_date', 'urban_plan_status', 'land_use_zone',
+      'building_coverage_rate', 'floor_area_ratio', 'prohibited_building', 'restricted_building',
+      'main_road_name', 'main_road_width_m', 'average_road_width_m', 'observations', 'site_opinion',
+      'handler_name', 'section_head_name', 'director_name',
+    ])
+    const inF02Rf = new Set(['rule_version_id', 'factor_rows', 'other_influences'])
+    if (inS01.has(finding.fieldCode)) return { pageCode: 'S01', field: finding.fieldCode }
+    if (inF02Rf.has(finding.fieldCode)) return { pageCode: 'F02-RF', field: finding.fieldCode }
+    return { pageCode: 'F02', field: finding.fieldCode }
+  }
+  if (finding.code.startsWith('S01_')) {
+    return { pageCode: 'S01', field: finding.code.includes('OBSERVATION') ? 'observations' : undefined }
+  }
+  if (finding.code.startsWith('F02_RF_') || finding.code === 'FORMAL_RULE_VERSION_INVALID' || finding.code === 'FORMAL_REFERENCES_REQUIRED') {
+    return { pageCode: 'F02-RF', field: finding.code.includes('RULE') ? 'rule_version_id' : 'factor_rows' }
+  }
+  if (finding.code === 'F02_BENCHMARK_NOTES_MISSING') return { pageCode: 'F02', field: 'benchmark_notes' }
+  if (finding.code === 'F02_TARGETS_REQUIRED') return { pageCode: 'F02', field: 'comparison_targets' }
+  if (finding.code === 'APPRAISER_NAME_MISSING') return { pageCode: 'F02', field: 'appraiser_name' }
+  if (finding.code.startsWith('FORMAL_MAP_')) return { documents: true }
+  if (finding.code.includes('CALCULATION')) return { calculation: true }
+  return { pageCode: 'F02' }
+}
+
+async function goToFormalFinding(finding: FormalValidationFindingModel): Promise<void> {
+  const target = formalFindingTarget(finding)
+  if (target.documents) {
+    await router.push({
+      name: 'valuation-prepare',
+      params: { caseId: caseId.value },
+      query: { focus: 'documents' },
+    })
+    return
+  }
+  if (target.calculation) {
+    const calculationButton = document.querySelector<HTMLElement>('[data-testid="run-formal-calculation"]')
+      ?? document.querySelector<HTMLElement>('[data-testid="run-formal-validation"]')
+    calculationButton?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+    calculationButton?.focus()
+    editorNotice.value = '此問題來自正式計算狀態；請確認輸入資料後重新執行正式計算，再執行正式檢核。'
+    return
+  }
+  if (!Object.keys(reportPageEditors.value).length) await loadReportPageEditors()
+  if (!target.pageCode) return
+  activeReportPageCode.value = target.pageCode
+  await nextTick()
+  const editor = document.querySelector<HTMLElement>(`[data-page-code="${target.pageCode}"]`)
+  const field = target.field
+    ? editor?.querySelector<HTMLElement>(`[data-report-field="${target.field}"]`)
+    : editor
+  ;(field ?? editor)?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+  ;(field ?? editor)?.focus?.()
+  editorNotice.value = `${finding.code}：請在 ${target.pageCode}${target.field ? ` 的 ${target.field}` : ''} 修正後儲存，再重新計算與檢核。`
+}
+
+function goBackToGeneralFinding(fieldPath: string | null): void {
+  const query = fieldPath === 'documents' || fieldPath === 'object_key'
+    ? { focus: 'documents' }
+    : fieldPath ? { field: fieldPath } : undefined
+  void router.push({ name: 'valuation-prepare', params: { caseId: caseId.value }, query })
 }
 
 async function refreshAuthoritativePackage(
@@ -300,13 +441,13 @@ async function validateReportPages(): Promise<void> {
       error.value = '三頁正式檢核與目前報告包不一致，暫停正式輸出。'
       return
     }
+    flow.formalValidation = formalValidation
+    flow.formalReport = null
+    acknowledgedWarningCodes.value = []
     if (!result.can_generate_formal_report) {
       error.value = '三頁正式檢核仍有阻擋項目，請依伺服器結果補正。'
       return
     }
-    flow.formalValidation = formalValidation
-    flow.formalReport = null
-    acknowledgedWarningCodes.value = []
     if (!(await refreshAuthoritativePackage(token, requestedCaseId))) {
       error.value = '三頁檢核已回傳，但尚未取得 CHECKED 權威 F02。'
     }
@@ -338,6 +479,11 @@ async function loadData(): Promise<void> {
   reportPageSaved.value = false
   reportPageCalculated.value = false
   reportPageConfirmations.value = { s01: false, f02Rf: false, f02: false }
+  reportPageEditors.value = {}
+  reportPageEditorsLoading.value = false
+  reportPageEditorSaving.value = null
+  activeReportPageCode.value = 'S01'
+  editorNotice.value = ''
   error.value = ''
   refreshWarning.value = ''
 
@@ -588,7 +734,7 @@ watch(caseId, () => {
 
 <template>
   <div class="valuation-view">
-    <ValuationStepNavigator :current-stage="3" />
+    <ValuationStepNavigator :current-step="currentStep" />
     <PageHeader
       eyebrow="SUBMIT FOR REVIEW"
       title="送審確認"
@@ -629,7 +775,40 @@ watch(caseId, () => {
           <span>F02 第 {{ flow.authoritativeF02.versionNo }} 版｜權威識別碼：{{ flow.reportPackageId }}</span>
         </div>
         <template v-else>
-          <p class="empty-copy">請依序確認三份 DRAFT 表單。按鈕會先保存三頁，再由伺服器執行正式計算與檢核；前端不直接改寫表單狀態。</p>
+          <p class="empty-copy">先檢視或修改 S01、F02-RF、F02，再逐頁確認。修改後必須重新保存確認、正式計算與檢核。</p>
+          <div class="report-page-editor-shell">
+            <button
+              v-if="!Object.keys(reportPageEditors).length"
+              class="solid-button"
+              type="button"
+              data-testid="open-report-page-editors"
+              :disabled="reportPageEditorsLoading"
+              @click="loadReportPageEditors"
+            >
+              {{ reportPageEditorsLoading ? '三頁載入中…' : '檢視／修改三頁資料' }}
+            </button>
+            <template v-else>
+              <nav class="report-page-tabs" aria-label="三頁表單切換">
+                <button
+                  v-for="pageCode in REPORT_PAGE_CODES"
+                  :key="pageCode"
+                  type="button"
+                  :class="{ 'is-active': activeReportPageCode === pageCode }"
+                  :aria-current="activeReportPageCode === pageCode ? 'page' : undefined"
+                  @click="activeReportPageCode = pageCode"
+                >
+                  {{ pageCode }}
+                </button>
+              </nav>
+              <ReportPageEditor
+                v-if="activeReportPage"
+                :page="activeReportPage"
+                :saving="reportPageEditorSaving === activeReportPageCode"
+                @save="saveReportPageEditor"
+              />
+            </template>
+            <p v-if="editorNotice" class="editor-notice" role="status">{{ editorNotice }}</p>
+          </div>
           <div class="package-confirmations">
             <label><input v-model="reportPageConfirmations.s01" data-testid="report-page-s01-confirm" type="checkbox" /> 我已確認 S01 勘查資料與來源</label>
             <label><input v-model="reportPageConfirmations.f02Rf" data-testid="report-page-f02-rf-confirm" type="checkbox" /> 我已確認 F02-RF 全部因素級距</label>
@@ -670,6 +849,7 @@ watch(caseId, () => {
             <span>{{ finding.message }}</span>
             <small>實際值：{{ finding.actualValue ?? '—' }}</small>
             <small>預期值（expected）：{{ finding.expectedValue ?? '—' }}</small>
+            <button class="finding-action" type="button" @click="goBackToGeneralFinding(finding.fieldPath)">返回資料確認修正</button>
           </li>
         </ul>
         <p v-else class="empty-copy">伺服器沒有回傳其他檢核訊息。</p>
@@ -697,6 +877,16 @@ watch(caseId, () => {
             <li v-for="finding in flow.formalValidation.findings" :key="`${finding.code}-${finding.fieldCode ?? ''}`" :data-severity="finding.severity">
               <strong>{{ finding.severity === 'ERROR' ? '阻擋' : '警示' }}｜{{ finding.code }}</strong>
               <span>{{ finding.message }}</span>
+              <small v-if="finding.fieldCode">欄位：{{ finding.fieldCode }}</small>
+              <button
+                v-if="finding.severity === 'ERROR'"
+                class="finding-action"
+                type="button"
+                :data-testid="`fix-formal-finding-${finding.code}`"
+                @click="goToFormalFinding(finding)"
+              >
+                前往修正
+              </button>
               <label v-if="finding.severity === 'WARNING'" class="warning-acknowledgement">
                 <input
                   type="checkbox"
@@ -818,9 +1008,16 @@ watch(caseId, () => {
 .finding-list li { display: grid; gap: 4px; padding: 12px 14px; border-left: 4px solid #d6a63e; background: #fffaf0; color: var(--app-ink-soft); font-size: 13px; }
 .finding-list li[data-severity="ERROR"] { border-left-color: #c85b43; background: #fff3f0; }
 .finding-list strong { color: var(--app-ink); font-size: 12px; }
+.finding-action { justify-self: start; min-height: 36px; margin-top: 5px; padding: 6px 11px; border: 1px solid rgba(200,91,67,.26); border-radius: 8px; color: var(--app-accent-deep); background: #fff; cursor: pointer; font-size: 11px; font-weight: 900; }
 .package-confirmations { display: grid; gap: 10px; margin: 16px 0; }
 .package-confirmations label { display: flex; align-items: flex-start; gap: 8px; color: var(--app-ink); font-size: 13px; font-weight: 700; }
 .package-confirmations input { margin-top: 2px; accent-color: var(--app-accent); }
+.report-page-editor-shell { display: grid; gap: 12px; margin-top: 16px; }
+.report-page-editor-shell > .solid-button { justify-self: start; }
+.report-page-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.report-page-tabs button { min-height: 38px; padding: 7px 13px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: #fff; cursor: pointer; font-size: 12px; font-weight: 900; }
+.report-page-tabs button.is-active { border-color: rgba(200,91,67,.32); color: var(--app-accent-deep); background: var(--app-accent-soft); }
+.editor-notice { margin: 0; padding: 10px 12px; border-radius: 8px; color: #2e5984; background: #edf4fb; font-size: 12px; line-height: 1.6; }
 .package-authoritative { display: grid; gap: 5px; padding: 14px; border: 1px solid rgba(59, 129, 102, 0.24); border-radius: var(--app-radius-sm); color: var(--app-green); background: rgba(59, 129, 102, 0.08); }
 .package-authoritative span { color: var(--app-ink-soft); font-size: 12px; overflow-wrap: anywhere; }
 .warning-acknowledgement { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; color: var(--app-ink); font-size: 12px; font-weight: 700; }
@@ -852,5 +1049,6 @@ watch(caseId, () => {
   .summary-grid { grid-template-columns: 1fr; }
   .solid-button { width: 100%; }
   .formal-actions { width: 100%; }
+  .report-page-editor-shell > .solid-button { justify-self: stretch; }
 }
 </style>

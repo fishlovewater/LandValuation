@@ -1,6 +1,8 @@
 import { isAxiosError } from 'axios'
 import { ForbiddenError, http } from '../../api/http'
 import type {
+  CorrectionRequestCreateDto,
+  CorrectionRequestDto,
   DecisionDto,
   FindingDto,
   FindingTriageRequestDto,
@@ -78,6 +80,32 @@ export const reviewApi = {
     return response.data
   },
 
+  async createCorrectionRequest(
+    reviewId: string,
+    payload: CorrectionRequestCreateDto,
+  ): Promise<CorrectionRequestDto> {
+    const response = await http.post<CorrectionRequestDto>(
+      `/review/cases/${reviewId}/correction-requests`,
+      payload,
+    )
+    return response.data
+  },
+
+  async sendCorrectionRequest(correctionRequestId: string): Promise<CorrectionRequestDto> {
+    const response = await http.post<CorrectionRequestDto>(
+      `/review/correction-requests/${correctionRequestId}/send`,
+      {},
+    )
+    return response.data
+  },
+
+  async recheckCorrectionRequest(correctionRequestId: string): Promise<CorrectionRequestDto> {
+    const response = await http.post<CorrectionRequestDto>(
+      `/review/correction-requests/${correctionRequestId}/recheck`,
+    )
+    return response.data
+  },
+
   async completeReview(reviewId: string, payload: ReviewCompletionRequestDto): Promise<DecisionDto> {
     const response = await http.post<DecisionDto>(`/review/cases/${reviewId}/complete-review`, payload)
     return response.data
@@ -127,10 +155,23 @@ export function safeReviewErrorMessage(error: unknown): string {
       REVIEW_SUBMISSION_STALE: '目前檢核不是最新送審版本，請重新執行最新版本檢核。',
       REVIEW_REPORT_NOT_AVAILABLE: '審查報告須在案件完成且最新檢核完成後產生。',
       CORRECTION_REQUEST_BLOCKED: '目前無法送出修正通知，請先完成疑點判定或前一筆修正通知。',
+      CORRECTION_REQUEST_STATE_CONFLICT: '修正通知狀態已變更，請重新整理後再試。',
+      CORRECTION_REQUEST_STALE: '修正通知不是基於最新審查結果，請重新整理案件。',
+      CORRECTION_RECHECK_INVALID: '目前修正通知尚未進入可重新檢核的狀態。',
+      CORRECTION_RECHECK_INCOMPLETE: '新版資料仍有缺件或完整性問題，請查看案件缺件後再次補正。',
+      REVIEW_RESUBMISSION_REQUIRED: '估價端尚未建立並送出較新的正式版本，暫時不能重新檢核。',
+      CORRECTION_RECHECK_SUBMISSION_INVALID: '新版送審資料不存在或不屬於此審查案件。',
+      CORRECTION_RECHECK_DOCUMENT_MISMATCH: '新版回件文件與目前送審版本不一致，請確認估價端已重新送審。',
+      CORRECTION_RESUBMISSION_INVALID: '補正回件版本不符合案件沿革或版本要求。',
       REVIEW_DECISION_INVALID: '請補充審查理由或必要內容。',
       DATA_CONFLICT: '資料狀態已變更，請重新整理後再試。',
     }
     return knownMessages[code] ?? '案件狀態不允許此操作，請重新整理後確認。'
+  }
+  if (isAxiosError(error) && error.response?.status === 422) {
+    const code = error.response.data?.error?.code
+    if (code === 'CORRECTION_DUE_AT_INVALID') return '修正期限必須晚於目前時間。'
+    return '修正通知內容或期限格式不正確，請檢查後再試。'
   }
   return '審查服務目前無法完成此操作，請稍後再試。'
 }

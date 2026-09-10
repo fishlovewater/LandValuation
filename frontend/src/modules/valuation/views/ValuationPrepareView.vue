@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ErrorState from '../../../components/common/ErrorState.vue'
 import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
@@ -24,8 +24,13 @@ import {
 import {
   resetValuationFlow,
   valuationFlowState,
+  type AutomatedWorkflowResponseDto,
   type DocumentCategory,
   type F03EditableValues,
+  type ReportPageCode,
+  type ReportProgressResponseDto,
+  type ValidationFindingModel,
+  type ValuationReviewHandoffDto,
   type ValuationFormModel,
 } from '../valuation.types'
 import ValuationStepNavigator from '../components/ValuationStepNavigator.vue'
@@ -41,6 +46,10 @@ const uploading = ref(false)
 const dirty = ref(false)
 const error = ref('')
 const notice = ref('')
+const workflowGuidance = ref<AutomatedWorkflowResponseDto | null>(null)
+const reviewHandoff = ref<ValuationReviewHandoffDto | null>(null)
+const reportProgress = ref<ReportProgressResponseDto | null>(null)
+const revisionInitializing = ref(false)
 const uploadCategory = ref<DocumentCategory>('original')
 const uploadFile = ref<File | null>(null)
 
@@ -61,11 +70,107 @@ const draft = reactive<F03EditableValues>({
 
 const caseId = computed(() => String(route.params.caseId ?? ''))
 const f03Form = computed<ValuationFormModel | null>(
-  () => flow.forms.find((form) => form.formCode === 'F03') ?? null,
+  () => flow.forms
+    .filter((form) => form.formCode === 'F03')
+    .reduce<ValuationFormModel | null>(
+      (latest, form) => (!latest || form.versionNo > latest.versionNo ? form : latest),
+      null,
+    ),
 )
+const isRevisionRequired = computed(() => reviewHandoff.value?.case_status === 'REVISION_REQUIRED')
+const latestReportForms = computed(() => {
+  const reportId = reportProgress.value?.report_id
+  if (!reportId) return []
+  return flow.forms.filter((form) =>
+    form.reportId === reportId && ['S01', 'F02-RF', 'F02'].includes(form.formCode),
+  )
+})
+const revisionDraftReady = computed(() => Boolean(
+  isRevisionRequired.value
+    && f03Form.value?.status === 'DRAFT'
+    && reportProgress.value?.report_id
+    && latestReportForms.value.length === 3
+    && latestReportForms.value.every((form) => form.status === 'DRAFT'),
+))
+const canEditF03 = computed(() => f03Form.value?.status === 'DRAFT')
+type CorrectionItem = NonNullable<ValuationReviewHandoffDto['correction']>['items'][number]
 const calculatedSource = sourceForCalculatedValue()
 const canUpload = computed(() => auth.permissions.includes('document.upload'))
+const canReadAutomatedWorkflow = computed(() => [
+  'case.create',
+  'case.read',
+  'valuation.update',
+  'document.upload',
+  'document.download',
+].every((permission) => auth.permissions.includes(permission)))
+const currentStep = computed<2 | 3 | 4 | 5>(() => {
+  if (flow.validation?.canGenerateReport && flow.report) return 5
+  if (flow.validation) return 4
+  if (flow.calculation) return 3
+  return 2
+})
+const canProceedToSubmit = computed(() => Boolean(flow.validation?.canGenerateReport && flow.report))
+const f03Guidance = computed(() => workflowGuidance.value?.form_guidance.find((item) => item.form_code === 'F03') ?? null)
+const workflowMissingItems = computed(() => workflowGuidance.value?.missing_items ?? [])
+const workflowWarnings = computed(() => workflowGuidance.value?.warnings ?? [])
+const workflowNextActionLabel = computed(() => {
+  if (isRevisionRequired.value) {
+    if (!revisionDraftReady.value) {
+      return '審查已退回補正；先建立較新的 F03 與三頁正式報告草稿，再依修正通知逐項處理。'
+    }
+    return '補正版已建立；依修正通知修改資料、重新計算與檢核後，再建立新版正式輸出並重新送審。'
+  }
+  const action = workflowGuidance.value?.next_action
+  if (action === 'REVIEW_CANDIDATES') return '先確認 OCR / AI 擷取候選資料，再回到 F03 完成正式欄位。'
+  if (action === 'FILL_REQUIRED_FIELDS') return '補齊下列必填欄位後，再執行伺服器計算。'
+  if (action === 'RUN_FORM_CALCULATION') return '必要資料已具備，可執行伺服器計算與檢核。'
+  if (action === 'COMPLETE_WORKFLOW_REQUIREMENTS') return '仍有案件或報告必要資料未完成，請先處理待辦項目。'
+  if (action === 'REVIEW_BEFORE_MANUAL_PDF_GENERATION') return '目前資料已可繼續，請確認內容後執行計算與檢核。'
+  if (!flow.documents.length) return '先上傳案件來源文件，再完成 F03 資料確認。'
+  if (!flow.f03) return 'F03 尚未可編輯，請先補齊案件、宗地與比準地資料。'
+  if (flow.validation && !flow.validation.canGenerateReport) return '依檢核結果修正欄位，儲存後重新執行計算與檢核。'
+  if (flow.validation?.canGenerateReport && flow.report) return '檢核已通過，可前往輸出預覽與送審。'
+  return '確認 F03 人工欄位後，執行伺服器計算與檢核。'
+})
 let activeCaseToken = 0
+
+const FIELD_TARGET_IDS: Readonly<Record<string, string>> = {
+  benchmark_land_id: 'f03-benchmark-land',
+  valuation_base_date: 'f03-valuation-base-date',
+  comparison_price: 'f03-comparison-price',
+  comparison_weight: 'f03-comparison-weight',
+  income_price: 'f03-income-price',
+  income_weight: 'f03-income-weight',
+  market_period_start: 'f03-market-period-start',
+  market_period_end: 'f03-market-period-end',
+  market_condition: 'f03-market-condition',
+  selection_scope_reason: 'f03-selection-scope-reason',
+  decision_reason: 'f03-decision-reason',
+  documents: 'valuation-document-workspace',
+  object_key: 'valuation-document-workspace',
+  prices: 'f03-comparison-price',
+  'case/form/benchmark/date': 'f03-benchmark-land',
+  benchmark_land_price: 'run-valuation',
+}
+
+const FIELD_LABELS: Readonly<Record<string, string>> = {
+  benchmark_land_id: 'F03 → 基準地',
+  valuation_base_date: 'F03 → 估價基準日',
+  comparison_price: 'F03 → 比較法價格',
+  comparison_weight: 'F03 → 比較法權重',
+  income_price: 'F03 → 收益法價格',
+  income_weight: 'F03 → 收益法權重',
+  market_period_start: 'F03 → 市場期間起日',
+  market_period_end: 'F03 → 市場期間迄日',
+  market_condition: 'F03 → 市場條件',
+  selection_scope_reason: 'F03 → 選擇範圍理由',
+  decision_reason: 'F03 → 採用決策理由',
+  documents: '案件與文件 → 來源文件',
+  object_key: '案件與文件 → 來源文件儲存狀態',
+  prices: 'F03 → 比較法／收益法價格',
+  'case/form/benchmark/date': 'F03 → 基準地與估價基準日',
+  benchmark_land_price: 'F03 → 伺服器計算結果',
+}
 
 function emptyDraft(): F03EditableValues {
   return {
@@ -101,6 +206,247 @@ async function loadF03(form: ValuationFormModel, token: number, requestedCaseId:
   copyDraft()
 }
 
+async function loadWorkflowGuidance(token = activeCaseToken, requestedCaseId = caseId.value): Promise<void> {
+  if (!canReadAutomatedWorkflow.value || !isCurrentCase(token, requestedCaseId)) {
+    workflowGuidance.value = null
+    return
+  }
+  try {
+    const response = await valuationApi.getWorkflowReview(requestedCaseId)
+    if (isCurrentCase(token, requestedCaseId)) workflowGuidance.value = response
+  } catch {
+    // The workflow helper only exists for cases initialized through the automated
+    // intake. The regular valuation flow remains usable when it is unavailable.
+    if (isCurrentCase(token, requestedCaseId)) workflowGuidance.value = null
+  }
+}
+
+async function loadReviewHandoff(token = activeCaseToken, requestedCaseId = caseId.value): Promise<void> {
+  if (!isCurrentCase(token, requestedCaseId)) return
+  try {
+    const response = await valuationApi.getReviewHandoff(requestedCaseId)
+    if (isCurrentCase(token, requestedCaseId)) reviewHandoff.value = response
+  } catch {
+    // The handoff is supplemental for ordinary draft cases. Do not block the
+    // valuation editor if an older backend does not expose it yet.
+    if (isCurrentCase(token, requestedCaseId)) reviewHandoff.value = null
+  }
+}
+
+function editableReportPagePayload(
+  pageCode: ReportPageCode,
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  const allowed: Record<ReportPageCode, readonly string[]> = {
+    S01: [
+      'district_name', 'district_boundary', 'survey_date', 'urban_plan_status',
+      'land_use_zone', 'building_coverage_rate', 'floor_area_ratio',
+      'prohibited_building', 'restricted_building', 'main_road_name',
+      'main_road_width_m', 'average_road_width_m', 'observations', 'notes',
+      'site_opinion', 'handler_name', 'section_head_name', 'director_name',
+      'appraiser_name',
+    ],
+    'F02-RF': [
+      'benchmark_land_id', 'comparison_analysis_id', 'rule_version_id',
+      'factor_rows', 'other_influences', 'notes', 'appraiser_name',
+    ],
+    F02: [
+      'benchmark_land_id', 'comparison_analysis_id', 'comparison_targets',
+      'benchmark_notes', 'notes', 'handler_name', 'section_head_name',
+      'director_name', 'appraiser_name',
+    ],
+  }
+  return Object.fromEntries(
+    allowed[pageCode]
+      .filter((key) => Object.prototype.hasOwnProperty.call(data, key))
+      .map((key) => [key, data[key]]),
+  )
+}
+
+async function ensureRevisionDrafts(): Promise<void> {
+  const requestedCaseId = caseId.value
+  const token = activeCaseToken
+  if (!isRevisionRequired.value || revisionInitializing.value || !isCurrentCase(token, requestedCaseId)) return
+
+  revisionInitializing.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    const currentF03 = f03Form.value
+    const f03SourceValues = flow.f03 ? { ...flow.f03.editable } : null
+    const currentReportId = reportProgress.value?.report_id ?? null
+    const reportSourcePages = currentReportId
+      ? await Promise.all(
+          (['S01', 'F02-RF', 'F02'] as ReportPageCode[]).map((pageCode) =>
+            valuationApi.getReportPage(requestedCaseId, currentReportId, pageCode),
+          ),
+        )
+      : []
+
+    if (!currentF03 || currentF03.status !== 'DRAFT') {
+      if (!f03SourceValues?.benchmarkLandId || !f03SourceValues.valuationBaseDate) {
+        throw new Error('F03_SOURCE_VALUES_REQUIRED')
+      }
+      const createdF03 = await valuationApi.createForm(requestedCaseId, {
+        form_code: 'F03',
+        prepared_date: currentF03?.preparedDate ?? flow.case?.valuationBaseDate ?? null,
+        source_document_id: currentF03?.sourceDocumentId ?? null,
+      })
+      await valuationApi.updateF03(
+        requestedCaseId,
+        createdF03.form_instance_id,
+        mapF03Update(f03SourceValues),
+      )
+    }
+
+    const reportIsEditable = Boolean(
+      currentReportId
+        && latestReportForms.value.length === 3
+        && latestReportForms.value.every((form) => form.status === 'DRAFT'),
+    )
+    if (!reportIsEditable) {
+      const createdPackage = await valuationApi.createReportPackage(requestedCaseId, {
+        report_type: 'REPORT_COMPARISON_COMMERCIAL',
+        prepared_date: latestReportForms.value[0]?.preparedDate ?? flow.case?.valuationBaseDate ?? null,
+      })
+      for (const sourcePage of reportSourcePages) {
+        const payload = editableReportPagePayload(sourcePage.page_code, sourcePage.data)
+        if (Object.keys(payload).length) {
+          await valuationApi.updateReportPage(
+            requestedCaseId,
+            createdPackage.report_id,
+            sourcePage.page_code,
+            payload,
+          )
+        }
+      }
+    }
+
+    await loadData()
+    if (isCurrentCase(activeCaseToken, requestedCaseId)) {
+      notice.value = '補正版已建立：F03 與 S01／F02-RF／F02 已建立較新的 DRAFT 版本，可依修正通知逐項修改。'
+      void focusElementById('f03-data-section')
+    }
+  } catch (caught: unknown) {
+    if (caught instanceof Error && caught.message === 'F03_SOURCE_VALUES_REQUIRED') {
+      error.value = '舊版 F03 缺少基準地或估價基準日，無法安全複製；請先確認來源資料。'
+    } else {
+      error.value = safeValuationErrorMessage(caught)
+    }
+  } finally {
+    revisionInitializing.value = false
+  }
+}
+
+function findingFieldCodes(finding: ValidationFindingModel): string[] {
+  if (finding.fieldPath === 'prices') return ['comparison_price', 'income_price']
+  if (finding.fieldPath === 'case/form/benchmark/date') return ['valuation_base_date', 'benchmark_land_id']
+  if (finding.fieldPath) return finding.fieldPath.split(',').map((item) => item.trim()).filter(Boolean)
+  if (finding.ruleCode === 'F03_REQUIRED_FIELDS') return ['benchmark_land_id', 'valuation_base_date']
+  if (finding.ruleCode === 'F03_REQUIRED_DOCUMENTS' || finding.ruleCode === 'F03_MINIO_OBJECTS') return ['documents']
+  if (finding.ruleCode === 'F03_CALCULATION_MATCH') return ['benchmark_land_price']
+  return []
+}
+
+function findingLocationLabel(finding: ValidationFindingModel): string {
+  const codes = findingFieldCodes(finding)
+  if (!codes.length) return 'F03 檢核資料'
+  return codes.map((code) => FIELD_LABELS[code] ?? `F03 → ${code}`).join('、')
+}
+
+function findingCorrectionHint(finding: ValidationFindingModel): string {
+  if (finding.ruleCode === 'F03_CALCULATION_MATCH') {
+    return '此欄位由伺服器計算。請先修正上游資料，再重新執行「伺服器計算與檢核」。'
+  }
+  if (finding.ruleCode === 'F03_REQUIRED_DOCUMENTS' || finding.ruleCode === 'F03_MINIO_OBJECTS') {
+    return '請到來源文件區補上或重新上傳缺少的文件，完成後再執行檢核。'
+  }
+  if (finding.ruleCode === 'F03_WEIGHT_SUM') {
+    return '請調整比較法與收益法權重，使各自介於 0～1 且合計為 1。'
+  }
+  if (finding.ruleCode === 'F03_METHOD_INPUTS') {
+    return '權重大於 0 的估價方法必須有對應價格；補值後重新計算。'
+  }
+  if (finding.ruleCode === 'F03_PRICE_RANGE') return '價格不可小於 0，請修正價格欄位。'
+  if (finding.ruleCode === 'F03_REQUIRED_FIELDS') return '請補齊基準地與估價基準日。'
+  return finding.message
+}
+
+async function focusElementById(targetId: string, message?: string): Promise<void> {
+  await nextTick()
+  const target = document.getElementById(targetId)
+  if (!target) return
+  target.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+  const focusable = target.matches('input, select, textarea, button')
+    ? target as HTMLElement
+    : target.querySelector<HTMLElement>('input, select, textarea, button')
+  focusable?.focus()
+  if (message) notice.value = message
+}
+
+function goToFinding(finding: ValidationFindingModel): void {
+  const fieldCode = findingFieldCodes(finding)[0]
+  const targetId = fieldCode ? FIELD_TARGET_IDS[fieldCode] : undefined
+  if (!targetId) {
+    notice.value = `請依檢核訊息處理：${finding.message}`
+    return
+  }
+  void focusElementById(targetId, `${findingLocationLabel(finding)}：${findingCorrectionHint(finding)}`)
+}
+
+function goToWorkflowNextAction(): void {
+  if (isRevisionRequired.value) {
+    if (!revisionDraftReady.value) {
+      void ensureRevisionDrafts()
+      return
+    }
+    void focusElementById('f03-data-section', '補正版已建立，請依修正通知逐項調整資料。')
+    return
+  }
+  if (workflowGuidance.value?.pending_candidate_count) {
+    void focusElementById('f03-data-section', '目前仍有待確認候選資料；請先確認來源資料，再完成 F03 正式欄位。')
+    return
+  }
+  if (workflowMissingItems.value.some((item) => item.toLowerCase().includes('document'))) {
+    void focusElementById('valuation-document-workspace')
+    return
+  }
+  if (flow.validation && !flow.validation.canGenerateReport) {
+    void focusElementById('validation-title')
+    return
+  }
+  if (canProceedToSubmit.value) {
+    goToSubmit()
+    return
+  }
+  void focusElementById(flow.f03 ? 'f03-data-section' : 'valuation-document-workspace')
+}
+
+async function goToCorrectionItem(item: CorrectionItem): Promise<void> {
+  if (isRevisionRequired.value && !revisionDraftReady.value) {
+    await ensureRevisionDrafts()
+    if (!revisionDraftReady.value) return
+  }
+  if (item.document_id) {
+    await focusElementById('valuation-document-workspace', `修正要求：${item.requested_correction}`)
+    return
+  }
+  await focusElementById('f03-data-section', `修正要求：${item.requested_correction}`)
+}
+
+function focusRequestedRouteTarget(): void {
+  const focus = typeof route.query.focus === 'string' ? route.query.focus : ''
+  const field = typeof route.query.field === 'string' ? route.query.field : ''
+  if (focus === 'documents') {
+    void focusElementById('valuation-document-workspace')
+    return
+  }
+  if (!field) return
+  const normalized = field.split(',')[0]?.trim()
+  const targetId = normalized ? FIELD_TARGET_IDS[normalized] : undefined
+  if (targetId) void focusElementById(targetId, `請修正 ${FIELD_LABELS[normalized] ?? normalized} 後重新執行檢核。`)
+}
+
 async function loadData(): Promise<void> {
   const requestedCaseId = caseId.value
   const token = ++activeCaseToken
@@ -111,6 +457,9 @@ async function loadData(): Promise<void> {
   running.value = false
   error.value = ''
   notice.value = ''
+  workflowGuidance.value = null
+  reviewHandoff.value = null
+  reportProgress.value = null
 
   if (!requestedCaseId) {
     error.value = '找不到案件識別資訊，請從估價案件清單重新進入。'
@@ -130,7 +479,12 @@ async function loadData(): Promise<void> {
     if (!isCurrentCase(token, requestedCaseId)) return
 
     const forms = formDtos.map(mapFormResponse)
-    const form = forms.find((item) => item.formCode === 'F03')
+    const form = forms
+      .filter((item) => item.formCode === 'F03')
+      .reduce<ValuationFormModel | null>(
+        (latest, item) => (!latest || item.versionNo > latest.versionNo ? item : latest),
+        null,
+      )
     const documents = documentDtos.map(mapDocumentResponse)
     const authoritative = selectAuthoritativeF02(forms, documents, reportProgressDto)
 
@@ -141,6 +495,7 @@ async function loadData(): Promise<void> {
     flow.authoritativeF02 = authoritative.form
     flow.completeReport = authoritative.completeReport
     flow.reportPackageId = authoritative.reportPackageId
+    reportProgress.value = reportProgressDto
     if (form) {
       try {
         await loadF03(form, token, requestedCaseId)
@@ -152,6 +507,11 @@ async function loadData(): Promise<void> {
     } else {
       notice.value = '目前案件尚未建立 F03 估價表；可先補齊來源文件，再建立需要的估價表。'
     }
+    await Promise.all([
+      loadWorkflowGuidance(token, requestedCaseId),
+      loadReviewHandoff(token, requestedCaseId),
+    ])
+    if (isCurrentCase(token, requestedCaseId)) focusRequestedRouteTarget()
   } catch (caught: unknown) {
     if (!isCurrentCase(token, requestedCaseId)) return
     error.value = safeValuationErrorMessage(caught)
@@ -177,6 +537,7 @@ async function uploadSourceDocument(): Promise<void> {
     uploadFile.value = null
     const input = document.querySelector<HTMLInputElement>('#valuation-source-file')
     if (input) input.value = ''
+    await loadWorkflowGuidance()
   } catch (caught: unknown) {
     error.value = safeValuationErrorMessage(caught)
   } finally {
@@ -199,6 +560,7 @@ async function saveConfirmedFields(
     if (!isCurrentCase(token, requestedCaseId)) return false
     flow.f03 = mapF03DraftResponse(updated, form.sourceDocumentId, form.formInstanceId)
     copyDraft()
+    await loadWorkflowGuidance(token, requestedCaseId)
     notice.value = '人工確認欄位已由伺服器儲存並重新載入。'
     return true
   } catch (caught: unknown) {
@@ -256,6 +618,7 @@ async function runValuation(): Promise<void> {
     flow.validation = mapValidationResponse(validation)
 
     if (!flow.validation.canGenerateReport) {
+      await loadWorkflowGuidance(token, requestedCaseId)
       notice.value = '伺服器檢核回傳阻擋項目，請依結果補正後再執行。'
       return
     }
@@ -278,6 +641,7 @@ async function runValuation(): Promise<void> {
     })
     if (!isCurrentCase(token, requestedCaseId)) return
     flow.report = mapReportResponse(report)
+    await loadWorkflowGuidance(token, requestedCaseId)
     notice.value = '伺服器已完成計算、檢核、F03 提交與正式輸出。'
   } catch (caught: unknown) {
     if (!isCurrentCase(token, requestedCaseId)) return
@@ -288,7 +652,10 @@ async function runValuation(): Promise<void> {
 }
 
 function goToSubmit(): void {
-  if (!flow.validation) return
+  if (!canProceedToSubmit.value) {
+    notice.value = '目前仍有阻擋項目，必須先完成修正並通過伺服器檢核，才能進入輸出與送審。'
+    return
+  }
   void router.push({ name: 'valuation-submit', params: { caseId: caseId.value } })
 }
 
@@ -299,7 +666,7 @@ watch(caseId, () => {
 
 <template>
   <div class="valuation-view">
-    <ValuationStepNavigator :current-stage="2" />
+    <ValuationStepNavigator :current-step="currentStep" />
     <PageHeader
       eyebrow="CASE PREPARATION"
       title="確認估價資料"
@@ -310,6 +677,98 @@ watch(caseId, () => {
     <ErrorState v-else-if="error && !flow.case" :message="error" @retry="loadData" />
 
     <template v-else-if="flow.case">
+      <section
+        v-if="isRevisionRequired && reviewHandoff?.correction"
+        v-liquid-glass
+        data-lg
+        class="valuation-surface revision-panel lg"
+        data-testid="valuation-correction-request"
+        aria-labelledby="revision-panel-title"
+      >
+        <div class="revision-panel__heading">
+          <div>
+            <p class="valuation-eyebrow">REVISION REQUIRED</p>
+            <h2 id="revision-panel-title">第 {{ reviewHandoff.correction.request_no }} 次補正要求</h2>
+          </div>
+          <span>{{ new Date(reviewHandoff.correction.due_at).toLocaleString('zh-TW') }} 前</span>
+        </div>
+        <p class="revision-panel__message">{{ reviewHandoff.correction.message }}</p>
+        <ul class="revision-panel__items">
+          <li v-for="item in reviewHandoff.correction.items" :key="`${item.finding_code}-${item.document_id ?? 'case'}`">
+            <div>
+              <strong>{{ item.issue_summary }}</strong>
+              <span>要求修正：{{ item.requested_correction }}</span>
+              <small v-if="item.page_number">文件頁次：第 {{ item.page_number }} 頁</small>
+            </div>
+            <button class="finding-action" type="button" @click="goToCorrectionItem(item)">
+              {{ item.document_id ? '前往文件處理' : '前往資料修正' }}
+            </button>
+          </li>
+        </ul>
+        <div v-if="reviewHandoff.missing_items.length" class="revision-panel__missing">
+          <strong>審查缺件</strong>
+          <span v-for="item in reviewHandoff.missing_items" :key="item.item_code">
+            {{ item.item_name }}{{ item.reason ? `：${item.reason}` : '' }}
+          </span>
+        </div>
+        <div class="revision-panel__actions">
+          <button
+            v-if="!revisionDraftReady"
+            class="solid-button solid-button--primary"
+            type="button"
+            data-testid="prepare-revision-draft"
+            :disabled="revisionInitializing"
+            @click="ensureRevisionDrafts"
+          >
+            {{ revisionInitializing ? '建立補正版中…' : '建立補正版並帶入前一版資料' }}
+          </button>
+          <button
+            v-else
+            class="solid-button solid-button--primary"
+            type="button"
+            data-testid="open-revision-fields"
+            @click="focusElementById('f03-data-section', '補正版已建立，請依上方修正通知逐項修改。')"
+          >
+            補正版已建立，開始修正
+          </button>
+          <small>舊送審版本保持不可變；補正會建立較新的 F03 與正式報告版本。</small>
+        </div>
+      </section>
+
+      <section v-liquid-glass data-lg class="valuation-surface workflow-guide lg" data-testid="valuation-workflow-guide" aria-labelledby="workflow-guide-title">
+        <div class="workflow-guide__copy">
+          <div>
+            <p class="valuation-eyebrow">NEXT ACTION</p>
+            <h2 id="workflow-guide-title">目前步驟與待處理事項</h2>
+          </div>
+          <span class="workflow-guide__step">第 {{ currentStep }} 步 / 6</span>
+        </div>
+        <p class="workflow-guide__next">{{ workflowNextActionLabel }}</p>
+        <div class="workflow-guide__stats">
+          <span>來源文件 {{ flow.documents.length }} 份</span>
+          <span v-if="workflowGuidance">待確認候選 {{ workflowGuidance.pending_candidate_count }} 筆</span>
+          <span v-if="f03Guidance">F03 缺欄位 {{ f03Guidance.missing_required_fields.length }} 項</span>
+          <span v-if="flow.validation">檢核錯誤 {{ flow.validation.failedCount }} 項</span>
+        </div>
+        <div v-if="workflowMissingItems.length || f03Guidance?.missing_required_fields.length || workflowWarnings.length" class="workflow-guide__issues">
+          <div v-if="f03Guidance?.missing_required_fields.length">
+            <strong>待補欄位</strong>
+            <span>{{ f03Guidance.missing_required_fields.join('、') }}</span>
+          </div>
+          <div v-if="workflowMissingItems.length">
+            <strong>流程待辦</strong>
+            <span>{{ workflowMissingItems.join('、') }}</span>
+          </div>
+          <div v-if="workflowWarnings.length">
+            <strong>系統提醒</strong>
+            <span>{{ workflowWarnings.join('、') }}</span>
+          </div>
+        </div>
+        <button class="solid-button solid-button--primary" type="button" data-testid="workflow-next-action" @click="goToWorkflowNextAction">
+          {{ canProceedToSubmit ? '前往輸出與送審' : '前往下一個待處理位置' }}
+        </button>
+      </section>
+
       <section v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="case-summary-title">
         <div class="surface-heading">
           <div>
@@ -331,7 +790,7 @@ watch(caseId, () => {
             <small>{{ form.source.label }}</small>
           </div>
         </div>
-        <div class="document-workspace">
+        <div id="valuation-document-workspace" class="document-workspace" tabindex="-1">
           <div class="document-workspace__heading">
             <div>
               <strong>來源文件</strong>
@@ -376,7 +835,7 @@ watch(caseId, () => {
         <p>系統不會以空值直接送出。請先完成必要來源文件、宗地與比準地資料；待後端建立 F03 正式草稿後，計算與檢核按鈕才會開放。</p>
       </section>
 
-      <section v-if="flow.f03" v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="f03-title">
+      <section id="f03-data-section" v-if="flow.f03" v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="f03-title">
         <div class="surface-heading">
           <div>
             <p class="valuation-eyebrow">F03 正式資料</p>
@@ -398,10 +857,11 @@ watch(caseId, () => {
             <h3>人工確認欄位</h3>
             <span class="value-kind" data-value-kind="human-confirmed">可編輯欄位依 F03 PATCH 契約</span>
           </div>
-          <div class="field-grid">
+          <fieldset class="field-grid" :disabled="!canEditF03">
             <label>
               <span>基準地</span>
               <select
+                id="f03-benchmark-land"
                 v-model="draft.benchmarkLandId"
                 data-value-kind="human-confirmed"
                 @input="dirty = true"
@@ -414,12 +874,13 @@ watch(caseId, () => {
             </label>
             <label>
               <span>估價基準日</span>
-              <input v-model="draft.valuationBaseDate" type="date" @input="dirty = true" />
+              <input id="f03-valuation-base-date" v-model="draft.valuationBaseDate" type="date" @input="dirty = true" />
             </label>
             <label>
               <span>比較法價格（正式值）</span>
               <input
                 v-model="draft.comparisonPrice"
+                id="f03-comparison-price"
                 data-testid="f03-comparison-price"
                 inputmode="decimal"
                 @input="dirty = true"
@@ -427,46 +888,46 @@ watch(caseId, () => {
             </label>
             <label>
               <span>比較法權重</span>
-              <input v-model="draft.comparisonWeight" inputmode="decimal" @input="dirty = true" />
+              <input id="f03-comparison-weight" v-model="draft.comparisonWeight" inputmode="decimal" @input="dirty = true" />
             </label>
             <label>
               <span>收益法價格（正式值）</span>
-              <input v-model="draft.incomePrice" inputmode="decimal" @input="dirty = true" />
+              <input id="f03-income-price" v-model="draft.incomePrice" inputmode="decimal" @input="dirty = true" />
             </label>
             <label>
               <span>收益法權重</span>
-              <input v-model="draft.incomeWeight" inputmode="decimal" @input="dirty = true" />
+              <input id="f03-income-weight" v-model="draft.incomeWeight" inputmode="decimal" @input="dirty = true" />
             </label>
             <label>
               <span>市場期間起日</span>
-              <input v-model="draft.marketPeriodStart" type="date" @input="dirty = true" />
+              <input id="f03-market-period-start" v-model="draft.marketPeriodStart" type="date" @input="dirty = true" />
             </label>
             <label>
               <span>市場期間迄日</span>
-              <input v-model="draft.marketPeriodEnd" type="date" @input="dirty = true" />
+              <input id="f03-market-period-end" v-model="draft.marketPeriodEnd" type="date" @input="dirty = true" />
             </label>
             <label class="field-grid__wide">
               <span>市場條件</span>
-              <input v-model="draft.marketCondition" @input="dirty = true" />
+              <input id="f03-market-condition" v-model="draft.marketCondition" @input="dirty = true" />
             </label>
             <label class="field-grid__wide">
               <span>選擇範圍理由</span>
-              <textarea v-model="draft.selectionScopeReason" rows="2" @input="dirty = true" />
+              <textarea id="f03-selection-scope-reason" v-model="draft.selectionScopeReason" rows="2" @input="dirty = true" />
             </label>
             <label class="field-grid__wide">
               <span>採用決策理由</span>
-              <textarea v-model="draft.decisionReason" rows="2" @input="dirty = true" />
+              <textarea id="f03-decision-reason" v-model="draft.decisionReason" rows="2" @input="dirty = true" />
             </label>
-          </div>
+          </fieldset>
           <div class="action-row">
-            <button class="solid-button" data-testid="save-confirmed-fields" type="submit" :disabled="saving">
+            <button class="solid-button" data-testid="save-confirmed-fields" type="submit" :disabled="saving || !canEditF03">
               {{ saving ? '儲存中…' : '儲存確認欄位' }}
             </button>
             <button
               class="solid-button solid-button--primary"
               type="button"
               data-testid="run-valuation"
-              :disabled="running || saving"
+              :disabled="running || saving || !canEditF03"
               @click="runValuation"
             >
               {{ running ? '伺服器處理中…' : '執行伺服器計算與檢核' }}
@@ -497,11 +958,22 @@ watch(caseId, () => {
           <li v-for="finding in flow.validation.findings" :key="finding.findingId" :data-severity="finding.severity">
             <strong>{{ finding.severity === 'ERROR' ? '阻擋' : '警示' }}｜{{ finding.ruleCode }}</strong>
             <span>{{ finding.message }}</span>
+            <small><b>問題位置：</b>{{ findingLocationLabel(finding) }}</small>
             <small>實際值：{{ finding.actualValue ?? '—' }}</small>
             <small>預期值（expected）：{{ finding.expectedValue ?? '—' }}</small>
+            <small><b>建議修正：</b>{{ findingCorrectionHint(finding) }}</small>
+            <button class="finding-action" type="button" :data-testid="`fix-finding-${finding.findingId}`" @click="goToFinding(finding)">
+              前往修正
+            </button>
           </li>
         </ul>
         <p v-else class="empty-copy">伺服器沒有回傳其他檢核訊息。</p>
+        <div v-if="flow.validation.correctionHints.length" class="correction-hints">
+          <strong>伺服器修正提示</strong>
+          <ul>
+            <li v-for="hint in flow.validation.correctionHints" :key="hint">{{ hint }}</li>
+          </ul>
+        </div>
 
         <div v-if="flow.calculation" class="calculation-result" data-testid="calculation-result" data-source-kind="calculated">
           <span>伺服器計算正式結果</span>
@@ -517,9 +989,11 @@ watch(caseId, () => {
           class="solid-button solid-button--primary"
           type="button"
           data-testid="go-to-submit"
+          :disabled="!canProceedToSubmit"
+          :title="canProceedToSubmit ? '前往輸出預覽與送審' : '必須先修正 ERROR 並通過檢核'"
           @click="goToSubmit"
         >
-          前往送審確認
+          {{ canProceedToSubmit ? '前往輸出預覽與送審' : '請先完成阻擋項目' }}
         </button>
       </section>
     </template>
@@ -563,6 +1037,34 @@ watch(caseId, () => {
 .value-kind[data-value-kind="calculated"] { border-color: rgba(46, 89, 132, 0.22); color: #2e5984; background: #edf4fb; }
 .summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .summary-grid div { display: grid; gap: 5px; padding: 13px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #fbfcfe; }
+.revision-panel { display: grid; gap: 14px; border-color: rgba(200, 91, 67, .26); background: rgba(255, 246, 242, .86); }
+.revision-panel__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.revision-panel__heading h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 22px; }
+.revision-panel__heading > span { padding: 7px 10px; border-radius: var(--app-radius-pill); color: #a44334; background: #fff0ed; font-size: 11px; font-weight: 900; white-space: nowrap; }
+.revision-panel__message { margin: 0; color: var(--app-ink); font-size: 13px; font-weight: 700; line-height: 1.7; white-space: pre-line; }
+.revision-panel__items { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.revision-panel__items li { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 13px; border-left: 4px solid #c85b43; border-radius: 8px; background: rgba(255,255,255,.8); }
+.revision-panel__items li > div { display: grid; gap: 4px; min-width: 0; }
+.revision-panel__items strong { color: var(--app-ink); font-size: 12px; }
+.revision-panel__items span { color: var(--app-ink-soft); font-size: 12px; line-height: 1.6; }
+.revision-panel__items small { color: var(--app-muted); font-size: 10px; }
+.revision-panel__missing { display: grid; gap: 5px; padding: 11px 12px; border: 1px solid rgba(214,166,62,.28); border-radius: 9px; background: #fffaf0; }
+.revision-panel__missing strong { color: var(--app-ink); font-size: 11px; }
+.revision-panel__missing span { color: var(--app-ink-soft); font-size: 11px; }
+.revision-panel__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.revision-panel__actions small { color: var(--app-muted); font-size: 11px; line-height: 1.5; }
+.workflow-guide { display: grid; gap: 14px; border-color: rgba(46, 89, 132, .18); background: rgba(246, 250, 255, .82); }
+.workflow-guide__copy { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.workflow-guide__copy h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 22px; }
+.workflow-guide__step { padding: 7px 11px; border-radius: var(--app-radius-pill); color: #2e5984; background: #edf4fb; font-size: 11px; font-weight: 900; white-space: nowrap; }
+.workflow-guide__next { margin: 0; color: var(--app-ink); font-size: 14px; font-weight: 800; line-height: 1.6; }
+.workflow-guide__stats { display: flex; flex-wrap: wrap; gap: 8px; }
+.workflow-guide__stats span { padding: 7px 10px; border-radius: 8px; color: var(--app-ink-soft); background: rgba(255,255,255,.82); font-size: 11px; font-weight: 800; }
+.workflow-guide__issues { display: grid; gap: 8px; }
+.workflow-guide__issues div { display: grid; gap: 4px; padding: 10px 12px; border-left: 3px solid #d6a63e; background: #fffaf0; }
+.workflow-guide__issues strong { color: var(--app-ink); font-size: 11px; }
+.workflow-guide__issues span { color: var(--app-ink-soft); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.workflow-guide > .solid-button { justify-self: start; }
 .form-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .form-list__item { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: #fff; font-size: 11px; }
 .form-list__item strong { color: var(--app-ink); font-size: 12px; }
@@ -592,7 +1094,8 @@ watch(caseId, () => {
 .official-value strong { color: #244d73; font-family: var(--app-font-display); font-size: 24px; font-weight: 600; }
 .form-heading { align-items: center; margin-bottom: 12px; }
 .form-heading h3 { margin: 0; color: var(--app-ink); font-size: 16px; }
-.field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.field-grid:disabled { opacity: .68; }
 .field-grid label { display: grid; gap: 6px; color: var(--app-ink-soft); font-size: 12px; font-weight: 800; }
 .field-grid__wide { grid-column: 1 / -1; }
 .field-grid input, .field-grid select, .field-grid textarea { width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink); background: #fff; font: inherit; font-weight: 500; }
@@ -611,6 +1114,11 @@ watch(caseId, () => {
 .finding-list li { display: grid; gap: 4px; padding: 12px 14px; border-left: 4px solid #d6a63e; background: #fffaf0; color: var(--app-ink-soft); font-size: 13px; }
 .finding-list li[data-severity="ERROR"] { border-left-color: #c85b43; background: #fff3f0; }
 .finding-list strong { color: var(--app-ink); font-size: 12px; }
+.finding-list b { color: var(--app-ink); }
+.finding-action { justify-self: start; min-height: 36px; margin-top: 5px; padding: 6px 11px; border: 1px solid rgba(200,91,67,.26); border-radius: 8px; color: var(--app-accent-deep); background: #fff; cursor: pointer; font-size: 11px; font-weight: 900; }
+.correction-hints { display: grid; gap: 7px; margin-top: 14px; padding: 12px 14px; border: 1px solid rgba(214,166,62,.26); border-radius: var(--app-radius-sm); background: #fffaf0; }
+.correction-hints > strong { color: var(--app-ink); font-size: 12px; }
+.correction-hints ul { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: var(--app-ink-soft); font-size: 12px; }
 .empty-copy { margin: 0; color: var(--app-muted); font-size: 13px; }
 .calculation-result, .report-result { align-items: center; margin-top: 14px; padding: 14px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #fbfcfe; }
 .calculation-result strong, .report-result strong { margin-left: auto; color: var(--app-ink); font-size: 14px; }
@@ -621,6 +1129,9 @@ watch(caseId, () => {
   .valuation-view { padding: 18px 16px 28px; }
   .valuation-surface { padding: 16px; }
   .surface-heading, .official-value, .calculation-result, .report-result { align-items: flex-start; flex-direction: column; }
+  .revision-panel__heading, .revision-panel__items li, .revision-panel__actions { align-items: stretch; flex-direction: column; }
+  .workflow-guide__copy { flex-direction: column; }
+  .workflow-guide > .solid-button { width: 100%; justify-self: stretch; }
   .summary-grid, .field-grid { grid-template-columns: 1fr; }
   .upload-form { grid-template-columns: 1fr; }
   .field-grid__wide { grid-column: auto; }

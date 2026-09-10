@@ -9,6 +9,11 @@ const props = withDefaults(
     canFinalize?: boolean
     canExecute?: boolean
     canGenerateReport?: boolean
+    canRequestCorrection?: boolean
+    canSendCorrection?: boolean
+    canRecheckCorrection?: boolean
+    correctionStatus?: string | null
+    correctionActionReason?: string
     reviewStatusCode?: string
     unresolvedFindingCount?: number
     latestRunId?: string | null
@@ -22,6 +27,11 @@ const props = withDefaults(
     canFinalize: false,
     canExecute: false,
     canGenerateReport: false,
+    canRequestCorrection: false,
+    canSendCorrection: false,
+    canRecheckCorrection: false,
+    correctionStatus: null,
+    correctionActionReason: '請先完成所有疑點判定；至少一項確認為需修正後，才能送出修正通知。',
     reviewStatusCode: '',
     unresolvedFindingCount: 0,
     latestRunId: null,
@@ -34,7 +44,9 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   'finalize-request': []
-  'return-request': []
+  'correction-request': []
+  'send-correction': []
+  'recheck-correction': []
   'generate-report': []
   'open-result': []
 }>()
@@ -51,25 +63,46 @@ const finalState = computed(() => ['APPROVED', 'REVIEW_COMPLETED'].includes(prop
     </div>
     <div class="review-action-bar__actions">
       <GlassButton
-        data-testid="save-review-draft"
-        :disabled="true"
-        title="目前驗證的 Demo API 未提供草稿保存端點"
-      >
-        儲存草稿
-      </GlassButton>
-      <GlassButton
+        v-if="!correctionStatus || correctionStatus === 'RECHECKED'"
         data-testid="request-correction"
-        :disabled="true"
-        title="目前驗證的 Demo API 未提供修正通知端點"
+        :disabled="!canRequestCorrection || busy || finalState"
+        :title="correctionActionReason"
+        @click="emit('correction-request')"
       >
         要求修正
       </GlassButton>
       <GlassButton
-        data-testid="return-review"
-        :disabled="true"
-        title="目前驗證的 Demo API 未提供案件退回端點"
+        v-else-if="correctionStatus === 'DRAFT'"
+        data-testid="send-correction"
+        :disabled="!canSendCorrection || busy"
+        :title="correctionActionReason"
+        @click="emit('send-correction')"
       >
-        退回案件
+        送出修正通知
+      </GlassButton>
+      <GlassButton
+        v-else-if="correctionStatus === 'SENT'"
+        data-testid="awaiting-correction"
+        :disabled="true"
+        title="已退回估價端，等待較新的正式版本重新送審。"
+      >
+        等待補正回件
+      </GlassButton>
+      <GlassButton
+        v-else-if="correctionStatus === 'RESUBMITTED'"
+        data-testid="recheck-correction"
+        :disabled="!canRecheckCorrection || busy"
+        :title="correctionActionReason"
+        @click="emit('recheck-correction')"
+      >
+        新版重檢
+      </GlassButton>
+      <GlassButton
+        v-else-if="correctionStatus === 'RECHECKING'"
+        data-testid="rechecking-correction"
+        :disabled="true"
+      >
+        新版重檢中
       </GlassButton>
       <GlassButton
         data-testid="finalize-review"

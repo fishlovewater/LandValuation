@@ -1002,6 +1002,192 @@ describe('valuation demo flow', () => {
     wrapper.unmount()
   })
 
+  it('shows a review correction handoff and creates newer editable F03 and report-package drafts', async () => {
+    const newF03Id = '13131313-1313-4131-8131-131313131313'
+    const newReportId = '14141414-1414-4141-8141-141414141414'
+    const correctionId = '15151515-1515-4151-8151-151515151515'
+    const revisionCase = { ...caseDto, case_status: 'REVISION_REQUIRED' }
+    const oldF03 = { ...formDto, form_status: 'READY' }
+    const oldS01 = {
+      ...authoritativeFormDto,
+      form_instance_id: '16161616-1616-4161-8161-161616161616',
+      form_code: 'S01',
+      output_document_id: null,
+    }
+    const oldF02Rf = {
+      ...authoritativeFormDto,
+      form_instance_id: '17171717-1717-4171-8171-171717171717',
+      form_code: 'F02-RF',
+      output_document_id: null,
+    }
+    const newF03Form = {
+      ...formDto,
+      form_instance_id: newF03Id,
+      version_no: 5,
+      form_status: 'DRAFT',
+      source_document_id: ids.sourceDocument,
+    }
+    const newF03Dto = {
+      ...f03Dto,
+      form_instance_id: newF03Id,
+      benchmark_valuation_id: '18181818-1818-4181-8181-181818181818',
+      version_no: 5,
+      benchmark_land_price: null,
+    }
+    const newReportForms = (['S01', 'F02-RF', 'F02'] as const).map((code, index) => ({
+      ...authoritativeFormDto,
+      form_instance_id: `19191919-1919-4191-8191-19191919191${index}`,
+      form_code: code,
+      version_no: 5,
+      form_status: 'DRAFT',
+      form_content: {
+        report_type: 'REPORT_COMPARISON_COMMERCIAL',
+        report_id: newReportId,
+      },
+      output_document_id: null,
+    }))
+    const handoff = {
+      case_id: ids.case,
+      case_status: 'REVISION_REQUIRED',
+      display_status: '退回補正',
+      review_id: ids.review,
+      review_status: 'RETURNED_FOR_REVISION',
+      latest_submission: {
+        submission_id: ids.submission,
+        submission_no: 1,
+        submitted_at: '2026-09-07T03:05:00Z',
+      },
+      correction: {
+        correction_request_id: correctionId,
+        request_no: 1,
+        status: 'SENT',
+        due_at: '2099-09-20T04:00:00Z',
+        message: '請修正調整率並重新送審。',
+        items: [{
+          finding_code: 'ADJUSTMENT_RATE',
+          severity: 'ERROR',
+          document_id: null,
+          page_number: 3,
+          issue_summary: '調整率與正式規則不一致',
+          requested_correction: '修正調整率後重新計算。',
+        }],
+      },
+      missing_items: [],
+    }
+    const sourcePages = {
+      S01: { page_code: 'S01', data: { district_name: '新店區', notes: '前版現勘資料' } },
+      'F02-RF': {
+        page_code: 'F02-RF',
+        data: {
+          benchmark_land_id: ids.benchmarkLand,
+          comparison_analysis_id: null,
+          rule_version_id: null,
+          factor_rows: [],
+          other_influences: [],
+          notes: '前版區域因素',
+        },
+      },
+      F02: {
+        page_code: 'F02',
+        data: {
+          benchmark_land_id: ids.benchmarkLand,
+          comparison_analysis_id: null,
+          comparison_targets: [],
+          benchmark_notes: '前版比較說明',
+          notes: null,
+        },
+      },
+    } as const
+    const requests: Array<{ method?: string; url?: string; data?: unknown }> = []
+    let revisionReady = false
+
+    http.defaults.adapter = vi.fn(async (config) => {
+      requests.push({ method: config.method, url: config.url, data: config.data })
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}`) return response(revisionCase, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms`) {
+        return response(
+          revisionReady
+            ? [oldS01, oldF02Rf, authoritativeFormDto, oldF03, ...newReportForms, newF03Form]
+            : [oldS01, oldF02Rf, authoritativeFormDto, oldF03],
+          config,
+        )
+      }
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/f03`) return response(f03Dto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms/${newF03Id}/f03`) return response(newF03Dto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([benchmarkDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response(documentsDto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/review-handoff`) return response(handoff, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) {
+        return response(
+          revisionReady
+            ? { ...reportProgressDto, report_id: newReportId, version_no: 5, completion_rate: '0.00' }
+            : reportProgressDto,
+          config,
+        )
+      }
+      if (config.method === 'get' && config.url?.startsWith(`/valuation/cases/${ids.case}/reports/${ids.reportPackage}/pages/`)) {
+        const code = config.url.split('/').at(-1) as keyof typeof sourcePages
+        return response(sourcePages[code], config)
+      }
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/forms`) {
+        expect(requestBody(config.data)).toEqual(expect.objectContaining({
+          form_code: 'F03',
+          form_content: {},
+        }))
+        return response(newF03Form, config, 201)
+      }
+      if (config.method === 'patch' && config.url === `/valuation/cases/${ids.case}/forms/${newF03Id}/f03`) {
+        expect(requestBody(config.data)).toEqual(expect.objectContaining({
+          benchmark_land_id: ids.benchmarkLand,
+          valuation_base_date: '2026-08-01',
+          comparison_price: '125000.00',
+        }))
+        return response(newF03Dto, config)
+      }
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/report-packages`) {
+        expect(requestBody(config.data)).toEqual({
+          report_type: 'REPORT_COMPARISON_COMMERCIAL',
+          prepared_date: '2026-09-07',
+        })
+        revisionReady = true
+        return response({
+          report_id: newReportId,
+          case_id: ids.case,
+          report_type: 'REPORT_COMPARISON_COMMERCIAL',
+          version_no: 5,
+          prepared_date: '2026-09-07',
+          components: newReportForms.map((form) => ({
+            code: form.form_code,
+            form_instance_id: form.form_instance_id,
+            form_status: form.form_status,
+          })),
+          created_at: '2026-09-10T12:00:00Z',
+          updated_at: '2026-09-10T12:00:00Z',
+        }, config, 201)
+      }
+      if (config.method === 'patch' && config.url?.startsWith(`/valuation/cases/${ids.case}/reports/${newReportId}/pages/`)) {
+        return response({}, config)
+      }
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/valuation/cases/${ids.case}/prepare`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="valuation-correction-request"]').text()).toContain('第 1 次補正要求'))
+
+    expect(wrapper.get('[data-testid="valuation-correction-request"]').text()).toContain('修正調整率後重新計算')
+    expect(wrapper.get('[data-testid="save-confirmed-fields"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="prepare-revision-draft"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="open-revision-fields"]').exists()).toBe(true))
+
+    expect(wrapper.get('[data-testid="save-confirmed-fields"]').attributes('disabled')).toBeUndefined()
+    expect(requests.some((request) => request.url === `/valuation/cases/${ids.case}/forms` && request.method === 'post')).toBe(true)
+    expect(requests.some((request) => request.url === `/valuation/cases/${ids.case}/report-packages` && request.method === 'post')).toBe(true)
+    expect(requests.filter((request) => request.url?.startsWith(`/valuation/cases/${ids.case}/reports/${newReportId}/pages/`) && request.method === 'patch')).toHaveLength(3)
+    wrapper.unmount()
+  })
+
   it('ignores stale submit-view responses when the reused route changes from A to B', async () => {
     const caseBId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaabb'
     const pendingA: Array<() => void> = []

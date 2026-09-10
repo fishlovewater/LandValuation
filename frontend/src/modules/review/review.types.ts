@@ -304,6 +304,11 @@ export interface ReviewCompletionRequestDto {
   reason: string
 }
 
+export interface CorrectionRequestCreateDto {
+  message: string
+  due_at: string
+}
+
 export interface GeneratedReportCreateDto {
   format: 'xlsx' | 'docx'
 }
