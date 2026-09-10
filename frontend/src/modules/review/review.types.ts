@@ -15,3 +15,5 @@ export interface ReviewCaseDetail extends ReviewCaseSummary { documents:ReviewDo
 export interface ReviewSummary { totalCount:number; pendingCount:number; inReviewCount:number; actionRequiredCount:number; completedCount:number; urgentCount:number }
 export interface ReviewCaseQuery { q?:string; status?:string; riskLevel?:string; statusGroup?:string; limit?:number; offset?:number }
 export interface ReviewCasePage { items:ReviewCaseSummary[]; total:number; limit:number; offset:number }
+export interface WorkbenchSummaryDto { total_count:number; pending_count:number; in_review_count:number; action_required_count:number; completed_count:number; urgent_count:number }
+export interface WorkbenchCaseListDto { items:WorkbenchCaseDto[]; total:number; limit:number; offset:number }
