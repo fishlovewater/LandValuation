@@ -7,6 +7,7 @@ import ErrorState from '../../../components/common/ErrorState.vue'
 import RiskBadge from '../../../components/common/RiskBadge.vue'
 import StatusBadge from '../../../components/common/StatusBadge.vue'
 import GlassModal from '../../../components/glass/GlassModal.vue'
+import GlassDrawer from '../../../components/glass/GlassDrawer.vue'
 import { useAuthStore } from '../../auth/auth.store'
 import EvidenceViewer from '../components/EvidenceViewer.vue'
 import FindingPanel from '../components/FindingPanel.vue'
@@ -18,6 +19,7 @@ const route = useRoute(); const router = useRouter(); const auth = useAuthStore(
 const detail = ref<ReviewCaseDetail | null>(null); const loading = ref(true); const starting = ref(false); const error = ref('')
 const startResult = ref<ReviewStartResult | null>(null); const selectedFinding = ref<FindingViewModel | null>(null); const selectedDocumentId = ref<string>()
 const actionBusy = ref(false)
+const mobileNavOpen = ref(false); const mobileFindingOpen = ref(false)
 const pendingDecision = ref<{ decision: FindingTriageDecision; reason: string } | null>(null)
 const correctionOpen = ref(false); const correctionMessage = ref(''); const correctionDue = ref('')
 const blockedItems = computed(() => startResult.value?.outcome === 'BLOCKED' ? startResult.value.missingItems : detail.value?.missingItems ?? [])
@@ -82,18 +84,28 @@ onMounted(load)
     <template v-else-if="detail">
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
       <ReviewActionBar :starting="starting" :can-start="detail.status !== 'REVIEW_COMPLETED'" :can-correct="canDecide && detail.findings.length > 0" :can-complete="canDecide && detail.findings.length > 0" @start="startReview" @correct="correctionOpen=true" @complete="goResult" />
+      <div class="mobile-workbench-actions"><button class="text-button" type="button" @click="mobileNavOpen=true">案件/疑點清單</button><button class="text-button" type="button" @click="mobileFindingOpen=true">目前疑點</button></div>
       <section v-if="blockedItems.length" class="blocked-panel solid-panel">
         <h2>缺件／待補資料</h2><ul><li v-for="item in blockedItems" :key="item.missingItemId"><strong>{{ item.itemName }}</strong> — {{ item.reason ?? item.status }}</li></ul>
       </section>
       <div class="workbench-grid">
-        <aside class="workbench-nav solid-panel">
+        <aside class="workbench-nav desktop-assist solid-panel">
           <h2>文件</h2><button v-for="doc in detail.documents" :key="doc.documentId" type="button" :disabled="!doc.contentAvailable" @click="selectedDocumentId=doc.documentId">{{ doc.filename }}</button>
           <h2>疑點</h2><button v-for="finding in detail.findings" :key="finding.findingId" type="button" :class="{ selected:selectedFinding?.findingId===finding.findingId }" @click="chooseFinding(finding)">{{ finding.severityLabel }}｜{{ finding.title }}</button>
         </aside>
         <EvidenceViewer :review-id="reviewId" :document-id="selectedDocumentId" />
-        <FindingPanel :finding="selectedFinding" :can-decide="canDecide" :busy="actionBusy" @select-document="selectedDocumentId=$event" @request-decision="pendingDecision=$event" />
+        <FindingPanel class="desktop-assist" :finding="selectedFinding" :can-decide="canDecide" :busy="actionBusy" @select-document="selectedDocumentId=$event" @request-decision="pendingDecision=$event" />
       </div>
     </template>
+    <GlassDrawer :open="mobileNavOpen" title="案件與疑點" @close="mobileNavOpen=false">
+      <nav v-if="detail" class="drawer-list">
+        <strong>文件</strong><button v-for="doc in detail.documents" :key="doc.documentId" type="button" :disabled="!doc.contentAvailable" @click="selectedDocumentId=doc.documentId; mobileNavOpen=false">{{ doc.filename }}</button>
+        <strong>疑點</strong><button v-for="finding in detail.findings" :key="finding.findingId" type="button" @click="chooseFinding(finding); mobileNavOpen=false">{{ finding.severityLabel }}｜{{ finding.title }}</button>
+      </nav>
+    </GlassDrawer>
+    <GlassDrawer :open="mobileFindingOpen" title="疑點內容" @close="mobileFindingOpen=false">
+      <FindingPanel v-if="detail" :finding="selectedFinding" :can-decide="canDecide" :busy="actionBusy" @select-document="selectedDocumentId=$event; mobileFindingOpen=false" @request-decision="pendingDecision=$event; mobileFindingOpen=false" />
+    </GlassDrawer>
     <GlassModal :open="Boolean(pendingDecision)" title="確認疑點判定" @close="pendingDecision=null">
       <p>判定送出後會寫入審查決策紀錄。請確認理由與選項正確。</p>
       <p v-if="pendingDecision"><strong>{{ pendingDecision.decision }}</strong> — {{ pendingDecision.reason }}</p>

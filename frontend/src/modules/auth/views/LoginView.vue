@@ -33,9 +33,9 @@ async function submit() {
   <form class="login-card" @submit.prevent="submit">
     <div><span class="eyebrow">Reviewer Portal</span><h2>登入智慧審查</h2><p>使用已授權的審查帳號登入。</p></div>
     <label for="username">帳號</label>
-    <input id="username" v-model="username" name="username" autocomplete="username" required />
+    <input id="username" v-model="username" name="username" autocomplete="username" required :aria-invalid="Boolean(errorMessage)" :aria-describedby="errorMessage ? 'login-error' : undefined" />
     <label for="password">密碼</label>
-    <div class="password-field"><input id="password" v-model="password" name="password" :type="showPassword ? 'text' : 'password'" autocomplete="current-password" required /><button type="button" :aria-label="showPassword ? '隱藏密碼' : '顯示密碼'" @click="showPassword = !showPassword">{{ showPassword ? '隱藏' : '顯示' }}</button></div>
+    <div class="password-field"><input id="password" v-model="password" name="password" :type="showPassword ? 'text' : 'password'" autocomplete="current-password" required :aria-invalid="Boolean(errorMessage)" :aria-describedby="errorMessage ? 'login-error' : undefined" /><button type="button" :aria-label="showPassword ? '隱藏密碼' : '顯示密碼'" @click="showPassword = !showPassword">{{ showPassword ? '隱藏' : '顯示' }}</button></div>
     <p v-if="errorMessage" id="login-error" class="form-error" role="alert">{{ errorMessage }}</p>
     <button class="primary-button" type="submit" :disabled="loading">{{ loading ? '登入中…' : '登入' }}</button>
   </form>

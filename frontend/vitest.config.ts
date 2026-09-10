@@ -6,7 +6,7 @@ export default defineConfig({
   test: {
     environment: 'happy-dom',
     globals: true,
-    include: ['tests/**/*.{spec,test}.{ts,tsx}'],
+    include: ['tests/{unit,integration}/**/*.{spec,test}.{ts,tsx}'],
     restoreMocks: true,
   },
 })
