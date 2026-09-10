@@ -42,3 +42,22 @@ def test_comparison_setup_rejects_invalid_weights_or_duplicate_transactions(targ
         ComparisonSetupCreate(
             report_id=uuid4(), benchmark_land_id=uuid4(), targets=targets
         )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("transaction_no", "T" * 31),
+        ("subject_address", "A" * 301),
+    ],
+)
+def test_comparison_setup_rejects_values_wider_than_database_columns(
+    field_name, value
+):
+    """Request validation must fail before PostgreSQL varchar constraints do."""
+    with pytest.raises(ValidationError):
+        ComparisonSetupCreate(
+            report_id=uuid4(),
+            benchmark_land_id=uuid4(),
+            targets=[_target(**{field_name: value})],
+        )

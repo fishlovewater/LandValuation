@@ -63,6 +63,10 @@ const extractionBusyDocumentId = ref<string | null>(null)
 const confirmingCandidates = ref(false)
 const candidateDecision = reactive<Record<string, 'CONFIRM' | 'REJECT' | ''>>({})
 const candidateValue = reactive<Record<string, string>>({})
+const manualFieldValue = reactive<Record<string, string>>({})
+const manualFieldsSaving = ref(false)
+const documentActionId = ref<string | null>(null)
+const documentCategoryDraft = reactive<Record<string, DocumentCategory>>({})
 const landContextSaving = ref(false)
 const editingParcelId = ref<string | null>(null)
 
@@ -153,7 +157,7 @@ const canProceedToSubmit = computed(() => Boolean(flow.validation?.canGenerateRe
 const f03Guidance = computed(() => workflowGuidance.value?.form_guidance.find((item) => item.form_code === 'F03') ?? null)
 const workflowMissingItems = computed(() => workflowGuidance.value?.missing_items ?? [])
 const workflowWarnings = computed(() => workflowGuidance.value?.warnings ?? [])
-const pendingCandidates = computed(() => {
+const allCandidates = computed(() => {
   const merged = new Map<string, ExtractedFieldResponseDto>()
   for (const candidate of workflowGuidance.value?.candidates ?? []) {
     merged.set(candidate.extracted_field_id, candidate)
@@ -161,11 +165,43 @@ const pendingCandidates = computed(() => {
   for (const candidate of extractionCandidates.value) {
     merged.set(candidate.extracted_field_id, candidate)
   }
-  return [...merged.values()].filter((candidate) => candidate.field_status === 'NEEDS_CONFIRMATION')
+  return [...merged.values()]
 })
-const selectedCandidateCount = computed(() => pendingCandidates.value.filter(
+const pendingCandidates = computed(() => allCandidates.value.filter(
+  (candidate) => candidate.field_status === 'NEEDS_CONFIRMATION',
+))
+const processedCandidates = computed(() => allCandidates.value.filter(
+  (candidate) => ['APPLIED', 'CONFIRMED', 'REJECTED'].includes(candidate.field_status),
+))
+const candidateDecisionTargets = computed(() => allCandidates.value.filter(
+  (candidate) => candidate.field_status === 'NEEDS_CONFIRMATION' || Boolean(candidateDecision[candidate.extracted_field_id]),
+))
+const selectedCandidateCount = computed(() => candidateDecisionTargets.value.filter(
   (candidate) => Boolean(candidateDecision[candidate.extracted_field_id]),
 ).length)
+const manualFieldEntries = computed(() => {
+  const keys = new Set<string>()
+  for (const guidance of workflowGuidance.value?.form_guidance ?? []) {
+    for (const field of guidance.missing_required_fields) keys.add(`${guidance.form_code}.${field}`)
+  }
+  for (const [formCode, fields] of Object.entries(workflowGuidance.value?.manual_field_values ?? {})) {
+    for (const field of Object.keys(fields)) keys.add(`${formCode}.${field}`)
+  }
+  return [...keys].sort().map((key) => {
+    const split = key.indexOf('.')
+    return { key, formCode: key.slice(0, split), fieldName: key.slice(split + 1) }
+  })
+})
+const SOURCE_DOCUMENT_CATEGORIES: readonly DocumentCategory[] = [
+  'original',
+  'land-register',
+  'cadastral-map',
+  'photos',
+  'attachments',
+  'map-section-sketch',
+  'map-zoning',
+  'map-land-value-section',
+]
 const workflowNextActionLabel = computed(() => {
   if (isRevisionRequired.value) {
     if (!revisionDraftReady.value) {
@@ -282,6 +318,28 @@ function displayCandidateValue(value: unknown): string {
   }
 }
 
+function fieldDisplayLabel(formCode: string, fieldName: string): string {
+  if (formCode === 'F03' && FIELD_LABELS[fieldName]) return FIELD_LABELS[fieldName]
+  return `${formCode} → ${fieldName.replaceAll('_', ' ')}`
+}
+
+function initializeManualFieldInputs(response: AutomatedWorkflowResponseDto): void {
+  for (const [formCode, fields] of Object.entries(response.manual_field_values ?? {})) {
+    for (const [fieldName, value] of Object.entries(fields)) {
+      const key = `${formCode}.${fieldName}`
+      if (!(key in manualFieldValue)) manualFieldValue[key] = displayCandidateValue(value)
+    }
+  }
+}
+
+function initializeDocumentCategories(): void {
+  for (const document of flow.documents) {
+    if (SOURCE_DOCUMENT_CATEGORIES.includes(document.documentType as DocumentCategory)) {
+      documentCategoryDraft[document.documentId] = document.documentType as DocumentCategory
+    }
+  }
+}
+
 function candidateDocumentName(documentId: string): string {
   return flow.documents.find((document) => document.documentId === documentId)?.filename ?? '來源文件'
 }
@@ -294,6 +352,25 @@ function canExtractDocument(document: { mimeType: string; isActive: boolean }): 
   )
 }
 
+function canManageSourceDocument(document: { documentType: string; isActive: boolean }): boolean {
+  return document.isActive
+    && canUpload.value
+    && SOURCE_DOCUMENT_CATEGORIES.includes(document.documentType as DocumentCategory)
+}
+
+function documentCategoryLabel(category: string): string {
+  return ({
+    original: '原始文件',
+    'land-register': '土地登記資料',
+    'cadastral-map': '地籍圖',
+    photos: '照片',
+    attachments: '其他附件',
+    'map-section-sketch': '地段示意圖',
+    'map-zoning': '使用分區圖',
+    'map-land-value-section': '地價區段圖',
+  } as Record<string, string>)[category] ?? category
+}
+
 function candidateConfidenceLabel(candidate: ExtractedFieldResponseDto): string {
   const confidence = Number(candidate.confidence)
   if (!Number.isFinite(confidence)) return candidate.confidence || '未提供'
@@ -304,7 +381,9 @@ function candidateConfidenceLabel(candidate: ExtractedFieldResponseDto): string 
 function initializeCandidateInputs(candidates: ExtractedFieldResponseDto[]): void {
   for (const candidate of candidates) {
     if (!(candidate.extracted_field_id in candidateValue)) {
-      candidateValue[candidate.extracted_field_id] = displayCandidateValue(candidate.extracted_value)
+      candidateValue[candidate.extracted_field_id] = displayCandidateValue(
+        candidate.confirmed_value ?? candidate.extracted_value,
+      )
     }
     if (!(candidate.extracted_field_id in candidateDecision)) {
       candidateDecision[candidate.extracted_field_id] = ''
@@ -339,6 +418,7 @@ async function loadWorkflowGuidance(token = activeCaseToken, requestedCaseId = c
     if (isCurrentCase(token, requestedCaseId)) {
       workflowGuidance.value = response
       initializeCandidateInputs(response.candidates)
+      initializeManualFieldInputs(response)
     }
   } catch {
     // The workflow helper only exists for cases initialized through the automated
@@ -610,6 +690,8 @@ async function loadData(): Promise<void> {
   confirmingCandidates.value = false
   clearReactiveRecord(candidateDecision)
   clearReactiveRecord(candidateValue)
+  clearReactiveRecord(manualFieldValue)
+  clearReactiveRecord(documentCategoryDraft)
   resetParcelDraft()
   resetBenchmarkDraft()
 
@@ -648,6 +730,7 @@ async function loadData(): Promise<void> {
     flow.forms = forms
     flow.benchmarks = benchmarkDtos.map(mapBenchmarkLandResponse)
     flow.documents = documents
+    initializeDocumentCategories()
     flow.authoritativeF02 = authoritative.form
     flow.completeReport = authoritative.completeReport
     flow.reportPackageId = authoritative.reportPackageId
@@ -689,6 +772,7 @@ async function uploadSourceDocument(): Promise<void> {
   try {
     const uploaded = await valuationApi.uploadDocument(flow.case.caseId, uploadCategory.value, uploadFile.value)
     flow.documents = [mapDocumentResponse(uploaded), ...flow.documents.filter((item) => item.documentId !== uploaded.document_id)]
+    initializeDocumentCategories()
     notice.value = `${uploaded.original_filename} 已上傳完成，檔案版本與儲存狀態已由伺服器確認。`
     uploadFile.value = null
     const input = document.querySelector<HTMLInputElement>('#valuation-source-file')
@@ -738,12 +822,22 @@ function chooseCandidateDecision(candidateId: string, decision: 'CONFIRM' | 'REJ
   candidateDecision[candidateId] = decision
 }
 
+function reopenCandidate(candidate: ExtractedFieldResponseDto): void {
+  candidateDecision[candidate.extracted_field_id] = 'CONFIRM'
+  candidateValue[candidate.extracted_field_id] = displayCandidateValue(
+    candidate.confirmed_value ?? candidate.extracted_value,
+  )
+  void nextTick(() => {
+    document.querySelector<HTMLInputElement>(`[data-testid="candidate-value-${candidate.extracted_field_id}"]`)?.focus()
+  })
+}
+
 async function submitCandidateDecisions(): Promise<void> {
   const requestedCaseId = caseId.value
   const token = activeCaseToken
   if (confirmingCandidates.value || !selectedCandidateCount.value || !isCurrentCase(token, requestedCaseId)) return
 
-  const confirmations = pendingCandidates.value.flatMap<AutomatedCandidateConfirmationDto>((candidate) => {
+  const confirmations = candidateDecisionTargets.value.flatMap<AutomatedCandidateConfirmationDto>((candidate) => {
     const decision = candidateDecision[candidate.extracted_field_id]
     if (!decision) return []
     const inputValue = candidateValue[candidate.extracted_field_id] ?? ''
@@ -773,6 +867,7 @@ async function submitCandidateDecisions(): Promise<void> {
       delete candidateValue[confirmation.extracted_field_id]
     }
     initializeCandidateInputs(response.candidates)
+    initializeManualFieldInputs(response)
     const form = f03Form.value
     if (form) {
       try {
@@ -789,6 +884,119 @@ async function submitCandidateDecisions(): Promise<void> {
     if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
   } finally {
     if (isCurrentCase(token, requestedCaseId)) confirmingCandidates.value = false
+  }
+}
+
+async function saveManualFields(): Promise<void> {
+  const requestedCaseId = caseId.value
+  const token = activeCaseToken
+  if (manualFieldsSaving.value || !isCurrentCase(token, requestedCaseId)) return
+
+  const values: Record<string, Record<string, unknown>> = {}
+  for (const entry of manualFieldEntries.value) {
+    const value = (manualFieldValue[entry.key] ?? '').trim()
+    if (!value) continue
+    ;(values[entry.formCode] ??= {})[entry.fieldName] = value
+  }
+  if (!Object.keys(values).length) {
+    notice.value = '請至少填寫一個人工補充欄位；空白欄位不會送到伺服器。'
+    return
+  }
+
+  manualFieldsSaving.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    const response = await valuationApi.saveWorkflowManualFields(requestedCaseId, { values })
+    if (!isCurrentCase(token, requestedCaseId)) return
+    workflowGuidance.value = response
+    extractionCandidates.value = response.candidates
+    initializeCandidateInputs(response.candidates)
+    initializeManualFieldInputs(response)
+    const form = f03Form.value
+    if (form) {
+      try {
+        await loadF03(form, token, requestedCaseId)
+      } catch {
+        // Manual values may belong only to another form. Keep the workflow
+        // response visible even if F03 is not initialized yet.
+      }
+    }
+    const failures = Object.entries(response.manual_field_errors ?? {})
+    notice.value = failures.length
+      ? `已保存可套用欄位；另有 ${failures.length} 項無法寫入正式表單，請依下方錯誤修正。`
+      : `已保存 ${response.manual_fields_saved?.length ?? 0} 個人工補充欄位，並重新產生確認資料。`
+  } catch (caught: unknown) {
+    if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
+  } finally {
+    if (isCurrentCase(token, requestedCaseId)) manualFieldsSaving.value = false
+  }
+}
+
+async function refreshDocumentsAndWorkflow(token: number, requestedCaseId: string): Promise<void> {
+  const documentDtos = await valuationApi.listDocuments(requestedCaseId)
+  if (!isCurrentCase(token, requestedCaseId)) return
+  flow.documents = documentDtos.map(mapDocumentResponse)
+  clearReactiveRecord(documentCategoryDraft)
+  initializeDocumentCategories()
+  await loadWorkflowGuidance(token, requestedCaseId)
+}
+
+async function reclassifyDocument(documentId: string): Promise<void> {
+  const requestedCaseId = caseId.value
+  const token = activeCaseToken
+  const category = documentCategoryDraft[documentId]
+  if (!category || documentActionId.value || !isCurrentCase(token, requestedCaseId)) return
+  documentActionId.value = documentId
+  error.value = ''
+  notice.value = ''
+  try {
+    await valuationApi.reclassifyDocument(requestedCaseId, documentId, category)
+    if (!isCurrentCase(token, requestedCaseId)) return
+    await refreshDocumentsAndWorkflow(token, requestedCaseId)
+    notice.value = `文件分類已更新為「${documentCategoryLabel(category)}」。`
+  } catch (caught: unknown) {
+    if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
+  } finally {
+    if (isCurrentCase(token, requestedCaseId)) documentActionId.value = null
+  }
+}
+
+async function removeDocument(documentId: string, filename: string): Promise<void> {
+  const requestedCaseId = caseId.value
+  const token = activeCaseToken
+  if (documentActionId.value || !isCurrentCase(token, requestedCaseId)) return
+  if (typeof window !== 'undefined' && !window.confirm(`確定要移除「${filename}」嗎？舊版本仍保留在稽核歷程。`)) return
+  documentActionId.value = documentId
+  error.value = ''
+  notice.value = ''
+  try {
+    await valuationApi.deleteDocument(requestedCaseId, documentId)
+    if (!isCurrentCase(token, requestedCaseId)) return
+    await refreshDocumentsAndWorkflow(token, requestedCaseId)
+    notice.value = `${filename} 已從目前作用中的來源文件移除。`
+  } catch (caught: unknown) {
+    if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
+  } finally {
+    if (isCurrentCase(token, requestedCaseId)) documentActionId.value = null
+  }
+}
+
+async function downloadConfirmationExport(): Promise<void> {
+  const exported = workflowGuidance.value?.confirmation_export
+  const requestedCaseId = caseId.value
+  if (!exported || !requestedCaseId) return
+  error.value = ''
+  try {
+    const blob = await valuationApi.downloadDocument(requestedCaseId, exported.document_id)
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = exported.filename
+    anchor.click()
+    URL.revokeObjectURL(url)
+  } catch (caught: unknown) {
+    error.value = safeValuationErrorMessage(caught)
   }
 }
 
@@ -1149,7 +1357,7 @@ watch(caseId, () => {
           <span v-if="f03Guidance">F03 缺欄位 {{ f03Guidance.missing_required_fields.length }} 項</span>
           <span v-if="flow.validation">檢核錯誤 {{ flow.validation.failedCount }} 項</span>
         </div>
-        <div v-if="workflowMissingItems.length || f03Guidance?.missing_required_fields.length || workflowWarnings.length" class="workflow-guide__issues">
+        <div v-if="workflowMissingItems.length || f03Guidance?.missing_required_fields.length || workflowWarnings.length || (workflowGuidance?.ignored_duplicate_files?.length ?? 0)" class="workflow-guide__issues">
           <div v-if="f03Guidance?.missing_required_fields.length">
             <strong>待補欄位</strong>
             <span>{{ f03Guidance.missing_required_fields.join('、') }}</span>
@@ -1161,6 +1369,10 @@ watch(caseId, () => {
           <div v-if="workflowWarnings.length">
             <strong>系統提醒</strong>
             <span>{{ workflowWarnings.join('、') }}</span>
+          </div>
+          <div v-if="workflowGuidance?.ignored_duplicate_files?.length">
+            <strong>已略過重複檔案</strong>
+            <span>{{ (workflowGuidance.ignored_duplicate_files ?? []).join('、') }}</span>
           </div>
         </div>
         <button class="solid-button solid-button--primary" type="button" data-testid="workflow-next-action" @click="goToWorkflowNextAction">
@@ -1212,6 +1424,33 @@ watch(caseId, () => {
                 >
                   {{ extractionBusyDocumentId === document.documentId ? '擷取中…' : '擷取候選資料' }}
                 </button>
+                <div v-if="canManageSourceDocument(document)" class="document-list__manage">
+                  <label :for="`document-category-${document.documentId}`">分類</label>
+                  <select
+                    :id="`document-category-${document.documentId}`"
+                    v-model="documentCategoryDraft[document.documentId]"
+                    :data-testid="`document-category-${document.documentId}`"
+                    :disabled="documentActionId === document.documentId"
+                  >
+                    <option v-for="category in SOURCE_DOCUMENT_CATEGORIES" :key="category" :value="category">
+                      {{ documentCategoryLabel(category) }}
+                    </option>
+                  </select>
+                  <button
+                    class="finding-action"
+                    type="button"
+                    :data-testid="`reclassify-document-${document.documentId}`"
+                    :disabled="documentActionId === document.documentId || documentCategoryDraft[document.documentId] === document.documentType"
+                    @click="reclassifyDocument(document.documentId)"
+                  >套用分類</button>
+                  <button
+                    class="finding-action finding-action--danger"
+                    type="button"
+                    :data-testid="`remove-document-${document.documentId}`"
+                    :disabled="documentActionId === document.documentId"
+                    @click="removeDocument(document.documentId, document.filename)"
+                  >移除</button>
+                </div>
               </div>
             </li>
           </ul>
@@ -1252,14 +1491,23 @@ watch(caseId, () => {
             <p class="valuation-eyebrow">EXTRACTION REVIEW</p>
             <h2 id="candidate-workspace-title">文件擷取候選人工確認</h2>
           </div>
-          <span class="value-kind">待確認 {{ pendingCandidates.length }} 筆</span>
+          <div class="candidate-workspace__summary">
+            <span class="value-kind">待確認 {{ pendingCandidates.length }} 筆</span>
+            <button
+              v-if="workflowGuidance?.confirmation_export"
+              class="finding-action"
+              type="button"
+              data-testid="download-confirmation-export"
+              @click="downloadConfirmationExport"
+            >下載確認 Excel</button>
+          </div>
         </div>
-        <p v-if="!pendingCandidates.length" class="empty-copy">
+        <p v-if="!candidateDecisionTargets.length" class="empty-copy">
           目前沒有待確認候選。若要從 PDF / XLSX 取得候選資料，請在上方來源文件按「擷取候選資料」。
         </p>
         <div v-else class="candidate-list">
           <article
-            v-for="candidate in pendingCandidates"
+            v-for="candidate in candidateDecisionTargets"
             :key="candidate.extracted_field_id"
             class="candidate-card"
             :data-testid="`candidate-${candidate.extracted_field_id}`"
@@ -1269,7 +1517,7 @@ watch(caseId, () => {
                 <strong>{{ candidate.form_code }} · {{ candidate.field_name }}</strong>
                 <span>{{ candidateDocumentName(candidate.document_id) }}{{ candidate.source_page ? ` · 第 ${candidate.source_page} 頁` : '' }}</span>
               </div>
-              <small>信心度 {{ candidateConfidenceLabel(candidate) }} · {{ candidate.analysis_provider }}</small>
+              <small>{{ candidate.field_status === 'NEEDS_CONFIRMATION' ? '待確認' : '重新確認中' }} · 信心度 {{ candidateConfidenceLabel(candidate) }} · {{ candidate.analysis_provider }}</small>
             </div>
             <blockquote v-if="candidate.source_text" class="candidate-card__source">{{ candidate.source_text }}</blockquote>
             <label class="candidate-card__value">
@@ -1301,7 +1549,7 @@ watch(caseId, () => {
             </div>
           </article>
           <div class="candidate-submit">
-            <span>已選擇 {{ selectedCandidateCount }} / {{ pendingCandidates.length }} 筆判定</span>
+            <span>已選擇 {{ selectedCandidateCount }} / {{ candidateDecisionTargets.length }} 筆判定</span>
             <button
               class="solid-button solid-button--primary"
               type="button"
@@ -1312,6 +1560,70 @@ watch(caseId, () => {
               {{ confirmingCandidates ? '保存判定中…' : '保存已選判定並套用' }}
             </button>
           </div>
+        </div>
+
+        <div v-if="processedCandidates.length" class="candidate-history" data-testid="processed-candidates">
+          <div class="candidate-history__heading">
+            <strong>已處理候選</strong>
+            <span>已採用資料若需要補正，可以重新開啟、修改後再次套用。</span>
+          </div>
+          <ul>
+            <li v-for="candidate in processedCandidates" :key="`processed-${candidate.extracted_field_id}`">
+              <div>
+                <strong>{{ candidate.form_code }} · {{ candidate.field_name }}</strong>
+                <span>{{ candidate.field_status }} · {{ displayCandidateValue(candidate.confirmed_value ?? candidate.extracted_value) || '未採用值' }}</span>
+              </div>
+              <button
+                v-if="candidate.field_status !== 'REJECTED' && !candidateDecision[candidate.extracted_field_id]"
+                class="finding-action"
+                type="button"
+                :data-testid="`reopen-candidate-${candidate.extracted_field_id}`"
+                @click="reopenCandidate(candidate)"
+              >重新修改</button>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section
+        v-if="workflowGuidance && manualFieldEntries.length"
+        v-liquid-glass
+        data-lg
+        class="valuation-surface manual-fields lg"
+        data-testid="manual-field-workspace"
+        aria-labelledby="manual-fields-title"
+      >
+        <div class="surface-heading">
+          <div>
+            <p class="valuation-eyebrow">MANUAL FALLBACK</p>
+            <h2 id="manual-fields-title">AI / OCR 未取得欄位的人工補充</h2>
+          </div>
+          <span class="value-kind">{{ manualFieldEntries.length }} 項</span>
+        </div>
+        <p class="manual-fields__intro">只會送出非空欄位。後端會依正式表單契約寫入可直接套用的值；其餘值保留為人工覆寫稽核資料，不會偷偷填入不相容欄位。</p>
+        <div class="manual-fields__grid">
+          <label v-for="entry in manualFieldEntries" :key="entry.key">
+            <span>{{ fieldDisplayLabel(entry.formCode, entry.fieldName) }}</span>
+            <input
+              v-model="manualFieldValue[entry.key]"
+              :data-testid="`manual-field-${entry.formCode}-${entry.fieldName}`"
+              type="text"
+              autocomplete="off"
+            >
+            <small v-if="workflowGuidance.manual_field_errors?.[entry.key]" class="manual-fields__error">
+              {{ workflowGuidance.manual_field_errors?.[entry.key] }}
+            </small>
+          </label>
+        </div>
+        <div class="candidate-submit">
+          <span>人工輸入會覆蓋先前同欄位的人工值，並使相關正式輸出需要重新計算／檢核。</span>
+          <button
+            class="solid-button solid-button--primary"
+            type="button"
+            data-testid="save-manual-fields"
+            :disabled="manualFieldsSaving"
+            @click="saveManualFields"
+          >{{ manualFieldsSaving ? '儲存中…' : '儲存人工補充資料' }}</button>
         </div>
       </section>
 
@@ -1660,6 +1972,10 @@ watch(caseId, () => {
 .document-list li span { color: var(--app-muted); font-size: 10px; }
 .document-list__actions { display: flex !important; align-items: flex-end; gap: 6px !important; }
 .document-list__actions .finding-action { margin-top: 0; white-space: nowrap; }
+.document-list__manage { display: grid !important; grid-template-columns: auto minmax(130px, 190px) auto auto; align-items: center; gap: 6px !important; }
+.document-list__manage label { color: var(--app-muted); font-size: 10px; font-weight: 800; }
+.document-list__manage select { min-height: 36px; padding: 6px 8px; border: 1px solid var(--app-line); border-radius: 7px; color: var(--app-ink); background: #fff; font-size: 11px; }
+.finding-action--danger { border-color: rgba(164,67,52,.28); color: #a44334; }
 .upload-form { display: grid; grid-template-columns: 180px minmax(0,1fr) auto; align-items: end; gap: 10px; }
 .upload-form label { display: grid; gap: 5px; color: var(--app-ink-soft); font-size: 11px; font-weight: 800; }
 .upload-form select,
@@ -1673,6 +1989,7 @@ watch(caseId, () => {
 .supplement-panel__list span { color: var(--app-ink-soft); font-size: 12px; line-height: 1.55; }
 .supplement-panel__list small { color: var(--app-muted); font-size: 10px; }
 .candidate-workspace { border-color: rgba(46,89,132,.18); }
+.candidate-workspace__summary { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .candidate-list { display: grid; gap: 10px; }
 .candidate-card { display: grid; gap: 12px; padding: 15px; border: 1px solid var(--app-line); border-radius: 11px; background: #fbfcfe; }
 .candidate-card__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
@@ -1688,6 +2005,21 @@ watch(caseId, () => {
 .candidate-card__actions button.is-reject { border-color: rgba(200,91,67,.35); color: var(--app-accent-deep); background: rgba(200,91,67,.07); }
 .candidate-submit { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 4px; }
 .candidate-submit > span { color: var(--app-muted); font-size: 11px; }
+.candidate-history { display: grid; gap: 9px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--app-line); }
+.candidate-history__heading { display: grid; gap: 3px; }
+.candidate-history__heading strong { color: var(--app-ink); font-size: 12px; }
+.candidate-history__heading span { color: var(--app-muted); font-size: 11px; }
+.candidate-history ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.candidate-history li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 11px; border-radius: 9px; background: rgba(247,249,252,.84); }
+.candidate-history li > div { display: grid; gap: 3px; min-width: 0; }
+.candidate-history li strong { color: var(--app-ink); font-size: 11px; }
+.candidate-history li span { overflow-wrap: anywhere; color: var(--app-muted); font-size: 10px; }
+.manual-fields { border-color: rgba(59,129,102,.2); }
+.manual-fields__intro { margin: -4px 0 14px; color: var(--app-ink-soft); font-size: 12px; line-height: 1.65; }
+.manual-fields__grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
+.manual-fields__grid label { display: grid; gap: 5px; color: var(--app-ink-soft); font-size: 11px; font-weight: 800; }
+.manual-fields__grid input { min-height: 42px; padding: 8px 10px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink); background: #fff; }
+.manual-fields__error { color: #a44334; font-size: 10px; line-height: 1.5; }
 .land-context__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .land-context__panel { display: grid; align-content: start; gap: 12px; padding: 15px; border: 1px solid var(--app-line); border-radius: 11px; background: #fbfcfe; }
 .land-context__panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
@@ -1756,8 +2088,11 @@ watch(caseId, () => {
   .workflow-guide > .solid-button { width: 100%; justify-self: stretch; }
   .summary-grid, .field-grid { grid-template-columns: 1fr; }
   .upload-form { grid-template-columns: 1fr; }
-  .document-list li, .supplement-panel__list li, .candidate-card__heading, .candidate-submit { align-items: stretch; flex-direction: column; }
+  .document-list li, .supplement-panel__list li, .candidate-card__heading, .candidate-submit, .candidate-history li { align-items: stretch; flex-direction: column; }
   .document-list__actions { align-items: stretch; }
+  .document-list__manage { grid-template-columns: 1fr; align-items: stretch; }
+  .candidate-workspace__summary { justify-content: flex-start; }
+  .manual-fields__grid { grid-template-columns: 1fr; }
   .land-context__grid, .land-context__fields { grid-template-columns: 1fr; }
   .field-grid__wide { grid-column: auto; }
   .form-heading, .action-row { align-items: stretch; flex-direction: column; }

@@ -216,6 +216,7 @@ export interface AutomatedWorkflowResponseDto {
   blank_fields_remain: boolean
   missing_items: string[]
   warnings: string[]
+  ignored_duplicate_files: string[]
   next_action: string
   draft_pages_1_3_url: string | null
   draft_pages_1_6_url: string | null
@@ -227,6 +228,62 @@ export interface AutomatedWorkflowResponseDto {
     filename: string
     download_path: string
   } | null
+  manual_fields_saved: string[]
+  manual_fields_ignored: string[]
+  manual_field_errors: Record<string, string>
+  manual_field_values: Record<string, Record<string, unknown>>
+}
+
+export interface ManualFieldValuesRequestDto {
+  values: Record<string, Record<string, unknown>>
+}
+
+export interface ComparisonSetupTargetDto {
+  transaction_no: string
+  transaction_date: string
+  transaction_total_price: string
+  normal_land_unit_price: string
+  weight: string
+  source_notes: string
+  subject_address?: string | null
+  land_area_sqm?: string | null
+}
+
+export interface ComparisonSetupCreateDto {
+  report_id: string
+  benchmark_land_id: string
+  targets: ComparisonSetupTargetDto[]
+  notes?: string | null
+}
+
+export interface ComparisonSetupApplyDto {
+  report_id: string
+  comparison_analysis_id: string
+}
+
+export interface ComparisonSetupContextDto {
+  parcels: Array<{ parcel_id: string; label: string }>
+  benchmark_lands: Array<{ benchmark_land_id: string; label: string }>
+  analyses: Array<{
+    comparison_analysis_id: string
+    benchmark_land_id: string
+    analysis_status: string
+    label: string
+  }>
+}
+
+export interface ComparisonSetupResponseDto {
+  comparison_analysis_id: string
+  benchmark_land_id: string
+  report_id: string
+  targets: Array<{
+    comparison_target_id: string
+    transaction_id: string
+    transaction_no: string
+    transaction_date: string
+    normal_land_unit_price: string
+    weight: string
+  }>
 }
 
 export type ExtractionCandidateDecision = 'CONFIRM' | 'REJECT'
@@ -324,11 +381,11 @@ export interface FormalCalculationRequestDto {
 export interface FormalCalculationResponseDto {
   case_id: string
   report_id: string
-  comparison_analysis_id: string
-  rule_version_id: string
+  comparison_analysis_id: string | null
+  rule_version_id: string | null
   formula_code: string
   rounding_code: string
-  benchmark_comparison_price: string
+  benchmark_comparison_price: string | null
   targets: Array<Record<string, unknown>>
   input_fingerprint: string
   calculated_at: string
@@ -376,6 +433,12 @@ export interface FormalReportResponseDto {
   file_size_bytes: number
   download_path: string
   request_id: string | null
+}
+
+export interface FormalWorkflowStatusResponseDto {
+  validation: FormalValidationResponseDto | null
+  report: FormalReportResponseDto | null
+  requires_revalidation_for_submission: boolean
 }
 
 export interface F03DraftResponseDto {

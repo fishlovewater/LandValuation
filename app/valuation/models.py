@@ -350,11 +350,14 @@ class TransactionCaseRecord(Base):
     )
     case_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True))
     form_instance_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
-    transaction_no: Mapped[str] = mapped_column(String(80))
-    price_period: Mapped[str | None] = mapped_column(String(50))
+    # Keep ORM lengths aligned with the baseline PostgreSQL schema.  The
+    # database currently stores these as varchar(30)/varchar(10), so wider
+    # ORM columns would let validation pass only to fail during INSERT.
+    transaction_no: Mapped[str] = mapped_column(String(30))
+    price_period: Mapped[str | None] = mapped_column(String(10))
     price_zone_no: Mapped[str | None] = mapped_column(String(30))
     transaction_date: Mapped[date] = mapped_column(Date)
-    subject_address: Mapped[str | None] = mapped_column(String(500))
+    subject_address: Mapped[str | None] = mapped_column(String(300))
     transaction_total_price: Mapped[Decimal] = mapped_column(Numeric(20, 2))
     normal_total_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
     land_area_sqm: Mapped[Decimal | None] = mapped_column(Numeric(18, 4))

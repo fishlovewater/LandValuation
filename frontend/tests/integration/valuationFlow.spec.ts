@@ -652,8 +652,12 @@ describe('valuation demo flow', () => {
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) {
         return response(reportProgressDto, config)
       }
-      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-validation`) {
-        return response(formalValidationNoWarningsDto, config, 201)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-status`) {
+        return response({
+          validation: formalValidationNoWarningsDto,
+          report: null,
+          requires_revalidation_for_submission: false,
+        }, config)
       }
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-pdf`) {
         const requestId = config.headers?.get?.('X-Request-ID') ?? config.headers?.['X-Request-ID']
@@ -703,7 +707,7 @@ describe('valuation demo flow', () => {
       `get /valuation/cases/${ids.case}/forms`,
       `get /valuation/cases/${ids.case}/documents`,
       `get /valuation/cases/${ids.case}/report-progress`,
-      `post /valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-validation`,
+      `get /valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-status`,
       `post /valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-pdf`,
       `post /valuation/cases/${ids.case}/submit-for-review`,
       `get /valuation/cases/${ids.case}`,
@@ -721,8 +725,12 @@ describe('valuation demo flow', () => {
       }
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response(documentsDto, config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) return response(reportProgressDto, config)
-      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-validation`) {
-        return response(blockedFormalValidationDto, config, 201)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-status`) {
+        return response({
+          validation: blockedFormalValidationDto,
+          report: null,
+          requires_revalidation_for_submission: false,
+        }, config)
       }
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-pdf`) {
         formalPdfCount += 1
@@ -757,6 +765,13 @@ describe('valuation demo flow', () => {
       }
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response(documentsDto, config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) return response(reportProgressDto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-status`) {
+        return response({
+          validation: formalValidationNoWarningsDto,
+          report: null,
+          requires_revalidation_for_submission: false,
+        }, config)
+      }
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-validation`) {
         return response(formalValidationNoWarningsDto, config, 201)
       }
@@ -802,8 +817,12 @@ describe('valuation demo flow', () => {
       }
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response(documentsDto, config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) return response(reportProgressDto, config)
-      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-validation`) {
-        return response(formalValidationNoWarningsDto, config, 201)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-status`) {
+        return response({
+          validation: formalValidationNoWarningsDto,
+          report: null,
+          requires_revalidation_for_submission: false,
+        }, config)
       }
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-pdf`) {
         const requestId = config.headers?.get?.('X-Request-ID') ?? config.headers?.['X-Request-ID']
@@ -1246,7 +1265,7 @@ describe('valuation demo flow', () => {
       applied_at: null,
     }
     let candidatePending = false
-    let confirmationBody: Record<string, any> | null = null
+    const confirmationBodies: Array<Record<string, any>> = []
     const workflow = () => ({
       status: candidatePending ? 'NEEDS_CONFIRMATION' : 'READY',
       case: caseDto,
@@ -1309,7 +1328,7 @@ describe('valuation demo flow', () => {
         }, config)
       }
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/auto-workflow/confirm`) {
-        confirmationBody = requestBody(config.data)
+        confirmationBodies.push(requestBody(config.data))
         candidatePending = false
         return response(workflow(), config)
       }
@@ -1333,7 +1352,7 @@ describe('valuation demo flow', () => {
     await wrapper.get('[data-testid="submit-candidate-decisions"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.find(`[data-testid="candidate-${candidateId}"]`).exists()).toBe(false))
 
-    expect(confirmationBody).toEqual({
+    expect(confirmationBodies[0]).toEqual({
       confirmations: [{
         document_id: ids.sourceDocument,
         extracted_field_id: candidateId,
@@ -1343,7 +1362,181 @@ describe('valuation demo flow', () => {
       confirm_apply: true,
     })
     expect(wrapper.get('[data-testid="valuation-candidate-workspace"]').text()).toContain('0')
+    await vi.waitFor(() => expect(wrapper.find(`[data-testid="reopen-candidate-${candidateId}"]`).exists()).toBe(true))
+
+    await wrapper.get(`[data-testid="reopen-candidate-${candidateId}"]`).trigger('click')
+    await vi.waitFor(() => expect(wrapper.find(`[data-testid="candidate-${candidateId}"]`).exists()).toBe(true))
+    await wrapper.get(`[data-testid="candidate-value-${candidateId}"]`).setValue('2026-08-04')
+    await wrapper.get('[data-testid="submit-candidate-decisions"]').trigger('click')
+    await vi.waitFor(() => expect(confirmationBodies).toHaveLength(2))
+
+    expect(confirmationBodies[1]).toEqual({
+      confirmations: [{
+        document_id: ids.sourceDocument,
+        extracted_field_id: candidateId,
+        decision: 'CONFIRM',
+        corrected_value: '2026-08-04',
+      }],
+      confirm_apply: true,
+    })
     wrapper.unmount()
+  })
+
+  it('saves non-empty manual fallback fields through the server workflow instead of inventing local values', async () => {
+    let savedReason = ''
+    let manualBody: Record<string, any> | null = null
+    const workflow = () => ({
+      status: savedReason ? 'READY' : 'COMPLETE_WORKFLOW_REQUIREMENTS',
+      case: caseDto,
+      parcel_ids: [ids.parcel],
+      benchmark_land_ids: [ids.benchmarkLand],
+      f03_form_instance_id: ids.f03,
+      report_id: null,
+      documents: [],
+      candidates: [],
+      pending_candidate_count: 0,
+      blank_fields_remain: !savedReason,
+      missing_items: [],
+      warnings: [],
+      ignored_duplicate_files: [],
+      next_action: savedReason ? 'RUN_FORM_CALCULATION' : 'FILL_REQUIRED_FIELDS',
+      draft_pages_1_3_url: null,
+      draft_pages_1_6_url: null,
+      form_guidance: [{
+        form_code: 'F03',
+        form_instance_id: ids.f03,
+        required_fields: ['decision_reason'],
+        confirmed_or_applied_fields: savedReason ? ['decision_reason'] : [],
+        pending_confirmation_fields: [],
+        missing_required_fields: savedReason ? [] : ['decision_reason'],
+        calculation_ready: Boolean(savedReason),
+        next_action: savedReason ? 'RUN_FORM_CALCULATION' : 'FILL_REQUIRED_FIELDS',
+        fill_endpoint: null,
+        calculate_endpoint: null,
+        validate_endpoint: null,
+      }],
+      automatic_pdf_generation_enabled: false,
+      automatic_confirmation_export_enabled: true,
+      confirmation_export: null,
+      manual_fields_saved: savedReason ? ['F03.decision_reason'] : [],
+      manual_fields_ignored: [],
+      manual_field_errors: {},
+      manual_field_values: savedReason ? { F03: { decision_reason: savedReason } } : {},
+    })
+
+    http.defaults.adapter = vi.fn(async (config) => {
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}`) return response(caseDto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms`) return response([formDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/f03`) return response(f03Dto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/parcels`) return response([parcelDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([benchmarkDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response(documentsDto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) return response({ ...reportProgressDto, report_id: null, version_no: null }, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/auto-workflow/review`) return response(workflow(), config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/review-handoff`) return response({
+        case_id: ids.case, case_status: 'PROCESSING', display_status: 'PROCESSING', review_id: null,
+        review_status: null, latest_submission: null, correction: null, missing_items: [],
+      }, config)
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/auto-workflow/manual-fields`) {
+        manualBody = requestBody(config.data)
+        savedReason = String(manualBody.values?.F03?.decision_reason ?? '')
+        return response(workflow(), config)
+      }
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/valuation/cases/${ids.case}/prepare`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="manual-field-workspace"]').exists()).toBe(true))
+
+    await wrapper.get('[data-testid="manual-field-F03-decision_reason"]').setValue('人工核對附件後採用此值')
+    await wrapper.get('[data-testid="save-manual-fields"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(savedReason).toBe('人工核對附件後採用此值')
+      expect(wrapper.get('[data-testid="save-manual-fields"]').text()).toContain('儲存人工補充資料')
+    })
+
+    expect(manualBody).toEqual({ values: { F03: { decision_reason: '人工核對附件後採用此值' } } })
+    expect(wrapper.text()).toContain('已保存 1 個人工補充欄位')
+    wrapper.unmount()
+  })
+
+  it('reclassifies and removes an active source document through the server document lifecycle', async () => {
+    const originalConfirm = window.confirm
+    Object.defineProperty(window, 'confirm', { configurable: true, value: vi.fn(() => true) })
+    let documentState = {
+      ...documentsDto[0],
+      document_id: ids.sourceDocument,
+      document_group_id: '31313131-3131-4313-8313-313131313131',
+      document_type: 'original',
+      original_filename: 'misclassified.pdf',
+      is_active: true,
+    }
+    const writes: Array<{ method?: string; url?: string; body?: Record<string, any> }> = []
+    const workflow = () => ({
+      status: 'READY', case: caseDto, parcel_ids: [ids.parcel], benchmark_land_ids: [ids.benchmarkLand],
+      f03_form_instance_id: ids.f03, report_id: null, documents: [], candidates: [], pending_candidate_count: 0,
+      blank_fields_remain: false, missing_items: [], warnings: [], ignored_duplicate_files: [], next_action: 'RUN_FORM_CALCULATION',
+      draft_pages_1_3_url: null, draft_pages_1_6_url: null, form_guidance: [], automatic_pdf_generation_enabled: false,
+      automatic_confirmation_export_enabled: false, confirmation_export: null, manual_fields_saved: [], manual_fields_ignored: [],
+      manual_field_errors: {}, manual_field_values: {},
+    })
+
+    http.defaults.adapter = vi.fn(async (config) => {
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}`) return response(caseDto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms`) return response([formDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/f03`) return response(f03Dto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/parcels`) return response([parcelDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([benchmarkDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response([documentState], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) return response({ ...reportProgressDto, report_id: null, version_no: null }, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/auto-workflow/review`) return response(workflow(), config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/review-handoff`) return response({
+        case_id: ids.case, case_status: 'PROCESSING', display_status: 'PROCESSING', review_id: null,
+        review_status: null, latest_submission: null, correction: null, missing_items: [],
+      }, config)
+      if (config.method === 'patch' && config.url === `/valuation/cases/${ids.case}/documents/${ids.sourceDocument}/category`) {
+        const body = requestBody(config.data)
+        writes.push({ method: config.method, url: config.url, body })
+        documentState = { ...documentState, document_type: String(body.category) }
+        return response(documentState, config)
+      }
+      if (config.method === 'delete' && config.url === `/valuation/cases/${ids.case}/documents/${ids.sourceDocument}`) {
+        writes.push({ method: config.method, url: config.url })
+        documentState = { ...documentState, is_active: false }
+        return response(null, config, 204)
+      }
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/valuation/cases/${ids.case}/prepare`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.find(`[data-testid="document-category-${ids.sourceDocument}"]`).exists()).toBe(true))
+
+    await wrapper.get(`[data-testid="document-category-${ids.sourceDocument}"]`).setValue('land-register')
+    await wrapper.get(`[data-testid="reclassify-document-${ids.sourceDocument}"]`).trigger('click')
+    await vi.waitFor(() => {
+      expect(documentState.document_type).toBe('land-register')
+      expect(wrapper.get(`[data-testid="remove-document-${ids.sourceDocument}"]`).attributes('disabled')).toBeUndefined()
+    })
+    await wrapper.get(`[data-testid="remove-document-${ids.sourceDocument}"]`).trigger('click')
+    await vi.waitFor(() => {
+      expect(documentState.is_active).toBe(false)
+      expect(wrapper.find(`[data-testid="remove-document-${ids.sourceDocument}"]`).exists()).toBe(false)
+    })
+
+    expect(writes).toEqual([
+      {
+        method: 'patch',
+        url: `/valuation/cases/${ids.case}/documents/${ids.sourceDocument}/category`,
+        body: { category: 'land-register' },
+      },
+      { method: 'delete', url: `/valuation/cases/${ids.case}/documents/${ids.sourceDocument}` },
+    ])
+    wrapper.unmount()
+    Object.defineProperty(window, 'confirm', { configurable: true, value: originalConfirm })
   })
 
   it('creates and edits parcels and creates a benchmark land through the existing backend contracts', async () => {

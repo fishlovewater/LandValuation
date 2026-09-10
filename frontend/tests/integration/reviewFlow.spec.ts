@@ -502,6 +502,14 @@ describe('review demo flow', () => {
           risk_summary: null,
         }, config)
       }
+      if (config.method === 'post' && config.url === `/review/cases/${idsWithDetail.review}/complete-review`) {
+        expect(requestBody(config.data)).toEqual({ reason: '依審查工作台確認結果完成審查。' })
+        detailDto = {
+          ...detailDto,
+          review: { ...detailDto.review, review_status: 'REVIEW_COMPLETED' },
+        }
+        return response({ review_id: idsWithDetail.review, status: 'REVIEW_COMPLETED' }, config, 201)
+      }
       throw new Error(`Unexpected request ${config.method} ${config.url}`)
     }) as unknown as typeof originalAdapter
 
@@ -517,6 +525,10 @@ describe('review demo flow', () => {
       `post /review/workbench/cases/${idsWithDetail.review}/start`,
     ])
     expect(wrapper.get('[data-testid="finalize-review"]').attributes('disabled')).toBeUndefined()
+    await wrapper.get('[data-testid="finalize-review"]').trigger('click')
+    await wrapper.get('[data-confirm]').trigger('click')
+    await vi.waitFor(() => expect(requests).toContain(`post /review/cases/${idsWithDetail.review}/complete-review`))
+    await vi.waitFor(() => expect(wrapper.text()).toContain('已完成審查'))
     wrapper.unmount()
   })
 

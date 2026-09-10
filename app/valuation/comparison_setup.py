@@ -28,7 +28,7 @@ from app.valuation.service import ValuationService
 
 
 class ComparisonSetupTarget(RequestModel):
-    transaction_no: str = Field(min_length=1, max_length=80)
+    transaction_no: str = Field(min_length=1, max_length=30)
     transaction_date: date
     transaction_total_price: Decimal = Field(
         gt=0, max_digits=20, decimal_places=2
@@ -38,7 +38,7 @@ class ComparisonSetupTarget(RequestModel):
     )
     weight: Decimal = Field(gt=0, le=1, max_digits=9, decimal_places=6)
     source_notes: str = Field(min_length=1, max_length=1000)
-    subject_address: str | None = Field(default=None, max_length=500)
+    subject_address: str | None = Field(default=None, max_length=300)
     land_area_sqm: Decimal | None = Field(
         default=None, gt=0, max_digits=18, decimal_places=4
     )

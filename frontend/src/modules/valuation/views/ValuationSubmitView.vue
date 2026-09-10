@@ -29,6 +29,7 @@ import {
   type ReportPageCode,
   type ReportPageResponseDto,
 } from '../valuation.types'
+import ComparisonSetupPanel from '../components/ComparisonSetupPanel.vue'
 import ReportPageEditor from '../components/ReportPageEditor.vue'
 import ValuationStepNavigator from '../components/ValuationStepNavigator.vue'
 
@@ -279,7 +280,33 @@ async function saveReportPageEditor(value: {
   }
 }
 
-function formalFindingTarget(finding: FormalValidationFindingModel): { pageCode?: ReportPageCode; field?: string; documents?: boolean; calculation?: boolean } {
+async function handleComparisonChanged(): Promise<void> {
+  const requestedCaseId = caseId.value
+  const token = activeCaseToken
+  if (!isCurrentCase(token, requestedCaseId)) return
+  await loadReportPageEditors()
+  if (!isCurrentCase(token, requestedCaseId)) return
+  reportPageConfirmations.value = {
+    ...reportPageConfirmations.value,
+    f02Rf: false,
+    f02: false,
+  }
+  reportPageSaved.value = false
+  reportPageCalculated.value = false
+  flow.formalValidation = null
+  flow.formalReport = null
+  acknowledgedWarningCodes.value = []
+  editorNotice.value = '比較法設定已變更。F02 / F02-RF 已重新載入；請重新確認兩頁並執行正式計算與檢核。'
+}
+
+function formalFindingTarget(finding: FormalValidationFindingModel): {
+  pageCode?: ReportPageCode
+  field?: string
+  documents?: boolean
+  calculation?: boolean
+  comparison?: boolean
+  systemRule?: boolean
+} {
   if (finding.fieldCode) {
     const inS01 = new Set([
       'district_name', 'district_boundary', 'survey_date', 'urban_plan_status', 'land_use_zone',
@@ -287,7 +314,11 @@ function formalFindingTarget(finding: FormalValidationFindingModel): { pageCode?
       'main_road_name', 'main_road_width_m', 'average_road_width_m', 'observations', 'site_opinion',
       'handler_name', 'section_head_name', 'director_name',
     ])
-    const inF02Rf = new Set(['rule_version_id', 'factor_rows', 'other_influences'])
+    const inF02Rf = new Set(['factor_rows', 'other_influences'])
+    if (['benchmark_land_id', 'comparison_analysis_id', 'comparison_targets'].includes(finding.fieldCode)) {
+      return { comparison: true }
+    }
+    if (finding.fieldCode === 'rule_version_id') return { systemRule: true }
     if (inS01.has(finding.fieldCode)) return { pageCode: 'S01', field: finding.fieldCode }
     if (inF02Rf.has(finding.fieldCode)) return { pageCode: 'F02-RF', field: finding.fieldCode }
     return { pageCode: 'F02', field: finding.fieldCode }
@@ -295,11 +326,15 @@ function formalFindingTarget(finding: FormalValidationFindingModel): { pageCode?
   if (finding.code.startsWith('S01_')) {
     return { pageCode: 'S01', field: finding.code.includes('OBSERVATION') ? 'observations' : undefined }
   }
-  if (finding.code.startsWith('F02_RF_') || finding.code === 'FORMAL_RULE_VERSION_INVALID' || finding.code === 'FORMAL_REFERENCES_REQUIRED') {
-    return { pageCode: 'F02-RF', field: finding.code.includes('RULE') ? 'rule_version_id' : 'factor_rows' }
+  if (finding.code === 'FORMAL_RULE_VERSION_INVALID' || finding.code.includes('RULE_VERSION')) {
+    return { systemRule: true }
+  }
+  if (finding.code === 'FORMAL_REFERENCES_REQUIRED') return { comparison: true }
+  if (finding.code.startsWith('F02_RF_')) {
+    return { pageCode: 'F02-RF', field: 'factor_rows' }
   }
   if (finding.code === 'F02_BENCHMARK_NOTES_MISSING') return { pageCode: 'F02', field: 'benchmark_notes' }
-  if (finding.code === 'F02_TARGETS_REQUIRED') return { pageCode: 'F02', field: 'comparison_targets' }
+  if (finding.code === 'F02_TARGETS_REQUIRED' || finding.code.includes('COMPARISON')) return { comparison: true }
   if (finding.code === 'APPRAISER_NAME_MISSING') return { pageCode: 'F02', field: 'appraiser_name' }
   if (finding.code.startsWith('FORMAL_MAP_')) return { documents: true }
   if (finding.code.includes('CALCULATION')) return { calculation: true }
@@ -324,7 +359,20 @@ async function goToFormalFinding(finding: FormalValidationFindingModel): Promise
     editorNotice.value = '此問題來自正式計算狀態；請確認輸入資料後重新執行正式計算，再執行正式檢核。'
     return
   }
+  if (target.systemRule) {
+    editorNotice.value = `${finding.code}：正式規則版本由伺服器依案件適用範圍自動選用。若沒有可用的 PUBLISHED / VERIFIED 規則，需由規則管理流程處理，估價人員不應手動輸入 UUID。`
+    return
+  }
   if (!Object.keys(reportPageEditors.value).length) await loadReportPageEditors()
+  if (target.comparison) {
+    activeReportPageCode.value = 'F02'
+    await nextTick()
+    const setup = document.querySelector<HTMLElement>('[data-testid="comparison-setup"]')
+    setup?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+    setup?.focus?.()
+    editorNotice.value = `${finding.code}：請在「比較法設定」建立或套用可追溯的比較分析；不需要手動修改比較分析 ID 或 raw JSON。`
+    return
+  }
   if (!target.pageCode) return
   activeReportPageCode.value = target.pageCode
   await nextTick()
@@ -525,25 +573,48 @@ async function loadData(): Promise<void> {
       formalPdfRequestId.value = null
     }
 
-    if (
-      authoritative.form?.status === 'CHECKED' &&
-      flow.reportPackageId &&
-      !flow.formalValidation
-    ) {
-      const formalValidationDto = await valuationApi.formalValidate(
+    // Page load must be read-only. Restore the latest persisted formal result
+    // via the status endpoint instead of creating a new validation run merely
+    // because the browser refreshed.
+    if (reportProgressDto.report_id) {
+      const formalStatus = await valuationApi.getFormalStatus(
         requestedCaseId,
-        flow.reportPackageId,
+        reportProgressDto.report_id,
       )
       if (!isCurrentCase(token, requestedCaseId)) return
-      const formalValidation = mapFormalValidationResponse(formalValidationDto)
+      const restoredValidation = formalStatus.validation
+        ? mapFormalValidationResponse(formalStatus.validation)
+        : null
+      const restoredReport = formalStatus.report
+        ? mapFormalReportResponse(formalStatus.report)
+        : null
+
       if (
-        formalValidation.caseId !== requestedCaseId ||
-        formalValidation.reportId !== flow.reportPackageId
+        restoredValidation &&
+        (restoredValidation.caseId !== requestedCaseId ||
+          restoredValidation.reportId !== reportProgressDto.report_id)
       ) {
-        error.value = 'F02 正式檢核與目前報告包不一致，暫停正式輸出。'
+        error.value = '正式檢核狀態與目前案件或報告包不一致，暫停正式輸出。'
+      } else if (formalStatus.requires_revalidation_for_submission) {
+        flow.formalValidation = restoredValidation
+        flow.formalReport = null
+        acknowledgedWarningCodes.value = []
+        refreshWarning.value = '既有正式檢核缺少送審所需的不可變輸入快照，請重新執行正式計算與檢核。'
       } else {
-        flow.formalValidation = formalValidation
-        if (!formalValidation.canGenerateFormalReport) {
+        flow.formalValidation = restoredValidation
+        flow.formalReport = restoredReport
+        if (restoredReport && restoredValidation) {
+          // A persisted formal PDF can only exist after the server accepted
+          // every warning acknowledgement for this validation run. Restoring
+          // those codes here does not create a new acknowledgement; it merely
+          // reflects the already-authorized server result.
+          acknowledgedWarningCodes.value = Array.from(new Set(
+            restoredValidation.findings
+              .filter((finding) => finding.severity === 'WARNING')
+              .map((finding) => finding.code),
+          ))
+        }
+        if (restoredValidation && !restoredValidation.canGenerateFormalReport) {
           error.value = 'F02 正式檢核回傳阻擋項目，請先完成補正。'
         }
       }
@@ -800,6 +871,13 @@ watch(caseId, () => {
                   {{ pageCode }}
                 </button>
               </nav>
+              <ComparisonSetupPanel
+                v-if="activeReportPageCode === 'F02' && reportPageEditors.F02 && reportPageDraftId"
+                :case-id="caseId"
+                :report-id="reportPageDraftId"
+                :page="reportPageEditors.F02"
+                @changed="handleComparisonChanged"
+              />
               <ReportPageEditor
                 v-if="activeReportPage"
                 :page="activeReportPage"

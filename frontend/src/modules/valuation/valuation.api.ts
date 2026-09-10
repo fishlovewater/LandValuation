@@ -9,6 +9,10 @@ import type {
   CalculationResponseDto,
   CaseCreateDto,
   CaseResponseDto,
+  ComparisonSetupApplyDto,
+  ComparisonSetupContextDto,
+  ComparisonSetupCreateDto,
+  ComparisonSetupResponseDto,
   DocumentCategory,
   DocumentResponseDto,
   F03DraftResponseDto,
@@ -17,11 +21,13 @@ import type {
   FormalReportResponseDto,
   FormalCalculationRequestDto,
   FormalCalculationResponseDto,
+  FormalWorkflowStatusResponseDto,
   FormalValidationResponseDto,
   FormRequirementResponseDto,
   FormCreateDto,
   FormResponseDto,
   ExtractionResponseDto,
+  ManualFieldValuesRequestDto,
   ParcelCreateDto,
   ParcelResponseDto,
   ParcelUpdateDto,
@@ -74,6 +80,17 @@ export const valuationApi = {
   ): Promise<AutomatedWorkflowResponseDto> {
     const response = await http.post<AutomatedWorkflowResponseDto>(
       `/valuation/cases/${caseId}/auto-workflow/confirm`,
+      payload,
+    )
+    return response.data
+  },
+
+  async saveWorkflowManualFields(
+    caseId: string,
+    payload: ManualFieldValuesRequestDto,
+  ): Promise<AutomatedWorkflowResponseDto> {
+    const response = await http.post<AutomatedWorkflowResponseDto>(
+      `/valuation/cases/${caseId}/auto-workflow/manual-fields`,
       payload,
     )
     return response.data
@@ -192,6 +209,35 @@ export const valuationApi = {
     return response.data
   },
 
+  async getComparisonSetup(caseId: string): Promise<ComparisonSetupContextDto> {
+    const response = await http.get<ComparisonSetupContextDto>(
+      `/valuation/cases/${caseId}/comparison-setup`,
+    )
+    return response.data
+  },
+
+  async createComparisonSetup(
+    caseId: string,
+    payload: ComparisonSetupCreateDto,
+  ): Promise<ComparisonSetupResponseDto> {
+    const response = await http.post<ComparisonSetupResponseDto>(
+      `/valuation/cases/${caseId}/comparison-setup`,
+      payload,
+    )
+    return response.data
+  },
+
+  async applyComparisonSetup(
+    caseId: string,
+    payload: ComparisonSetupApplyDto,
+  ): Promise<ComparisonSetupResponseDto> {
+    const response = await http.post<ComparisonSetupResponseDto>(
+      `/valuation/cases/${caseId}/comparison-setup/apply`,
+      payload,
+    )
+    return response.data
+  },
+
   async listDocuments(caseId: string): Promise<DocumentResponseDto[]> {
     const response = await http.get<DocumentResponseDto[]>(
       `/valuation/cases/${caseId}/documents`,
@@ -210,6 +256,30 @@ export const valuationApi = {
     const response = await http.post<DocumentResponseDto>(`/valuation/cases/${caseId}/documents`, body, {
       headers: { 'Content-Type': undefined },
     })
+    return response.data
+  },
+
+  async deleteDocument(caseId: string, documentId: string): Promise<void> {
+    await http.delete(`/valuation/cases/${caseId}/documents/${documentId}`)
+  },
+
+  async reclassifyDocument(
+    caseId: string,
+    documentId: string,
+    category: DocumentCategory,
+  ): Promise<DocumentResponseDto> {
+    const response = await http.patch<DocumentResponseDto>(
+      `/valuation/cases/${caseId}/documents/${documentId}/category`,
+      { category },
+    )
+    return response.data
+  },
+
+  async downloadDocument(caseId: string, documentId: string): Promise<Blob> {
+    const response = await http.get<Blob>(
+      `/valuation/cases/${caseId}/documents/${documentId}/download`,
+      { responseType: 'blob' },
+    )
     return response.data
   },
 
@@ -277,6 +347,13 @@ export const valuationApi = {
     const response = await http.post<FormalCalculationResponseDto>(
       `/valuation/cases/${caseId}/reports/${reportId}/formal-calculation`,
       payload,
+    )
+    return response.data
+  },
+
+  async getFormalStatus(caseId: string, reportId: string): Promise<FormalWorkflowStatusResponseDto> {
+    const response = await http.get<FormalWorkflowStatusResponseDto>(
+      `/valuation/cases/${caseId}/reports/${reportId}/formal-status`,
     )
     return response.data
   },

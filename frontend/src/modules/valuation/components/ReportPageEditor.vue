@@ -50,9 +50,6 @@ const fieldDefinitions: Readonly<Record<ReportPageCode, readonly FieldDefinition
     { key: 'appraiser_name', label: '估價人員', kind: 'text' },
   ],
   'F02-RF': [
-    { key: 'benchmark_land_id', label: '比準地 ID', kind: 'text' },
-    { key: 'comparison_analysis_id', label: '比較分析 ID', kind: 'text' },
-    { key: 'rule_version_id', label: '規則版本 ID', kind: 'text' },
     {
       key: 'factor_rows',
       label: '區域因素級距',
@@ -64,14 +61,6 @@ const fieldDefinitions: Readonly<Record<ReportPageCode, readonly FieldDefinition
     { key: 'appraiser_name', label: '估價人員', kind: 'text' },
   ],
   F02: [
-    { key: 'benchmark_land_id', label: '比準地 ID', kind: 'text' },
-    { key: 'comparison_analysis_id', label: '比較分析 ID', kind: 'text' },
-    {
-      key: 'comparison_targets',
-      label: '比較標的、個別因素與權重',
-      kind: 'json',
-      help: '可修正比較標的、權重、理由與個別因素；價格與調整率等伺服器計算欄位不會由此欄位覆寫。',
-    },
     { key: 'benchmark_notes', label: '比準地說明', kind: 'textarea' },
     { key: 'notes', label: '備註', kind: 'textarea' },
     { key: 'handler_name', label: '承辦人', kind: 'text' },
@@ -115,32 +104,6 @@ function stripServerCalculatedFields(pageCode: ReportPageCode, fieldKey: string,
         })
       }
       return next
-    })
-  }
-  if (pageCode === 'F02' && fieldKey === 'comparison_targets' && Array.isArray(value)) {
-    const calculatedKeys = [
-      'regional_adjustment_rate',
-      'individual_adjustment_rate',
-      'total_adjustment_absolute',
-      'trial_price',
-      'normal_unit_price_snapshot',
-      'transaction_date_snapshot',
-      'date_adjusted_price',
-      'regional_adjusted_price',
-    ]
-    return value.map((target) => {
-      if (!target || typeof target !== 'object' || Array.isArray(target)) return target
-      const clean = { ...(target as Record<string, unknown>) }
-      for (const key of calculatedKeys) delete clean[key]
-      if (Array.isArray(clean.individual_factors)) {
-        clean.individual_factors = clean.individual_factors.map((factor) => {
-          if (!factor || typeof factor !== 'object' || Array.isArray(factor)) return factor
-          const next = { ...(factor as Record<string, unknown>) }
-          delete next.calculated_adjustment_rate
-          return next
-        })
-      }
-      return clean
     })
   }
   return value

@@ -119,12 +119,6 @@ class FormalReportService:
                 comparison=comparison,
                 user=user,
             )
-        if False and not comparison.comparison_workflow_enabled:
-            raise AppError(
-                "COMPARISON_WORKFLOW_SKIPPED",
-                "本案未啟用比準地與比較分析；目前商業用地正式表單採比較法，無法執行正式計算",
-                409,
-            )
         self.pages._validate_cross_page_ids(regional, comparison)
         regional = await self.pages._ensure_default_formal_rule(
             case, records["F02-RF"], regional, user

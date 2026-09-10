@@ -119,6 +119,117 @@ describe('valuation API transport', () => {
     expect(captured).toEqual(payload)
   })
 
+  it('saves manual workflow fields through the dedicated backend contract', async () => {
+    const caseId = '11111111-1111-4111-8111-111111111111'
+    const payload = {
+      values: {
+        F03: { decision_reason: '人工確認後補充' },
+        S01: { main_road_name: '中正路' },
+      },
+    }
+    let captured: Record<string, unknown> | null = null
+
+    http.defaults.adapter = vi.fn(async (config) => {
+      expect(config.method).toBe('post')
+      expect(config.url).toBe(`/valuation/cases/${caseId}/auto-workflow/manual-fields`)
+      captured = JSON.parse(String(config.data)) as Record<string, unknown>
+      return response({ manual_fields_saved: ['F03.decision_reason', 'S01.main_road_name'] } as never, config)
+    }) as unknown as typeof originalAdapter
+
+    await valuationApi.saveWorkflowManualFields(caseId, payload)
+    expect(captured).toEqual(payload)
+  })
+
+  it('uses structured comparison setup endpoints rather than client-authored comparison ids', async () => {
+    const caseId = '11111111-1111-4111-8111-111111111111'
+    const reportId = '22222222-2222-4222-8222-222222222222'
+    const analysisId = '33333333-3333-4333-8333-333333333333'
+    const benchmarkId = '44444444-4444-4444-8444-444444444444'
+    const requests: Array<{ method?: string; url?: string; body?: unknown }> = []
+    http.defaults.adapter = vi.fn(async (config) => {
+      requests.push({
+        method: config.method,
+        url: config.url,
+        body: typeof config.data === 'string' ? JSON.parse(config.data) : config.data,
+      })
+      return response({} as never, config)
+    }) as unknown as typeof originalAdapter
+
+    await valuationApi.getComparisonSetup(caseId)
+    await valuationApi.createComparisonSetup(caseId, {
+      report_id: reportId,
+      benchmark_land_id: benchmarkId,
+      targets: [{
+        transaction_no: 'T-001',
+        transaction_date: '2026-08-01',
+        transaction_total_price: '5000000',
+        normal_land_unit_price: '125000',
+        weight: '1',
+        source_notes: '實價登錄與人工確認',
+      }],
+      notes: '比較案例設定',
+    })
+    await valuationApi.applyComparisonSetup(caseId, {
+      report_id: reportId,
+      comparison_analysis_id: analysisId,
+    })
+
+    expect(requests).toEqual([
+      { method: 'get', url: `/valuation/cases/${caseId}/comparison-setup`, body: undefined },
+      {
+        method: 'post',
+        url: `/valuation/cases/${caseId}/comparison-setup`,
+        body: expect.objectContaining({ report_id: reportId, benchmark_land_id: benchmarkId }),
+      },
+      {
+        method: 'post',
+        url: `/valuation/cases/${caseId}/comparison-setup/apply`,
+        body: { report_id: reportId, comparison_analysis_id: analysisId },
+      },
+    ])
+  })
+
+  it('manages source documents and reads persisted formal status without mutation', async () => {
+    const caseId = '11111111-1111-4111-8111-111111111111'
+    const documentId = '22222222-2222-4222-8222-222222222222'
+    const reportId = '33333333-3333-4333-8333-333333333333'
+    const requests: Array<{ method?: string; url?: string; body?: unknown; responseType?: unknown }> = []
+    http.defaults.adapter = vi.fn(async (config) => {
+      requests.push({
+        method: config.method,
+        url: config.url,
+        body: typeof config.data === 'string' ? JSON.parse(config.data) : config.data,
+        responseType: config.responseType,
+      })
+      return response({} as never, config)
+    }) as unknown as typeof originalAdapter
+
+    await valuationApi.reclassifyDocument(caseId, documentId, 'land-register')
+    await valuationApi.deleteDocument(caseId, documentId)
+    await valuationApi.getFormalStatus(caseId, reportId)
+
+    expect(requests).toEqual([
+      {
+        method: 'patch',
+        url: `/valuation/cases/${caseId}/documents/${documentId}/category`,
+        body: { category: 'land-register' },
+        responseType: undefined,
+      },
+      {
+        method: 'delete',
+        url: `/valuation/cases/${caseId}/documents/${documentId}`,
+        body: undefined,
+        responseType: undefined,
+      },
+      {
+        method: 'get',
+        url: `/valuation/cases/${caseId}/reports/${reportId}/formal-status`,
+        body: undefined,
+        responseType: undefined,
+      },
+    ])
+  })
+
   it('uses the existing parcel and benchmark-land backend contracts without inventing client-only fields', async () => {
     const caseId = '11111111-1111-4111-8111-111111111111'
     const parcelId = '22222222-2222-4222-8222-222222222222'
