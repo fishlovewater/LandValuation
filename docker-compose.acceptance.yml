@@ -1,0 +1,28 @@
+services:
+  db:
+    container_name: !reset null
+    ports: !override
+      - "25433:5432"
+
+  db-role-init:
+    container_name: !reset null
+
+  migrate:
+    container_name: !reset null
+
+  minio:
+    container_name: !reset null
+    ports: !override
+      - "29010:9000"
+      - "29011:9001"
+
+  minio-init:
+    container_name: !reset null
+
+  knowledge-init:
+    container_name: !reset null
+
+  api:
+    container_name: !reset null
+    ports: !override
+      - "18100:8000"

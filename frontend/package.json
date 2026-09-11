@@ -11,7 +11,7 @@
     "build": "vue-tsc -b && vite build",
     "build:demo": "vue-tsc -b && vite build --mode demo",
     "test": "vitest",
-    "test:e2e": "playwright test --pass-with-no-tests",
+    "test:e2e": "node --no-warnings scripts/run-playwright.mjs --pass-with-no-tests",
     "preview": "vite preview"
   },
   "dependencies": {

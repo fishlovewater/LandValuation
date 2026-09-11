@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 test('valuation modal and document workspace stay within their visual columns', async ({ page }) => {
   const caseId = process.env.E2E_CASE_ID
-  if (!caseId) throw new Error('E2E_CASE_ID is required')
+  const caseNo = process.env.E2E_CASE_NO ?? 'DEMO-F03-PERSISTENT-001'
 
   await page.setViewportSize({ width: 1110, height: 900 })
   await page.goto('/')
@@ -22,7 +22,14 @@ test('valuation modal and document workspace stay within their visual columns', 
   expect(overflow.right).toBeLessThanOrEqual(overflow.viewport)
   await page.getByRole('button', { name: '取消' }).click()
 
-  await page.goto(`/app/valuation/cases/${caseId}/prepare`)
+  if (caseId) {
+    await page.goto(`/app/valuation/cases/${caseId}/prepare`)
+  } else {
+    const targetRow = page.getByRole('row').filter({ hasText: caseNo })
+    await expect(targetRow).toBeVisible()
+    await targetRow.getByRole('button', { name: '繼續估價' }).click()
+    await expect(page).toHaveURL(/\/app\/valuation\/cases\/[^/]+\/prepare$/)
+  }
   const next = page.getByTestId('wizard-next')
   await expect(next).toBeVisible()
   await next.click()

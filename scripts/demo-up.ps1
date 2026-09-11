@@ -115,7 +115,7 @@ Use the documented project-scoped teardown procedure before starting a fresh Dem
 "@
         }
 
-        Write-Host 'Seeding the owned pre-submission Demo generation...'
+        Write-Host 'Seeding the production-shaped Demo lifecycle generation...'
         Invoke-DemoCompose -Arguments @('exec', '-T', 'api', 'python', '-m', 'app.demo', 'seed') -DiscardOutput
         $status = Get-DemoStatus
     }
@@ -123,6 +123,17 @@ Use the documented project-scoped teardown procedure before starting a fresh Dem
     if (-not $status.ready) {
         throw 'Demo seed completed but readiness is still false. Run app.demo status and inspect the isolated Demo logs.'
     }
+
+    Write-Host 'Preparing the typed-login development system administrator...'
+    Invoke-DemoCompose -Arguments @(
+        'exec', '-T', 'api', 'python', '-m', 'app.demo.admin', 'seed'
+    ) -DiscardOutput
+
+    Write-Host 'Indexing official Knowledge PDFs (idempotent; OCR is used only where required)...'
+    Invoke-DemoCompose -Arguments @(
+        'exec', '-T', 'api', 'python', '-m', 'app.knowledge.import_official',
+        '--approved-by-username', 'valuation_demo'
+    ) -DiscardOutput
 
     Write-Host ''
     Write-Host 'Demo backend is ready.'
@@ -135,6 +146,7 @@ Use the documented project-scoped teardown procedure before starting a fresh Dem
     Write-Host '  npm run dev'
     Write-Host ''
     Write-Host 'Then use the three one-click Demo role buttons. No username/password typing is required.'
+    Write-Host 'Account-management testing uses the separate system_admin_demo typed-login account with the standard local Demo password.'
 }
 finally {
     Pop-Location

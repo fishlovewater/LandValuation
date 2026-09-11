@@ -84,7 +84,9 @@ npm run build:demo
 .\scripts\demo-up.ps1
 ```
 
-此腳本會建置並啟動獨立的 `landvaluation-persistent-demo` Compose project、等待 API ready、檢查 Demo 狀態，並只在安全的 pre-submission 狀態建立／刷新三個展示帳號與示範案件。若該 Demo generation 已經送審或進入 Review，腳本會拒絕自動 reseed，避免覆蓋展示證據。映像已是最新時可用 `-SkipBuild` 略過 build。後端就緒後只需在另一個 PowerShell 視窗執行 `cd frontend; npm run dev`，再使用登入頁三個一鍵角色按鈕。
+此腳本會建置並啟動獨立的 `landvaluation-persistent-demo` Compose project、等待 API ready、檢查 Demo 狀態，並在安全的 pre-submission generation 建立三個展示帳號與 6 個 production-shaped 生命週期案件：`DRAFT`、`PROCESSING`、`IN_REVIEW`、`REVISION_REQUIRED`、`REVIEW_COMPLETED`、`ARCHIVED`。其中 `PROCESSING` 保留為可現場操作的完整案件，其餘案件提供固定流程快照。所有案件都使用正式 PostgreSQL schema、MinIO、RBAC、API 與 Review / History 結構，不使用前端 mock 或 Demo-only 業務邏輯。
+
+送審後的 Demo snapshot 會真的建立 immutable `valuation.review_submissions`。因此 generation 一旦包含送審／審查資料，`seed` 與 `reset` 會 fail closed，不會為了重建 Demo 覆蓋正式送審證據；需要完全重建時應 teardown 整個隔離的 `landvaluation-persistent-demo` Compose project / volumes，再重新執行腳本。映像已是最新時可用 `-SkipBuild` 略過 build。後端就緒後只需在另一個 PowerShell 視窗執行 `cd frontend; npm run dev`，再使用登入頁三個一鍵角色按鈕。
 
 Excel / DOCX 內嵌預覽預設最多讀取 10 MiB，可用 `DOCUMENT_PREVIEW_MAX_BYTES` 調整；超過限制時仍可下載原始文件查看。
 

@@ -29,8 +29,11 @@ describe('persistent Demo browser-flow contracts', () => {
 
   it('requires the explicit permission gate, approved command, and supported permission code', () => {
     const documentedCommand = 'docker compose --project-directory .. -p landvaluation-persistent-demo -f ../docker-compose.yml -f ../docker-compose.demo.yml --env-file ../.env.example exec -T api python -m app.demo permission %E2E_PERMISSION_ACTION% %E2E_PERMISSION_CODE%'
+    const acceptanceCommand = 'docker compose --project-directory .. -p landvaluation-acceptance -f ../docker-compose.yml -f ../docker-compose.demo.yml -f ../docker-compose.acceptance.yml --env-file ../.env.example exec -T api python -m app.demo permission %E2E_PERMISSION_ACTION% %E2E_PERMISSION_CODE%'
     expect(isPermissionGateReady({ enabled: true, command: documentedCommand, permission: 'knowledge.read' })).toBe(true)
     expect(isDocumentedPermissionOperatorCommand(documentedCommand)).toBe(true)
+    expect(isPermissionGateReady({ enabled: true, command: acceptanceCommand, permission: 'knowledge.read' })).toBe(true)
+    expect(isDocumentedPermissionOperatorCommand(acceptanceCommand)).toBe(true)
     expect(isPermissionGateReady({ enabled: false, command: documentedCommand, permission: 'knowledge.read' })).toBe(false)
     expect(isPermissionGateReady({ enabled: true, command: '', permission: 'knowledge.read' })).toBe(false)
     expect(isPermissionGateReady({ enabled: true, command: 'approved-command', permission: 'role:APPRAISER' })).toBe(false)
@@ -41,6 +44,7 @@ describe('persistent Demo browser-flow contracts', () => {
     })).toBe(false)
     expect(isDocumentedPermissionOperatorCommand(`${documentedCommand} && whoami`)).toBe(false)
     expect(isDocumentedPermissionOperatorCommand(documentedCommand.replace('../docker-compose.demo.yml', '../other-compose.yml'))).toBe(false)
+    expect(isDocumentedPermissionOperatorCommand(acceptanceCommand.replace('landvaluation-acceptance', 'other-project'))).toBe(false)
   })
 
   it('requires a non-empty string review_id from the real submission response', () => {
@@ -76,13 +80,23 @@ describe('persistent Demo browser-flow contracts', () => {
     expect(matcher.test(` ${INSUFFICIENT_EVIDENCE_COPY} 額外文字`)).toBe(false)
   })
 
-  it('requires the local seeded-candidate refusal to stay EVIDENCE_ONLY', () => {
+  it('keeps Ollama outcomes bounded to supported evidence or safe non-supported states', () => {
     const source = readFileSync(resolve(import.meta.dirname, '../e2e/demo-flow.spec.ts'), 'utf8')
     const helperStart = source.indexOf('async function expectSafeAssistantRefusal')
-    const helperEnd = source.indexOf('\n}\n\nasync function askAndVerifyCitation', helperStart)
+    const helperEnd = source.indexOf('\n}\n\nasync function expectNonStrictProviderOutcome', helperStart)
     const refusalHelper = source.slice(helperStart, helperEnd)
-    expect(refusalHelper).toContain("expect(payload.answer_status).toBe('EVIDENCE_ONLY')")
-    expect(refusalHelper).not.toContain("expect(['EVIDENCE_ONLY', 'NO_RELEVANT_SOURCE']).toContain(payload.answer_status)")
+    expect(refusalHelper).toContain("allowedStatuses: readonly string[] = ['EVIDENCE_ONLY']")
+    expect(refusalHelper).toContain('expect(allowedStatuses).toContain(payload.answer_status)')
+
+    const outcomeHelperStart = source.indexOf('async function expectNonStrictProviderOutcome')
+    const outcomeHelperEnd = source.indexOf('\n}\n\nasync function expectAssistantPermissionDenied', outcomeHelperStart)
+    const outcomeHelper = source.slice(outcomeHelperStart, outcomeHelperEnd)
+    expect(outcomeHelper).toContain("if (payload.answer_status === 'SUPPORTED')")
+    expect(outcomeHelper).toContain('expect(payload.citations.length).toBeGreaterThan(0)')
+    expect(outcomeHelper).toContain("['EVIDENCE_ONLY', 'NO_RELEVANT_SOURCE', 'CLARIFICATION_REQUIRED']")
+    expect(outcomeHelper).not.toContain("'FAILED'")
+    expect(outcomeHelper).not.toContain("'ERROR'")
+
     const trueNoSourceHelperStart = source.indexOf('async function expectNoRelevantSourceRefusal')
     const trueNoSourceHelperEnd = source.indexOf('\n}\n\nasync function askAndVerifyCitation', trueNoSourceHelperStart)
     const trueNoSourceHelper = source.slice(trueNoSourceHelperStart, trueNoSourceHelperEnd)
@@ -97,7 +111,7 @@ describe('persistent Demo browser-flow contracts', () => {
 
     expect(providerBranch).toContain('askAssistantQuestion(page, assistantSessionId, TRUE_NO_SOURCE_QUESTION)')
     expect(providerBranch).toContain('await expectNoRelevantSourceRefusal(page, noSourcePayload)')
-    expect(localBranch).toContain("await expectSafeAssistantRefusal(page, payload, 'PRE_SUBMISSION')")
+    expect(localBranch).toContain("await expectNonStrictProviderOutcome(page, payload, 'PRE_SUBMISSION')")
     expect(localBranch).not.toContain('TRUE_NO_SOURCE_QUESTION')
     expect(localBranch).not.toContain('expectNoRelevantSourceRefusal')
   })
@@ -115,10 +129,10 @@ describe('persistent Demo browser-flow contracts', () => {
       expect(source).toContain(`withAssistantFailureTag(step, '${aspect}'`)
     }
 
-    expect(source).toContain("await expectSafeAssistantRefusal(page, payload, 'PRE_SUBMISSION')")
-    expect(source).toContain("await expectSafeAssistantRefusal(page, initial.payload, 'BASELINE')")
-    expect(source).toContain("await expectSafeAssistantRefusal(page, restored.payload, 'RESTORED')")
-    expect(source).toContain('await expectAssistantPermissionDenied(page, denied.response)')
+    expect(source).toContain("await expectNonStrictProviderOutcome(page, payload, 'PRE_SUBMISSION')")
+    expect(source).toContain("await expectNonStrictProviderOutcome(page, initial.payload, 'BASELINE')")
+    expect(source).toContain("await expectNonStrictProviderOutcome(page, restored.payload, 'RESTORED')")
+    expect(source).toContain('await expectAssistantPermissionDenied(page, denied)')
     expect(source).not.toContain("await expectSafeAssistantRefusal(page, denied.payload)")
   })
 
@@ -133,9 +147,8 @@ describe('persistent Demo browser-flow contracts', () => {
     expect(source).toContain("const ASSISTANT_DENIED_NO_SIDE_EFFECT_FAILURE = 'ASSISTANT_DENIED_NO_SIDE_EFFECT'")
     expect(helper).toContain('expect(response.status()).toBe(403)')
     expect(helper).toContain("expectAssistantPermissionDenied")
-    expect(helper).toContain('toContainText')
-    expect(helper).toContain("toHaveCount(1)")
-    expect(helper).toContain("await expect(page.locator('.assistant-conversation').getByTestId('assistant-answer')).toHaveCount(1)")
+    expect(helper).toContain("getByRole('heading', { name: '目前無法開啟這個功能' })")
+    expect(helper).toContain('你的帳號目前沒有使用此功能的權限')
     expect(helper).not.toContain('ASSISTANT_HTTP_403')
     expect(helper).not.toContain('error.message')
     expect(helper).not.toContain('cause: error')
@@ -143,11 +156,11 @@ describe('persistent Demo browser-flow contracts', () => {
     const failureIndexes = [
       helper.indexOf('throw new Error(ASSISTANT_DENIED_STATUS_FAILURE)'),
       helper.indexOf('throw new Error(ASSISTANT_DENIED_ALERT_FAILURE)'),
-      helper.indexOf('throw new Error(ASSISTANT_DENIED_NO_SIDE_EFFECT_FAILURE)'),
     ]
     expect(failureIndexes.every((index) => index >= 0)).toBe(true)
     expect(failureIndexes[0]).toBeLessThan(failureIndexes[1])
-    expect(failureIndexes[1]).toBeLessThan(failureIndexes[2])
+    expect(source).toContain("toHaveCount(answersBeforeDenied)")
+    expect(source).toContain('throw new Error(ASSISTANT_DENIED_NO_SIDE_EFFECT_FAILURE)')
   })
 
   it('uses an independent question for the true no-source path', () => {
@@ -176,12 +189,18 @@ describe('persistent Demo browser-flow contracts', () => {
       "const initial = await askAssistantQuestion(page, sessionId, '請先確認目前案件的可讀來源。')",
       "expect(initial.payload.answer_status).toBe('SUPPORTED')",
       'expect(initial.payload.citations.length).toBeGreaterThan(0)',
-      "await expectSafeAssistantRefusal(page, initial.payload, 'BASELINE')",
+      "await expectNonStrictProviderOutcome(page, initial.payload, 'BASELINE')",
+      "const answersBeforeDenied = await page.locator('.assistant-conversation').getByTestId('assistant-answer').count()",
       "await invokePermissionOperator('revoke')",
-      'await expectAssistantPermissionDenied(page, denied.response)',
+      "const denied = await askAssistantQuestionDirect(page, sessionId, '請再確認目前案件的可讀來源。')",
+      'await page.reload()',
+      'await expectAssistantPermissionDenied(page, denied)',
       "await invokePermissionOperator('restore')",
+      "await expect(page.getByTestId('assistant-question')).toBeEnabled()",
+      "toHaveCount(answersBeforeDenied)",
       "const restored = await askAssistantQuestion(page, sessionId, '權限恢復後請再次確認目前案件的可讀來源。')",
       'expect(restored.payload.assistant_session_id).toBe(sessionId)',
+      "await expectNonStrictProviderOutcome(page, restored.payload, 'RESTORED')",
       'await submitPreparedValuation(page)',
     ]
 

@@ -75,7 +75,7 @@ test.describe('valuation remediation workflow', () => {
     const passingValidation = await passingValidationResponse
     expect(passingValidation.status()).toBe(201)
 
-    await expect(page.getByText('伺服器已完成計算、檢核、F03 提交與正式輸出。')).toBeVisible()
+    await expect(page.getByText('已完成計算、檢核、F03 確認與單表輸出。')).toBeVisible()
     await expect(page.getByTestId('go-to-submit')).toBeEnabled()
     await expect(page.getByTestId('valuation-workflow-guide')).toContainText('第 4 步 / 6')
     await Promise.all([

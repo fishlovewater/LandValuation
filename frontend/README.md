@@ -34,7 +34,7 @@ npm run build:demo
 .\scripts\demo-up.ps1
 ```
 
-腳本使用獨立 `landvaluation-persistent-demo` Compose project，會等待 API ready 並在安全的 pre-submission 狀態準備三個 Demo 帳號與示範案件；已送審／已進 Review 的 Demo 不會被自動 reseed。後端 ready 後回到 `frontend/` 執行 `npm run dev` 即可。若映像已建置，可用 `..\scripts\demo-up.ps1 -SkipBuild`。
+腳本使用獨立 `landvaluation-persistent-demo` Compose project，會等待 API ready，並準備三個 Demo 帳號與 6 個 production-shaped 生命週期案件（`DRAFT`、`PROCESSING`、`IN_REVIEW`、`REVISION_REQUIRED`、`REVIEW_COMPLETED`、`ARCHIVED`）。案件資料仍透過正式 API / PostgreSQL / MinIO / RBAC 顯示，前端不使用 mock case；其中 `PROCESSING` 案件保留給現場完整操作，其餘案件用於快速切換流程狀態。已建立 immutable submission 的 generation 不會被自動 reseed。後端 ready 後回到 `frontend/` 執行 `npm run dev` 即可。若映像已建置，可用 `..\scripts\demo-up.ps1 -SkipBuild`。
 
 ## 主要畫面
 

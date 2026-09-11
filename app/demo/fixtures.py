@@ -32,6 +32,16 @@ class KnowledgeFixture:
 
 
 @dataclass(frozen=True)
+class DemoScenarioFixture:
+    key: str
+    case_no: str
+    title: str
+    case_status: str
+    review_status: str | None
+    description: str
+
+
+@dataclass(frozen=True)
 class F03Fixture:
     """The minimum structured F03 values needed by the Demo seed."""
 
@@ -71,6 +81,61 @@ def knowledge_source() -> KnowledgeFixture:
         title=DEMO_KNOWLEDGE_TITLE,
         content=content,
         content_checksum_sha256=sha256_content(content),
+    )
+
+
+def demo_scenarios() -> tuple[DemoScenarioFixture, ...]:
+    """Return fixed lifecycle snapshots backed by production tables at runtime."""
+
+    return (
+        DemoScenarioFixture(
+            key="draft",
+            case_no="DEMO-LIFECYCLE-001",
+            title="【Demo】01 新建案件｜待開始估價",
+            case_status="DRAFT",
+            review_status=None,
+            description="僅建立案件與 F03 草稿，尚未進入文件與估價作業。",
+        ),
+        DemoScenarioFixture(
+            key="processing",
+            case_no=DEMO_CASE_NO,
+            title=DEMO_CASE_TITLE,
+            case_status="PROCESSING",
+            review_status=None,
+            description="完整可操作案件，含來源文件、AI/OCR、表單、計算與正式檢核資料。",
+        ),
+        DemoScenarioFixture(
+            key="in_review",
+            case_no="DEMO-LIFECYCLE-003",
+            title="【Demo】03 已送審｜待審查",
+            case_status="IN_REVIEW",
+            review_status="RECEIVED",
+            description="估價完成並建立不可變送審快照，等待審查人員處理。",
+        ),
+        DemoScenarioFixture(
+            key="revision_required",
+            case_no="DEMO-LIFECYCLE-004",
+            title="【Demo】04 審查退回｜待補正",
+            case_status="REVISION_REQUIRED",
+            review_status="RETURNED_FOR_REVISION",
+            description="審查發現疑點並建立修正通知，等待估價人員補正。",
+        ),
+        DemoScenarioFixture(
+            key="review_completed",
+            case_no="DEMO-LIFECYCLE-005",
+            title="【Demo】05 審查完成｜已核定",
+            case_status="REVIEW_COMPLETED",
+            review_status="REVIEW_COMPLETED",
+            description="審查批次、風險摘要與核定決策皆已完成。",
+        ),
+        DemoScenarioFixture(
+            key="archived",
+            case_no="DEMO-LIFECYCLE-006",
+            title="【Demo】06 歷史案件｜已封存",
+            case_status="ARCHIVED",
+            review_status="REVIEW_COMPLETED",
+            description="已完成審查後封存，用於案件歷程與唯讀查詢展示。",
+        ),
     )
 
 
@@ -141,10 +206,12 @@ __all__ = [
     "SUPPORTED_QUESTION",
     "NO_SOURCE_QUESTION",
     "KnowledgeFixture",
+    "DemoScenarioFixture",
     "F03Fixture",
     "sha256_bytes",
     "sha256_content",
     "knowledge_source",
+    "demo_scenarios",
     "f03_fixture",
     "build_demo_pdf",
     "case_object_key",

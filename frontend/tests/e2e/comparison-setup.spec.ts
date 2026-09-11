@@ -27,7 +27,7 @@ test.describe('structured comparison setup', () => {
 
     await page.getByTestId('valuation-step-4').click()
     await page.getByTestId('run-valuation').click()
-    await expect(page.getByText('伺服器已完成計算、檢核、F03 提交與正式輸出。')).toBeVisible()
+    await expect(page.getByText('已完成計算、檢核、F03 確認與單表輸出。')).toBeVisible()
     await page.getByTestId('go-to-submit').click()
 
     await page.getByTestId('open-report-page-editors').click()

@@ -29,6 +29,7 @@ from app.valuation.report_packages.factor_catalog import (
     TEMPLATE_FACTORS,
 )
 from app.valuation.rule_packs.coverage import NEW_TAIPEI_CITYWIDE_SCOPE
+from app.valuation.submissions.snapshot import build_submission_snapshot, snapshot_fingerprint
 
 from .accounts import (
     APPRAISER,
@@ -44,10 +45,12 @@ from .fixtures import (
     DEMO_CASE_TITLE,
     DEMO_KNOWLEDGE_CODE,
     DEMO_KNOWLEDGE_TITLE,
+    DemoScenarioFixture,
     NO_SOURCE_QUESTION,
     SUPPORTED_QUESTION,
     build_demo_pdf,
     case_object_key,
+    demo_scenarios,
     f03_fixture,
     knowledge_object_key,
     knowledge_source,
@@ -78,7 +81,7 @@ F03_VALIDATION_RULES = (
         "benchmark_valuations",
         None,
         "MISSING_DATA",
-        "benchmark_land_id and valuation_base_date are present",
+        "比準地與估價基準日皆已填寫",
         "F03 缺少必要欄位",
     ),
     (
@@ -87,7 +90,7 @@ F03_VALIDATION_RULES = (
         "documents",
         None,
         "MISSING_DATA",
-        "active land-register and cadastral-map documents exist",
+        "土地登記資料與地籍圖皆已提供",
         "F03 缺少必要文件",
     ),
     (
@@ -96,7 +99,7 @@ F03_VALIDATION_RULES = (
         "benchmark_valuations",
         "comparison_weight,income_weight",
         "HIGH",
-        "weights are between 0 and 1 and sum to 1",
+        "各項權重介於 0 到 1，且合計為 1",
         "比較法與收益法權重必須介於 0 到 1 且合計為 1",
     ),
     (
@@ -105,7 +108,7 @@ F03_VALIDATION_RULES = (
         "benchmark_valuations",
         "comparison_price,income_price",
         "MISSING_DATA",
-        "a price exists for every method with weight greater than zero",
+        "權重大於 0 的估價方法皆有價格資料",
         "權重大於 0 的估價方法必須提供價格",
     ),
     (
@@ -114,7 +117,7 @@ F03_VALIDATION_RULES = (
         "benchmark_valuations",
         "comparison_price,income_price,benchmark_land_price",
         "HIGH",
-        "all supplied prices are non-negative",
+        "所有價格皆不得小於 0",
         "F03 價格不可小於 0",
     ),
     (
@@ -123,7 +126,7 @@ F03_VALIDATION_RULES = (
         "benchmark_valuations",
         "case_id,form_instance_id,valuation_base_date",
         "HIGH",
-        "case, form, benchmark land and valuation date are consistent",
+        "案件、表單、比準地與估價日期皆一致",
         "案件、表單、比準地或估價日期不一致",
     ),
     (
@@ -132,7 +135,7 @@ F03_VALIDATION_RULES = (
         "valuations",
         "unit_price,calculation_snapshot",
         "HIGH",
-        "latest calculation matches current inputs and formula version",
+        "最新計算結果與目前資料及公式版本一致",
         "最新計算結果與目前 F03 輸入不一致，請重新計算",
     ),
     (
@@ -141,8 +144,8 @@ F03_VALIDATION_RULES = (
         "documents",
         "object_key",
         "HIGH",
-        "every active required document metadata row has a MinIO object",
-        "必要文件 metadata 對應的 MinIO 物件不存在",
+        "所有必要文件皆可正常讀取",
+        "必要文件目前無法讀取",
     ),
 )
 
@@ -207,6 +210,24 @@ def _case_row(cursor):
         (DEMO_CASE_NO,),
     )
     return cursor.fetchone()
+
+
+def _scenario_case_rows(cursor):
+    fixtures = tuple(scenario for scenario in demo_scenarios() if scenario.key != "processing")
+    if not fixtures:
+        return []
+    placeholders = ", ".join("%s" for _ in fixtures)
+    cursor.execute(
+        f"""
+        SELECT case_id, case_no, case_title, created_by_user_id
+        FROM valuation.cases
+        WHERE case_no IN ({placeholders})
+        ORDER BY case_no
+        FOR UPDATE
+        """,
+        tuple(scenario.case_no for scenario in fixtures),
+    )
+    return cursor.fetchall()
 
 
 def _knowledge_row(cursor):
@@ -323,19 +344,35 @@ def _validate_fixed_ownership(cursor, *, allow_missing: bool = True):
         owner_row = users.get(APPRAISER[0])
         if owner_row is None or case[2] != owner_row[0]:
             raise DemoError(f"OWNERSHIP_COLLISION: valuation.cases.case_no={DEMO_CASE_NO}")
+    owner_row = users.get(APPRAISER[0])
+    scenario_by_no = {scenario.case_no: scenario for scenario in demo_scenarios()}
+    scenario_rows = _scenario_case_rows(cursor)
+    for scenario_case_id, case_no, title, created_by_user_id in scenario_rows:
+        scenario = scenario_by_no.get(case_no)
+        if scenario is None or title != scenario.title:
+            raise DemoError(f"OWNERSHIP_COLLISION: valuation.cases.case_no={case_no}")
+        if owner_row is None or created_by_user_id != owner_row[0]:
+            raise DemoError(f"OWNERSHIP_COLLISION: valuation.cases.case_no={case_no}")
+
     rule_version_ids = _validate_rule_pack_ownership(cursor, knowledge=knowledge)
+    owned_case_ids = [row[0] for row in scenario_rows]
     if case is not None:
+        owned_case_ids.append(case[0])
+    if owned_case_ids:
         cursor.execute(
             """
             SELECT
-                (SELECT count(*) FROM valuation.review_submissions WHERE case_id = %s),
-                (SELECT count(*) FROM review.reviews WHERE case_id = %s)
+                (SELECT count(*) FROM valuation.review_submissions WHERE case_id = ANY(%s)),
+                (SELECT count(*) FROM review.reviews WHERE case_id = ANY(%s))
             """,
-            (case[0], case[0]),
+            (owned_case_ids, owned_case_ids),
         )
         review_counts = cursor.fetchone() or (0, 0)
         if any(int(value or 0) > 0 for value in review_counts):
-            raise DemoError(f"DEMO_RESET_REVIEW_STATE: case_id={case[0]}")
+            raise DemoError(
+                "DEMO_SUBMITTED_GENERATION_LOCKED: submitted Demo snapshots are immutable; "
+                "use the project-scoped Demo teardown to create a fresh generation"
+            )
     elif not allow_missing and not any(users.values()):
         return {
             "formal_role_ids": formal_role_ids,
@@ -373,10 +410,13 @@ def _collect_owned_object_keys(cursor) -> list[str]:
 
     keys: list[str] = []
     case = _case_row(cursor)
+    case_ids = [row[0] for row in _scenario_case_rows(cursor)]
     if case is not None:
+        case_ids.append(case[0])
+    if case_ids:
         cursor.execute(
-            "SELECT object_key FROM valuation.documents WHERE case_id = %s",
-            (case[0],),
+            "SELECT object_key FROM valuation.documents WHERE case_id = ANY(%s)",
+            (case_ids,),
         )
         keys.extend(row[0] for row in cursor.fetchall())
     knowledge = _knowledge_row(cursor)
@@ -531,13 +571,24 @@ def _delete_owned_rows(
     cursor,
     *,
     rule_version_ids: list[UUID] | None = None,
+    reset_demo_accounts: bool = True,
 ) -> None:
-    """Delete only rows reached through the fixed Demo identifiers."""
+    """Delete only rows reached through the fixed Demo identifiers.
+
+    Reseeding keeps the owned Demo accounts in place because published Knowledge
+    documents may legitimately reference the Demo appraiser as their approver.
+    A project-scoped teardown removes the isolated database when a completely
+    fresh account generation is required.
+    """
 
     case = _case_row(cursor)
+    scenario_rows = _scenario_case_rows(cursor)
     knowledge = _knowledge_row(cursor)
+    case_ids = [row[0] for row in scenario_rows]
     if case is not None:
-        _delete_case_rows(cursor, case[0])
+        case_ids.append(case[0])
+    for case_id in dict.fromkeys(case_ids):
+        _delete_case_rows(cursor, case_id)
 
     # The Demo rule pack references the Knowledge document as its governed
     # source. Remove those references and dependent rule rows before the
@@ -569,7 +620,8 @@ def _delete_owned_rows(
         # version, so never rediscover associations by source_document_id.
         cursor.execute("DELETE FROM knowledge.documents WHERE document_id = %s", (knowledge_id,))
 
-    reset_accounts(cursor)
+    if reset_demo_accounts:
+        reset_accounts(cursor)
 
 
 @dataclass
@@ -588,6 +640,8 @@ class _SeedMaterial:
     rule_version_id: UUID
     rule_source_id: UUID
     validation_rule_id: UUID
+    review_adjustment_rule_id: UUID
+    review_grade_rule_id: UUID
     validation_run_id: UUID
     extraction_id: UUID
     extracted_field_id: UUID
@@ -605,11 +659,47 @@ class _SeedMaterial:
     review_grade_field_id: UUID
 
 
+@dataclass(frozen=True)
+class _ScenarioMaterial:
+    fixture: DemoScenarioFixture
+    case_id: UUID
+    parcel_id: UUID
+    form_id: UUID
+    report_document_id: UUID
+    document_group_id: UUID
+    request_id: UUID
+    review_id: UUID
+    source_validation_run_id: UUID
+    review_validation_run_id: UUID
+    submission_id: UUID
+    finding_id: UUID
+    correction_request_id: UUID
+
+
 class _UploadBatch(list[dict[str, Any]]):
     def __init__(self, material: _SeedMaterial):
         super().__init__()
         self.material = material
         self.accounts = None
+        self.scenario_materials = tuple(
+            _ScenarioMaterial(
+                fixture=scenario,
+                case_id=uuid4(),
+                parcel_id=uuid4(),
+                form_id=uuid4(),
+                report_document_id=uuid4(),
+                document_group_id=uuid4(),
+                request_id=uuid4(),
+                review_id=uuid4(),
+                source_validation_run_id=uuid4(),
+                review_validation_run_id=uuid4(),
+                submission_id=uuid4(),
+                finding_id=uuid4(),
+                correction_request_id=uuid4(),
+            )
+            for scenario in demo_scenarios()
+            if scenario.key != "processing"
+        )
 
 
 @dataclass(frozen=True)
@@ -642,7 +732,11 @@ def _build_validation_run_contract(
             "checksum_sha256": upload["checksum_sha256"],
         }
         for upload in sorted(
-            (item for item in uploads if item["document_type"] != "REGULATION"),
+            (
+                item
+                for item in uploads
+                if item["document_type"] != "REGULATION" and "scenario_key" not in item
+            ),
             key=lambda item: item["document_type"],
         )
     ]
@@ -736,6 +830,8 @@ def _new_seed_material() -> _SeedMaterial:
         rule_version_id=uuid4(),
         rule_source_id=uuid4(),
         validation_rule_id=uuid4(),
+        review_adjustment_rule_id=uuid4(),
+        review_grade_rule_id=uuid4(),
         validation_run_id=uuid4(),
         extraction_id=uuid4(),
         extracted_field_id=uuid4(),
@@ -754,7 +850,7 @@ def _new_seed_material() -> _SeedMaterial:
     )
 
 
-def _upload_object(storage, object_key: str, content: bytes, *, bucket: str, filename: str, document_id: UUID, document_type: str, uploads: _UploadBatch) -> None:
+def _upload_object(storage, object_key: str, content: bytes, *, bucket: str, filename: str, document_id: UUID, document_type: str, uploads: _UploadBatch) -> dict[str, Any]:
     # Record the attempted key before the call so a client that uploads and
     # then raises is still compensated on the current transaction path.
     entry: dict[str, Any] = {
@@ -776,6 +872,7 @@ def _upload_object(storage, object_key: str, content: bytes, *, bucket: str, fil
         content_type="application/pdf",
     )
     entry["storage_etag"] = getattr(result, "etag", None) or getattr(result, "etag_value", "")
+    return entry
 
 
 def _demo_source_pdf(filename: str) -> bytes:
@@ -898,8 +995,34 @@ def _upload_seed_objects(
     return uploads
 
 
+def _upload_scenario_objects(storage, uploads: _UploadBatch) -> _UploadBatch:
+    """Upload only artifacts a real case would already have at that snapshot."""
+
+    settings = get_settings()
+    for material in uploads.scenario_materials:
+        if material.fixture.review_status is None:
+            continue
+        filename = f"demo-{material.fixture.key}-formal-report.pdf"
+        entry = _upload_object(
+            storage,
+            case_object_key(material.case_id, material.report_document_id, filename),
+            build_demo_pdf(f"{material.fixture.title} formal report"),
+            bucket=settings.minio_bucket,
+            filename=filename,
+            document_id=material.report_document_id,
+            document_type="complete-valuation-report",
+            uploads=uploads,
+        )
+        entry["scenario_key"] = material.fixture.key
+    return uploads
+
+
 def _upload_by_type(uploads: _UploadBatch, document_type: str) -> dict[str, Any]:
     return next(item for item in uploads if item["document_type"] == document_type)
+
+
+def _scenario_upload(uploads: _UploadBatch, scenario_key: str) -> dict[str, Any]:
+    return next(item for item in uploads if item.get("scenario_key") == scenario_key)
 
 
 def _formal_component_data(material: _SeedMaterial) -> dict[str, dict[str, object]]:
@@ -1571,7 +1694,11 @@ def _write_seed_rows(cursor, uploads: _UploadBatch) -> None:
             ) VALUES (%s, %s, %s, %s, 'F03', %s, %s, %s, %s, %s, true)
             """,
             (
-                uuid4(),
+                (
+                    material.review_adjustment_rule_id
+                    if rule_code == "ADJUSTMENT_RATE"
+                    else material.review_grade_rule_id
+                ),
                 material.rule_version_id,
                 rule_code,
                 rule_name,
@@ -1673,6 +1800,598 @@ def _write_seed_rows(cursor, uploads: _UploadBatch) -> None:
         raise DemoError("DEMO_SEED_PRE_SUBMISSION_REQUIRED")
 
 
+def _scenario_rule_version_snapshot(
+    material: _SeedMaterial,
+    *,
+    review_layer: bool,
+) -> dict[str, object]:
+    return {
+        "rule_version_id": str(material.rule_version_id if review_layer else material.f03_rule_version_id),
+        "rule_set_code": DEMO_REVIEW_RULE_SET_CODE if review_layer else DEMO_RULE_SET_CODE,
+        "version_no": 1,
+        "version_name": DEMO_REVIEW_RULE_VERSION_NAME if review_layer else DEMO_RULE_VERSION_NAME,
+        "status": "PUBLISHED",
+        "effective_from": "2026-09-08",
+        "effective_to": None,
+        "applicable_case_type": "LAND",
+        "applicable_district_code": "65000010",
+        "selection_priority": 100 if review_layer else 90,
+        "source_document_id": str(material.knowledge_document_id),
+        "import_summary": {
+            "owner": DEMO_OWNER,
+            "case_no": DEMO_CASE_NO,
+            "layer": "review_execution" if review_layer else "f03_validation",
+            "paired_rule_set_code": DEMO_RULE_SET_CODE if review_layer else DEMO_REVIEW_RULE_SET_CODE,
+        },
+    }
+
+
+def _scenario_review_rules(material: _SeedMaterial) -> list[dict[str, object]]:
+    ids = {
+        "ADJUSTMENT_RATE": material.review_adjustment_rule_id,
+        "EXPERT_GRADE": material.review_grade_rule_id,
+    }
+    return [
+        {
+            "validation_rule_id": str(ids[rule_code]),
+            "rule_version_id": str(material.rule_version_id),
+            "rule_code": rule_code,
+            "rule_name": rule_name,
+            "target_form_code": "F03",
+            "target_table": target_table,
+            "target_field_code": target_field_code,
+            "severity": severity,
+            "rule_expression": rule_expression,
+            "message_template": message_template,
+            "is_active": True,
+        }
+        for (
+            rule_code,
+            rule_name,
+            target_table,
+            target_field_code,
+            severity,
+            rule_expression,
+            message_template,
+        ) in REVIEW_EXECUTION_RULES
+    ]
+
+
+def _build_scenario_submission_snapshot(
+    scenario: _ScenarioMaterial,
+    uploads: _UploadBatch,
+    *,
+    appraiser_id: UUID,
+) -> dict[str, object]:
+    """Build the same immutable handoff shape used by production submission."""
+
+    primary = uploads.material
+    report = _scenario_upload(uploads, scenario.fixture.key)
+    knowledge_upload = _upload_by_type(uploads, "REGULATION")
+    submitted_at = "2026-09-08T04:00:00+00:00"
+    field_ids = (uuid4(), uuid4())
+    form_content = f03_fixture(case_id=scenario.case_id).form_content
+    document_snapshot = {
+        "document_id": str(scenario.report_document_id),
+        "document_type": "complete-valuation-report",
+        "original_filename": report["filename"],
+        "mime_type": "application/pdf",
+        "version_no": 1,
+        "document_group_id": str(scenario.document_group_id),
+        "checksum_sha256": report["checksum_sha256"],
+        "file_size_bytes": report["file_size_bytes"],
+        "uploaded_at": submitted_at,
+        "is_active": True,
+    }
+    applied_fields = [
+        {
+            "extracted_field_id": str(field_ids[0]),
+            "document_id": str(scenario.report_document_id),
+            "form_code": "F03",
+            "field_name": "adjustment_rate",
+            "confirmed_value": "-12",
+            "source_page": 1,
+            "source_text": "來源文件記載調整率 -12%",
+            "confidence": "0.9900",
+            "field_status": "APPLIED",
+            "confirmed_by_user_id": str(appraiser_id),
+            "confirmed_at": submitted_at,
+        },
+        {
+            "extracted_field_id": str(field_ids[1]),
+            "document_id": str(scenario.report_document_id),
+            "form_code": "F03",
+            "field_name": "expert_grade",
+            "confirmed_value": "B",
+            "source_page": 1,
+            "source_text": "來源文件記載級距 B",
+            "confidence": "0.9900",
+            "field_status": "APPLIED",
+            "confirmed_by_user_id": str(appraiser_id),
+            "confirmed_at": submitted_at,
+        },
+    ]
+    form_snapshot = {
+        "form_instance_id": str(scenario.form_id),
+        "case_id": str(scenario.case_id),
+        "form_code": "F03",
+        "version_no": 1,
+        "form_status": "FINAL",
+        "output_document_id": str(scenario.report_document_id),
+        "form_content": form_content,
+    }
+    source_input_snapshot = {
+        "schema_version": "f03-validation-input-v1",
+        "case_id": str(scenario.case_id),
+        "form_instance_id": str(scenario.form_id),
+    }
+    source_ruleset_snapshot = {
+        "ruleset_code": DEMO_RULE_SET_CODE,
+        "version_no": 1,
+        "paired_rule_set_code": DEMO_REVIEW_RULE_SET_CODE,
+    }
+    execution_context = {
+        "schema_version": "valuation-review-execution-v1",
+        "case": {
+            "case_id": str(scenario.case_id),
+            "case_no": scenario.fixture.case_no,
+            "case_title": scenario.fixture.title,
+            "case_type": "LAND",
+            "district_code": "65000010",
+            "valuation_base_date": "2026-09-08",
+            "form_codes": ["F03"],
+        },
+        "source_validation_run": {
+            "validation_run_id": str(scenario.source_validation_run_id),
+            "case_id": str(scenario.case_id),
+            "form_instance_id": str(scenario.form_id),
+            "run_status": "COMPLETED",
+            "passed_count": len(F03_VALIDATION_RULES),
+            "warning_count": 0,
+            "failed_count": 0,
+            "rule_version_id": str(primary.f03_rule_version_id),
+            "input_snapshot": source_input_snapshot,
+            "ruleset_snapshot": source_ruleset_snapshot,
+            "completed_at": submitted_at,
+        },
+        "report": {
+            "form": form_snapshot,
+            "authoritative_form": dict(form_snapshot),
+            "document": {
+                **document_snapshot,
+                "case_id": str(scenario.case_id),
+            },
+        },
+        "rule_selection": {
+            "source_rule_version": _scenario_rule_version_snapshot(primary, review_layer=False),
+            "rule_version": _scenario_rule_version_snapshot(primary, review_layer=True),
+            "rule_source": {
+                "document_id": str(primary.knowledge_document_id),
+                "checksum_sha256": knowledge_upload["checksum_sha256"],
+                "version_no": 1,
+                "effective_from": "2026-09-08",
+                "effective_to": None,
+            },
+            "validation_rules": _scenario_review_rules(primary),
+        },
+    }
+    return build_submission_snapshot(
+        case_version=1,
+        submitted_by_user_id=appraiser_id,
+        request_id=scenario.request_id,
+        applied_fields=applied_fields,
+        calculations={"benchmark_land_price": "125000", "calculation_status": "FINAL"},
+        documents=[document_snapshot],
+        validation={
+            "validation_run_id": str(scenario.source_validation_run_id),
+            "form_instance_id": str(scenario.form_id),
+            "rule_version_id": str(primary.f03_rule_version_id),
+            "run_status": "COMPLETED",
+            "failed_count": 0,
+        },
+        execution_context=execution_context,
+    )
+
+
+def _write_scenario_rows(cursor, uploads: _UploadBatch) -> None:
+    """Create real lifecycle snapshots without introducing Demo-only runtime logic."""
+
+    if uploads.accounts is None:
+        raise DemoError("DEMO_ACCOUNTS_REQUIRED")
+    primary = uploads.material
+    appraiser_id = uploads.accounts.appraiser_user_id
+    reviewer_id = uploads.accounts.reviewer_user_id
+    settings = get_settings()
+    for scenario in uploads.scenario_materials:
+        fixture = scenario.fixture
+        final_form = fixture.review_status is not None
+        form_content = f03_fixture(case_id=scenario.case_id).form_content
+        cursor.execute(
+            """
+            INSERT INTO valuation.cases (
+                case_id, case_no, case_title, case_type, requesting_agency,
+                valuation_base_date, valuation_due_date, city_code, district_code,
+                land_use_type, case_status, created_by_user_id, updated_by_user_id
+            ) VALUES (%s, %s, %s, 'LAND', 'Demo Lifecycle Office', DATE '2026-09-08',
+                      DATE '2026-09-30', 'NWT', '65000010', 'COMMERCIAL', %s, %s, %s)
+            """,
+            (scenario.case_id, fixture.case_no, fixture.title, fixture.case_status, appraiser_id, appraiser_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.parcels (
+                parcel_id, case_id, district_code, section_name, subsection_name,
+                land_no, area_sqm, land_use_zone, designated_use,
+                ownership_numerator, ownership_denominator
+            ) VALUES (%s, %s, '板橋區', '示範段', '', %s, 100, 'COMMERCIAL',
+                      'commercial-use', 1, 1)
+            """,
+            (scenario.parcel_id, scenario.case_id, f"{scenario.fixture.key.upper()}-001"),
+        )
+
+        if not final_form:
+            cursor.execute(
+                """
+                INSERT INTO valuation.form_instances (
+                    form_instance_id, case_id, form_code, version_no, form_status,
+                    form_content, prepared_date, created_by_user_id, updated_by_user_id
+                ) VALUES (%s, %s, 'F03', 1, 'DRAFT', %s, DATE '2026-09-08', %s, %s)
+                """,
+                (scenario.form_id, scenario.case_id, Jsonb(form_content), appraiser_id, appraiser_id),
+            )
+            cursor.execute(
+                """
+                INSERT INTO history.case_events (
+                    case_event_id, case_id, event_type, event_data, occurred_by_user_id
+                ) VALUES (%s, %s, 'CASE_CREATED', %s, %s)
+                """,
+                (uuid4(), scenario.case_id, Jsonb({"demo_scenario": fixture.key}), appraiser_id),
+            )
+            continue
+
+        report = _scenario_upload(uploads, fixture.key)
+        cursor.execute(
+            """
+            INSERT INTO valuation.documents (
+                document_id, case_id, document_type, original_filename, mime_type,
+                bucket_name, object_key, checksum_sha256, file_size_bytes, version_no,
+                uploaded_by_user_id, is_active, document_group_id, storage_etag, uploaded_at
+            ) VALUES (%s, %s, 'complete-valuation-report', %s, 'application/pdf',
+                      %s, %s, %s, %s, 1, %s, true, %s, %s,
+                      TIMESTAMPTZ '2026-09-08 04:00:00+00')
+            """,
+            (
+                scenario.report_document_id,
+                scenario.case_id,
+                report["filename"],
+                settings.minio_bucket,
+                report["object_key"],
+                report["checksum_sha256"],
+                report["file_size_bytes"],
+                appraiser_id,
+                scenario.document_group_id,
+                report["storage_etag"],
+            ),
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.form_instances (
+                form_instance_id, case_id, form_code, version_no, form_status,
+                form_content, prepared_date, output_document_id,
+                created_by_user_id, updated_by_user_id
+            ) VALUES (%s, %s, 'F03', 1, 'FINAL', %s, DATE '2026-09-08', %s, %s, %s)
+            """,
+            (
+                scenario.form_id,
+                scenario.case_id,
+                Jsonb(form_content),
+                scenario.report_document_id,
+                appraiser_id,
+                appraiser_id,
+            ),
+        )
+        source_input_snapshot = {
+            "schema_version": "f03-validation-input-v1",
+            "case_id": str(scenario.case_id),
+            "form_instance_id": str(scenario.form_id),
+        }
+        source_ruleset_snapshot = {
+            "ruleset_code": DEMO_RULE_SET_CODE,
+            "version_no": 1,
+            "paired_rule_set_code": DEMO_REVIEW_RULE_SET_CODE,
+        }
+        cursor.execute(
+            """
+            INSERT INTO valuation.validation_runs (
+                validation_run_id, case_id, form_instance_id, run_status,
+                passed_count, warning_count, failed_count, started_at, completed_at,
+                triggered_by_user_id, rule_version_id, ruleset_snapshot, input_snapshot
+            ) VALUES (%s, %s, %s, 'COMPLETED', %s, 0, 0,
+                      TIMESTAMPTZ '2026-09-08 03:59:00+00',
+                      TIMESTAMPTZ '2026-09-08 04:00:00+00', %s, %s, %s, %s)
+            """,
+            (
+                scenario.source_validation_run_id,
+                scenario.case_id,
+                scenario.form_id,
+                len(F03_VALIDATION_RULES),
+                appraiser_id,
+                primary.f03_rule_version_id,
+                Jsonb(source_ruleset_snapshot),
+                Jsonb(source_input_snapshot),
+            ),
+        )
+        cursor.execute(
+            """
+            INSERT INTO review.reviews (
+                review_id, case_id, form_instance_id, validation_run_id, review_type,
+                review_status, started_by_user_id, started_at, received_at, due_at,
+                assigned_reviewer_id, current_risk_level, high_count, medium_count,
+                low_count, missing_item_count
+            ) VALUES (%s, %s, %s, %s, 'SMART_REVIEW', 'RECEIVED', %s,
+                      TIMESTAMPTZ '2026-09-08 04:06:00+00',
+                      TIMESTAMPTZ '2026-09-08 04:05:00+00',
+                      TIMESTAMPTZ '2026-09-30 09:00:00+00', %s, NULL, 0, 0, 0, 0)
+            """,
+            (
+                scenario.review_id,
+                scenario.case_id,
+                scenario.form_id,
+                scenario.source_validation_run_id,
+                appraiser_id,
+                reviewer_id,
+            ),
+        )
+        snapshot = _build_scenario_submission_snapshot(
+            scenario,
+            uploads,
+            appraiser_id=appraiser_id,
+        )
+        cursor.execute(
+            """
+            INSERT INTO valuation.review_submissions (
+                submission_id, review_id, case_id, submission_no, submitted_by_user_id,
+                submitted_at, source_validation_run_id, source_report_document_id,
+                input_snapshot, input_fingerprint, request_id
+            ) VALUES (%s, %s, %s, 1, %s, TIMESTAMPTZ '2026-09-08 04:05:00+00',
+                      %s, %s, %s, %s, %s)
+            """,
+            (
+                scenario.submission_id,
+                scenario.review_id,
+                scenario.case_id,
+                appraiser_id,
+                scenario.source_validation_run_id,
+                scenario.report_document_id,
+                Jsonb(snapshot),
+                snapshot_fingerprint(snapshot),
+                scenario.request_id,
+            ),
+        )
+        cursor.execute(
+            "UPDATE valuation.validation_runs SET submission_id = %s WHERE validation_run_id = %s",
+            (scenario.submission_id, scenario.source_validation_run_id),
+        )
+        cursor.execute(
+            "UPDATE review.reviews SET latest_submission_id = %s WHERE review_id = %s",
+            (scenario.submission_id, scenario.review_id),
+        )
+        cursor.execute(
+            """
+            INSERT INTO history.case_events (
+                case_event_id, case_id, event_type, event_data, occurred_by_user_id, request_id
+            ) VALUES (%s, %s, 'SUBMITTED_FOR_REVIEW', %s, %s, %s)
+            """,
+            (
+                uuid4(),
+                scenario.case_id,
+                Jsonb({"submission_id": str(scenario.submission_id), "demo_scenario": fixture.key}),
+                appraiser_id,
+                scenario.request_id,
+            ),
+        )
+
+        if fixture.key == "in_review":
+            continue
+
+        review_rule_ids = [primary.review_adjustment_rule_id, primary.review_grade_rule_id]
+        cursor.execute(
+            """
+            INSERT INTO valuation.validation_runs (
+                validation_run_id, case_id, form_instance_id, run_status,
+                passed_count, warning_count, failed_count, started_at, completed_at,
+                triggered_by_user_id, rule_version_id, ruleset_snapshot,
+                review_id, run_no, input_snapshot, submission_id
+            ) VALUES (%s, %s, %s, 'COMPLETED', %s, 0, %s,
+                      TIMESTAMPTZ '2026-09-08 04:59:00+00',
+                      TIMESTAMPTZ '2026-09-08 05:00:00+00', %s, %s, %s,
+                      %s, 1, %s, %s)
+            """,
+            (
+                scenario.review_validation_run_id,
+                scenario.case_id,
+                scenario.form_id,
+                1 if fixture.key == "revision_required" else 2,
+                1 if fixture.key == "revision_required" else 0,
+                reviewer_id,
+                primary.rule_version_id,
+                Jsonb({
+                    "rule_version_id": str(primary.rule_version_id),
+                    "validation_rule_ids": [str(rule_id) for rule_id in review_rule_ids],
+                }),
+                scenario.review_id,
+                Jsonb({
+                    "schema_version": "demo-review-run-v1",
+                    "submission_id": str(scenario.submission_id),
+                    "validation_rule_ids": [str(rule_id) for rule_id in review_rule_ids],
+                }),
+                scenario.submission_id,
+            ),
+        )
+        if fixture.key == "revision_required":
+            cursor.execute(
+                """
+                INSERT INTO review.findings (
+                    finding_id, review_id, finding_code, finding_type, severity,
+                    title, description, status, validation_run_id, document_id,
+                    document_version, page_number, field_path, source_evidence,
+                    reported_text, reported_value, legal_basis, reported_adjustment_rate,
+                    system_adjustment_rate, comparison_result, recommended_action,
+                    ai_status, rule_version_id
+                ) VALUES (%s, %s, 'ADJUSTMENT_RATE', 'RULE_MISMATCH', 'HIGH',
+                          '調整率與規則結果不一致', 'Demo 審查發現報告調整率需補正。',
+                          'REQUIRES_SUPPLEMENT', %s, %s, 1, 1, 'adjustment_rate', %s,
+                          '來源文件記載調整率 -12%%', '-12', %s, -12, -5, %s, %s,
+                          'NOT_REQUESTED', %s)
+                """,
+                (
+                    scenario.finding_id,
+                    scenario.review_id,
+                    scenario.review_validation_run_id,
+                    scenario.report_document_id,
+                    Jsonb([{"page": 1, "text": "來源文件記載調整率 -12%"}]),
+                    Jsonb([{"source": DEMO_KNOWLEDGE_CODE}]),
+                    Jsonb({"reported": "-12", "system": "-5"}),
+                    Jsonb({"action": "REQUEST_CORRECTION"}),
+                    primary.rule_version_id,
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO review.risk_summaries (
+                    risk_summary_id, review_id, overall_risk_level, risk_score,
+                    summary, category_scores, validation_run_id, high_count,
+                    medium_count, low_count, missing_item_count, risk_reasons
+                ) VALUES (%s, %s, 'HIGH', 80, 'Demo 案件有一項高風險調整率疑點。', %s,
+                          %s, 1, 0, 0, 0, %s)
+                """,
+                (
+                    uuid4(), scenario.review_id, Jsonb({"rule_mismatch": 80}),
+                    scenario.review_validation_run_id, Jsonb(["ADJUSTMENT_RATE"]),
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO review.decisions (
+                    decision_id, review_id, finding_id, decision, reason,
+                    decided_by_user_id, request_id, before_value, after_value
+                ) VALUES (%s, %s, %s, 'RETURNED_FOR_REVISION',
+                          '調整率與規則計算結果不一致，請補正後重新送審。', %s, %s, %s, %s)
+                """,
+                (
+                    uuid4(), scenario.review_id, scenario.finding_id, reviewer_id, uuid4(),
+                    Jsonb({"case_status": "IN_REVIEW"}),
+                    Jsonb({"case_status": "REVISION_REQUIRED"}),
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO review.correction_requests (
+                    correction_request_id, review_id, request_no, based_on_validation_run_id,
+                    status, due_at, message, base_document_id, base_document_version,
+                    created_by_user_id, sent_by_user_id, sent_at
+                ) VALUES (%s, %s, 1, %s, 'SENT', TIMESTAMPTZ '2026-09-20 09:00:00+00',
+                          '請依審查意見修正調整率後重新送審。', %s, 1, %s, %s,
+                          TIMESTAMPTZ '2026-09-08 05:10:00+00')
+                """,
+                (
+                    scenario.correction_request_id,
+                    scenario.review_id,
+                    scenario.review_validation_run_id,
+                    scenario.report_document_id,
+                    reviewer_id,
+                    reviewer_id,
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO review.correction_request_items (
+                    correction_request_item_id, correction_request_id, finding_id,
+                    finding_code, finding_type, severity, document_id, document_version,
+                    page_number, reported_text, reported_value, legal_basis_snapshot,
+                    source_evidence_snapshot, issue_summary, requested_correction
+                ) VALUES (%s, %s, %s, 'ADJUSTMENT_RATE', 'RULE_MISMATCH', 'HIGH',
+                          %s, 1, 1, '來源文件記載調整率 -12%%', '-12', %s, %s,
+                          '調整率與系統規則結果不一致', '確認正確調整率並重新產出估價書')
+                """,
+                (
+                    uuid4(), scenario.correction_request_id, scenario.finding_id,
+                    scenario.report_document_id,
+                    Jsonb([{"source": DEMO_KNOWLEDGE_CODE}]),
+                    Jsonb([{"page": 1, "text": "來源文件記載調整率 -12%"}]),
+                ),
+            )
+            cursor.execute(
+                """
+                UPDATE review.reviews
+                SET review_status = 'RETURNED_FOR_REVISION',
+                    validation_run_id = %s,
+                    latest_validation_run_id = %s,
+                    current_risk_level = 'HIGH', high_count = 1,
+                    medium_count = 0, low_count = 0, missing_item_count = 0
+                WHERE review_id = %s
+                """,
+                (scenario.review_validation_run_id, scenario.review_validation_run_id, scenario.review_id),
+            )
+            event_type = "RETURNED_FOR_REVISION"
+        else:
+            cursor.execute(
+                """
+                INSERT INTO review.risk_summaries (
+                    risk_summary_id, review_id, overall_risk_level, risk_score,
+                    summary, category_scores, validation_run_id, high_count,
+                    medium_count, low_count, missing_item_count, risk_reasons
+                ) VALUES (%s, %s, 'LOW', 5, 'Demo 審查已完成，無待處理高風險疑點。', %s,
+                          %s, 0, 0, 0, 0, %s)
+                """,
+                (
+                    uuid4(), scenario.review_id, Jsonb({"overall": 5}),
+                    scenario.review_validation_run_id, Jsonb([]),
+                ),
+            )
+            cursor.execute(
+                """
+                INSERT INTO review.decisions (
+                    decision_id, review_id, finding_id, decision, reason,
+                    decided_by_user_id, request_id, before_value, after_value
+                ) VALUES (%s, %s, NULL, 'REVIEW_COMPLETED',
+                          'Demo 案件審查程序完成。', %s, %s, %s, %s)
+                """,
+                (
+                    uuid4(), scenario.review_id, reviewer_id, uuid4(),
+                    Jsonb({"review_status": "RECEIVED"}),
+                    Jsonb({"review_status": "REVIEW_COMPLETED"}),
+                ),
+            )
+            cursor.execute(
+                """
+                UPDATE review.reviews
+                SET review_status = 'REVIEW_COMPLETED',
+                    validation_run_id = %s,
+                    latest_validation_run_id = %s,
+                    current_risk_level = 'LOW', high_count = 0,
+                    medium_count = 0, low_count = 0, missing_item_count = 0,
+                    completed_at = TIMESTAMPTZ '2026-09-08 05:15:00+00'
+                WHERE review_id = %s
+                """,
+                (scenario.review_validation_run_id, scenario.review_validation_run_id, scenario.review_id),
+            )
+            event_type = "CASE_ARCHIVED" if fixture.key == "archived" else "REVIEW_COMPLETED"
+
+        cursor.execute(
+            """
+            INSERT INTO history.case_events (
+                case_event_id, case_id, event_type, event_data, occurred_by_user_id
+            ) VALUES (%s, %s, %s, %s, %s)
+            """,
+            (
+                uuid4(), scenario.case_id, event_type,
+                Jsonb({"review_id": str(scenario.review_id), "demo_scenario": fixture.key}),
+                reviewer_id,
+            ),
+        )
+
+
 def _remove_objects(storage, object_keys: list[str]) -> None:
     settings = get_settings()
     for object_key in dict.fromkeys(object_keys):
@@ -1709,7 +2428,7 @@ def _result_from_material(material: _SeedMaterial, accounts) -> DemoSeedResult:
 
 
 def seed() -> DemoSeedResult:
-    """Replace the one owned generation atomically, without submission/review."""
+    """Create one production-shaped Demo generation across lifecycle states."""
 
     _ensure_development()
     material = _new_seed_material()
@@ -1725,9 +2444,12 @@ def seed() -> DemoSeedResult:
                 _delete_owned_rows(
                     cursor,
                     rule_version_ids=ownership.get("rule_version_ids", []),
+                    reset_demo_accounts=False,
                 )
                 uploads = _upload_seed_objects(storage, material, uploads)
+                uploads = _upload_scenario_objects(storage, uploads)
                 _write_seed_rows(cursor, uploads)
+                _write_scenario_rows(cursor, uploads)
                 connection.commit()
         except Exception:
             connection.rollback()
@@ -1749,6 +2471,8 @@ def _minio_exists(storage, object_key: str) -> bool:
 
 def _safe_status(connection) -> dict[str, object]:
     storage = get_minio_client()
+    fixtures = demo_scenarios()
+    placeholders = ", ".join("%s" for _ in fixtures)
     with connection.cursor() as cursor:
         cursor.execute(
             """
@@ -1760,16 +2484,20 @@ def _safe_status(connection) -> dict[str, object]:
         account_row = cursor.fetchone()
         account_count = int(account_row[0]) if account_row else 0
         cursor.execute(
-            """
-            SELECT c.case_id, fi.form_instance_id
+            f"""
+            SELECT c.case_id, c.case_no, c.case_title, c.case_status,
+                   fi.form_instance_id, r.review_status, r.latest_submission_id,
+                   (SELECT count(*) FROM valuation.review_submissions s WHERE s.case_id = c.case_id)
             FROM valuation.cases AS c
             LEFT JOIN valuation.form_instances AS fi
               ON fi.case_id = c.case_id AND fi.form_code = 'F03' AND fi.version_no = 1
-            WHERE c.case_no = %s AND c.case_title = %s
+            LEFT JOIN review.reviews AS r ON r.case_id = c.case_id
+            WHERE c.case_no IN ({placeholders})
             """,
-            (DEMO_CASE_NO, DEMO_CASE_TITLE),
+            tuple(fixture.case_no for fixture in fixtures),
         )
-        case_row = cursor.fetchone()
+        case_rows = cursor.fetchall()
+        rows_by_no = {row[1]: row for row in case_rows}
         cursor.execute(
             """
             SELECT d.document_id, d.object_key, count(ch.chunk_id)
@@ -1784,56 +2512,127 @@ def _safe_status(connection) -> dict[str, object]:
             (DEMO_KNOWLEDGE_CODE, DEMO_KNOWLEDGE_TITLE, DEMO_OWNER),
         )
         knowledge_row = cursor.fetchone()
-        cursor.execute(
-            "SELECT object_key FROM valuation.documents WHERE case_id = %s AND is_active = true",
-            (case_row[0],) if case_row else (None,),
-        )
-        case_object_keys = [row[0] for row in cursor.fetchall()]
-        cursor.execute(
-            "SELECT count(*) FROM valuation.review_submissions WHERE case_id = %s",
-            (case_row[0],) if case_row else (None,),
-        )
-        submission_row = cursor.fetchone()
-        cursor.execute(
-            "SELECT count(*) FROM review.reviews WHERE case_id = %s",
-            (case_row[0],) if case_row else (None,),
-        )
-        review_row = cursor.fetchone()
+        case_ids = [row[0] for row in case_rows]
+        object_keys_by_case: dict[UUID, list[str]] = {case_id: [] for case_id in case_ids}
+        if case_ids:
+            cursor.execute(
+                """
+                SELECT case_id, object_key
+                FROM valuation.documents
+                WHERE case_id = ANY(%s) AND is_active = true
+                ORDER BY case_id, object_key
+                """,
+                (case_ids,),
+            )
+            for case_id, object_key in cursor.fetchall():
+                object_keys_by_case.setdefault(case_id, []).append(object_key)
 
-    submissions = int(submission_row[0]) if submission_row else 0
-    reviews = int(review_row[0]) if review_row else 0
+    scenario_statuses: list[dict[str, object]] = []
+    total_submissions = 0
+    total_reviews = 0
+    for fixture in fixtures:
+        row = rows_by_no.get(fixture.case_no)
+        if row is None:
+            scenario_statuses.append(
+                {
+                    "key": fixture.key,
+                    "case_no": fixture.case_no,
+                    "expected_status": fixture.case_status,
+                    "case_id": None,
+                    "actual_status": None,
+                    "review_status": None,
+                    "submissions": 0,
+                    "objects_present": False,
+                    "ready": False,
+                }
+            )
+            continue
+        (
+            case_id,
+            _,
+            case_title,
+            case_status,
+            form_instance_id,
+            review_status,
+            latest_submission_id,
+            submission_count,
+        ) = row
+        submission_count = int(submission_count or 0)
+        total_submissions += submission_count
+        total_reviews += 1 if review_status is not None else 0
+        object_keys = object_keys_by_case.get(case_id, [])
+        objects_present = all(_minio_exists(storage, object_key) for object_key in object_keys)
+        requires_objects = fixture.key != "draft"
+        object_contract_ok = objects_present and (bool(object_keys) if requires_objects else True)
+        if fixture.review_status is None:
+            review_contract_ok = review_status is None and submission_count == 0
+        else:
+            review_contract_ok = (
+                review_status == fixture.review_status
+                and submission_count == 1
+                and latest_submission_id is not None
+            )
+        scenario_ready = bool(
+            case_title == fixture.title
+            and case_status == fixture.case_status
+            and form_instance_id is not None
+            and object_contract_ok
+            and review_contract_ok
+        )
+        scenario_statuses.append(
+            {
+                "key": fixture.key,
+                "case_no": fixture.case_no,
+                "expected_status": fixture.case_status,
+                "case_id": str(case_id),
+                "form_id": str(form_instance_id) if form_instance_id else None,
+                "actual_status": case_status,
+                "review_status": review_status,
+                "submissions": submission_count,
+                "objects_present": object_contract_ok,
+                "ready": scenario_ready,
+            }
+        )
+
     chunks = int(knowledge_row[2]) if knowledge_row else 0
     object_present = bool(knowledge_row and _minio_exists(storage, knowledge_row[1]))
-    case_objects_present = bool(case_object_keys) and all(
-        _minio_exists(storage, object_key) for object_key in case_object_keys
+    primary_status = next(
+        (item for item in scenario_statuses if item["key"] == "processing"),
+        None,
     )
     ready = bool(
         account_count == 3
-        and case_row is not None
-        and case_row[1] is not None
+        and len(case_rows) == len(fixtures)
+        and all(item["ready"] for item in scenario_statuses)
         and knowledge_row is not None
         and chunks >= 1
         and object_present
-        and case_objects_present
-        and submissions == 0
-        and reviews == 0
+        and total_submissions == 4
+        and total_reviews == 4
     )
     return {
         "command": "status",
         "ready": ready,
         "accounts_ready": account_count == 3,
         "case": {
-            "case_id": None if case_row is None else str(case_row[0]),
-            "form_id": None if case_row is None or case_row[1] is None else str(case_row[1]),
-            "objects_present": case_objects_present,
+            "case_id": None if primary_status is None else primary_status.get("case_id"),
+            "form_id": None if primary_status is None else primary_status.get("form_id"),
+            "objects_present": False if primary_status is None else primary_status.get("objects_present", False),
         },
+        "scenarios": scenario_statuses,
         "knowledge": {
             "document_id": None if knowledge_row is None else str(knowledge_row[0]),
             "chunks": chunks,
             "object_present": object_present,
         },
-        "counts": {"accounts": account_count, "chunks": chunks, "submissions": submissions, "reviews": reviews},
-        "pre_submission": submissions == 0 and reviews == 0,
+        "counts": {
+            "accounts": account_count,
+            "cases": len(case_rows),
+            "chunks": chunks,
+            "submissions": total_submissions,
+            "reviews": total_reviews,
+        },
+        "pre_submission": total_submissions == 0 and total_reviews == 0,
     }
 
 

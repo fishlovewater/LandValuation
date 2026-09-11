@@ -16,6 +16,7 @@ venv/
 
 # 暫存檔
 *.log
+*.bak-*
 .DS_Store
 Thumbs.db
 
@@ -38,3 +39,6 @@ frontend/dist/
 # Frontend test artifacts
 frontend/test-results/
 frontend/playwright-report/
+
+# Local generated document previews
+docs/previews/

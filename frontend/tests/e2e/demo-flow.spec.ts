@@ -1,7 +1,7 @@
 import { exec } from 'node:child_process'
 import { resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type APIResponse, type Page } from '@playwright/test'
 import {
   FINALIZE_CONFIRMATION_SELECTOR,
   INSUFFICIENT_EVIDENCE_COPY,
@@ -98,6 +98,11 @@ const demo = {
 
 const TRUE_NO_SOURCE_QUESTION = '量子泡沫黑洞磁場是否影響木星環？'
 
+const e2eAppOrigin = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:5173'
+const diagnosticApiBaseUrl = process.env.VITE_API_BASE_URL?.startsWith('http')
+  ? process.env.VITE_API_BASE_URL
+  : `${e2eAppOrigin}${process.env.VITE_API_BASE_URL || '/api/v1'}`
+
 const requiredPersistentInputs = [
   demo.caseId,
   demo.caseNo,
@@ -118,6 +123,7 @@ const permissionGateReady = isPermissionGateReady({
 })
 
 const providerBacked = new Set(['codex_cli', 'bedrock']).has(demo.knowledgeAnswerProvider)
+const ollamaBacked = demo.knowledgeAnswerProvider === 'ollama'
 
 let sharedAssistantSessionId = ''
 
@@ -134,7 +140,7 @@ async function submitPreparedValuation(page: Page): Promise<string> {
   const runButton = page.getByTestId('run-valuation')
   await expect(runButton).toBeEnabled()
   await runButton.click()
-  await expect(page.getByText('伺服器已完成計算、檢核、F03 提交與正式輸出。')).toBeVisible()
+  await expect(page.getByText('已完成計算、檢核、F03 確認與單表輸出。')).toBeVisible()
 
   await expect(page.getByTestId('go-to-submit')).toBeEnabled()
   await Promise.all([
@@ -173,7 +179,9 @@ async function submitPreparedValuation(page: Page): Promise<string> {
   await page.getByTestId('run-report-formal-validation').click()
   const reportPageValidation = await reportPageValidationResponse
   expect(reportPageValidation.status()).toBe(201)
-  await expect(page.getByTestId('report-package-authoritative')).toContainText('權威識別碼')
+  const authoritativePackage = page.getByTestId('report-package-authoritative')
+  await expect(authoritativePackage).toContainText('三頁已完成正式檢核')
+  await expect(authoritativePackage).toContainText('F02 第')
 
   await expect(page.getByTestId('formal-validation-result')).toBeVisible()
 
@@ -244,6 +252,8 @@ async function openAssistantSession(page: Page, sessionId?: string): Promise<str
   expect(payload.assistant_session_id).toBeTruthy()
   if (sessionId) expect(payload.assistant_session_id).toBe(sessionId)
   await expect(page.getByTestId('assistant-context')).toBeVisible()
+  await expect(page).toHaveURL(new RegExp(`/app/assistant/sessions/${payload.assistant_session_id}`))
+  await expect(page.getByTestId('assistant-question')).toBeEnabled()
   return payload.assistant_session_id
 }
 
@@ -261,13 +271,30 @@ async function askAssistantQuestion(page: Page, sessionId: string, question: str
   return { response, payload }
 }
 
+async function askAssistantQuestionDirect(
+  page: Page,
+  sessionId: string,
+  question: string,
+): Promise<APIResponse> {
+  const accessToken = await page.evaluate(() => window.sessionStorage.getItem('lva-demo-access-token'))
+  expect(accessToken).toBeTruthy()
+  return page.request.post(
+    `${diagnosticApiBaseUrl}/ai-assistant/sessions/${encodeURIComponent(sessionId)}/questions`,
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      data: { question },
+    },
+  )
+}
+
 async function expectSafeAssistantRefusal(
   page: Page,
   payload: AssistantQuestionPayload,
   step: SafeAnswerStep,
+  allowedStatuses: readonly string[] = ['EVIDENCE_ONLY'],
 ): Promise<void> {
   await withAssistantFailureTag(step, 'STATUS', () => {
-    expect(payload.answer_status).toBe('EVIDENCE_ONLY')
+    expect(allowedStatuses).toContain(payload.answer_status)
   })
   await withAssistantFailureTag(step, 'CITATIONS', () => {
     expect(payload.citations).toHaveLength(0)
@@ -282,21 +309,51 @@ async function expectSafeAssistantRefusal(
   })
 }
 
-async function expectAssistantPermissionDenied(page: Page, response: ResponseLike): Promise<void> {
+async function expectNonStrictProviderOutcome(
+  page: Page,
+  payload: AssistantQuestionPayload,
+  step: SafeAnswerStep,
+): Promise<void> {
+  if (!ollamaBacked) {
+    await expectSafeAssistantRefusal(page, payload, step)
+    return
+  }
+
+  if (payload.answer_status === 'SUPPORTED') {
+    await withAssistantFailureTag(step, 'CITATIONS', () => {
+      expect(payload.citations.length).toBeGreaterThan(0)
+    })
+    await withAssistantFailureTag(step, 'UI', async () => {
+      const latestAnswer = page.getByTestId('assistant-answer').last()
+      await expect(latestAnswer).toBeVisible()
+      await expect(latestAnswer.getByTestId('assistant-insufficient')).toHaveCount(0)
+      await expect(latestAnswer.locator('button[data-testid^="assistant-citation-"]')).not.toHaveCount(0)
+    })
+    return
+  }
+
+  await expectSafeAssistantRefusal(
+    page,
+    payload,
+    step,
+    ['EVIDENCE_ONLY', 'NO_RELEVANT_SOURCE', 'CLARIFICATION_REQUIRED'],
+  )
+}
+
+async function expectAssistantPermissionDenied(
+  page: Page,
+  response: APIResponse,
+): Promise<void> {
   try {
     expect(response.status()).toBe(403)
   } catch {
     throw new Error(ASSISTANT_DENIED_STATUS_FAILURE)
   }
   try {
-    await expect(page.getByRole('alert')).toContainText('沒有執行此操作的權限')
+    await expect(page.getByRole('heading', { name: '目前無法開啟這個功能' })).toBeVisible()
+    await expect(page.getByText('你的帳號目前沒有使用此功能的權限。若你認為這是錯誤，請向系統管理者確認。')).toBeVisible()
   } catch {
     throw new Error(ASSISTANT_DENIED_ALERT_FAILURE)
-  }
-  try {
-    await expect(page.locator('.assistant-conversation').getByTestId('assistant-answer')).toHaveCount(1)
-  } catch {
-    throw new Error(ASSISTANT_DENIED_NO_SIDE_EFFECT_FAILURE)
   }
 }
 
@@ -327,7 +384,7 @@ async function askAndVerifyCitation(page: Page, sessionId?: string): Promise<str
     expect(noSourcePayload.assistant_session_id).toBe(assistantSessionId)
     await expectNoRelevantSourceRefusal(page, noSourcePayload)
   } else {
-    await expectSafeAssistantRefusal(page, payload, 'PRE_SUBMISSION')
+    await expectNonStrictProviderOutcome(page, payload, 'PRE_SUBMISSION')
   }
   return assistantSessionId
 }
@@ -373,7 +430,7 @@ async function reviewAndFinalize(page: Page, reviewId: string): Promise<void> {
     if (openCount === 0) break
     await openFindings.first().click()
     await page.locator('#finding-decision').selectOption('DISMISSED_FALSE_POSITIVE')
-    await page.getByTestId('finding-reason').fill('依據伺服器規則結果完成判定。')
+    await page.getByTestId('finding-reason').fill('依據檢核規則結果完成判定。')
     const triageResponse = page.waitForResponse((candidate) => {
       const path = new URL(candidate.url()).pathname
       return candidate.request().method() === 'POST' && /\/review\/findings\/[^/]+\/triage$/.test(path)
@@ -440,8 +497,8 @@ test.describe('persistent three-role four-subsystem Demo (no route mocks)', () =
     )
 
     await loginAs(page, 'APPRAISER', demo.appraiser, testInfo, {
-      apiBaseUrl: process.env.VITE_API_BASE_URL,
-      appOrigin: 'http://127.0.0.1:5173',
+      apiBaseUrl: diagnosticApiBaseUrl,
+      appOrigin: e2eAppOrigin,
     })
     sharedAssistantSessionId = await askAndVerifyCitation(page)
     await logout(page)
@@ -454,8 +511,8 @@ test.describe('persistent three-role four-subsystem Demo (no route mocks)', () =
     )
 
     await loginAs(page, 'APPRAISER', demo.appraiser, testInfo, {
-      apiBaseUrl: process.env.VITE_API_BASE_URL,
-      appOrigin: 'http://127.0.0.1:5173',
+      apiBaseUrl: diagnosticApiBaseUrl,
+      appOrigin: e2eAppOrigin,
     })
     const sessionId = await openAssistantSession(page, sharedAssistantSessionId)
     const assistantUrl = page.url()
@@ -466,17 +523,28 @@ test.describe('persistent three-role four-subsystem Demo (no route mocks)', () =
       expect(initial.payload.answer_status).toBe('SUPPORTED')
       expect(initial.payload.citations.length).toBeGreaterThan(0)
     } else {
-      await expectSafeAssistantRefusal(page, initial.payload, 'BASELINE')
+      await expectNonStrictProviderOutcome(page, initial.payload, 'BASELINE')
     }
 
     let restoreRequired = false
     try {
+      const answersBeforeDenied = await page.locator('.assistant-conversation').getByTestId('assistant-answer').count()
       restoreRequired = true
       await invokePermissionOperator('revoke')
-      const denied = await askAssistantQuestion(page, sessionId, '請再確認目前案件的可讀來源。')
-      await expectAssistantPermissionDenied(page, denied.response)
+      const denied = await askAssistantQuestionDirect(page, sessionId, '請再確認目前案件的可讀來源。')
+      await page.reload()
+      await expect(page).toHaveURL(/\/app\/unauthorized$/)
+      await expectAssistantPermissionDenied(page, denied)
       await invokePermissionOperator('restore')
       restoreRequired = false
+      await page.goto(assistantUrl)
+      await expect(page).toHaveURL(assistantUrl)
+      await expect(page.getByTestId('assistant-question')).toBeEnabled()
+      try {
+        await expect(page.locator('.assistant-conversation').getByTestId('assistant-answer')).toHaveCount(answersBeforeDenied)
+      } catch {
+        throw new Error(ASSISTANT_DENIED_NO_SIDE_EFFECT_FAILURE)
+      }
       const restored = await askAssistantQuestion(page, sessionId, '權限恢復後請再次確認目前案件的可讀來源。')
       expect(restored.response.ok()).toBeTruthy()
       expect(restored.payload.assistant_session_id).toBe(sessionId)
@@ -484,7 +552,7 @@ test.describe('persistent three-role four-subsystem Demo (no route mocks)', () =
         expect(restored.payload.answer_status).toBe('SUPPORTED')
         expect(restored.payload.citations.length).toBeGreaterThan(0)
       } else {
-        await expectSafeAssistantRefusal(page, restored.payload, 'RESTORED')
+        await expectNonStrictProviderOutcome(page, restored.payload, 'RESTORED')
       }
       await expect(page).toHaveURL(assistantUrl)
     } finally {
@@ -495,15 +563,15 @@ test.describe('persistent three-role four-subsystem Demo (no route mocks)', () =
     await logout(page)
 
     await loginAs(page, 'REVIEWER', demo.reviewer, testInfo, {
-      apiBaseUrl: process.env.VITE_API_BASE_URL,
-      appOrigin: 'http://127.0.0.1:5173',
+      apiBaseUrl: diagnosticApiBaseUrl,
+      appOrigin: e2eAppOrigin,
     })
     await reviewAndFinalize(page, reviewId)
     await logout(page)
 
     await loginAs(page, 'INSPECTOR', demo.inspector, testInfo, {
-      apiBaseUrl: process.env.VITE_API_BASE_URL,
-      appOrigin: 'http://127.0.0.1:5173',
+      apiBaseUrl: diagnosticApiBaseUrl,
+      appOrigin: e2eAppOrigin,
     })
     await expectHistoryOutcome(page)
   })

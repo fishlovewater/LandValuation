@@ -8,17 +8,28 @@ function shellVariable(name: string): string {
   return `(?:%${name}%|\\$env:${name}|\\$\\{${name}\\}|\\$${name})`
 }
 
-const documentedPermissionOperatorCommand = new RegExp(
-  `^docker\\s+compose\\s+--project-directory\\s+\\.\\.\\s+` +
-  `-p\\s+landvaluation-persistent-demo\\s+` +
-  `-f\\s+\\.\\./docker-compose\\.yml\\s+` +
-  `-f\\s+\\.\\./docker-compose\\.demo\\.yml\\s+` +
-  `--env-file\\s+\\.\\./\\.env\\.example\\s+` +
-  `exec\\s+-T\\s+api\\s+python(?:\\.exe)?\\s+-m\\s+app\\.demo\\s+permission\\s+` +
-  `(?:${shellVariable('E2E_PERMISSION_ACTION')}|["']${shellVariable('E2E_PERMISSION_ACTION')}["'])\\s+` +
-  `(?:${shellVariable('E2E_PERMISSION_CODE')}|["']${shellVariable('E2E_PERMISSION_CODE')}["'])$`,
-  'i',
-)
+function permissionOperatorPattern(projectName: string, extraComposeFile?: string): RegExp {
+  const extraCompose = extraComposeFile
+    ? `-f\\s+\\.\\./${extraComposeFile.replaceAll('.', '\\.')}\\s+`
+    : ''
+  return new RegExp(
+    `^docker\\s+compose\\s+--project-directory\\s+\\.\\.\\s+` +
+    `-p\\s+${projectName}\\s+` +
+    `-f\\s+\\.\\./docker-compose\\.yml\\s+` +
+    `-f\\s+\\.\\./docker-compose\\.demo\\.yml\\s+` +
+    extraCompose +
+    `--env-file\\s+\\.\\./\\.env\\.example\\s+` +
+    `exec\\s+-T\\s+api\\s+python(?:\\.exe)?\\s+-m\\s+app\\.demo\\s+permission\\s+` +
+    `(?:${shellVariable('E2E_PERMISSION_ACTION')}|["']${shellVariable('E2E_PERMISSION_ACTION')}["'])\\s+` +
+    `(?:${shellVariable('E2E_PERMISSION_CODE')}|["']${shellVariable('E2E_PERMISSION_CODE')}["'])$`,
+    'i',
+  )
+}
+
+const documentedPermissionOperatorCommands = [
+  permissionOperatorPattern('landvaluation-persistent-demo'),
+  permissionOperatorPattern('landvaluation-acceptance', 'docker-compose.acceptance.yml'),
+]
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -48,7 +59,8 @@ export function reviewStartHasCompletedRun(payload: unknown): boolean {
 }
 
 export function isDocumentedPermissionOperatorCommand(command: string): boolean {
-  return documentedPermissionOperatorCommand.test(command.trim().replace(/\s+/g, ' '))
+  const normalized = command.trim().replace(/\s+/g, ' ')
+  return documentedPermissionOperatorCommands.some((pattern) => pattern.test(normalized))
 }
 
 export function isPermissionGateReady(input: {

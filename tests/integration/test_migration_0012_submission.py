@@ -7,6 +7,8 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from psycopg.types.json import Jsonb
 
 from tests.integration.schema_assertions import column_names, table_exists, unique_columns
@@ -103,6 +105,13 @@ def submission_fixture_graphs(admin_cursor):
             raise
 
 
+def _repository_alembic_head() -> str:
+    config = Config(str(PROJECT_ROOT / "alembic.ini"))
+    head = ScriptDirectory.from_config(config).get_current_head()
+    assert head is not None, "repository must have exactly one Alembic head"
+    return head
+
+
 class TestMigrationRoundtripIsolation:
     def test_01_downgrade_can_exit_before_reupgrade(self, migration_roundtrip):
         migration_roundtrip("downgrade", "20260901_0009")
@@ -110,7 +119,7 @@ class TestMigrationRoundtripIsolation:
 
     def test_02_successor_starts_at_alembic_head(self, admin_cursor):
         admin_cursor.execute("SELECT version_num FROM alembic_version")
-        assert admin_cursor.fetchone() == ("20260904_0014",)
+        assert admin_cursor.fetchone() == (_repository_alembic_head(),)
 
         required_columns = {
             ("valuation", "valuations"): {"request_id"},
