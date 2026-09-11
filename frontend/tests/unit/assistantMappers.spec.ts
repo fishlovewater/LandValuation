@@ -74,4 +74,21 @@ describe('Assistant citation graph mapper', () => {
 
     expect(mapAssistantQuestion(dto).supported).toBe(false)
   })
+
+  it('renders evidence-only candidate sources when the response explicitly labels them as unverified evidence', () => {
+    const dto = supportedQuestion()
+    dto.answer_status = 'EVIDENCE_ONLY'
+    dto.answer = '已找到可供查核的資料；此階段不產生正式規則結論。'
+    dto.generation_mode = 'EVIDENCE_ONLY'
+    dto.claims = [{
+      text: '以下為可供人工查核的候選來源，尚未經 AI 驗證為正式規則結論。',
+      citation_ids: ['55555555-5555-4555-8555-555555555555'],
+    }]
+
+    const mapped = mapAssistantQuestion(dto)
+
+    expect(mapped.supported).toBe(true)
+    expect(mapped.answerStatus).toBe('EVIDENCE_ONLY')
+    expect(mapped.citations).toHaveLength(1)
+  })
 })

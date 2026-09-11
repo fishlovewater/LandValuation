@@ -27,6 +27,7 @@ const props = withDefaults(
     emptyTitle?: string
     emptyDescription?: string
     rowTestIdPrefix?: string
+    showDeadline?: boolean
   }>(),
   {
     cases: undefined,
@@ -43,6 +44,7 @@ const props = withDefaults(
     emptyTitle: '目前沒有案件',
     emptyDescription: '符合目前條件的案件會顯示在這裡。',
     rowTestIdPrefix: 'case-row',
+    showDeadline: false,
   },
 )
 
@@ -158,6 +160,10 @@ function selectRow(row: CaseSummary): void {
               <th scope="col" :aria-sort="ariaSort('updatedAt')">
                 <button type="button" data-sort="updatedAt" @click="toggleSort('updatedAt')">最後更新</button>
               </th>
+              <th v-if="showDeadline" scope="col" :aria-sort="ariaSort('dueAt')">
+                <button type="button" data-sort="dueAt" @click="toggleSort('dueAt')">作業期限</button>
+              </th>
+              <th v-if="$slots.actions" scope="col" class="case-table__action-heading">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -176,6 +182,10 @@ function selectRow(row: CaseSummary): void {
               <td>{{ row.district || '—' }}</td>
               <td><StatusBadge :status="row.status" /></td>
               <td :title="row.updatedAt">{{ formatDateZhTw(row.updatedAt) }}</td>
+              <td v-if="showDeadline" :title="row.dueAt || ''">{{ row.dueAt ? formatDateZhTw(row.dueAt) : '未設定' }}</td>
+              <td v-if="$slots.actions" class="case-table__actions" @click.stop @keydown.stop>
+                <slot name="actions" :row="row" />
+              </td>
             </tr>
           </tbody>
         </table>
@@ -259,6 +269,9 @@ function selectRow(row: CaseSummary): void {
   border-radius: var(--app-radius-sm);
   background: var(--app-paper-strong);
 }
+
+.case-table__action-heading,
+.case-table__actions { text-align: right; white-space: nowrap; }
 
 .case-table__table {
   width: 100%;

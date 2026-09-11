@@ -14,6 +14,7 @@ import {
   ASSISTANT_QUESTION_VALIDATION_MESSAGE,
   assistantApi,
   canAskAssistantQuestion,
+  canAskGeneralAssistantQuestion,
   canStartAssistantSession,
   canUpdateAssistantValuation,
   safeAssistantErrorMessage,
@@ -60,7 +61,8 @@ const routeSessionId = computed(() => {
 })
 
 const canStartSession = computed(() => canStartAssistantSession(authStore.permissions))
-const canAskQuestion = computed(() => canAskAssistantQuestion(authStore.permissions))
+const canAskCaseQuestion = computed(() => canAskAssistantQuestion(authStore.permissions))
+const canAskGeneralQuestion = computed(() => canAskGeneralAssistantQuestion(authStore.permissions))
 const canUpdateValuation = computed(() => canUpdateAssistantValuation(authStore.permissions))
 const canRunWorkflow = computed(() => Boolean(session.value && canUpdateValuation.value))
 const permissionKey = computed(() => authStore.permissions.join('|'))
@@ -92,6 +94,12 @@ const context = computed<AssistantContext>(() => {
 })
 
 const hasContext = computed(() => isUsableAssistantContext(context.value))
+const generalKnowledgeMode = computed(() => !routeSessionId.value && !hasContext.value)
+const canAskQuestion = computed(() => (
+  session.value
+    ? canAskCaseQuestion.value
+    : generalKnowledgeMode.value && canAskGeneralQuestion.value
+))
 const latestAnswer = computed<AssistantAnswerModel | null>(() => {
   for (let index = messages.value.length - 1; index >= 0; index -= 1) {
     const item = messages.value[index]
@@ -167,7 +175,7 @@ async function loadSession(): Promise<void> {
 async function sendQuestion(value = question.value): Promise<void> {
   const content = value.trim()
   const currentSession = session.value
-  if (!content || !currentSession || !canAskQuestion.value || sending.value || loading.value) return
+  if (!content || !canAskQuestion.value || sending.value || loading.value) return
   if (content.length < ASSISTANT_QUESTION_MIN_LENGTH) {
     error.value = ASSISTANT_QUESTION_VALIDATION_MESSAGE
     return
@@ -184,8 +192,12 @@ async function sendQuestion(value = question.value): Promise<void> {
   const serial = loadSerial.value
   const request: AssistantQuestionRequestDto = { question: content }
   try {
-    const response = await assistantApi.askQuestion(currentSession.assistantSessionId, request, controller.signal)
-    if (!isCurrent(serial) || session.value?.assistantSessionId !== currentSession.assistantSessionId) return
+    const response = currentSession
+      ? await assistantApi.askQuestion(currentSession.assistantSessionId, request, controller.signal)
+      : await assistantApi.askGeneralQuestion(request, controller.signal)
+    if (!isCurrent(serial)) return
+    if (currentSession && session.value?.assistantSessionId !== currentSession.assistantSessionId) return
+    if (!currentSession && !generalKnowledgeMode.value) return
     const answer = mapAssistantQuestion(response)
     messages.value.push({ id: `assistant-answer-${messageSerial.value}`, role: 'assistant', answer })
   } catch (caught: unknown) {
@@ -317,7 +329,9 @@ onBeforeUnmount(() => {
     <PageHeader
       eyebrow="ASSISTED KNOWLEDGE WORKSPACE"
       title="智能助理"
-      description="在已授權的估價案件工作階段中提問，並以後端回傳的來源協助核對。"
+      :description="generalKnowledgeMode
+        ? '可直接查詢法規、條文與知識文件；一般知識模式不會帶入任何案件資料。'
+        : '在已授權的估價案件工作階段中提問，並以後端回傳的來源協助核對。'"
       >
       <template #actions>
         <button
@@ -336,13 +350,17 @@ onBeforeUnmount(() => {
     </PageHeader>
 
     <GlassCard class="assistant-frame">
-      <template #title>案件脈絡中的問答</template>
-      <template #meta>只顯示目前回應所附的資料；不自行補寫法規、頁碼或案件摘要。</template>
+      <template #title>{{ generalKnowledgeMode ? '法規與知識問答' : '案件脈絡中的問答' }}</template>
+      <template #meta>
+        {{ generalKnowledgeMode
+          ? '不需要選取案件；只使用知識庫中可核對的來源回答。'
+          : '只顯示目前回應所附的資料；不自行補寫法規、頁碼或案件摘要。' }}
+      </template>
 
       <LoadingSkeleton v-if="loading" :rows="4" label="智能助理工作階段載入中" />
       <ErrorState v-else-if="error && !session" :message="error" @retry="loadSession" />
       <EmptyState
-        v-else-if="!hasContext && !session"
+        v-else-if="!generalKnowledgeMode && !hasContext && !session"
         title="尚未選取可用的 F03 案件脈絡"
         :description="canStartSession ? '請先從已授權的估價案件開啟智能助理；未經授權的案件資料不會送出。' : '目前帳號缺少 valuation.read，無法建立案件工作階段。'"
       >
@@ -353,7 +371,7 @@ onBeforeUnmount(() => {
       <template v-else>
         <div class="assistant-context" data-testid="assistant-context" role="status">
           <span class="assistant-context__dot" aria-hidden="true" />
-          <span>{{ session ? '已建立後端工作階段' : '正在準備授權案件脈絡' }}</span>
+          <span>{{ session ? '已建立案件工作階段' : '一般知識模式 · 不帶入案件資料' }}</span>
           <span v-if="session" class="assistant-context__step">目前步驟：{{ session.currentStep }}</span>
         </div>
 
@@ -378,10 +396,12 @@ onBeforeUnmount(() => {
             data-testid="assistant-question"
             rows="4"
             maxlength="2000"
-            :disabled="!session || !canAskQuestion || loading || sending"
+            :disabled="!canAskQuestion || loading || sending"
             :aria-invalid="questionValidationMessage ? 'true' : undefined"
             :aria-describedby="questionValidationMessage ? 'assistant-question-validation' : undefined"
-            placeholder="例如：請說明目前工作階段還缺少哪些資料？"
+            :placeholder="generalKnowledgeMode
+              ? '例如：請查詢土地估價相關條文與適用依據。'
+              : '例如：請說明目前工作階段還缺少哪些資料？'"
           />
           <p
             v-if="!canAskQuestion"
@@ -389,7 +409,9 @@ onBeforeUnmount(() => {
             data-testid="assistant-permission-required"
             role="status"
           >
-            引用問答需要 knowledge.read 與 case.read 權限。
+            {{ generalKnowledgeMode
+              ? '一般知識問答需要 assistant.use 與 knowledge.read 權限。'
+              : '案件引用問答需要 knowledge.read 與 case.read 權限。' }}
           </p>
           <p
             v-if="questionValidationMessage"
@@ -406,7 +428,7 @@ onBeforeUnmount(() => {
               class="assistant-composer__submit"
               type="submit"
               data-testid="assistant-submit"
-              :disabled="!session || !canAskQuestion || loading || sending || question.trim().length < ASSISTANT_QUESTION_MIN_LENGTH"
+              :disabled="!canAskQuestion || loading || sending || question.trim().length < ASSISTANT_QUESTION_MIN_LENGTH"
               @click.prevent="submitQuestion"
             >
               {{ sending ? '送出中…' : '送出問題' }}

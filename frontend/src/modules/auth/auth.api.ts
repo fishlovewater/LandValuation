@@ -23,8 +23,11 @@ export const authApi = {
     return response.data
   },
 
-  async me(): Promise<AuthUser> {
-    const response = await http.get<CurrentUserDto>('/auth/me')
+  async me(accessToken?: string): Promise<AuthUser> {
+    const response = await http.get<CurrentUserDto>(
+      '/auth/me',
+      accessToken ? { headers: { Authorization: `Bearer ${accessToken}` } } : undefined,
+    )
     return mapCurrentUser(response.data)
   },
 }

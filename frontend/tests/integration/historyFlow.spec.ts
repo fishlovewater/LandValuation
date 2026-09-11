@@ -111,6 +111,8 @@ describe('history demo flow', () => {
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('HIST-VAL-001'))
 
+    expect(wrapper.get('[data-testid="history-advanced-toggle"]').attributes('aria-expanded')).toBe('true')
+    expect(wrapper.get('[data-testid="history-advanced-filters"]').isVisible()).toBe(true)
     expect(requests[0]?.params).toEqual({
       keyword: 'HIST-VAL-001',
       city_code: '31',
@@ -268,6 +270,12 @@ describe('history demo flow', () => {
           response: { status: 404, data: { error: { code: 'DOCUMENT_OBJECT_MISSING' } } },
         })
       }
+      if (config.url === `/history/documents/${ids.missingDocument}/text-preview`) {
+        return Promise.reject({
+          isAxiosError: true,
+          response: { status: 404, data: { error: { code: 'DOCUMENT_OBJECT_MISSING' } } },
+        })
+      }
       throw new Error(`Unexpected request ${config.method} ${config.url}`)
     }) as unknown as typeof originalAdapter
 
@@ -317,7 +325,8 @@ describe('history demo flow', () => {
     await wrapper.get('[data-testid="history-tab-overview"]').trigger('click')
     await wrapper.get(`[data-testid="history-preview-${ids.missingDocument}"]`).trigger('click')
     await vi.waitFor(() => expect(wrapper.find('[data-testid="history-document-preview"]').exists()).toBe(true))
-    expect(requests).toContain(`get /history/documents/${ids.missingDocument}/download`)
+    await vi.waitFor(() => expect(wrapper.text()).toContain('文件目前無法下載'))
+    expect(requests).toContain(`get /history/documents/${ids.missingDocument}/text-preview`)
 
     await wrapper.get(`[data-testid="history-download-${ids.missingDocument}"]`).trigger('click')
     await vi.waitFor(() => expect(wrapper.text()).toContain('文件目前無法下載'))

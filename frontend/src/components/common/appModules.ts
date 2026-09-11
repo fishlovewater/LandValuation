@@ -4,7 +4,7 @@ import {
   PhClockCounterClockwise as History,
   PhFiles as Files,
 } from '@phosphor-icons/vue'
-import { HISTORY_ROLES } from '../../router/roleAccess'
+import { HISTORY_ROLES, VALUATION_ROLES } from '../../router/roleAccess'
 
 export interface AppModule {
   key: string
@@ -23,6 +23,7 @@ export const APP_MODULES: readonly AppModule[] = [
     description: '案件與估價資料',
     path: '/app/valuation/dashboard',
     permission: 'valuation.read',
+    roles: VALUATION_ROLES,
     icon: ChartLineUp,
   },
   {

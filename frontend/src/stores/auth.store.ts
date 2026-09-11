@@ -66,6 +66,25 @@ export const useAuthStore = defineStore('auth', () => {
     await establishSession(() => authApi.demoLogin(role))
   }
 
+  async function switchDemoRole(role: DemoLoginRole): Promise<void> {
+    if (isSubmitting.value) return
+    isSubmitting.value = true
+    const requestGeneration = sessionGeneration
+    try {
+      const token = await authApi.demoLogin(role)
+      if (sessionGeneration !== requestGeneration) return
+      const currentUser = await authApi.me(token.access_token)
+      if (sessionGeneration !== requestGeneration) return
+
+      invalidatePendingSession()
+      tokenService.set(token.access_token, token.expires_in)
+      user.value = currentUser
+      authenticatedToken = token.access_token
+    } finally {
+      isSubmitting.value = false
+    }
+  }
+
   function logout(): void {
     clearSession()
   }
@@ -125,6 +144,7 @@ export const useAuthStore = defineStore('auth', () => {
     permissions,
     login,
     demoLogin,
+    switchDemoRole,
     logout,
     restoreSession,
   }

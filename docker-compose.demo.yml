@@ -25,3 +25,12 @@ services:
       - "18000:8000"
     environment:
       F03_VALIDATION_RULE_SET_CODE: DEMO-F03-FORMAL-VALIDATION
+      DEMO_QUICK_LOGIN_ENABLED: "true"
+      DEMO_SOURCE_DIR: /app/demo-sources
+      DOCUMENT_EXTRACTION_PROVIDER: local_ocr
+      AI_PROVIDER: ollama
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: qwen3.5:latest
+      OLLAMA_TIMEOUT_SECONDS: "120"
+    volumes:
+      - ./需要放入MINIO的東西:/app/demo-sources:ro

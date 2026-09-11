@@ -55,6 +55,18 @@ class DetailRepository:
         self.calls.append("list_documents")
         return []
 
+    async def list_case_versions(self, case_id):
+        self.calls.append("list_case_versions")
+        return []
+
+    async def list_changes(self, case_id):
+        self.calls.append("list_changes")
+        return []
+
+    async def list_official_field_versions(self, case_id):
+        self.calls.append("list_official_field_versions")
+        return []
+
     async def list_parcels(self, case_id):
         self.calls.append("list_parcels")
         return [{"parcel_id": uuid4(), "land_no": "123-4"}]
@@ -111,6 +123,9 @@ async def test_reviewer_detail_does_not_load_or_expose_valuation_parcels(monkeyp
 
     assert detail.parcels == []
     assert "list_parcels" not in repository.calls
+    assert "list_changes" not in repository.calls
+    assert "list_official_field_versions" not in repository.calls
+    assert detail.version_diffs == []
     assert detail.valuation is None
     assert detail.review == {"reviews": []}
 
@@ -127,6 +142,7 @@ async def test_appraiser_and_both_role_details_keep_parcels(monkeypatch):
     )
     appraiser_detail = await service.detail(repository.case_id, SimpleNamespace())
     assert len(appraiser_detail.parcels) == 1
+    assert "list_official_field_versions" in repository.calls
 
     repository.calls.clear()
     monkeypatch.setattr(
@@ -136,3 +152,4 @@ async def test_appraiser_and_both_role_details_keep_parcels(monkeypatch):
     )
     both_detail = await service.detail(repository.case_id, SimpleNamespace())
     assert len(both_detail.parcels) == 1
+    assert "list_changes" in repository.calls

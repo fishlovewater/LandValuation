@@ -396,6 +396,9 @@ export function mapHistoryDetail(dto: HistoryCaseDetailDto): HistoryCaseDetailMo
     review: mapReview(review),
     permissions,
     timeline: mapHistoryTimeline({ ...dto, valuation, review }),
+    versions: dto.versions ?? [],
+    changes: dto.changes ?? [],
+    versionDiffs: dto.version_diffs ?? [],
   }
 }
 

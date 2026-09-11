@@ -46,6 +46,7 @@ class CaseCreate(RequestModel):
     case_type: str = Field(min_length=1, max_length=50)
     requesting_agency: str | None = Field(default=None, max_length=200)
     valuation_base_date: date
+    valuation_due_date: date | None = None
     city_code: str = Field(min_length=1, max_length=20)
     district_code: str = Field(min_length=1, max_length=20)
     land_use_type: str | None = Field(default=None, max_length=100)
@@ -56,6 +57,7 @@ class CaseUpdate(RequestModel):
     case_type: str | None = Field(default=None, min_length=1, max_length=50)
     requesting_agency: str | None = Field(default=None, max_length=200)
     valuation_base_date: date | None = None
+    valuation_due_date: date | None = None
     city_code: str | None = Field(default=None, min_length=1, max_length=20)
     district_code: str | None = Field(default=None, min_length=1, max_length=20)
     land_use_type: str | None = Field(default=None, max_length=100)
@@ -88,6 +90,7 @@ class CaseResponse(BaseModel):
     case_type: str
     requesting_agency: str | None
     valuation_base_date: date
+    valuation_due_date: date | None
     city_code: str
     district_code: str
     land_use_type: str | None

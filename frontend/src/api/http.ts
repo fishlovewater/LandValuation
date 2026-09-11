@@ -77,9 +77,17 @@ type AuthenticatedRequestConfig = InternalAxiosRequestConfig & {
   __lvaAuthToken?: string | null
 }
 
+function bearerTokenFromHeaders(headers: InternalAxiosRequestConfig['headers']): string | null {
+  const value = headers.get('Authorization') ?? headers.get('authorization')
+  if (typeof value !== 'string') return null
+  const match = /^\s*Bearer\s+(.+?)\s*$/i.exec(value)
+  return match?.[1] ?? null
+}
+
 function addBearerToken(config: InternalAxiosRequestConfig): InternalAxiosRequestConfig {
-  const token = tokenService.get()
-  if (token) config.headers.set('Authorization', `Bearer ${token}`)
+  const explicitToken = bearerTokenFromHeaders(config.headers)
+  const token = explicitToken ?? tokenService.get()
+  if (!explicitToken && token) config.headers.set('Authorization', `Bearer ${token}`)
   const authConfig = config as AuthenticatedRequestConfig
   authConfig.__lvaAuthGeneration = tokenService.generation()
   authConfig.__lvaAuthToken = token

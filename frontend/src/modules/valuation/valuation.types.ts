@@ -22,6 +22,7 @@ export interface CaseCreateDto {
   case_type: string
   requesting_agency?: string | null
   valuation_base_date: string
+  valuation_due_date?: string | null
   city_code: string
   district_code: string
   land_use_type?: string | null
@@ -34,6 +35,7 @@ export interface CaseResponseDto {
   case_type: string
   requesting_agency: string | null
   valuation_base_date: string
+  valuation_due_date: string | null
   city_code: string
   district_code: string
   land_use_type: string | null
@@ -601,6 +603,7 @@ export interface ValuationCaseModel extends CaseSummary {
   caseType: string
   requestingAgency: string | null
   valuationBaseDate: string
+  valuationDueDate: string | null
   cityCode: string
   districtCode: string
   landUseType: string | null

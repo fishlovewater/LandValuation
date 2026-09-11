@@ -8,9 +8,13 @@ from app.history.schemas import (
     HistoryCaseDetail,
     HistoryCasePage,
     HistoryCaseSummary,
+    HistoryCaseVersion,
+    HistoryChange,
     HistoryDocument,
     HistoryPermissions,
     HistorySearchParams,
+    HistoryVersionDiff,
+    HistoryVersionValue,
 )
 
 
@@ -81,6 +85,17 @@ class HistoryService:
         if not access.get("allowed"):
             raise PermissionDeniedError("沒有可調閱的案件歷史資料")
         documents = await self.repository.list_documents(case_id, scope)
+        versions = await self.repository.list_case_versions(case_id)
+        changes = (
+            await self.repository.list_changes(case_id)
+            if scope.valuation and scope.review
+            else []
+        )
+        version_diffs = (
+            self._version_diffs(await self.repository.list_official_field_versions(case_id))
+            if scope.valuation
+            else []
+        )
         return HistoryCaseDetail(
             case=case,
             parcels=(
@@ -91,6 +106,9 @@ class HistoryService:
                 await self.repository.valuation_data(case_id) if scope.valuation else None
             ),
             review=await self.repository.review_data(case_id) if scope.review else None,
+            versions=[HistoryCaseVersion(**item) for item in versions],
+            changes=[HistoryChange(**item) for item in changes],
+            version_diffs=version_diffs,
             permissions=self.permissions(scope),
         )
 
@@ -100,6 +118,41 @@ class HistoryService:
         if document is None:
             raise ResourceNotFoundError("文件")
         return document
+
+    @staticmethod
+    def _version_diffs(rows: list[dict]) -> list[HistoryVersionDiff]:
+        grouped: dict[tuple[object, str, str | None], list[dict]] = {}
+        for row in rows:
+            key = (row["document_group_id"], row["field_code"], row.get("field_path"))
+            grouped.setdefault(key, []).append(row)
+        diffs: list[HistoryVersionDiff] = []
+        for (_, field_code, field_path), versions in sorted(
+            grouped.items(), key=lambda item: (str(item[0][0]), item[0][1], item[0][2] or "")
+        ):
+            if len(versions) < 2:
+                continue
+            previous, current = versions[-2:]
+            if previous.get("normalized_value") == current.get("normalized_value"):
+                continue
+            diffs.append(
+                HistoryVersionDiff(
+                    field_code=field_code,
+                    field_path=field_path,
+                    previous=HistoryVersionValue(
+                        document_version=previous["document_version"],
+                        value=previous.get("normalized_value"),
+                        raw_text=previous.get("raw_text") or None,
+                        page_number=previous.get("page_number"),
+                    ),
+                    current=HistoryVersionValue(
+                        document_version=current["document_version"],
+                        value=current.get("normalized_value"),
+                        raw_text=current.get("raw_text") or None,
+                        page_number=current.get("page_number"),
+                    ),
+                )
+            )
+        return diffs
 
     @staticmethod
     def _document(row: dict) -> HistoryDocument:

@@ -20,9 +20,10 @@ async def login(payload: LoginRequest, session: DbSession) -> TokenResponse:
 
 @router.post("/demo-login", response_model=TokenResponse)
 async def demo_login(payload: DemoLoginRequest, session: DbSession) -> TokenResponse:
-    """Development-only one-click login for the fixed hackathon Demo accounts."""
+    """Explicitly enabled one-click login for the fixed competition Demo accounts."""
 
-    if get_settings().app_env.lower() != "development":
+    settings = get_settings()
+    if settings.app_env.lower() != "development" and not settings.demo_quick_login_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
     username_by_role = {

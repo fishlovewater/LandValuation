@@ -121,3 +121,16 @@ BEDROCK_TOOL_CONFIG = [
         }
     },
 ]
+
+
+OLLAMA_TOOL_CONFIG = [
+    {
+        "type": "function",
+        "function": {
+            "name": item["toolSpec"]["name"],
+            "description": item["toolSpec"]["description"],
+            "parameters": item["toolSpec"]["inputSchema"]["json"],
+        },
+    }
+    for item in BEDROCK_TOOL_CONFIG
+]

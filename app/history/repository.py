@@ -378,6 +378,71 @@ class HistoryRepository:
             "decisions": decisions,
         }
 
+    async def list_case_versions(self, case_id: UUID) -> list[dict]:
+        rows = (
+            await self.session.execute(
+                text(
+                    """SELECT cv.version_no, cv.change_summary, cv.created_at,
+                              u.display_name AS created_by
+                       FROM history.case_versions cv
+                       LEFT JOIN auth.users u ON u.user_id = cv.created_by_user_id
+                       WHERE cv.case_id = :case_id
+                       ORDER BY cv.version_no DESC"""
+                ),
+                {"case_id": case_id},
+            )
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
+    async def list_changes(self, case_id: UUID) -> list[dict]:
+        rows = (
+            await self.session.execute(
+                text(
+                    """SELECT cl.entity_type, cl.field_name, cl.old_value, cl.new_value,
+                              cl.change_reason, cl.changed_at,
+                              u.display_name AS changed_by
+                       FROM history.change_logs cl
+                       LEFT JOIN auth.users u ON u.user_id = cl.changed_by_user_id
+                       WHERE cl.case_id = :case_id
+                       ORDER BY cl.changed_at DESC, cl.change_log_id DESC
+                       LIMIT 200"""
+                ),
+                {"case_id": case_id},
+            )
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
+    async def list_official_field_versions(self, case_id: UUID) -> list[dict]:
+        rows = (
+            await self.session.execute(
+                text(
+                    """SELECT d.document_group_id, d.version_no AS document_version,
+                              ef.field_name AS field_code,
+                              concat(ef.form_code, '.', ef.field_name) AS field_path,
+                              ef.confirmed_value AS normalized_value,
+                              coalesce(ef.source_text, '') AS raw_text,
+                              ef.source_page AS page_number
+                       FROM valuation.documents d
+                       JOIN LATERAL (
+                           SELECT extraction_id
+                           FROM valuation.document_extractions
+                           WHERE case_id = d.case_id
+                             AND document_id = d.document_id
+                             AND extraction_status = 'COMPLETED'
+                           ORDER BY completed_at DESC NULLS LAST, created_at DESC, extraction_id DESC
+                           LIMIT 1
+                       ) de ON true
+                       JOIN valuation.extracted_fields ef
+                         ON ef.extraction_id = de.extraction_id
+                        AND ef.field_status = 'APPLIED'
+                       WHERE d.case_id = :case_id
+                       ORDER BY d.document_group_id, ef.field_name, d.version_no"""
+                ),
+                {"case_id": case_id},
+            )
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
     async def _json_rows(self, sql: str, case_id: UUID):
         rows = (
             await self.session.execute(text(sql), {"case_id": case_id})

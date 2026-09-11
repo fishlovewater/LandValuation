@@ -62,10 +62,7 @@ function closeAssistant(): void {
 .app-layout {
   min-height: 100vh;
   padding: 16px 24px 24px;
-  background:
-    radial-gradient(circle at 5% 4%, rgba(229, 239, 249, 0.68), transparent 28rem),
-    radial-gradient(circle at 96% 4%, rgba(247, 228, 216, 0.7), transparent 30rem),
-    var(--app-paper);
+  background: var(--app-paper);
 }
 
 .app-layout__body {

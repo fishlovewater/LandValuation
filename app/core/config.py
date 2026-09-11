@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     docs_enabled: bool = True
     log_level: str = "INFO"
+    demo_quick_login_enabled: bool = False
+    document_preview_max_bytes: int = Field(
+        default=10 * 1024 * 1024, ge=1024 * 1024, le=50 * 1024 * 1024
+    )
     f03_validation_rule_set_code: str = F03_PRODUCTION_RULE_SET_CODE
 
     database_url: str | None = None
@@ -83,7 +87,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 30
 
-    ai_provider: Literal["mock", "bedrock", "gemini"] = "mock"
+    ai_provider: Literal["mock", "ollama", "bedrock", "gemini"] = "mock"
     ai_prompt_version: str = "f03-v1"
     ai_field_analysis_prompt_version: str = "field-analysis-v1"
     ai_codex_import_prompt_version: str = "codex-field-analysis-v1"
@@ -92,6 +96,9 @@ class Settings(BaseSettings):
     ai_field_analysis_max_candidates: int = Field(default=30, ge=1, le=100)
     ai_timeout_seconds: int = Field(default=30, ge=1, le=120)
     ai_max_tool_rounds: int = Field(default=5, ge=1, le=10)
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "qwen3.5:latest"
+    ollama_timeout_seconds: int = Field(default=120, ge=1, le=900)
     bedrock_region: str | None = None
     bedrock_model_id: str | None = None
     aws_access_key_id: SecretStr | None = None
@@ -154,6 +161,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_ai_provider(self):
+        self.ollama_base_url = self.ollama_base_url.rstrip("/")
+        if not self.ollama_base_url:
+            raise ValueError("OLLAMA_BASE_URL must not be empty")
+        if not self.ollama_model.strip():
+            raise ValueError("OLLAMA_MODEL must not be empty")
         if self.ai_provider == "bedrock" and (
             not self.bedrock_region or not self.bedrock_model_id
         ):

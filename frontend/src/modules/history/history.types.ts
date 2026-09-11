@@ -81,7 +81,41 @@ export interface HistoryCaseDetailDto {
   documents: HistoryDocumentDto[]
   valuation?: Record<string, unknown> | null
   review?: Record<string, unknown> | null
+  versions?: HistoryCaseVersionDto[]
+  changes?: HistoryChangeDto[]
+  version_diffs?: HistoryVersionDiffDto[]
   permissions: HistoryPermissionsDto
+}
+
+export interface HistoryCaseVersionDto {
+  version_no: number
+  change_summary: string | null
+  created_by: string | null
+  created_at: string
+}
+
+export interface HistoryChangeDto {
+  entity_type: string
+  field_name: string
+  old_value: unknown
+  new_value: unknown
+  change_reason: string | null
+  changed_by: string | null
+  changed_at: string
+}
+
+export interface HistoryVersionValueDto {
+  document_version: number
+  value: unknown
+  raw_text: string | null
+  page_number: number | null
+}
+
+export interface HistoryVersionDiffDto {
+  field_code: string
+  field_path: string | null
+  previous: HistoryVersionValueDto
+  current: HistoryVersionValueDto
 }
 
 export interface HistoryCaseModel extends CaseSummary {
@@ -170,4 +204,7 @@ export interface HistoryCaseDetailModel extends CaseIdentity {
   review: HistoryReviewModel | null
   permissions: HistoryPermissionsModel
   timeline: HistoryTimelineEvent[]
+  versions: HistoryCaseVersionDto[]
+  changes: HistoryChangeDto[]
+  versionDiffs: HistoryVersionDiffDto[]
 }

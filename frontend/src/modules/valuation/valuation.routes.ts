@@ -1,4 +1,5 @@
 import type { RouteRecordRaw } from 'vue-router'
+import { VALUATION_ROLES } from '../../router/roleAccess'
 
 const lazyDashboard = () => import('./views/ValuationDashboardView.vue')
 const lazyPrepare = () => import('./views/ValuationPrepareView.vue')
@@ -11,6 +12,7 @@ export const valuationRoutes: readonly RouteRecordRaw[] = [
     component: lazyDashboard,
     meta: {
       requiresAuth: true,
+      roles: [...VALUATION_ROLES],
       permissions: ['case.read', 'valuation.read'],
       title: '估價作業',
       subsystem: '估價作業',
@@ -23,6 +25,7 @@ export const valuationRoutes: readonly RouteRecordRaw[] = [
     component: lazyPrepare,
     meta: {
       requiresAuth: true,
+      roles: [...VALUATION_ROLES],
       permissions: ['case.read', 'valuation.read', 'valuation.update', 'document.download'],
       title: '準備估價資料',
       subsystem: '估價作業',
@@ -35,6 +38,7 @@ export const valuationRoutes: readonly RouteRecordRaw[] = [
     component: lazySubmit,
     meta: {
       requiresAuth: true,
+      roles: [...VALUATION_ROLES],
       permissions: ['case.read', 'valuation.read', 'valuation.submit_review', 'valuation.update', 'document.download'],
       title: '送審確認',
       subsystem: '估價作業',

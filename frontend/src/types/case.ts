@@ -9,4 +9,5 @@ export interface CaseSummary extends CaseIdentity {
   district?: string
   status: string
   updatedAt: string
+  dueAt?: string | null
 }

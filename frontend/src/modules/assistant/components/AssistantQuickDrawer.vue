@@ -10,6 +10,7 @@ import {
   ASSISTANT_QUESTION_MIN_LENGTH,
   assistantApi,
   canAskAssistantQuestion,
+  canAskGeneralAssistantQuestion,
   canStartAssistantSession,
   safeAssistantErrorMessage,
 } from '../assistant.api'
@@ -39,10 +40,15 @@ const contextFormId = ref('')
 let serial = 0
 
 const canStart = computed(() => canStartAssistantSession(auth.permissions))
-const canAsk = computed(() => canAskAssistantQuestion(auth.permissions) && Boolean(session.value))
+const canAskGeneral = computed(() => canAskGeneralAssistantQuestion(auth.permissions))
+const canAsk = computed(() => (
+  session.value
+    ? canAskAssistantQuestion(auth.permissions)
+    : canAskGeneral.value
+))
 const contextReady = computed(() => Boolean(contextCaseId.value && contextFormId.value))
 const currentContextLabel = computed(() => {
-  if (!contextCaseId.value) return '目前頁面沒有案件脈絡'
+  if (!contextCaseId.value) return '一般知識模式 · 不帶入案件資料'
   if (!contextFormId.value) return '已取得案件，但尚無可用 F03 估價表'
   return `案件 ${contextCaseId.value.slice(0, 8)}… · F03`
 })
@@ -107,14 +113,16 @@ async function ensureSession(forceNew = false): Promise<void> {
 
 async function send(value = question.value): Promise<void> {
   const content = value.trim()
-  if (!content || content.length < ASSISTANT_QUESTION_MIN_LENGTH || !session.value || !canAsk.value || sending.value) return
+  if (!content || content.length < ASSISTANT_QUESTION_MIN_LENGTH || !canAsk.value || sending.value) return
   question.value = ''
   error.value = ''
   const item: ConversationItem = { id: Date.now(), question: content, answer: null }
   items.value.push(item)
   sending.value = true
   try {
-    const response = await assistantApi.askQuestion(session.value.assistantSessionId, { question: content })
+    const response = session.value
+      ? await assistantApi.askQuestion(session.value.assistantSessionId, { question: content })
+      : await assistantApi.askGeneralQuestion({ question: content })
     item.answer = mapAssistantQuestion(response)
   } catch (caught) {
     item.failed = true
@@ -164,11 +172,11 @@ watch(
       </section>
 
       <p v-if="loading" class="assistant-quick__notice" role="status">正在建立安全工作階段…</p>
-      <p v-else-if="!canStart" class="assistant-quick__notice" role="status">
-        此帳號沒有啟用 AI 助理或估價資料讀取權限。
+      <p v-else-if="!canStart && !canAskGeneral" class="assistant-quick__notice" role="status">
+        此帳號沒有啟用 AI 助理或知識資料讀取權限。
       </p>
       <p v-else-if="!contextReady" class="assistant-quick__notice" role="status">
-        AI 助理需要案件與 F03 估價表脈絡。請先進入一個可讀取的估價案件。
+        目前為一般知識模式，可直接查詢法規、條文與知識文件，不會帶入案件資料。
       </p>
       <p v-if="error" class="assistant-quick__error" role="alert">{{ error }}</p>
 
@@ -193,7 +201,9 @@ watch(
           rows="4"
           maxlength="2000"
           :disabled="!canAsk || loading || sending"
-          placeholder="例如：這筆案件採用的估價基準依據是什麼？"
+          :placeholder="contextReady
+            ? '例如：這筆案件採用的估價基準依據是什麼？'
+            : '例如：土地估價相關規定有哪些適用條件？'"
         />
         <div class="assistant-quick__composer-actions">
           <button type="button" class="assistant-quick__secondary" :disabled="!items.length || sending" @click="retryLast">
@@ -208,7 +218,9 @@ watch(
         </div>
       </form>
 
-      <RouterLink v-if="contextReady" class="assistant-quick__full" :to="{ name: 'assistant', query: { caseId: contextCaseId, formId: contextFormId } }" @click="emit('close')">
+      <RouterLink class="assistant-quick__full" :to="contextReady
+        ? { name: 'assistant', query: { caseId: contextCaseId, formId: contextFormId } }
+        : { name: 'assistant' }" @click="emit('close')">
         開啟完整助理工作區
       </RouterLink>
       <p class="assistant-quick__disclaimer">AI 建議僅供輔助；可見來源與可執行操作仍由後端權限決定。</p>

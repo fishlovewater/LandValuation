@@ -21,7 +21,8 @@ declare module 'vue-router' {
   }
 }
 
-const lazyPlaceholder = () => import('../views/RoutePlaceholderView.vue')
+const lazyAppHome = () => import('../views/AppHomeView.vue')
+const lazyProfile = () => import('../modules/auth/views/ProfileView.vue')
 const lazyPublicInfo = () => import('../modules/auth/views/PublicInfoView.vue')
 
 export const routes: readonly RouteRecordRaw[] = [
@@ -75,7 +76,7 @@ export const routes: readonly RouteRecordRaw[] = [
       {
         path: '',
         name: 'app-home',
-        component: lazyPlaceholder,
+        component: lazyAppHome,
         meta: {
           requiresAuth: true,
           title: '工作台總覽',
@@ -86,7 +87,7 @@ export const routes: readonly RouteRecordRaw[] = [
       {
         path: 'profile',
         name: 'app-profile',
-        component: lazyPlaceholder,
+        component: lazyProfile,
         meta: {
           requiresAuth: true,
           title: '帳號設定',

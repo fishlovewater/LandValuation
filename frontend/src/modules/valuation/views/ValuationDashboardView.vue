@@ -9,7 +9,7 @@ import { useAuthStore } from '../../../stores/auth.store'
 import { safeValuationErrorMessage, valuationApi } from '../valuation.api'
 import { mapCaseResponse } from '../valuation.mappers'
 import { resetValuationFlow } from '../valuation.types'
-import type { FormCode, FormRequirementResponseDto, ValuationCaseModel } from '../valuation.types'
+import type { FormRequirementResponseDto, ValuationCaseModel } from '../valuation.types'
 import ValuationStepNavigator from '../components/ValuationStepNavigator.vue'
 
 const router = useRouter()
@@ -21,7 +21,8 @@ const creating = ref(false)
 const error = ref('')
 const notice = ref('')
 const createOpen = ref(false)
-const firstCase = computed(() => cases.value[0] ?? null)
+const sortBy = ref('valuationDueDate')
+const sortDirection = ref<'asc' | 'desc'>('asc')
 const canCreate = computed(() => auth.permissions.includes('case.create') && auth.permissions.includes('valuation.update'))
 const createDraft = reactive({
   caseNo: '',
@@ -29,12 +30,51 @@ const createDraft = reactive({
   caseType: '',
   requestingAgency: '',
   valuationBaseDate: '',
+  valuationDueDate: '',
   cityCode: '',
   districtCode: '',
   landUseType: '',
-  formCode: 'F03' as FormCode,
 })
-const selectedRequirement = computed(() => formTypes.value.find((item) => item.form_type === createDraft.formCode) ?? null)
+const selectedRequirement = computed(() => formTypes.value.find((item) => item.form_type === 'F03') ?? null)
+const sortedCases = computed(() => {
+  const direction = sortDirection.value === 'asc' ? 1 : -1
+  const key = sortBy.value
+  return [...cases.value].sort((left, right) => {
+    const leftValue = key === 'caseNo'
+      ? left.caseNo
+      : key === 'name'
+        ? left.name
+        : key === 'status'
+          ? left.status
+          : key === 'dueAt' || key === 'valuationDueDate'
+            ? left.valuationDueDate ?? '9999-12-31'
+            : left.updatedAt
+    const rightValue = key === 'caseNo'
+      ? right.caseNo
+      : key === 'name'
+        ? right.name
+        : key === 'status'
+          ? right.status
+          : key === 'dueAt' || key === 'valuationDueDate'
+            ? right.valuationDueDate ?? '9999-12-31'
+            : right.updatedAt
+    return leftValue.localeCompare(rightValue, 'zh-Hant') * direction
+  })
+})
+
+function requirementFieldLabel(field: string): string {
+  return ({
+    valuation_base_date: '估價基準日',
+    benchmark_land_id: '比準地',
+  } as Record<string, string>)[field] ?? field
+}
+
+function requirementDocumentLabel(document: string): string {
+  return ({
+    'land-register': '土地登記資料',
+    'cadastral-map': '地籍圖',
+  } as Record<string, string>)[document] ?? document
+}
 
 async function loadCases(): Promise<void> {
   loading.value = true
@@ -58,8 +98,13 @@ async function loadCases(): Promise<void> {
 function resetCreateDraft(): void {
   Object.assign(createDraft, {
     caseNo: '', title: '', caseType: '', requestingAgency: '', valuationBaseDate: '',
-    cityCode: '', districtCode: '', landUseType: '', formCode: 'F03' as FormCode,
+    valuationDueDate: '', cityCode: '', districtCode: '', landUseType: '',
   })
+}
+
+function updateSort(value: { sortBy: string; sortDirection: 'asc' | 'desc' }): void {
+  sortBy.value = value.sortBy
+  sortDirection.value = value.sortDirection
 }
 
 async function createCase(): Promise<void> {
@@ -74,12 +119,13 @@ async function createCase(): Promise<void> {
       case_type: createDraft.caseType,
       requesting_agency: createDraft.requestingAgency || null,
       valuation_base_date: createDraft.valuationBaseDate,
+      valuation_due_date: createDraft.valuationDueDate || null,
       city_code: createDraft.cityCode,
       district_code: createDraft.districtCode,
       land_use_type: createDraft.landUseType || null,
     })
     await valuationApi.createForm(created.case_id, {
-      form_code: createDraft.formCode,
+      form_code: 'F03',
       prepared_date: createDraft.valuationBaseDate,
     })
     createOpen.value = false
@@ -131,34 +177,34 @@ onMounted(() => {
       </div>
 
       <CaseTable
-        :cases="cases"
+        :cases="sortedCases"
         :loading="loading"
         :error="error"
+        :sort-by="sortBy === 'valuationDueDate' ? 'dueAt' : sortBy"
+        :sort-direction="sortDirection"
+        :show-deadline="true"
         empty-title="目前沒有可處理案件"
         empty-description="請確認目前帳號具備案件讀取權限，或稍後重新整理。"
+        @sort-change="updateSort"
         @retry="loadCases"
-      />
-
-      <div v-if="firstCase" class="next-action" data-testid="next-action">
-        <div>
-          <p class="valuation-eyebrow">下一步</p>
-          <strong>{{ firstCase.caseNo }}｜{{ firstCase.name }}</strong>
-          <p>開啟案件，確認來源資料與 F03 正式估價欄位。</p>
-        </div>
-        <button
-          class="solid-button solid-button--primary"
-          type="button"
-          data-testid="case-open"
-          @click="openCase(firstCase.caseId)"
-        >
-          繼續處理
-        </button>
-      </div>
+      >
+        <template #actions="{ row }">
+          <button
+            class="case-action-button"
+            type="button"
+            :data-testid="`case-open-${row.caseId}`"
+            @click="openCase(row.caseId)"
+          >
+            繼續估價
+          </button>
+        </template>
+      </CaseTable>
     </section>
 
     <GlassModal
       :open="createOpen"
       id="valuation-create-case"
+      class="valuation-create-modal"
       title="新增估價案件"
       initial-focus="#valuation-case-no"
       @close="createOpen = false"
@@ -168,26 +214,27 @@ onMounted(() => {
           <label><span>案件編號 *</span><input id="valuation-case-no" v-model.trim="createDraft.caseNo" required maxlength="50" /></label>
           <label><span>案件名稱 *</span><input v-model.trim="createDraft.title" required maxlength="200" /></label>
           <label><span>案件類型 *</span><input v-model.trim="createDraft.caseType" required maxlength="50" placeholder="例如：徵收補償市價查估" /></label>
-          <label><span>估價表類型 *</span>
-            <select v-model="createDraft.formCode" required>
-              <option v-for="item in formTypes" :key="item.form_type" :value="item.form_type">{{ item.form_type }}｜{{ item.form_name }}</option>
-            </select>
-          </label>
           <label><span>估價基準日 *</span><input v-model="createDraft.valuationBaseDate" type="date" required /></label>
+          <label><span>估價作業期限</span><input v-model="createDraft.valuationDueDate" type="date" /></label>
           <label><span>申請機關</span><input v-model.trim="createDraft.requestingAgency" maxlength="200" /></label>
           <label><span>縣市代碼 *</span><input v-model.trim="createDraft.cityCode" required maxlength="20" /></label>
           <label><span>行政區代碼 *</span><input v-model.trim="createDraft.districtCode" required maxlength="20" /></label>
           <label class="create-case-grid__wide"><span>土地使用類型</span><input v-model.trim="createDraft.landUseType" maxlength="100" /></label>
+          <div class="create-case-fixed-form create-case-grid__wide" data-testid="create-case-starting-form">
+            <span>起始查估表</span>
+            <strong>F03｜比準地地價估計表</strong>
+            <small>新增案件會先建立目前估價工作台的 F03 草稿；其他查估書表會依後續比較、區域因素與正式報告流程建立或確認，不需要在這裡先選一張表。</small>
+          </div>
         </div>
 
         <section v-if="selectedRequirement" class="requirement-preview" aria-label="所需資料清單">
           <div>
             <strong>{{ selectedRequirement.form_name }} 所需資料</strong>
-            <span>依後端 form-types 契約顯示。</span>
+            <span>這裡只列出 F03 起始草稿的必要條件，不代表整個徵收市價查估作業只有這一張表。</span>
           </div>
           <ul>
-            <li v-for="field in selectedRequirement.required_fields" :key="`field-${field}`">欄位：{{ field }}</li>
-            <li v-for="document in selectedRequirement.required_documents" :key="`doc-${document}`">文件：{{ document }}</li>
+            <li v-for="field in selectedRequirement.required_fields" :key="`field-${field}`">欄位：{{ requirementFieldLabel(field) }}</li>
+            <li v-for="document in selectedRequirement.required_documents" :key="`doc-${document}`">文件：{{ requirementDocumentLabel(document) }}</li>
           </ul>
         </section>
 
@@ -222,7 +269,9 @@ onMounted(() => {
 .dashboard-notice { color: var(--app-green); background: rgba(59, 129, 102, .09); }
 .dashboard-error { color: #a44334; background: rgba(255, 240, 237, .9); }
 
-.create-case-form { display: grid; gap: 18px; min-width: min(720px, 72vw); }
+.create-case-form { display: grid; width: 100%; min-width: 0; gap: 18px; }
+:deep(.valuation-create-modal.lg-modal__panel) { width: min(860px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
+:deep(.valuation-create-modal .lg-modal__title) { color: var(--app-ink); }
 .create-case-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
 .create-case-grid label { display: grid; gap: 6px; color: var(--app-ink-soft); font-size: 12px; font-weight: 800; }
 .create-case-grid__wide { grid-column: 1 / -1; }
@@ -230,6 +279,10 @@ onMounted(() => {
 .create-case-grid select { min-height: 44px; padding: 9px 11px; border: 1px solid var(--app-line); border-radius: 10px; color: var(--app-ink); background: rgba(255,255,255,.8); font: inherit; }
 .create-case-grid input:focus,
 .create-case-grid select:focus { outline: 3px solid rgba(200, 91, 67, .16); border-color: var(--app-accent); }
+.create-case-fixed-form { display: grid; gap: 4px; padding: 12px 13px; border: 1px solid rgba(46,89,132,.18); border-radius: 10px; background: #f7fbff; }
+.create-case-fixed-form > span { color: var(--app-muted); font-size: 10px; font-weight: 800; }
+.create-case-fixed-form strong { color: var(--app-ink); font-size: 13px; }
+.create-case-fixed-form small { color: var(--app-ink-soft); font-size: 11px; font-weight: 500; line-height: 1.6; }
 .requirement-preview { display: grid; gap: 10px; padding: 14px; border: 1px solid rgba(46, 89, 132, .18); border-radius: 14px; background: rgba(237, 244, 251, .66); }
 .requirement-preview div { display: grid; gap: 3px; }
 .requirement-preview strong { color: var(--app-ink); }
@@ -238,8 +291,7 @@ onMounted(() => {
 .requirement-preview li { padding: 6px 9px; border-radius: 999px; color: var(--app-ink-soft); background: rgba(255,255,255,.76); font-size: 11px; }
 .create-case-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
-.valuation-surface__heading,
-.next-action {
+.valuation-surface__heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -281,26 +333,8 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.next-action {
-  align-items: center;
-  margin-top: 18px;
-  padding: 18px;
-  border: 1px solid rgba(200, 91, 67, 0.18);
-  border-radius: var(--app-radius-sm);
-  background: #fffaf7;
-}
-
-.next-action strong {
-  display: block;
-  color: var(--app-ink);
-  font-size: 15px;
-}
-
-.next-action p:last-child {
-  margin: 5px 0 0;
-  color: var(--app-ink-soft);
-  font-size: 13px;
-}
+.case-action-button { min-height: 36px; padding: 7px 12px; border: 1px solid #2e5984; border-radius: 8px; color: #fff; background: #2e5984; cursor: pointer; font-size: 11px; font-weight: 900; white-space: nowrap; }
+.case-action-button:hover { background: #244d73; }
 
 .solid-button {
   min-height: 44px;
@@ -334,8 +368,7 @@ onMounted(() => {
     padding: 16px;
   }
 
-  .valuation-surface__heading,
-  .next-action {
+  .valuation-surface__heading {
     align-items: flex-start;
     flex-direction: column;
   }

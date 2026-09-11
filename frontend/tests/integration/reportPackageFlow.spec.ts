@@ -37,6 +37,7 @@ const caseDto = {
   case_type: 'LAND_VALUATION',
   requesting_agency: '示範機關',
   valuation_base_date: '2026-09-08',
+  valuation_due_date: '2026-09-30',
   city_code: '65000',
   district_code: '65000010',
   land_use_type: 'COMMERCIAL',

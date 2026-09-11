@@ -72,6 +72,7 @@ export function mapCaseResponse(dto: CaseResponseDto): ValuationCaseModel {
     district: dto.district_code,
     status: dto.case_status,
     updatedAt: dto.updated_at,
+    dueAt: dto.valuation_due_date,
   }
 
   return {
@@ -79,6 +80,7 @@ export function mapCaseResponse(dto: CaseResponseDto): ValuationCaseModel {
     caseType: dto.case_type,
     requestingAgency: dto.requesting_agency,
     valuationBaseDate: dto.valuation_base_date,
+    valuationDueDate: dto.valuation_due_date,
     cityCode: dto.city_code,
     districtCode: dto.district_code,
     landUseType: dto.land_use_type,

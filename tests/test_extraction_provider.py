@@ -16,6 +16,7 @@ from app.valuation.extraction.provider import (
     LocalPdfExtractionProvider,
     TextractPdfExtractionProvider,
     XlsxExtractionProvider,
+    _candidate_values,
     build_document_extraction_provider,
 )
 
@@ -343,13 +344,22 @@ async def test_local_ocr_renders_pdf_parses_tsv_and_cleans_temp_files() -> None:
     assert result.provider == "LOCAL_OCR"
     assert result.text == "估價基準日：115年8月25日"
     assert result.candidates[0].field_name == "valuation_base_date"
-    assert result.candidates[0].value == "115年8月25日"
+    assert result.candidates[0].value == "2026-08-25"
     assert result.candidates[0].confidence == Decimal("0.9800")
     assert calls[0][0][0] == "pdftoppm"
     assert calls[1][0][0] == "tesseract"
     assert calls[1][0][calls[1][0].index("--psm") + 1] == "1"
     assert rendered_image is not None
     assert not rendered_image.exists()
+
+
+def test_roc_compact_valuation_date_is_normalized_for_f03_confirmation() -> None:
+    candidates = _candidate_values(["估價基準日:1050901"])
+
+    assert len(candidates) == 1
+    assert candidates[0].field_name == "valuation_base_date"
+    assert candidates[0].value == "2016-09-01"
+    assert candidates[0].source_text == "估價基準日:1050901"
 
 
 @pytest.mark.asyncio
@@ -410,7 +420,7 @@ async def test_textract_extracts_paginated_lines_and_cleans_temporary_s3() -> No
     assert result.page_count == 2
     assert result.text == "估價基準日：115年8月25日\n\n第二頁內容"
     assert result.candidates[0].field_name == "valuation_base_date"
-    assert result.candidates[0].value == "115年8月25日"
+    assert result.candidates[0].value == "2026-08-25"
     assert result.candidates[0].confidence == Decimal("0.9876")
     assert textract.get_calls[1]["NextToken"] == "page-2"
     assert len(s3.uploads) == 1

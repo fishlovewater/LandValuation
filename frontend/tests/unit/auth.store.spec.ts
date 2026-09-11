@@ -21,6 +21,15 @@ const user: AuthUser = {
   permissions: ['review.execute'],
 }
 
+const appraiser: AuthUser = {
+  id: 'user-appraiser',
+  username: 'valuation_demo',
+  email: 'valuation_demo@example.test',
+  displayName: '示範估價人員',
+  roles: ['APPRAISER'],
+  permissions: ['valuation.read', 'valuation.update'],
+}
+
 describe('auth store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -89,6 +98,52 @@ describe('auth store', () => {
 
     expect(tokenService.get()).toBeNull()
     expect(store.user).toBeNull()
+    expect(store.isSubmitting).toBe(false)
+  })
+
+  it('atomically switches Demo roles only after the replacement token is verified', async () => {
+    const oldToken = 'existing-appraiser-token'
+    const replacementToken: TokenResponseDto = {
+      access_token: 'replacement-reviewer-token',
+      token_type: 'bearer',
+      expires_in: 1800,
+    }
+    tokenService.set(oldToken, 1800)
+    const store = useAuthStore()
+    store.user = appraiser
+    vi.spyOn(authApi, 'demoLogin').mockResolvedValue(replacementToken)
+    const me = vi.spyOn(authApi, 'me').mockImplementation(async (accessToken) => {
+      expect(tokenService.get()).toBe(oldToken)
+      expect(accessToken).toBe(replacementToken.access_token)
+      return user
+    })
+
+    await store.switchDemoRole('REVIEWER')
+
+    expect(me).toHaveBeenCalledWith(replacementToken.access_token)
+    expect(tokenService.get()).toBe(replacementToken.access_token)
+    expect(store.user).toEqual(user)
+    expect(store.roles).toEqual(['REVIEWER'])
+  })
+
+  it('preserves the current Demo session when role switching fails', async () => {
+    const oldToken = 'existing-appraiser-token'
+    const replacementToken: TokenResponseDto = {
+      access_token: 'broken-reviewer-token',
+      token_type: 'bearer',
+      expires_in: 1800,
+    }
+    tokenService.set(oldToken, 1800)
+    const store = useAuthStore()
+    store.user = appraiser
+    vi.spyOn(authApi, 'demoLogin').mockResolvedValue(replacementToken)
+    vi.spyOn(authApi, 'me').mockRejectedValue(new Error('replacement verification failed'))
+
+    await expect(store.switchDemoRole('REVIEWER')).rejects.toThrow('replacement verification failed')
+
+    expect(tokenService.get()).toBe(oldToken)
+    expect(store.user).toEqual(appraiser)
+    expect(store.roles).toEqual(['APPRAISER'])
     expect(store.isSubmitting).toBe(false)
   })
 

@@ -38,6 +38,21 @@ Run from the repository root. The override gives every service a unique
 volumes project-scoped. These commands do not stop or reuse the default
 `land_valuation_*` containers.
 
+For normal local presentation setup, use the guarded wrapper:
+
+```powershell
+.\scripts\demo-up.ps1
+```
+
+The wrapper builds/starts this exact isolated Compose project, waits for
+`/health/ready`, reads the safe `app.demo status` envelope, and seeds only when
+the generation is still safe to replace. If the owned Demo case has already
+been submitted or reviewed, it refuses automatic reseeding instead of trying
+to remove immutable evidence. Use `-SkipBuild` only when the local images are
+already known to match the current worktree.
+
+The lower-level commands below remain the acceptance/debugging equivalent:
+
 ```powershell
 docker compose -p landvaluation-persistent-demo -f docker-compose.yml -f docker-compose.demo.yml --env-file .env.example build migrate api
 docker compose -p landvaluation-persistent-demo -f docker-compose.yml -f docker-compose.demo.yml --env-file .env.example up -d db db-role-init migrate minio minio-init api
@@ -59,7 +74,8 @@ provider-backed run is explicitly available.
 
 ## 2. Seed and capture credentials without printing them
 
-The normal command is the shared lifecycle entry point:
+`scripts/demo-up.ps1` already performs this seed step when required. For
+acceptance/debugging, the shared lifecycle entry point remains:
 
 ```powershell
 docker compose -p landvaluation-persistent-demo -f docker-compose.yml -f docker-compose.demo.yml --env-file .env.example exec -T api python -m app.demo seed
@@ -233,8 +249,10 @@ $expectedContainers = @('land_valuation_persistent_demo_api', 'land_valuation_pe
 $expectedVolumes = @("${project}_postgres_data", "${project}_minio_data")
 $containerInfo = @(docker inspect $containers | ConvertFrom-Json)
 $volumeInfo = @(docker volume inspect $volumes | ConvertFrom-Json)
-if ((Compare-Object ($containers | Sort-Object) ($expectedContainers | Sort-Object)) -or $containerInfo.Count -ne $expectedContainers.Count) { throw 'unexpected Demo container set' }
-if ((Compare-Object ($volumes | Sort-Object) ($expectedVolumes | Sort-Object)) -or $volumeInfo.Count -ne $expectedVolumes.Count) { throw 'unexpected Demo volume set' }
+$containerDiff = @(Compare-Object ($containers | Sort-Object) ($expectedContainers | Sort-Object))
+$volumeDiff = @(Compare-Object ($volumes | Sort-Object) ($expectedVolumes | Sort-Object))
+if ($containerDiff.Count -ne 0 -or $containerInfo.Count -ne $expectedContainers.Count) { throw 'unexpected Demo container set' }
+if ($volumeDiff.Count -ne 0 -or $volumeInfo.Count -ne $expectedVolumes.Count) { throw 'unexpected Demo volume set' }
 if ($containerInfo | Where-Object { $_.Name.TrimStart('/') -notmatch '^land_valuation_persistent_demo_' -or $_.Config.Labels.'com.docker.compose.project' -ne $project }) { throw 'unexpected Demo container label' }
 if ($volumeInfo | Where-Object { $_.Name -notmatch '^landvaluation-persistent-demo_' -or $_.Labels.'com.docker.compose.project' -ne $project }) { throw 'unexpected Demo volume label' }
 ```
@@ -244,12 +262,21 @@ names before teardown. After the label checks pass, run only the explicitly
 scoped project command below; never run an unscoped `down -v`:
 
 ```powershell
+$demoVolumeNames = @(
+  $containerInfo |
+    ForEach-Object { $_.Mounts } |
+    Where-Object { $_.Type -eq 'volume' } |
+    ForEach-Object { $_.Name } |
+    Sort-Object -Unique
+)
 $defaultContainersBefore = @(docker ps -a --format '{{.Names}}' | Where-Object { $_ -match '^land_valuation_' -and $_ -notmatch '^land_valuation_persistent_demo_' })
-$unrelatedVolumesBefore = @(docker volume ls --format '{{.Name}}' | Where-Object { $_ -notmatch '^landvaluation-persistent-demo_' })
+$unrelatedVolumesBefore = @(docker volume ls --format '{{.Name}}' | Where-Object { $_ -notin $demoVolumeNames })
 docker compose @compose down --volumes
 $defaultContainersAfter = @(docker ps -a --format '{{.Names}}' | Where-Object { $_ -match '^land_valuation_' -and $_ -notmatch '^land_valuation_persistent_demo_' })
-$unrelatedVolumesAfter = @(docker volume ls --format '{{.Name}}' | Where-Object { $_ -notmatch '^landvaluation-persistent-demo_' })
-if ((Compare-Object $defaultContainersBefore $defaultContainersAfter) -or (Compare-Object $unrelatedVolumesBefore $unrelatedVolumesAfter)) { throw 'default or unrelated Docker resources changed' }
+$unrelatedVolumesAfter = @(docker volume ls --format '{{.Name}}' | Where-Object { $_ -notin $demoVolumeNames })
+$defaultContainerDiff = @(Compare-Object ($defaultContainersBefore | Sort-Object) ($defaultContainersAfter | Sort-Object))
+$unrelatedVolumeDiff = @(Compare-Object ($unrelatedVolumesBefore | Sort-Object) ($unrelatedVolumesAfter | Sort-Object))
+if ($defaultContainerDiff.Count -ne 0 -or $unrelatedVolumeDiff.Count -ne 0) { throw 'default or unrelated Docker resources changed' }
 ```
 
 Do not add an admin delete endpoint or backdoor. The public reset refusal and

@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
+    "build:demo": "vue-tsc -b && vite build --mode demo",
     "test": "vitest",
     "test:e2e": "playwright test --pass-with-no-tests",
     "preview": "vite preview"

@@ -2,10 +2,12 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import EmptyState from '../../../components/common/EmptyState.vue'
+import DocumentTextPreview from '../../../components/common/DocumentTextPreview.vue'
 import ErrorState from '../../../components/common/ErrorState.vue'
 import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
 import PageHeader from '../../../components/common/PageHeader.vue'
 import RiskBadge from '../../../components/common/RiskBadge.vue'
+import SpreadsheetPreview from '../../../components/common/SpreadsheetPreview.vue'
 import StatusBadge from '../../../components/common/StatusBadge.vue'
 import { liquidGlass as vLiquidGlass } from '../../../directives/liquidGlass'
 import { statusLabel } from '../../../utils/enumLabels'
@@ -34,6 +36,8 @@ import {
 } from '../../review/review.mappers'
 import CaseTimeline from '../components/CaseTimeline.vue'
 import DocumentList from '../components/DocumentList.vue'
+import type { SpreadsheetPreviewDto } from '../../../types/spreadsheet'
+import type { DocumentTextPreviewDto } from '../../../types/documentPreview'
 import type {
   HistoryCaseDetailModel,
   HistoryDocumentModel,
@@ -41,7 +45,7 @@ import type {
   HistoryValuationModel,
 } from '../history.types'
 
-type DetailTab = 'overview' | 'valuation' | 'review'
+type DetailTab = 'overview' | 'valuation' | 'review' | 'versions'
 interface DisplayValue { value: string; technicalCode?: string }
 interface DisplayField extends DisplayValue { label: string }
 interface TechnicalField { label: string; code: string }
@@ -61,12 +65,17 @@ const previewDocument = ref<HistoryDocumentModel | null>(null)
 const previewUrl = ref('')
 const previewLoading = ref(false)
 const previewError = ref('')
+const previewSpreadsheet = ref<SpreadsheetPreviewDto | null>(null)
+const previewText = ref<DocumentTextPreviewDto | null>(null)
 let activeController: AbortController | null = null
 let loadSerial = 0
 
 const caseId = computed(() => (typeof route.params.caseId === 'string' ? route.params.caseId : ''))
 const hasValuation = computed(() => Boolean(detail.value?.permissions.canViewValuation))
 const hasReview = computed(() => Boolean(detail.value?.permissions.canViewReview))
+const hasVersionHistory = computed(() => Boolean(
+  detail.value && (detail.value.versions.length || detail.value.changes.length || detail.value.versionDiffs.length),
+))
 
 function safeRecordEntries(record: Record<string, unknown>): Array<[string, unknown]> {
   return Object.entries(record).filter(([key, value]) => {
@@ -132,7 +141,7 @@ function valuationRecords(valuation: HistoryValuationModel | null): DisplayRecor
     ...displayRecords(valuation.forms, ['form_code'], '估價表單'),
     ...displayRecords(valuation.valuations, ['valuation_type', 'result_status'], '估價結果'),
     ...displayRecords(valuation.comparisonAnalyses, ['analysis_status'], '比較分析'),
-    ...displayRecords(valuation.benchmarkValuations, ['valuation_status'], '基準地估價'),
+    ...displayRecords(valuation.benchmarkValuations, ['valuation_status'], '比準地估價'),
     ...displayRecords(valuation.parcelValuations, ['valuation_status'], '宗地估價'),
     ...displayRecords(valuation.validationRuns, ['run_status'], '估價檢核'),
     ...displayRecords(valuation.validationFindings, ['rule_code', 'severity'], '估價檢核項目'),
@@ -152,9 +161,28 @@ function reviewRecords(review: HistoryReviewModel | null): DisplayRecord[] {
 const valuationItems = computed(() => valuationRecords(detail.value?.valuation ?? null))
 const reviewItems = computed(() => reviewRecords(detail.value?.review ?? null))
 
+function versionFieldLabel(fieldCode: string, fieldPath?: string | null): string {
+  const pathLabel = fieldPath ? fieldPathLabel(fieldPath) : ''
+  if (pathLabel && pathLabel !== '其他檢核欄位') return pathLabel
+  const labels: Readonly<Record<string, string>> = {
+    valuation_base_date: '估價基準日', comparison_price: '比較法價格', comparison_weight: '比較法權重',
+    income_price: '收益法價格', income_weight: '收益法權重', market_condition: '市場條件',
+    adjustment_rate: '調整率', land_no: '地號', area_sqm: '土地面積', land_use_zone: '使用分區',
+  }
+  return labels[fieldCode] ?? '估價資料欄位'
+}
+
+function changeEntityLabel(value: string): string {
+  const labels: Readonly<Record<string, string>> = {
+    case: '案件', document: '文件', valuation: '估價資料', review: '審查資料', form: '估價表單',
+  }
+  return labels[value.toLowerCase()] ?? '案件資料'
+}
+
 function syncTab(): void {
   if (activeTab.value === 'valuation' && !hasValuation.value) activeTab.value = hasReview.value ? 'review' : 'overview'
   if (activeTab.value === 'review' && !hasReview.value) activeTab.value = hasValuation.value ? 'valuation' : 'overview'
+  if (activeTab.value === 'versions' && !hasVersionHistory.value) activeTab.value = 'overview'
 }
 
 async function load(): Promise<void> {
@@ -193,6 +221,8 @@ function downloadAnchor(url: string, filename: string): HTMLAnchorElement {
 function clearDocumentPreview(): void {
   if (previewUrl.value && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(previewUrl.value)
   previewUrl.value = ''
+  previewSpreadsheet.value = null
+  previewText.value = null
   previewDocument.value = null
   previewError.value = ''
 }
@@ -204,6 +234,14 @@ async function previewHistoryDocument(historyDocument: HistoryDocumentModel): Pr
   previewDocument.value = historyDocument
   previewLoading.value = true
   try {
+    if (historyDocument.contentType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+      previewSpreadsheet.value = await historyApi.previewSpreadsheet(historyDocument.documentId)
+      return
+    }
+    if (historyDocument.contentType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      previewText.value = await historyApi.previewTextDocument(historyDocument.documentId)
+      return
+    }
     const blob = await historyApi.downloadDocument(historyDocument.documentId)
     if (typeof URL.createObjectURL === 'function') previewUrl.value = URL.createObjectURL(blob)
   } catch (caught: unknown) {
@@ -288,6 +326,7 @@ onBeforeUnmount(() => {
         <button type="button" :class="{ 'is-active': activeTab === 'overview' }" data-testid="history-tab-overview" @click="activeTab = 'overview'">案件總覽</button>
         <button v-if="detail.permissions.canViewValuation" type="button" :class="{ 'is-active': activeTab === 'valuation' }" data-testid="history-tab-valuation" @click="activeTab = 'valuation'">估價資料</button>
         <button v-if="detail.permissions.canViewReview" type="button" :class="{ 'is-active': activeTab === 'review' }" data-testid="history-tab-review" @click="activeTab = 'review'">審查資料</button>
+        <button v-if="hasVersionHistory" type="button" :class="{ 'is-active': activeTab === 'versions' }" data-testid="history-tab-versions" @click="activeTab = 'versions'">版本比較</button>
       </nav>
 
       <template v-if="activeTab === 'overview'">
@@ -335,6 +374,8 @@ onBeforeUnmount(() => {
             :src="previewUrl"
             :alt="`${previewDocument.fileName} 預覽`"
           >
+          <SpreadsheetPreview v-else-if="previewSpreadsheet" :preview="previewSpreadsheet" />
+          <DocumentTextPreview v-else-if="previewText" :preview="previewText" />
           <div v-else class="history-case__document-unsupported">
             <strong>此格式目前不支援直接內嵌預覽</strong>
             <span>仍可使用上方文件清單的「下載」查看完整內容。</span>
@@ -388,6 +429,57 @@ onBeforeUnmount(() => {
           </article>
         </div>
       </section>
+
+      <section v-else-if="activeTab === 'versions'" class="history-case__version-section" data-testid="history-version-section" aria-labelledby="history-version-title">
+        <div class="history-case__section-heading">
+          <div><p class="history-case__eyebrow">VERSION HISTORY</p><h2 id="history-version-title">版本前後比較</h2></div>
+          <span>{{ detail.versionDiffs.length }} 個欄位變更</span>
+        </div>
+
+        <div v-if="detail.versions.length" class="history-case__version-meta">
+          <article v-for="version in detail.versions" :key="`${version.version_no}-${version.created_at}`">
+            <strong>第 {{ version.version_no }} 版</strong>
+            <span>{{ version.change_summary || '案件版本更新' }}</span>
+            <small>{{ version.created_by || '系統流程' }} · {{ readableDate(version.created_at) }}</small>
+          </article>
+        </div>
+
+        <div v-if="detail.versionDiffs.length" class="history-case__diff-grid">
+          <article v-for="diff in detail.versionDiffs" :key="`${diff.field_code}-${diff.previous.document_version}-${diff.current.document_version}`">
+            <h3>{{ versionFieldLabel(diff.field_code, diff.field_path) }}</h3>
+            <div class="history-case__diff-values">
+              <div>
+                <span>修改前 · 第 {{ diff.previous.document_version }} 版</span>
+                <strong>{{ readableValue(diff.previous.value) }}</strong>
+                <small v-if="diff.previous.page_number">來源第 {{ diff.previous.page_number }} 頁</small>
+                <p v-if="diff.previous.raw_text">{{ diff.previous.raw_text }}</p>
+              </div>
+              <span class="history-case__diff-arrow" aria-hidden="true">→</span>
+              <div class="is-current">
+                <span>修改後 · 第 {{ diff.current.document_version }} 版</span>
+                <strong>{{ readableValue(diff.current.value) }}</strong>
+                <small v-if="diff.current.page_number">來源第 {{ diff.current.page_number }} 頁</small>
+                <p v-if="diff.current.raw_text">{{ diff.current.raw_text }}</p>
+              </div>
+            </div>
+          </article>
+        </div>
+        <p v-else class="history-case__empty">目前沒有可比對的前後欄位差異。</p>
+
+        <section v-if="detail.changes.length" class="history-case__change-log" aria-labelledby="history-change-log-title">
+          <h3 id="history-change-log-title">修改紀錄</h3>
+          <ol>
+            <li v-for="(change, index) in detail.changes" :key="`${change.changed_at}-${index}`">
+              <div>
+                <strong>{{ changeEntityLabel(change.entity_type) }} · {{ readableFieldLabel(change.field_name) }}</strong>
+                <span>{{ readableValue(change.old_value) }} → {{ readableValue(change.new_value) }}</span>
+                <p v-if="change.change_reason">{{ change.change_reason }}</p>
+              </div>
+              <small>{{ change.changed_by || '系統流程' }} · {{ readableDate(change.changed_at) }}</small>
+            </li>
+          </ol>
+        </section>
+      </section>
     </template>
   </section>
 </template>
@@ -415,6 +507,7 @@ onBeforeUnmount(() => {
 .history-case__document-preview header button { min-height:40px; padding:7px 11px; border:1px solid var(--app-line); border-radius:8px; color:var(--app-ink-soft); background:#fff; cursor:pointer; font-weight:800; }
 .history-case__document-frame { width:100%; min-height:620px; border:1px solid #d6dee8; border-radius:8px; background:#eef2f6; }
 .history-case__document-image { display:block; max-width:100%; max-height:720px; margin:auto; border-radius:8px; object-fit:contain; }
+.history-case__document-preview :deep(.spreadsheet-preview) { min-width:0; }
 .history-case__document-unsupported { display:grid; gap:5px; padding:28px; border:1px dashed var(--app-line); border-radius:8px; color:var(--app-muted); text-align:center; }
 .history-case__document-unsupported strong { color:var(--app-ink-soft); }
 .history-case__facts,
@@ -448,11 +541,38 @@ onBeforeUnmount(() => {
 .history-case__technical dl { margin: 10px 0 0; }
 .history-case__technical code { color: var(--app-ink-soft); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
 .history-case__empty { margin: 0; color: var(--app-muted); font-size: 13px; }
+.history-case__version-section { display:grid; gap:16px; margin-top:15px; padding:20px; border:1px solid var(--app-line); border-radius:var(--app-radius-sm); background:#fff; box-shadow:var(--app-shadow-soft); }
+.history-case__version-meta { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:8px; }
+.history-case__version-meta article { display:grid; gap:4px; padding:12px; border:1px solid var(--app-line); border-radius:9px; background:var(--app-surface-muted); }
+.history-case__version-meta strong { color:var(--app-ink); font-size:12px; }
+.history-case__version-meta span { color:var(--app-ink-soft); font-size:11px; }
+.history-case__version-meta small { color:var(--app-muted); font-size:9px; }
+.history-case__diff-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.history-case__diff-grid > article { display:grid; gap:10px; padding:14px; border:1px solid var(--app-line); border-radius:10px; background:#fbfcfe; }
+.history-case__diff-grid h3 { margin:0; color:var(--app-ink); font-size:13px; }
+.history-case__diff-values { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); gap:8px; align-items:stretch; }
+.history-case__diff-values > div { display:grid; align-content:start; gap:4px; padding:10px; border:1px solid #e3e9f0; border-radius:8px; background:#fff; }
+.history-case__diff-values > div.is-current { border-color:#bfd8ca; background:#f3f9f6; }
+.history-case__diff-values span { color:var(--app-muted); font-size:9px; font-weight:800; }
+.history-case__diff-values strong { overflow-wrap:anywhere; color:var(--app-ink); font-size:13px; }
+.history-case__diff-values small { color:var(--app-muted); font-size:9px; }
+.history-case__diff-values p { margin:4px 0 0; color:var(--app-ink-soft); font-size:10px; line-height:1.55; white-space:pre-wrap; }
+.history-case__diff-arrow { align-self:center; color:var(--app-primary) !important; font-size:16px !important; }
+.history-case__change-log { display:grid; gap:10px; padding-top:4px; }
+.history-case__change-log > h3 { margin:0; color:var(--app-ink); font-size:14px; }
+.history-case__change-log ol { display:grid; gap:7px; margin:0; padding:0; list-style:none; }
+.history-case__change-log li { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:11px 12px; border-left:3px solid var(--app-primary); background:var(--app-surface-muted); }
+.history-case__change-log li > div { display:grid; gap:3px; }
+.history-case__change-log strong { color:var(--app-ink); font-size:11px; }
+.history-case__change-log span { color:var(--app-ink-soft); font-size:11px; }
+.history-case__change-log p { margin:2px 0 0; color:var(--app-muted); font-size:10px; }
+.history-case__change-log small { color:var(--app-muted); font-size:9px; white-space:nowrap; }
 
 @media (max-width: 900px) {
   .history-case { padding-inline: 18px; }
   .history-case__overview-grid { grid-template-columns: 1fr; }
   .history-case__record-grid { grid-template-columns: 1fr; }
+  .history-case__diff-grid { grid-template-columns:1fr; }
 }
 
 @media (max-width: 640px) {
@@ -463,5 +583,8 @@ onBeforeUnmount(() => {
   .history-case__document-frame { min-height:420px; }
   .history-case__parcel-list { grid-template-columns: 1fr; }
   .history-case__record dl { grid-template-columns: 1fr; }
+  .history-case__diff-values { grid-template-columns:1fr; }
+  .history-case__diff-arrow { justify-self:center; transform:rotate(90deg); }
+  .history-case__change-log li { flex-direction:column; }
 }
 </style>

@@ -221,6 +221,13 @@
   gap: 3px;
 }
 
+.demo-login__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .demo-login__heading strong {
   color: var(--app-ink);
   font-size: 13px;
@@ -232,6 +239,17 @@
   line-height: 1.5;
 }
 
+.demo-login__heading .demo-login__sequence {
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: #244d73;
+  background: #edf4fb;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+
 .demo-login__grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -239,10 +257,13 @@
 }
 
 .demo-login__button {
+  position: relative;
   display: grid;
-  min-height: 94px;
-  align-content: start;
-  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 112px;
+  align-content: center;
+  align-items: center;
+  gap: 10px;
   padding: 12px 10px;
   border: 1px solid #cfd9e5;
   border-radius: 12px;
@@ -251,6 +272,31 @@
   cursor: pointer;
   text-align: left;
   transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.demo-login__stage {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: inline-grid;
+  width: 21px;
+  height: 21px;
+  place-items: center;
+  border-radius: 999px;
+  color: #fff;
+  background: #2e5984;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.demo-login__icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 10px;
+  color: #244d73;
+  background: #eaf2fa;
 }
 
 .demo-login__button:hover:not(:disabled) {
@@ -264,7 +310,7 @@
   opacity: .6;
 }
 
-.demo-login__button > span {
+.demo-login__copy {
   display: grid;
   gap: 3px;
 }
@@ -324,8 +370,30 @@
   padding-bottom: 4px;
   border: 0 !important;
   outline: 0 !important;
+  color: #1f2f46 !important;
+  caret-color: #1f2f46;
   background: transparent !important;
   box-shadow: none !important;
+  font-weight: 650;
+}
+
+.login-card .lg-field__box--solid .lg-field__input::placeholder {
+  color: #8996a8 !important;
+  opacity: 1;
+}
+
+.login-card .lg-field__box--solid .lg-field__label {
+  color: #52657a !important;
+  font-weight: 800;
+}
+
+.login-card .lg-field__box--solid:focus-within {
+  border-color: #2e5984;
+  box-shadow: 0 0 0 3px rgba(46, 89, 132, .12);
+}
+
+.login-card .lg-field__box--solid:focus-within .lg-field__label {
+  color: #244d73 !important;
 }
 
 .lg-field__box--solid:focus-within {
@@ -394,8 +462,12 @@
 
   .demo-login__button {
     min-height: 68px;
-    grid-template-columns: auto 1fr;
     align-items: center;
+  }
+
+  .demo-login__title-row {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 

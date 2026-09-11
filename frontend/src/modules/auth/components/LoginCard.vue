@@ -15,6 +15,7 @@ import { ForbiddenError } from '../../../api/http'
 import GlassButton from '../../../components/glass/GlassButton.vue'
 import GlassCard from '../../../components/glass/GlassCard.vue'
 import GlassField from '../../../components/glass/GlassField.vue'
+import { isDemoQuickLoginEnabled } from '../../../config/environment'
 import { useAuthStore } from '../../../stores/auth.store'
 import type { AuthUser, DemoLoginRole } from '../auth.types'
 
@@ -33,16 +34,17 @@ const usernameContainer = ref<HTMLElement | null>(null)
 const passwordContainer = ref<HTMLElement | null>(null)
 let enterHandled = false
 
-const demoQuickLoginEnabled = import.meta.env.DEV || import.meta.env.VITE_DEMO_QUICK_LOGIN === 'true'
+const demoQuickLoginEnabled = isDemoQuickLoginEnabled(import.meta.env)
 const demoAccounts: Array<{
   role: DemoLoginRole
+  stage: number
   label: string
   description: string
   icon: typeof MapPin
 }> = [
-  { role: 'APPRAISER', label: '估價人員', description: '估價、文件與 AI 辨識', icon: MapPin },
-  { role: 'REVIEWER', label: '審查人員', description: '疑點、補件與審查決定', icon: ClipboardText },
-  { role: 'INSPECTOR', label: '案件查詢', description: '歷程、版本與追溯', icon: MagnifyingGlass },
+  { role: 'APPRAISER', stage: 1, label: '估價人員', description: '文件辨識、估價計算與正式送審', icon: MapPin },
+  { role: 'REVIEWER', stage: 2, label: '審查人員', description: '疑點判讀、證據確認與審查決定', icon: ClipboardText },
+  { role: 'INSPECTOR', stage: 3, label: '案件查詢', description: '歷程、版本與完整追溯', icon: MagnifyingGlass },
 ]
 
 const passwordType = computed(() => (passwordVisible.value ? 'text' : 'password'))
@@ -152,8 +154,11 @@ defineExpose({ focusUsername })
 
     <section v-if="demoQuickLoginEnabled" class="demo-login" aria-labelledby="demo-login-title">
       <div class="demo-login__heading">
-        <strong id="demo-login-title">Demo 快速登入</strong>
-        <span>展示時直接選擇角色，不需要輸入帳號密碼。</span>
+        <div class="demo-login__title-row">
+          <strong id="demo-login-title">Demo 快速登入</strong>
+          <span class="demo-login__sequence">建議順序 1 → 2 → 3</span>
+        </div>
+        <span>展示時直接選擇角色，不需要輸入帳號密碼；完整展示依「估價 → 審查 → 歷程查詢」進行。</span>
       </div>
       <div class="demo-login__grid">
         <button
@@ -165,8 +170,11 @@ defineExpose({ focusUsername })
           :disabled="authStore.isSubmitting"
           @click="quickLogin(account.role)"
         >
-          <component :is="account.icon" :size="19" weight="duotone" aria-hidden="true" />
-          <span>
+          <span class="demo-login__stage" aria-hidden="true">{{ account.stage }}</span>
+          <span class="demo-login__icon" aria-hidden="true">
+            <component :is="account.icon" :size="19" weight="duotone" />
+          </span>
+          <span class="demo-login__copy">
             <strong>{{ account.label }}</strong>
             <small>{{ account.description }}</small>
           </span>

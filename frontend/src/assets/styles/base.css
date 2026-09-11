@@ -34,8 +34,45 @@ a {
 button:focus-visible,
 a:focus-visible,
 input:focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--app-accent) 70%, white);
+  outline: 3px solid color-mix(in srgb, var(--app-primary) 70%, white);
   outline-offset: 3px;
+}
+
+/* Application design system: solid, readable work surfaces. Public landing can
+   still use decorative glass; authenticated workspaces intentionally do not. */
+.app-layout .lg {
+  border-color: var(--app-line) !important;
+  background: var(--app-paper-strong) !important;
+  box-shadow: var(--app-shadow-soft) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.app-layout .lg::before,
+.app-layout .lg::after {
+  display: none !important;
+}
+
+.app-layout input:not([type='checkbox']):not([type='radio']):not([type='range']),
+.app-layout select,
+.app-layout textarea {
+  border-color: var(--app-line-strong);
+  border-radius: 9px;
+  color: var(--app-ink);
+  background: #fff;
+  box-shadow: none;
+}
+
+.app-layout input:not([type='checkbox']):not([type='radio']):not([type='range']):focus,
+.app-layout select:focus,
+.app-layout textarea:focus {
+  border-color: var(--app-primary);
+  outline: 0;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-primary) 15%, transparent);
+}
+
+.app-layout button {
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease, transform 120ms ease;
 }
 
 #app {

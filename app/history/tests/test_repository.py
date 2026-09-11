@@ -106,3 +106,47 @@ async def test_history_detail_risk_summaries_are_scoped_to_latest_run_and_ordere
         in normalized_sql
     )
     assert "ORDER BY rs.generated_at DESC, rs.risk_summary_id DESC" in normalized_sql
+
+
+@pytest.mark.asyncio
+async def test_history_case_versions_are_ordered_newest_first_and_resolve_actor_name():
+    session = Session()
+
+    await HistoryRepository(session).list_case_versions(uuid4())
+
+    normalized_sql = " ".join(session.statements[0].split())
+    assert "FROM history.case_versions cv" in normalized_sql
+    assert "LEFT JOIN auth.users u ON u.user_id = cv.created_by_user_id" in normalized_sql
+    assert "u.display_name AS created_by" in normalized_sql
+    assert "ORDER BY cv.version_no DESC" in normalized_sql
+
+
+@pytest.mark.asyncio
+async def test_history_changes_are_bounded_and_ordered_newest_first():
+    session = Session()
+
+    await HistoryRepository(session).list_changes(uuid4())
+
+    normalized_sql = " ".join(session.statements[0].split())
+    assert "FROM history.change_logs cl" in normalized_sql
+    assert "LEFT JOIN auth.users u ON u.user_id = cl.changed_by_user_id" in normalized_sql
+    assert "ORDER BY cl.changed_at DESC, cl.change_log_id DESC" in normalized_sql
+    assert "LIMIT 200" in normalized_sql
+
+
+@pytest.mark.asyncio
+async def test_history_official_field_versions_only_use_latest_completed_applied_extraction():
+    session = Session()
+
+    await HistoryRepository(session).list_official_field_versions(uuid4())
+
+    normalized_sql = " ".join(session.statements[0].split())
+    assert "FROM valuation.documents d" in normalized_sql
+    assert "FROM valuation.document_extractions" in normalized_sql
+    assert "extraction_status = 'COMPLETED'" in normalized_sql
+    assert "ORDER BY completed_at DESC NULLS LAST, created_at DESC, extraction_id DESC" in normalized_sql
+    assert "LIMIT 1" in normalized_sql
+    assert "JOIN valuation.extracted_fields ef" in normalized_sql
+    assert "ef.field_status = 'APPLIED'" in normalized_sql
+    assert "ef.confirmed_value AS normalized_value" in normalized_sql
+    assert "ORDER BY d.document_group_id, ef.field_name, d.version_no" in normalized_sql

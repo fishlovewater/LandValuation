@@ -149,6 +149,25 @@ describe('router guards', () => {
     expect(allowedSubmitRouter.currentRoute.value.path).toBe('/app/valuation/cases/case-a/submit')
   })
 
+  it('keeps the interactive Valuation workspace appraiser-only even when review/history roles have valuation evidence permissions', async () => {
+    authenticatedUser({
+      ...reviewer,
+      permissions: ['case.read', 'valuation.read', 'valuation.update', 'valuation.submit_review', 'document.download'],
+    })
+    const reviewerRouter = createAppRouter()
+    await reviewerRouter.push('/app/valuation/dashboard')
+    expect(reviewerRouter.currentRoute.value.path).toBe('/app/unauthorized')
+
+    authenticatedUser({
+      ...appraiser,
+      roles: ['INSPECTOR'],
+      permissions: ['case.read', 'valuation.read', 'valuation.update', 'valuation.submit_review', 'document.download'],
+    })
+    const inspectorRouter = createAppRouter()
+    await inspectorRouter.push('/app/valuation/cases/case-a/prepare')
+    expect(inspectorRouter.currentRoute.value.path).toBe('/app/unauthorized')
+  })
+
   it('allows History for its verified roles without requiring an invented permission', async () => {
     authenticatedUser({
       ...appraiser,

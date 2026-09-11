@@ -1,9 +1,10 @@
+import json
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai_assistant.provider import BedrockConverseProvider
+from app.ai_assistant.provider import BedrockConverseProvider, OllamaChatProvider
 from app.ai_assistant.repository import AssistantRepository
 from app.ai_assistant.schemas import (
     AssistantClaim,
@@ -15,7 +16,11 @@ from app.ai_assistant.schemas import (
     AssistantSessionCreate,
     ToolExecutionResponse,
 )
-from app.ai_assistant.tools import ALLOWED_TOOL_NAMES, BEDROCK_TOOL_CONFIG
+from app.ai_assistant.tools import (
+    ALLOWED_TOOL_NAMES,
+    BEDROCK_TOOL_CONFIG,
+    OLLAMA_TOOL_CONFIG,
+)
 from app.auth.models import User
 from app.auth.service import permission_codes
 from app.core.config import get_settings
@@ -91,22 +96,23 @@ class AssistantService:
     async def create_session(
         self, payload: AssistantSessionCreate, user: User
     ) -> AssistantSessionRecord:
-        await self.valuation._owned_editable_case(payload.case_id, user)
-        form = await self.f03._require_f03_form(
+        # An Assistant session is also useful after an appraisal has been
+        # submitted (for example, to inspect the case, extraction results, or
+        # cited knowledge).  Session creation therefore follows the normal
+        # read authorization boundary rather than the editable-case boundary.
+        # Mutating tools keep their own stricter state/ownership checks in the
+        # valuation services that actually perform the write.
+        await self.valuation.get_case(payload.case_id, user)
+        await self.f03._require_f03_form(
             payload.case_id, payload.form_instance_id
         )
-        if form.form_status != "DRAFT":
-            raise AppError(
-                "FORM_STATE_CONFLICT",
-                "只能為 F03 草稿建立 AI 工作階段",
-                409,
-            )
         provider = self.settings.ai_provider.upper()
-        model_id = (
-            self.settings.bedrock_model_id
-            if provider == "BEDROCK"
-            else "mock-f03-v1"
-        )
+        if provider == "BEDROCK":
+            model_id = self.settings.bedrock_model_id
+        elif provider == "OLLAMA":
+            model_id = self.settings.ollama_model
+        else:
+            model_id = "mock-f03-v1"
         record = AssistantSessionRecord(
             case_id=payload.case_id,
             user_id=user.user_id,
@@ -311,7 +317,11 @@ class AssistantService:
         record = await self.get_session(session_id, user)
         if record.session_status != "ACTIVE":
             raise AppError("ASSISTANT_SESSION_CLOSED", "AI 工作階段已關閉", 409)
-        await self.valuation._owned_editable_case(record.case_id, user)
+        # Read-only conversation/tool calls remain available for submitted or
+        # reviewed cases.  Any tool that mutates valuation data is checked by
+        # its underlying service (F03 update/calculation/validation/report),
+        # which still enforces editable case/form state.
+        await self.valuation.get_case(record.case_id, user)
         await self._add_message(
             record,
             role="USER",
@@ -322,6 +332,10 @@ class AssistantService:
         tools: list[ToolExecutionResponse] = []
         if record.provider == "BEDROCK":
             reply = await self._bedrock_reply(
+                record, payload, user, tools, request_id
+            )
+        elif record.provider == "OLLAMA":
+            reply = await self._ollama_reply(
                 record, payload, user, tools, request_id
             )
         else:
@@ -429,6 +443,121 @@ class AssistantService:
             model_id=record.model_id,
         )
         return record, reply, progress, tools
+
+    async def _ollama_reply(
+        self,
+        record: AssistantSessionRecord,
+        payload: AssistantMessageRequest,
+        user: User,
+        tools: list[ToolExecutionResponse],
+        request_id: UUID | None,
+    ) -> str:
+        provider = OllamaChatProvider(self.settings, OLLAMA_TOOL_CONFIG)
+        messages: list[dict[str, Any]] = [
+            {"role": "user", "content": payload.content}
+        ]
+        applied = False
+        for _round in range(self.settings.ai_max_tool_rounds):
+            response = await provider.converse(messages)
+            if not response.tool_calls:
+                return response.text or self._mock_reply(record, 0, False)
+            messages.append(response.content)
+            operation_executed: set[str] = set()
+            for call in response.tool_calls:
+                if call.name not in ALLOWED_TOOL_NAMES:
+                    raise AppError(
+                        "AI_TOOL_NOT_ALLOWED",
+                        f"AI 不可呼叫工具 {call.name}",
+                        422,
+                    )
+                if call.name in {"apply_confirmed_fields", "save_form_draft"}:
+                    if applied:
+                        result = {"status": "SUCCESS", "duplicate_ignored": True}
+                    elif not payload.confirm_apply:
+                        result = {
+                            "status": "PENDING",
+                            "confirmation_required": True,
+                        }
+                    else:
+                        result = await self._execute_tool(
+                            "apply_confirmed_fields",
+                            record,
+                            payload,
+                            user,
+                            tool_input=call.input,
+                        )
+                        applied = True
+                elif call.name in {
+                    "run_calculation",
+                    "run_validation",
+                    "generate_report_pdf",
+                }:
+                    requested = {
+                        "run_calculation": payload.run_calculation,
+                        "run_validation": payload.run_validation,
+                        "generate_report_pdf": payload.generate_report_pdf,
+                    }[call.name]
+                    confirmation_required = call.name in {
+                        "run_calculation",
+                        "generate_report_pdf",
+                    }
+                    if not requested:
+                        result = {
+                            "status": "DENIED",
+                            "reason": "使用者未在結構化請求中要求此操作",
+                        }
+                    elif confirmation_required and not payload.confirm_action:
+                        result = {
+                            "status": "PENDING",
+                            "confirmation_required": True,
+                        }
+                    elif call.name in operation_executed:
+                        result = {"status": "SUCCESS", "duplicate_ignored": True}
+                    else:
+                        result = await self._execute_tool(
+                            call.name,
+                            record,
+                            payload,
+                            user,
+                            request_id,
+                            call.input,
+                        )
+                        operation_executed.add(call.name)
+                elif call.name == "get_nearest_facility":
+                    if payload.nearest_facility is None:
+                        result = {
+                            "status": "DENIED",
+                            "reason": "使用者未在結構化請求中確認步行距離查詢",
+                        }
+                    elif call.name in operation_executed:
+                        result = {"status": "SUCCESS", "duplicate_ignored": True}
+                    else:
+                        result = await self._execute_tool(
+                            call.name, record, payload, user, request_id
+                        )
+                        operation_executed.add(call.name)
+                else:
+                    result = await self._execute_tool(
+                        call.name, record, payload, user, request_id, call.input
+                    )
+                status = str(result.get("status", "SUCCESS"))
+                tools.append(
+                    await self._record_tool(
+                        record, call.name, result, request_id, status=status
+                    )
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_name": call.name,
+                        "content": json.dumps(
+                            result,
+                            ensure_ascii=False,
+                            default=str,
+                        ),
+                    }
+                )
+        raise AppError("AI_TOOL_LIMIT", "AI 工具呼叫次數已達上限", 503)
 
     async def _bedrock_reply(
         self,

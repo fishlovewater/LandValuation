@@ -1,5 +1,7 @@
 import { isAxiosError } from 'axios'
 import { ForbiddenError, http } from '../../api/http'
+import type { DocumentTextPreviewDto } from '../../types/documentPreview'
+import type { SpreadsheetPreviewDto } from '../../types/spreadsheet'
 import type {
   AutomatedConfirmRequestDto,
   AutomatedWorkflowResponseDto,
@@ -283,6 +285,20 @@ export const valuationApi = {
     return response.data
   },
 
+  async previewSpreadsheet(caseId: string, documentId: string): Promise<SpreadsheetPreviewDto> {
+    const response = await http.get<SpreadsheetPreviewDto>(
+      `/valuation/cases/${caseId}/documents/${documentId}/spreadsheet-preview`,
+    )
+    return response.data
+  },
+
+  async previewTextDocument(caseId: string, documentId: string): Promise<DocumentTextPreviewDto> {
+    const response = await http.get<DocumentTextPreviewDto>(
+      `/valuation/cases/${caseId}/documents/${documentId}/text-preview`,
+    )
+    return response.data
+  },
+
   async startDocumentExtraction(caseId: string, documentId: string): Promise<ExtractionResponseDto> {
     const response = await http.post<ExtractionResponseDto>(
       `/valuation/cases/${caseId}/documents/${documentId}/extract`,
@@ -421,8 +437,16 @@ export const valuationApi = {
 
 export function safeValuationErrorMessage(error: unknown): string {
   if (error instanceof ForbiddenError) return error.message
-  if (isAxiosError(error) && error.response?.status === 404) {
-    return '找不到目前案件或估價資料，請重新整理後再試。'
+  if (isAxiosError(error)) {
+    const status = error.response?.status
+    const code = error.response?.data?.error?.code
+    if (status === 413 && code === 'PREVIEW_TOO_LARGE') {
+      return '文件檔案過大，請下載原始文件查看完整內容。'
+    }
+    if (status === 415 && code === 'PREVIEW_NOT_SUPPORTED') {
+      return '此文件格式目前不支援內嵌預覽，請下載原始文件查看。'
+    }
+    if (status === 404) return '找不到目前案件或估價資料，請重新整理後再試。'
   }
   return '估價服務目前無法完成此操作，請稍後再試。'
 }

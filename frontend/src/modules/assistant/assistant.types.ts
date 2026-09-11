@@ -143,6 +143,34 @@ export interface AssistantQuestionResponseDto {
   unreadable_sources: AssistantUnreadableSourceResponseDto[]
 }
 
+/** Raw response returned by POST /knowledge/ask for context-free knowledge questions. */
+export interface KnowledgeQuestionCitationResponseDto {
+  chunk_id: string
+  document_id: string
+  document_title: string
+  document_code: string
+  version_no: number
+  effective_from: string | null
+  effective_to: string | null
+  page_start: number | null
+  page_end: number | null
+  section_title: string | null
+  article_no: string | null
+  quoted_text: string
+  supporting_quote?: string | null
+  supported_claim?: string | null
+}
+
+export interface KnowledgeQuestionResponseDto {
+  answer_status: AssistantAnswerStatus
+  answer: string
+  generation_mode: string
+  next_action: string
+  clarification_question?: string | null
+  citations: KnowledgeQuestionCitationResponseDto[]
+  unreadable_sources: AssistantUnreadableSourceResponseDto[]
+}
+
 export interface AssistantSessionModel {
   assistantSessionId: string
   caseId: string

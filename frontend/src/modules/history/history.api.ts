@@ -1,6 +1,8 @@
 import { isAxiosError } from 'axios'
 import { ForbiddenError, http } from '../../api/http'
 import { historyScopeForRoles } from '../../router/roleAccess'
+import type { DocumentTextPreviewDto } from '../../types/documentPreview'
+import type { SpreadsheetPreviewDto } from '../../types/spreadsheet'
 import type {
   HistoryCaseDetailDto,
   HistoryCasePageDto,
@@ -115,6 +117,22 @@ export const historyApi = {
     })
     return response.data
   },
+
+  async previewSpreadsheet(documentId: string, signal?: AbortSignal): Promise<SpreadsheetPreviewDto> {
+    const response = await http.get<SpreadsheetPreviewDto>(
+      `/history/documents/${documentId}/spreadsheet-preview`,
+      { signal },
+    )
+    return response.data
+  },
+
+  async previewTextDocument(documentId: string, signal?: AbortSignal): Promise<DocumentTextPreviewDto> {
+    const response = await http.get<DocumentTextPreviewDto>(
+      `/history/documents/${documentId}/text-preview`,
+      { signal },
+    )
+    return response.data
+  },
 }
 
 export function safeHistoryErrorMessage(error: unknown): string {
@@ -127,9 +145,16 @@ export function safeHistoryErrorMessage(error: unknown): string {
 
 export function safeHistoryDownloadError(error: unknown): string {
   if (error instanceof ForbiddenError) return error.message
-  if (isAxiosError(error) && error.response?.status === 404) {
-    const code = error.response.data?.error?.code
-    if (code === 'DOCUMENT_OBJECT_MISSING') return '文件目前無法下載'
+  if (isAxiosError(error)) {
+    const status = error.response?.status
+    const code = error.response?.data?.error?.code
+    if (status === 413 && code === 'PREVIEW_TOO_LARGE') {
+      return '文件檔案過大，請下載原始文件查看完整內容。'
+    }
+    if (status === 415 && code === 'PREVIEW_NOT_SUPPORTED') {
+      return '此文件格式目前不支援內嵌預覽，請下載原始文件查看。'
+    }
+    if (status === 404 && code === 'DOCUMENT_OBJECT_MISSING') return '文件目前無法下載'
   }
   return '文件目前無法下載'
 }

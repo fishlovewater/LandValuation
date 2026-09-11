@@ -31,6 +31,7 @@ import {
 } from '../valuation.types'
 import ComparisonSetupPanel from '../components/ComparisonSetupPanel.vue'
 import ReportPageEditor from '../components/ReportPageEditor.vue'
+import ValuationIssueDrawer from '../components/ValuationIssueDrawer.vue'
 import ValuationStepNavigator from '../components/ValuationStepNavigator.vue'
 
 const route = useRoute()
@@ -57,6 +58,7 @@ const reportPageEditorsLoading = ref(false)
 const reportPageEditorSaving = ref<ReportPageCode | null>(null)
 const activeReportPageCode = ref<ReportPageCode>('S01')
 const editorNotice = ref('')
+const downloadingDocumentId = ref<string | null>(null)
 const REPORT_PAGE_CODES: readonly ReportPageCode[] = ['S01', 'F02-RF', 'F02']
 let activeCaseToken = 0
 
@@ -122,6 +124,27 @@ const reportPagesConfirmed = computed(() => {
   return value.s01 && value.f02Rf && value.f02
 })
 const activeReportPage = computed(() => reportPageEditors.value[activeReportPageCode.value] ?? null)
+const submitIssues = computed(() => {
+  if (flow.submission) return []
+  const items: Array<{ id: string; title: string; detail: string; target: string; severity: 'error' | 'warning' | 'pending' }> = []
+  if (!flow.authoritativeF02) {
+    items.push({ id: 'report-pages', title: '完整查估書尚未確認完成', detail: '檢視三頁資料、逐頁確認並完成正式計算與檢核。', target: 'report-pages', severity: 'pending' })
+  }
+  if (flow.formalValidation?.failedCount) {
+    items.push({ id: 'formal-errors', title: '正式檢核仍有阻擋項目', detail: `${flow.formalValidation.failedCount} 個錯誤必須修正後才能產生正式 PDF。`, target: 'formal-validation', severity: 'error' })
+  } else if (!flow.formalValidation) {
+    items.push({ id: 'formal-validation', title: '尚未完成正式檢核', detail: '完成查估書資料後執行正式檢核。', target: 'formal-validation', severity: 'pending' })
+  } else if (!warningsAcknowledged.value) {
+    items.push({ id: 'formal-warnings', title: '正式檢核警示待人工確認', detail: `還有 ${formalWarningCodes.value.length} 個警示需要人工確認。`, target: 'formal-validation', severity: 'warning' })
+  }
+  if (!flow.formalReport) {
+    items.push({ id: 'formal-pdf', title: '尚未產生正式 PDF', detail: '正式檢核通過後產生送審用完整正式 PDF。', target: 'formal-pdf', severity: 'pending' })
+  }
+  if (!flow.submission) {
+    items.push({ id: 'submission', title: '案件尚未送審', detail: '正式輸出完成後即可送出審查。', target: 'submission', severity: 'pending' })
+  }
+  return items
+})
 const readinessMessage = computed(() => {
   if (!flow.authoritativeF02) return '尚未取得 F02 最終表單，無法建立權威送審來源。'
   if (!flow.reportPackageId) return 'F02 尚未提供正式報告包識別碼。'
@@ -132,10 +155,36 @@ const readinessMessage = computed(() => {
   if (!flow.formalValidation) return '請先執行 F02 正式檢核。'
   if (!flow.formalValidation.canGenerateFormalReport) return 'F02 正式檢核回傳阻擋項目，暫停送審。'
   if (!warningsAcknowledged.value) return '請逐項確認正式檢核警示後產生 PDF。'
-  if (!flow.formalReport) return '請先產生正式六頁 PDF。'
+  if (!flow.formalReport) return '請先產生完整送審 PDF。'
   if (!formalOutputReady.value) return '正式 PDF 或 F02 FINAL 狀態尚未完成，暫停送審。'
   return '伺服器已提供可送審的正式輸出。'
 })
+
+function reportPageLabel(code: ReportPageCode): string {
+  return ({ S01: '勘查資料（S01）', 'F02-RF': '影響因素（F02-RF）', F02: '比較法資料（F02）' } as Record<ReportPageCode, string>)[code]
+}
+
+function formalFieldLabel(code: string | null): string {
+  if (!code) return ''
+  const labels: Readonly<Record<string, string>> = {
+    benchmark_land_id: '比準地', comparison_analysis_id: '比較分析', rule_version_id: '正式計算規則',
+    comparison_targets: '比較案例', valuation_base_date: '估價基準日', comparison_price: '比較法價格',
+    comparison_weight: '比較法權重', income_price: '收益法價格', income_weight: '收益法權重',
+  }
+  return labels[code] ?? '查估書資料欄位'
+}
+
+function focusSubmitTarget(target: string): void {
+  const selectors: Readonly<Record<string, string>> = {
+    'report-pages': '[data-testid="report-package-draft-flow"]',
+    'formal-validation': '[aria-labelledby="formal-validation-title"]',
+    'formal-pdf': '[data-testid="generate-formal-pdf"]',
+    submission: '[data-testid="submit-for-review"]',
+  }
+  const element = document.querySelector<HTMLElement>(selectors[target] ?? '')
+  element?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+  element?.focus?.()
+}
 
 function isCurrentCase(token: number, requestedCaseId: string): boolean {
   return token === activeCaseToken && requestedCaseId === caseId.value
@@ -647,6 +696,27 @@ function setFormalFormStatus(status: 'CHECKED' | 'FINAL', outputDocumentId: stri
   )
 }
 
+async function downloadOutput(documentId: string, filename: string): Promise<void> {
+  const requestedCaseId = caseId.value
+  if (!requestedCaseId || !documentId || downloadingDocumentId.value) return
+
+  downloadingDocumentId.value = documentId
+  error.value = ''
+  try {
+    const blob = await valuationApi.downloadDocument(requestedCaseId, documentId)
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = filename
+    anchor.click()
+    URL.revokeObjectURL(url)
+  } catch (caught: unknown) {
+    error.value = safeValuationErrorMessage(caught)
+  } finally {
+    downloadingDocumentId.value = null
+  }
+}
+
 async function runFormalValidation(): Promise<void> {
   const requestedCaseId = caseId.value
   const token = activeCaseToken
@@ -811,6 +881,11 @@ watch(caseId, () => {
       title="送審確認"
       description="送審命令只帶入伺服器回傳的檢核、正式輸出與版本資訊；前端不自行判定或計算門檻。"
     />
+    <ValuationIssueDrawer
+      v-if="flow.case"
+      :items="submitIssues"
+      @select="focusSubmitTarget"
+    />
 
     <LoadingSkeleton v-if="loading" :rows="6" label="送審資料載入中" />
     <ErrorState v-else-if="error && !flow.case" :message="error" @retry="loadData" />
@@ -868,7 +943,7 @@ watch(caseId, () => {
                   :aria-current="activeReportPageCode === pageCode ? 'page' : undefined"
                   @click="activeReportPageCode = pageCode"
                 >
-                  {{ pageCode }}
+                  {{ reportPageLabel(pageCode) }}
                 </button>
               </nav>
               <ComparisonSetupPanel
@@ -955,7 +1030,7 @@ watch(caseId, () => {
             <li v-for="finding in flow.formalValidation.findings" :key="`${finding.code}-${finding.fieldCode ?? ''}`" :data-severity="finding.severity">
               <strong>{{ finding.severity === 'ERROR' ? '阻擋' : '警示' }}｜{{ finding.code }}</strong>
               <span>{{ finding.message }}</span>
-              <small v-if="finding.fieldCode">欄位：{{ finding.fieldCode }}</small>
+              <small v-if="finding.fieldCode">欄位：{{ formalFieldLabel(finding.fieldCode) }}（{{ finding.fieldCode }}）</small>
               <button
                 v-if="finding.severity === 'ERROR'"
                 class="finding-action"
@@ -1000,7 +1075,7 @@ watch(caseId, () => {
             :disabled="formalPdfGenerating || formalValidating || submitting || !flow.formalValidation.canGenerateFormalReport || !warningsAcknowledged || flow.authoritativeF02?.status !== 'CHECKED'"
             @click="generateFormalPdf"
           >
-            {{ formalPdfGenerating ? '正式 PDF 產生中…' : '產生正式六頁 PDF' }}
+            {{ formalPdfGenerating ? '正式 PDF 產生中…' : '產生完整送審 PDF' }}
           </button>
         </div>
       </section>
@@ -1009,14 +1084,23 @@ watch(caseId, () => {
         <div class="surface-heading">
           <div>
             <p class="valuation-eyebrow">FORMAL PDF</p>
-            <h2 id="formal-pdf-title">正式六頁 PDF</h2>
+            <h2 id="formal-pdf-title">完整送審 PDF</h2>
           </div>
           <span class="source-marker" data-source-kind="calculated">狀態：F02 FINAL</span>
         </div>
         <div class="artifact-card">
           <strong>{{ flow.formalReport.filename }}</strong>
           <span>第 {{ flow.formalReport.versionNo }} 版｜{{ flow.formalReport.mimeType }}｜{{ flow.formalReport.fileSizeBytes }} bytes</span>
-          <small>正式 PDF 文件與檢核批次均由伺服器回傳，並作為送審來源。</small>
+          <small>這是主要送審產物。頁數依本案實際查估書表與附圖內容產生，不以固定六頁作為流程條件。</small>
+          <button
+            class="solid-button solid-button--primary artifact-card__download"
+            type="button"
+            data-testid="download-formal-report"
+            :disabled="Boolean(downloadingDocumentId)"
+            @click="downloadOutput(flow.formalReport.documentId, flow.formalReport.filename)"
+          >
+            {{ downloadingDocumentId === flow.formalReport.documentId ? '下載中…' : '下載完整送審 PDF' }}
+          </button>
         </div>
       </section>
 
@@ -1024,14 +1108,23 @@ watch(caseId, () => {
         <div class="surface-heading">
           <div>
             <p class="valuation-eyebrow">AVAILABLE OUTPUT</p>
-            <h2 id="artifact-title">正式輸出</h2>
+            <h2 id="artifact-title">F03 單表輸出（流程附件）</h2>
           </div>
           <span class="source-marker" data-source-kind="calculated">來源：伺服器輸出</span>
         </div>
         <div class="artifact-card">
           <strong>{{ flow.report.filename }}</strong>
           <span>第 {{ flow.report.versionNo }} 版｜{{ flow.report.mimeType }}｜{{ flow.report.fileSizeBytes }} bytes</span>
-          <small>文件識別碼已由伺服器回傳並用於送審來源追溯。</small>
+          <small>這是前段 F03 計算產生的單表輸出，保留作流程追溯；正式送審以「完整送審 PDF」為主。</small>
+          <button
+            class="solid-button artifact-card__download"
+            type="button"
+            data-testid="download-f03-report"
+            :disabled="Boolean(downloadingDocumentId)"
+            @click="downloadOutput(flow.report.documentId, flow.report.filename)"
+          >
+            {{ downloadingDocumentId === flow.report.documentId ? '下載中…' : '下載 F03 單表' }}
+          </button>
         </div>
       </section>
 
@@ -1106,6 +1199,7 @@ watch(caseId, () => {
 .artifact-card strong { color: var(--app-ink); font-size: 15px; }
 .artifact-card span, .artifact-card small { color: var(--app-ink-soft); font-size: 12px; }
 .artifact-card small { color: var(--app-muted); }
+.artifact-card__download { justify-self: start; margin-top: 8px; }
 .formal-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
 .submit-bar { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px 20px; border: 1px solid rgba(255,255,255,.72); border-radius: var(--app-radius-md); background: rgba(255,250,247,.74); box-shadow: var(--app-shadow-soft); }
 .submit-bar strong { color: var(--app-ink); font-size: 15px; }

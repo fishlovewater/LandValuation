@@ -91,6 +91,23 @@ describe('shared application shell', () => {
     expect(wrapper.text()).not.toContain('審查工作台')
   })
 
+  it('does not expose the valuation workspace to reviewer or inspector roles even when they can read valuation evidence', async () => {
+    const router = shellRouter()
+    await router.push('/')
+
+    setUser({ ...reviewer, permissions: [...reviewer.permissions, 'valuation.read'] })
+    const reviewerWrapper = mount(AppSidebar, { global: { plugins: [router] } })
+    expect(reviewerWrapper.text()).toContain('審查工作台')
+    expect(reviewerWrapper.text()).not.toContain('估價作業')
+    reviewerWrapper.unmount()
+
+    setUser({ ...inspector, permissions: ['valuation.read'] })
+    const inspectorWrapper = mount(AppSidebar, { global: { plugins: [router] } })
+    expect(inspectorWrapper.text()).toContain('案件歷程')
+    expect(inspectorWrapper.text()).not.toContain('估價作業')
+    inspectorWrapper.unmount()
+  })
+
   it('renders authorized search and AI actions without leaking them to a reviewer', async () => {
     const router = shellRouter()
     await router.push('/')
@@ -108,6 +125,29 @@ describe('shared application shell', () => {
     const reviewerWrapper = mount(AppHeader, { global: { plugins: [router] } })
     expect(reviewerWrapper.get('[data-testid="case-search"]')).toBeTruthy()
     expect(reviewerWrapper.find('[data-testid="assistant-shortcut"]').exists()).toBe(false)
+  })
+
+  it('switches Demo roles from the user menu and lands on the selected workspace', async () => {
+    const router = shellRouter()
+    await router.push('/app/valuation/dashboard')
+    setUser(appraiser)
+    const authStore = useAuthStore()
+    vi.spyOn(authStore, 'switchDemoRole').mockImplementation(async (role) => {
+      authStore.user = role === 'REVIEWER' ? reviewer : role === 'INSPECTOR' ? inspector : appraiser
+    })
+
+    const wrapper = mount(AppHeader, { global: { plugins: [router] } })
+    expect(wrapper.get('[data-testid="demo-mode-badge"]').text()).toBe('DEMO')
+    await wrapper.get('.app-header__user-trigger').trigger('click')
+
+    expect(wrapper.get('[data-testid="demo-switch-appraiser"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="demo-switch-reviewer"]').trigger('click')
+    await flushPromises()
+
+    expect(authStore.switchDemoRole).toHaveBeenCalledWith('REVIEWER')
+    expect(router.currentRoute.value.path).toBe('/app/review/dashboard')
+    expect(authStore.roles).toEqual(['REVIEWER'])
+    expect(wrapper.find('.app-header__user-menu').exists()).toBe(false)
   })
 
   it('keeps case search interactive on mobile with an accessible popover', async () => {

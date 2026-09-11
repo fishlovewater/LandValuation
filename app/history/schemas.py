@@ -65,12 +65,46 @@ class HistoryDocument(BaseModel):
     download_available: bool | None = None
 
 
+class HistoryVersionValue(BaseModel):
+    document_version: int
+    value: Any = None
+    raw_text: str | None = None
+    page_number: int | None = None
+
+
+class HistoryVersionDiff(BaseModel):
+    field_code: str
+    field_path: str | None = None
+    previous: HistoryVersionValue
+    current: HistoryVersionValue
+
+
+class HistoryCaseVersion(BaseModel):
+    version_no: int
+    change_summary: str | None = None
+    created_by: str | None = None
+    created_at: datetime
+
+
+class HistoryChange(BaseModel):
+    entity_type: str
+    field_name: str
+    old_value: Any = None
+    new_value: Any = None
+    change_reason: str | None = None
+    changed_by: str | None = None
+    changed_at: datetime
+
+
 class HistoryCaseDetail(BaseModel):
     case: dict[str, Any]
     parcels: list[dict[str, Any]]
     documents: list[HistoryDocument]
     valuation: dict[str, Any] | None = None
     review: dict[str, Any] | None = None
+    versions: list[HistoryCaseVersion] = Field(default_factory=list)
+    changes: list[HistoryChange] = Field(default_factory=list)
+    version_diffs: list[HistoryVersionDiff] = Field(default_factory=list)
     permissions: HistoryPermissions
 
 

@@ -109,7 +109,9 @@ function completeClaimGraph(
   dto: AssistantQuestionResponseDto,
   citations: AssistantCitationModel[],
 ): { claims: AssistantClaimModel[]; supported: boolean } {
-  if (dto.answer_status !== 'SUPPORTED') return { claims: [], supported: false }
+  if (dto.answer_status !== 'SUPPORTED' && dto.answer_status !== 'EVIDENCE_ONLY') {
+    return { claims: [], supported: false }
+  }
   if (!nonEmptyString(dto.answer)) return { claims: [], supported: false }
   if (!Array.isArray(dto.claims) || !Array.isArray(dto.citations) || !citations.length) {
     return { claims: [], supported: false }

@@ -11,6 +11,17 @@ export const HISTORY_ROLES = [
   'SUPERADMIN',
 ] as const
 
+// valuation.read is intentionally broader because review/history need to read
+// valuation evidence.  The interactive valuation workspace itself is an
+// appraiser/admin responsibility and must not be exposed merely because a
+// reviewer or inspector can read valuation records.
+export const VALUATION_ROLES = [
+  'APPRAISER',
+  'ADMIN',
+  'SYSTEM_ADMIN',
+  'SUPERADMIN',
+] as const
+
 export interface HistoryRoleScope {
   valuation: boolean
   review: boolean

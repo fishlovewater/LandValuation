@@ -30,6 +30,7 @@ const total = ref(0)
 const permissions = ref({ canViewValuation: false, canViewReview: false })
 const loading = ref(false)
 const error = ref('')
+const advancedOpen = ref(false)
 const loadSerial = ref(0)
 let activeController: AbortController | null = null
 const historyScope = computed(() => historyScopeForRoles(authStore.roles))
@@ -85,6 +86,23 @@ const offset = computed(() => {
 
 const page = computed(() => Math.floor(offset.value / pageSize.value) + 1)
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
+const advancedFilterCount = computed(() => [
+  form.cityCode,
+  form.districtCode,
+  form.sectionName,
+  form.dateFrom,
+  form.dateTo,
+  form.dateField !== 'updated_at' ? form.dateField : '',
+  form.sort !== 'updated_at' ? form.sort : '',
+  form.order !== 'desc' ? form.order : '',
+].filter(Boolean).length)
+
+function routeHasAdvancedFilters(): boolean {
+  return [
+    'cityCode', 'city_code', 'districtCode', 'district_code', 'sectionName', 'section_name',
+    'dateField', 'date_field', 'dateFrom', 'date_from', 'dateTo', 'date_to', 'sort', 'order',
+  ].some((name) => Boolean(queryString(name)))
+}
 
 function routeSearchParams(): HistorySearchParams {
   const dateField = queryString('dateField', 'date_field')
@@ -196,6 +214,7 @@ async function resetSearch(): Promise<void> {
     sort: 'updated_at',
     order: 'desc',
   })
+  advancedOpen.value = false
   await router.replace({ query: {} })
 }
 
@@ -222,11 +241,13 @@ function formatPermissionText(): string {
 
 watch(() => route.fullPath, () => {
   syncFormFromRoute()
+  if (routeHasAdvancedFilters()) advancedOpen.value = true
   void loadData()
 })
 
 onMounted(() => {
   syncFormFromRoute()
+  advancedOpen.value = routeHasAdvancedFilters()
   void loadData()
 })
 
@@ -251,24 +272,25 @@ onBeforeUnmount(() => activeController?.abort())
           <p class="history-search__eyebrow">SUPPORTED SEARCH</p>
           <h2>搜尋條件</h2>
         </div>
-        <button type="button" class="history-search__reset" data-testid="history-search-reset" @click="resetSearch">清除條件</button>
+        <div class="history-search__form-tools">
+          <button
+            type="button"
+            class="history-search__advanced-toggle"
+            data-testid="history-advanced-toggle"
+            :aria-expanded="advancedOpen ? 'true' : 'false'"
+            aria-controls="history-advanced-filters"
+            @click="advancedOpen = !advancedOpen"
+          >
+            {{ advancedOpen ? '收合進階篩選' : '進階篩選' }}
+            <span v-if="advancedFilterCount">{{ advancedFilterCount }}</span>
+          </button>
+          <button type="button" class="history-search__reset" data-testid="history-search-reset" @click="resetSearch">清除條件</button>
+        </div>
       </div>
-      <div class="history-search__fields">
+      <div class="history-search__quick-fields">
         <label>
           <span>關鍵字</span>
           <input v-model="form.keyword" data-testid="history-keyword" type="search" placeholder="案件編號、案件名稱或地號" autocomplete="off">
-        </label>
-        <label>
-          <span>縣市代碼</span>
-          <input v-model="form.cityCode" data-testid="history-city-code" type="text" inputmode="numeric" maxlength="20">
-        </label>
-        <label>
-          <span>行政區代碼</span>
-          <input v-model="form.districtCode" data-testid="history-district-code" type="text" inputmode="numeric" maxlength="20">
-        </label>
-        <label>
-          <span>段名</span>
-          <input v-model="form.sectionName" data-testid="history-section-name" type="text" maxlength="100">
         </label>
         <label>
           <span>歷程結果</span>
@@ -280,6 +302,30 @@ onBeforeUnmount(() => activeController?.abort())
             <option v-if="historyScope.review" value="SUPPLEMENT_REQUIRED">待補件</option>
             <option value="IN_PROGRESS">處理中</option>
           </select>
+        </label>
+      </div>
+      <div
+        id="history-advanced-filters"
+        v-show="advancedOpen"
+        class="history-search__advanced"
+        data-testid="history-advanced-filters"
+      >
+        <div class="history-search__advanced-heading">
+          <strong>進階篩選</strong>
+          <span>需要縮小地區、日期或排序條件時再使用。</span>
+        </div>
+        <div class="history-search__fields">
+        <label>
+          <span>縣市代碼</span>
+          <input v-model="form.cityCode" data-testid="history-city-code" type="text" inputmode="numeric" maxlength="20">
+        </label>
+        <label>
+          <span>行政區代碼</span>
+          <input v-model="form.districtCode" data-testid="history-district-code" type="text" inputmode="numeric" maxlength="20">
+        </label>
+        <label>
+          <span>段名</span>
+          <input v-model="form.sectionName" data-testid="history-section-name" type="text" maxlength="100">
         </label>
         <label>
           <span>日期欄位</span>
@@ -312,9 +358,10 @@ onBeforeUnmount(() => activeController?.abort())
             <option value="asc">舊到新</option>
           </select>
         </label>
+        </div>
       </div>
       <div class="history-search__actions">
-        <p>搜尋只使用目前 API 已支援的欄位，不包含內容比對或統計分析。</p>
+        <p>可直接輸入案件編號或名稱搜尋；需要地區、日期或排序時再開啟進階篩選。</p>
         <button type="submit" class="history-search__submit" data-testid="history-search-submit" @click.prevent="applySearch">搜尋案件</button>
       </div>
     </form>
@@ -392,18 +439,32 @@ onBeforeUnmount(() => activeController?.abort())
 .history-search__form { padding: 19px; }
 .history-search__form-heading,
 .history-search__results-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
+.history-search__form-tools { display: flex; align-items: center; gap: 8px; }
 .history-search__eyebrow { margin: 0 0 5px; color: var(--app-accent-deep); font-size: 10px; font-weight: 900; letter-spacing: .15em; }
 .history-search h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 24px; }
 .history-search__reset,
 .history-search__detail { min-height: 42px; padding: 8px 13px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: var(--app-paper-strong); cursor: pointer; font-size: 12px; font-weight: 800; }
 .history-search__reset:hover,
 .history-search__detail:hover { border-color: var(--app-accent); color: var(--app-accent-deep); }
+.history-search__advanced-toggle { display: inline-flex; min-height: 42px; align-items: center; gap: 7px; padding: 8px 13px; border: 1px solid rgba(46,89,132,.2); border-radius: 8px; color: var(--app-primary-deep); background: var(--app-primary-soft); cursor: pointer; font-size: 12px; font-weight: 800; }
+.history-search__advanced-toggle:hover { border-color: var(--app-primary); }
+.history-search__advanced-toggle span { display: inline-grid; min-width: 20px; height: 20px; place-items: center; border-radius: 999px; color: #fff; background: var(--app-primary); font-size: 9px; }
+.history-search__quick-fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(180px, .8fr); gap: 11px; margin-top: 15px; }
 .history-search__fields { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 11px; margin-top: 15px; }
+.history-search__quick-fields label,
 .history-search__fields label { display: grid; gap: 5px; color: var(--app-ink-soft); font-size: 11px; font-weight: 800; }
+.history-search__quick-fields input,
+.history-search__quick-fields select,
 .history-search__fields input,
 .history-search__fields select { width: 100%; min-height: 44px; padding: 8px 10px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink); background: var(--app-paper-strong); font-size: 12px; }
+.history-search__quick-fields input:focus,
+.history-search__quick-fields select:focus,
 .history-search__fields input:focus,
 .history-search__fields select:focus { border-color: var(--app-accent); outline: 3px solid color-mix(in srgb, var(--app-accent) 24%, white); outline-offset: 1px; }
+.history-search__advanced { margin-top: 12px; padding: 13px; border: 1px solid var(--app-line); border-radius: 10px; background: rgba(255,255,255,.5); }
+.history-search__advanced-heading { display: flex; align-items: baseline; gap: 8px; }
+.history-search__advanced-heading strong { color: var(--app-ink); font-size: 11px; }
+.history-search__advanced-heading span { color: var(--app-muted); font-size: 10px; }
 .history-search__actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 14px; }
 .history-search__actions p { margin: 0; color: var(--app-muted); font-size: 11px; line-height: 1.6; }
 .history-search__submit { min-width: 120px; min-height: 44px; padding: 8px 15px; border: 1px solid var(--app-accent); border-radius: 8px; color: #fff8f2; background: var(--app-accent); cursor: pointer; font-size: 12px; font-weight: 800; }
@@ -438,11 +499,14 @@ onBeforeUnmount(() => activeController?.abort())
 
 @media (max-width: 700px) {
   .history-search { padding-inline: 14px; }
+  .history-search__quick-fields { grid-template-columns: 1fr; }
   .history-search__fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .history-search__actions { align-items: stretch; flex-direction: column; }
   .history-search__submit { width: 100%; }
   .history-search__form-heading,
   .history-search__results-heading { align-items: flex-start; flex-direction: column; }
+  .history-search__form-tools { width: 100%; }
+  .history-search__form-tools button { flex: 1; }
 }
 
 @media (max-width: 460px) {

@@ -2,13 +2,17 @@
 import { computed, nextTick, ref } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import {
+  PhArrowsClockwise as ArrowsClockwise,
   PhList as List,
   PhMagnifyingGlass as MagnifyingGlass,
   PhSignOut as SignOut,
   PhSparkle as Sparkle,
   PhUserCircle as UserCircle,
 } from '@phosphor-icons/vue'
+import { isDemoQuickLoginEnabled } from '../../config/environment'
 import { liquidGlass as vLiquidGlass } from '../../directives/liquidGlass'
+import type { DemoLoginRole } from '../../modules/auth/auth.types'
+import { homeFor } from '../../router/roleHomeMap'
 import { hasHistoryRole } from '../../router/roleAccess'
 import { useAuthStore } from '../../stores/auth.store'
 
@@ -35,6 +39,15 @@ const searchOpen = ref(false)
 const searchInput = ref<HTMLInputElement | null>(null)
 const searchTrigger = ref<HTMLButtonElement | null>(null)
 const userMenuOpen = ref(false)
+const demoSwitchError = ref('')
+const switchingDemoRole = ref<DemoLoginRole | null>(null)
+
+const demoQuickLoginEnabled = isDemoQuickLoginEnabled(import.meta.env)
+const demoRoles: ReadonlyArray<{ role: DemoLoginRole; stage: number; label: string; description: string }> = [
+  { role: 'APPRAISER', stage: 1, label: '估價人員', description: '估價與送審' },
+  { role: 'REVIEWER', stage: 2, label: '審查人員', description: '智慧審查' },
+  { role: 'INSPECTOR', stage: 3, label: '案件查詢', description: '歷程追溯' },
+]
 
 const currentSubsystem = computed(() => {
   const subsystem = route.meta.subsystem
@@ -44,6 +57,13 @@ const currentSubsystem = computed(() => {
 const canSearchCases = computed(() => hasHistoryRole(authStore.roles))
 const canUseAssistant = computed(() => authStore.permissions.includes('assistant.use'))
 const displayName = computed(() => authStore.user?.displayName || '目前使用者')
+const currentDemoRole = computed<DemoLoginRole | null>(() => {
+  for (const item of demoRoles) {
+    if (authStore.roles.includes(item.role)) return item.role
+  }
+  return null
+})
+const currentDemoRoleItem = computed(() => demoRoles.find((item) => item.role === currentDemoRole.value) ?? null)
 
 function searchCases(): void {
   if (!canSearchCases.value) return
@@ -73,6 +93,23 @@ function toggleUserMenu(): void {
 
 function closeUserMenu(): void {
   userMenuOpen.value = false
+  demoSwitchError.value = ''
+}
+
+async function switchDemoRole(role: DemoLoginRole): Promise<void> {
+  if (!demoQuickLoginEnabled || authStore.isSubmitting || role === currentDemoRole.value) return
+  demoSwitchError.value = ''
+  switchingDemoRole.value = role
+  try {
+    await authStore.switchDemoRole(role)
+    const destination = homeFor(authStore.user)
+    closeUserMenu()
+    await router.replace(destination)
+  } catch {
+    demoSwitchError.value = 'Demo 角色切換失敗，請重新登入後再試。'
+  } finally {
+    switchingDemoRole.value = null
+  }
 }
 
 function logout(): void {
@@ -99,7 +136,13 @@ function logout(): void {
       <RouterLink class="app-header__brand" to="/app" aria-label="估價審查中台工作台首頁">
         <span class="app-header__mark" aria-hidden="true">估</span>
         <span class="app-header__brand-copy">
-          <strong>估價審查中台</strong>
+          <span class="app-header__brand-title">
+            <strong>估價審查中台</strong>
+            <span v-if="demoQuickLoginEnabled" class="app-header__demo-badge" data-testid="demo-mode-badge">DEMO</span>
+            <span v-if="demoQuickLoginEnabled && currentDemoRoleItem" class="app-header__demo-stage" data-testid="demo-role-stage">
+              {{ currentDemoRoleItem.stage }} · {{ currentDemoRoleItem.label }}
+            </span>
+          </span>
           <small>{{ currentSubsystem }}</small>
         </span>
       </RouterLink>
@@ -192,6 +235,32 @@ function logout(): void {
           <span class="app-header__chevron" aria-hidden="true">⌄</span>
         </button>
         <div v-if="userMenuOpen" class="app-header__user-menu" role="menu">
+          <section v-if="demoQuickLoginEnabled" class="app-header__demo-switch" aria-label="Demo 角色切換">
+            <div class="app-header__demo-switch-heading">
+              <ArrowsClockwise :size="15" aria-hidden="true" />
+              <span>Demo 角色切換</span>
+            </div>
+            <button
+              v-for="item in demoRoles"
+              :key="item.role"
+              type="button"
+              role="menuitem"
+              :data-testid="`demo-switch-${item.role.toLowerCase()}`"
+              :disabled="authStore.isSubmitting || item.role === currentDemoRole"
+              @click="switchDemoRole(item.role)"
+            >
+              <span class="app-header__demo-role-copy">
+                <b>{{ item.stage }}</b>
+                <span>
+                  <strong>{{ item.label }}</strong>
+                  <small>{{ item.description }}</small>
+                </span>
+              </span>
+              <small v-if="item.role === currentDemoRole" class="app-header__demo-state">目前</small>
+              <small v-else-if="switchingDemoRole === item.role" class="app-header__demo-state">切換中…</small>
+            </button>
+            <p v-if="demoSwitchError" class="app-header__demo-switch-error" role="alert">{{ demoSwitchError }}</p>
+          </section>
           <RouterLink to="/app/profile" role="menuitem" @click="closeUserMenu">帳號設定</RouterLink>
           <button type="button" role="menuitem" @click="logout">
             <SignOut :size="17" aria-hidden="true" />
@@ -275,11 +344,43 @@ function logout(): void {
   min-width: 0;
 }
 
+.app-header__brand-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
 .app-header__brand-copy strong {
   overflow: hidden;
   font-size: 14px;
   letter-spacing: 0.04em;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-header__demo-badge {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid rgba(255, 209, 156, .72);
+  border-radius: 999px;
+  color: #fff2df;
+  background: rgba(255, 209, 156, .13);
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: .12em;
+}
+
+.app-header__demo-stage {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 999px;
+  color: rgba(255,255,255,.9);
+  background: rgba(255,255,255,.09);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .02em;
   white-space: nowrap;
 }
 
@@ -478,12 +579,93 @@ function logout(): void {
   top: calc(100% + 8px);
   right: 0;
   display: grid;
-  min-width: 160px;
+  min-width: 210px;
   padding: 7px;
   border: 1px solid var(--app-line);
   border-radius: var(--app-radius-sm);
   background: var(--app-paper-strong);
   box-shadow: var(--app-shadow-soft);
+}
+
+.app-header__demo-switch {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 5px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--app-line);
+}
+
+.app-header__demo-switch-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px 4px;
+  color: var(--app-muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .06em;
+}
+
+.app-header__demo-switch button {
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 54px;
+}
+
+.app-header__demo-role-copy {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.app-header__demo-role-copy > b {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--app-primary-deep);
+  background: var(--app-primary-soft);
+  font-size: 10px;
+}
+
+.app-header__demo-role-copy > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.app-header__demo-role-copy strong {
+  color: inherit;
+  font-size: 11px;
+}
+
+.app-header__demo-role-copy small {
+  color: var(--app-muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.app-header__demo-switch button:disabled {
+  cursor: default;
+  opacity: 1;
+  color: var(--app-primary-deep);
+  background: var(--app-primary-soft);
+}
+
+.app-header__demo-state {
+  color: var(--app-muted);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.app-header__demo-switch-error {
+  margin: 4px 9px 2px;
+  color: #a44334;
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .app-header__user-menu a,
@@ -506,6 +688,26 @@ function logout(): void {
   color: var(--app-accent-deep);
   background: var(--app-accent-soft);
 }
+
+/* Authenticated shell uses a solid government-service header instead of glass. */
+.app-header {
+  border-color: var(--app-primary-deep);
+  background: var(--app-primary-deep) !important;
+  box-shadow: 0 8px 24px rgba(18, 59, 104, .18) !important;
+}
+.app-header__brand,
+.app-header__brand-copy strong,
+.app-header__menu,
+.app-header__user-trigger { color: #fff; }
+.app-header__brand-copy small { color: #ffd19c; }
+.app-header__mark { color: #fff; background: var(--app-highlight); }
+.app-header__menu:hover,
+.app-header__user-trigger:hover { color: #fff; background: rgba(255,255,255,.12); }
+.app-header__assistant { color: #fff; background: rgba(255,255,255,.13); }
+.app-header__assistant:hover { color: #fff; background: rgba(255,255,255,.2); }
+.app-header__search { border-color: rgba(255,255,255,.2); background: #fff; }
+.app-header__search-trigger { border-color: rgba(255,255,255,.25); color: #fff; background: rgba(255,255,255,.12); }
+.app-header__chevron { color: rgba(255,255,255,.68); }
 
 @media (max-width: 980px) {
   .app-header {
@@ -537,6 +739,10 @@ function logout(): void {
 
   .app-header__assistant span,
   .app-header__user-trigger span {
+    display: none;
+  }
+
+  .app-header__demo-stage {
     display: none;
   }
 

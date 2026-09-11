@@ -21,6 +21,7 @@ describe('valuation API transport', () => {
       case_type: 'LAND_VALUATION',
       requesting_agency: '新北市政府',
       valuation_base_date: '2026-09-10',
+      valuation_due_date: '2026-10-10',
       city_code: '65000',
       district_code: '65000030',
       land_use_type: '住宅區',

@@ -60,6 +60,7 @@ class CaseRecord(Base):
     case_type: Mapped[str] = mapped_column(String(50))
     requesting_agency: Mapped[str | None] = mapped_column(String(200))
     valuation_base_date: Mapped[date] = mapped_column(Date)
+    valuation_due_date: Mapped[date | None] = mapped_column(Date)
     city_code: Mapped[str] = mapped_column(String(20))
     district_code: Mapped[str] = mapped_column(String(20))
     land_use_type: Mapped[str | None] = mapped_column(String(100))

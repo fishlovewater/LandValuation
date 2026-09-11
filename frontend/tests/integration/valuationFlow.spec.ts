@@ -64,6 +64,7 @@ const caseDto = {
   case_type: 'LAND_VALUATION',
   requesting_agency: '新北市政府',
   valuation_base_date: '2026-08-01',
+  valuation_due_date: '2026-09-30',
   city_code: '65000',
   district_code: '65000030',
   land_use_type: '住宅區',
@@ -424,7 +425,12 @@ describe('valuation demo flow', () => {
         )
           ? submittedF03FormDto
           : formDto
-        return response([authoritativeFormDto, f03], config)
+        return response([
+          { ...authoritativeFormDto, form_instance_id: '61616161-6161-4616-8161-616161616161', form_code: 'S01' },
+          { ...authoritativeFormDto, form_instance_id: '62626262-6262-4626-8262-626262626262', form_code: 'F02-RF' },
+          authoritativeFormDto,
+          f03,
+        ], config)
       }
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/f03`) return response(f03Dto, config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/parcels`) return response([parcelDto], config)
@@ -484,11 +490,16 @@ describe('valuation demo flow', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('NB-2026-0001')
-    expect(wrapper.text()).toContain('繼續處理')
-    await wrapper.get('[data-testid="case-open"]').trigger('click')
+    expect(wrapper.text()).toContain('作業期限')
+    expect(wrapper.text()).toContain('繼續估價')
+    await wrapper.get(`[data-testid="case-open-${ids.case}"]`).trigger('click')
     await vi.waitFor(() => expect(router.currentRoute.value.path).toBe(`/app/valuation/cases/${ids.case}/prepare`))
     expect(wrapper.text()).toContain('來源：案件原始資料')
     expect(wrapper.get('[data-testid="case-context"]').text()).toContain('NB-2026-0001')
+    expect(wrapper.text()).toContain('比準地地價估計表')
+    expect(wrapper.text()).toContain('比較法調查估價表')
+    expect(wrapper.text()).toContain('影響地價區域因素分析明細表')
+    expect(wrapper.text()).toContain('地價區段勘查表')
 
     await wrapper.get('[data-testid="valuation-step-3"]').trigger('click')
     await wrapper.get('[data-testid="data-section-f03"]').trigger('click')

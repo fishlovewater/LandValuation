@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+
 const props = withDefaults(defineProps<{
   currentStep: 1 | 2 | 3 | 4 | 5 | 6
   availableSteps?: number[]
@@ -21,6 +23,9 @@ const steps = [
   { number: 6, label: '送審' },
 ] as const
 
+const currentStepMeta = computed(() => steps.find((step) => step.number === props.currentStep) ?? steps[0])
+const progressPercent = computed(() => `${Math.round((props.currentStep / steps.length) * 100)}%`)
+
 function isAvailable(step: number): boolean {
   return props.availableSteps.includes(step)
 }
@@ -29,6 +34,16 @@ function isAvailable(step: number): boolean {
 
 <template>
   <nav class="valuation-steps" aria-label="估價作業步驟">
+    <div class="valuation-steps__summary" data-testid="valuation-step-summary">
+      <div>
+        <span>估價流程</span>
+        <strong>第 {{ currentStep }} 步 / {{ steps.length }} · {{ currentStepMeta.label }}</strong>
+      </div>
+      <span>{{ progressPercent }}</span>
+    </div>
+    <div class="valuation-steps__progress" aria-hidden="true">
+      <span :style="{ width: progressPercent }"></span>
+    </div>
     <ol>
       <li
         v-for="step in steps"
@@ -62,6 +77,47 @@ function isAvailable(step: number): boolean {
   border-radius: var(--app-radius-md);
   background: rgba(255, 255, 255, 0.62);
   box-shadow: var(--app-shadow-soft);
+}
+
+.valuation-steps__summary {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+.valuation-steps__summary > div {
+  display: grid;
+  gap: 2px;
+}
+
+.valuation-steps__summary span {
+  color: var(--app-muted);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: .1em;
+}
+
+.valuation-steps__summary strong {
+  color: var(--app-ink);
+  font-size: 12px;
+}
+
+.valuation-steps__progress {
+  height: 4px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(46, 89, 132, .09);
+}
+
+.valuation-steps__progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--app-accent);
+  transition: width 180ms ease;
 }
 
 .valuation-steps ol {

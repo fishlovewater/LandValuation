@@ -9,12 +9,14 @@ returns storage coordinates to callers.
 from __future__ import annotations
 
 import hashlib
+import os
 from collections.abc import Mapping
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -62,6 +64,7 @@ DEMO_REVIEW_RULE_VERSION_NAME = "Persistent F03 Review execution rules"
 DEMO_LEGACY_RULE_VERSION_NAME = "Persistent F03 demonstration rules"
 DEMO_FRONTEND_URL = "http://localhost:5173"
 DEMO_API_DOCS_URL = "http://localhost:8000/docs"
+DEMO_SOURCE_PDF = "比準地查估.pdf"
 
 F03_VALIDATION_RULES = (
     (
@@ -770,6 +773,35 @@ def _upload_object(storage, object_key: str, content: bytes, *, bucket: str, fil
     entry["storage_etag"] = getattr(result, "etag", None) or getattr(result, "etag_value", "")
 
 
+def _demo_source_pdf(filename: str) -> bytes:
+    """Load a real operator-provided appraisal sample for the Demo source.
+
+    Docker Demo runs mount ``需要放入MINIO的東西`` at ``/app/demo-sources``.
+    The repo-relative fallback keeps host-side lifecycle tests usable without
+    requiring a container-specific path.
+    """
+
+    configured = os.getenv("DEMO_SOURCE_DIR")
+    candidates = []
+    if configured:
+        candidates.append(Path(configured) / filename)
+    candidates.extend(
+        (
+            Path("/app/demo-sources") / filename,
+            Path(__file__).resolve().parents[2] / "需要放入MINIO的東西" / filename,
+        )
+    )
+    for path in candidates:
+        if path.is_file():
+            content = path.read_bytes()
+            if content.startswith(b"%PDF-"):
+                return content
+            raise DemoError(f"DEMO_SOURCE_INVALID_PDF: {path}")
+    raise DemoError(
+        f"DEMO_SOURCE_NOT_FOUND: {filename}; set DEMO_SOURCE_DIR or mount the Demo source folder"
+    )
+
+
 def _upload_seed_objects(
     storage,
     material: _SeedMaterial,
@@ -778,9 +810,9 @@ def _upload_seed_objects(
     settings = get_settings()
     if uploads is None:
         uploads = _UploadBatch(material)
-    case_pdf = build_demo_pdf(f"{DEMO_CASE_TITLE} source")
+    case_pdf = _demo_source_pdf(DEMO_SOURCE_PDF)
     report_pdf = build_demo_pdf(f"{DEMO_CASE_TITLE} formal report")
-    source_name = "persistent-f03-source.pdf"
+    source_name = DEMO_SOURCE_PDF
     report_name = "persistent-f03-formal-report.pdf"
     _upload_object(
         storage,
@@ -1046,12 +1078,20 @@ def _write_seed_rows(cursor, uploads: _UploadBatch) -> None:
         """
         INSERT INTO valuation.cases (
             case_id, case_no, case_title, case_type, requesting_agency,
-            valuation_base_date, city_code, district_code, land_use_type,
+            valuation_base_date, valuation_due_date, city_code, district_code, land_use_type,
             case_status, created_by_user_id, updated_by_user_id
-        ) VALUES (%s, %s, %s, 'LAND', 'Persistent Demo Office', %s,
+        ) VALUES (%s, %s, %s, 'LAND', 'Persistent Demo Office', %s, %s,
                   'NWT', '65000010', 'COMMERCIAL', 'PROCESSING', %s, %s)
         """,
-        (material.case_id, DEMO_CASE_NO, DEMO_CASE_TITLE, today, appraiser_id, appraiser_id),
+        (
+            material.case_id,
+            DEMO_CASE_NO,
+            DEMO_CASE_TITLE,
+            today,
+            date(2026, 9, 30),
+            appraiser_id,
+            appraiser_id,
+        ),
     )
     cursor.execute(
         """

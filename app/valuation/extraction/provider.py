@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -22,7 +23,7 @@ FIELD_PATTERNS = (
         "valuation_base_date",
         re.compile(
             r"(?:估價基準日|估價日期|勘查日期|查估日期|基準日)\s*[：:]?\s*"
-            r"(?P<value>\d{2,4}[年/.-]\d{1,2}[月/.-]\d{1,2}日?)"
+            r"(?P<value>(?:\d{7,8}|\d{2,4}[年/.-]\d{1,2}[月/.-]\d{1,2}日?))"
         ),
     ),
     (
@@ -70,7 +71,7 @@ class DocumentExtractionProvider:
 
 
 HEURISTIC_LINE_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
-    ("valuation_base_date", re.compile(r"(?:估價基準日|估價日期|基準日)\s*[：:\s]\s*(?P<value>\d{2,4}[年/.-]\d{1,2}[月/.-]\d{1,2}日?)")),
+    ("valuation_base_date", re.compile(r"(?:估價基準日|估價日期|基準日)\s*[：:\s]\s*(?P<value>(?:\d{7,8}|\d{2,4}[年/.-]\d{1,2}[月/.-]\d{1,2}日?))")),
     ("benchmark_land_no", re.compile(r"(?:比準地地號|比準地號|比較標的地號|比準地)\s*[：:\s]\s*(?P<value>[^\s，,；;。]+地號|[^\s，,；;。]+)")),
     ("price_zone_no", re.compile(r"(?:地價區段編號|地價區段號|地價區段|區段號)\s*[：:\s]\s*(?P<value>[^\s，,；;。]+)")),
     ("transaction_no", re.compile(r"(?:實例編號|交易案例編號|買賣實例編號)\s*[：:\s]\s*(?P<value>[^\s，,；;。]+)")),
@@ -95,6 +96,45 @@ HEURISTIC_LINE_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
 )
 
 
+def _normalized_candidate_value(field_name: str, value: str) -> str:
+    """Normalize unambiguous date displays before asking a human to confirm.
+
+    Government appraisal samples commonly print ROC dates compactly (for
+    example ``1050901``).  The candidate keeps the OCR source text separately,
+    while the proposed value is converted to the ISO date format accepted by
+    the F03 API.  Ambiguous or invalid values are left untouched for manual
+    correction.
+    """
+
+    if field_name != "valuation_base_date":
+        return value
+    raw = value.strip()
+    compact = re.fullmatch(r"(\d{3})(\d{2})(\d{2})", raw)
+    if compact:
+        year, month, day = (int(part) for part in compact.groups())
+        try:
+            return date(year + 1911, month, day).isoformat()
+        except ValueError:
+            return value
+    gregorian_compact = re.fullmatch(r"(\d{4})(\d{2})(\d{2})", raw)
+    if gregorian_compact:
+        year, month, day = (int(part) for part in gregorian_compact.groups())
+        try:
+            return date(year, month, day).isoformat()
+        except ValueError:
+            return value
+    separated = re.fullmatch(r"(\d{2,4})\D+(\d{1,2})\D+(\d{1,2})\D*", raw)
+    if separated:
+        year, month, day = (int(part) for part in separated.groups())
+        if year < 1911:
+            year += 1911
+        try:
+            return date(year, month, day).isoformat()
+        except ValueError:
+            return value
+    return value
+
+
 def _candidate_values(
     pages: list[str],
     *,
@@ -114,13 +154,14 @@ def _candidate_values(
                 if match is None:
                     continue
                 seen.add(field_name)
-                val = match.group("value").strip()
+                raw_value = match.group("value").strip()
+                val = _normalized_candidate_value(field_name, raw_value)
                 confidence = default_confidence
                 if page_lines is not None:
                     matching_confidences = [
                         line_confidence
                         for line_text, line_confidence in page_lines.get(page_number, [])
-                        if val in line_text
+                        if raw_value in line_text
                     ]
                     if matching_confidences:
                         confidence = min(matching_confidences)
@@ -157,7 +198,7 @@ def _candidate_values(
             candidates.append(
                 CandidateValue(
                     field_name=field_name,
-                    value=match.group("value"),
+                    value=_normalized_candidate_value(field_name, match.group("value")),
                     confidence=confidence,
                     source_page=page_number,
                     source_text=match.group(0),
