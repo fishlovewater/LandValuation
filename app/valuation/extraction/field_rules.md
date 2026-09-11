@@ -44,6 +44,17 @@
 | 徵收宗地 | F04 | 引用宗地、比準地及個別因素資料；差異率與市價由後端或人工確認。 |
 | 地價區段勘查 | S01 | 引用行政、道路、公共設施、環境與特殊設施觀察；選項、距離、百分比及空白狀態依欄位說明處理。 |
 
+## 跨表單候選欄位路由
+
+以下路由是 AI 可將「已確認來源角色」的原文提出為另一張表單候選的唯一例外。未列於此表的跨表單搬值一律禁止；候選仍須保留原文件原文、頁碼並經人工確認。目標表單自己的正式表單區段，仍可使用該表單全部可辨識欄位。
+
+| 來源角色 | 目標表單 | 允許 `field_name` | 使用條件 |
+|---|---|---|---|
+| `F01` | `F02` | `instance_no`, `transaction_date`, `normal_land_unit_price`, `price_zone_no` | 買賣實例表中須明確標示實例、交易日期、土地正常單價或同一區段號；僅作比較標的候選。 |
+| `S01` | `F02` | `price_zone_no`, `valuation_base_date` | 地價區段勘查表中須有相同案件／區段的明確資料。 |
+| `F02` | `F03` | `comparison_price`, `comparison_price_raw`, `valuation_base_date` | 比較法調查估價表須已有可核對的比較結果或估價基準日。 |
+| `S01` | `F03` | `price_zone_no`, `district_name`, `valuation_base_date` | 僅引用同一區段的行政區、區段號或估價基準日。 |
+
 ## F01
 
 本章節共有 26 個 AI 可辨識欄位。
@@ -147,6 +158,42 @@
 | 29 | 其他影響因素 | C8_01 | 其他影響因素 | 土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本 |
 
 F02-RF 的實際 AI `field_name` 由系統依 `TEMPLATE_FACTORS` 與本章來源項目順序配對產生；AI 必須回傳該配對後的代碼，不得回傳自訂名稱。
+
+### F02-RF canonical `field_name` 對照表
+
+以下是 F02-RF 唯一允許回傳的欄位名稱。`來源項目` 是文件中的項目代碼，`field_name` 是 API、資料庫與候選確認畫面使用的 canonical 名稱；兩者不可互換。
+
+| 順序 | 來源項目 | canonical `field_name` |
+|---:|---|---|
+| 1 | `C1_01` | `urban_plan_status` |
+| 2 | `C1_02` | `land_use_zone` |
+| 3 | `C1_03` | `building_coverage_rate` |
+| 4 | `C1_04` | `floor_area_ratio` |
+| 5 | `C1_05` | `prohibited_building` |
+| 6 | `C1_06` | `restricted_building` |
+| 7 | `C2_01` | `main_road_width` |
+| 8 | `C2_02` | `average_road_width` |
+| 9 | `C2_03` | `mass_transit_proximity` |
+| 10 | `C2_04` | `station_proximity` |
+| 11 | `C2_05` | `interchange_proximity` |
+| 12 | `C2_06` | `road_plan` |
+| 13 | `C3_01` | `drainage` |
+| 14 | `C3_02` | `terrain` |
+| 15 | `C4_01` | `market_proximity` |
+| 16 | `C4_02` | `park_proximity` |
+| 17 | `C4_03` | `tourist_facility_proximity` |
+| 18 | `C4_04` | `parking_convenience` |
+| 19 | `C5_01` | `power_gas_facility` |
+| 20 | `C5_02` | `funeral_facility` |
+| 21 | `C5_03` | `waste_facility` |
+| 22 | `C6_01` | `environmental_pollution` |
+| 23 | `C7_01` | `department_store` |
+| 24 | `C7_02` | `financial_institution` |
+| 25 | `C7_03` | `entertainment_facility` |
+| 26 | `C7_04` | `exhibition_hotel` |
+| 27 | `C7_05` | `pedestrian_flow` |
+| 28 | `C7_06` | `vacancy_rate` |
+| 29 | `C8_01` | `other` |
 
 ## F03
 

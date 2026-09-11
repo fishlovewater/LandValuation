@@ -11,9 +11,18 @@ from app.core.exceptions import AppError, ResourceNotFoundError
 from app.storage.service import StorageService
 from app.valuation.documents.repository import DocumentRepository
 from app.valuation.extraction.provider import (
+    CandidateValue,
     DocumentExtractionProvider,
     XlsxExtractionProvider,
     build_document_extraction_provider,
+)
+from app.valuation.extraction.field_catalog import (
+    F01_FIELD_ANALYSIS_FIELDS,
+    F02_FIELD_ANALYSIS_FIELDS,
+    F02_RF_FIELD_ANALYSIS_FIELDS,
+    F03_FIELD_ANALYSIS_FIELDS,
+    F04_FIELD_ANALYSIS_FIELDS,
+    S01_FIELD_ANALYSIS_FIELDS,
 )
 from app.valuation.extraction.repository import ExtractionRepository
 from app.valuation.extraction.schemas import (
@@ -118,7 +127,10 @@ class ExtractionService:
                     ),
                     field_status="NEEDS_CONFIRMATION",
                 )
-                for item in result.candidates
+                for item in self._validated_initial_candidates(
+                    result.candidates,
+                    extracted_text=result.text,
+                )
             ]
             await self.repository.add_candidates(candidates)
             await self.repository.save_extraction(extraction)
@@ -131,6 +143,82 @@ class ExtractionService:
             extraction.completed_at = datetime.now(UTC)
             await self.repository.save_extraction(extraction)
             return extraction, []
+
+    @staticmethod
+    def _validated_initial_candidates(
+        candidates: tuple[CandidateValue, ...],
+        *,
+        extracted_text: str | None = None,
+    ) -> tuple[CandidateValue, ...]:
+        """Keep OCR/XLSX rule candidates aligned with the official catalogs.
+
+        Local OCR heuristics historically emitted several generic field names
+        while defaulting their form to F03.  Reclassify the unambiguous names,
+        canonicalize the F03 land-number alias, and drop anything that is not
+        an exact catalog key.  AI analysis still handles the complete source
+        text for all six forms after this inexpensive first pass.
+        """
+
+        catalogs = {
+            "F01": F01_FIELD_ANALYSIS_FIELDS,
+            "F02": F02_FIELD_ANALYSIS_FIELDS,
+            "F02-RF": F02_RF_FIELD_ANALYSIS_FIELDS,
+            "F03": F03_FIELD_ANALYSIS_FIELDS,
+            "F04": F04_FIELD_ANALYSIS_FIELDS,
+            "S01": S01_FIELD_ANALYSIS_FIELDS,
+        }
+        aliases = {
+            # These are legacy heuristic labels, not catalog field names.
+            "transaction_no": ("F01", "case_and_instance_refs"),
+            "benchmark_land_no": ("F03", "land_no"),
+        }
+        unambiguous_form_by_field = {
+            "transaction_total_price": "F01",
+            **{
+                field_name: "F02-RF"
+                for field_name in F02_RF_FIELD_ANALYSIS_FIELDS
+            },
+        }
+        normalized: list[CandidateValue] = []
+        seen: set[tuple[str, str]] = set()
+        if extracted_text is not None:
+            # Share the same source-section routing as AI/Codex analysis.
+            # Import lazily to keep the OCR provider independent of the AI
+            # service at module import time.
+            from app.valuation.extraction.field_analysis import _analysis_source_text
+
+        for item in candidates:
+            form_code = item.form_code
+            field_name = item.field_name
+            alias = aliases.get(field_name)
+            if alias is not None:
+                form_code, field_name = alias
+            if field_name not in catalogs.get(form_code, {}):
+                form_code = unambiguous_form_by_field.get(field_name, form_code)
+            if field_name not in catalogs.get(form_code, {}):
+                continue
+            if extracted_text is not None:
+                scoped_text = _analysis_source_text(extracted_text, form_code)
+                if not scoped_text or item.source_text.strip() not in scoped_text:
+                    continue
+            key = (form_code, field_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            if field_name == item.field_name and form_code == item.form_code:
+                normalized.append(item)
+            else:
+                normalized.append(
+                    CandidateValue(
+                        field_name=field_name,
+                        value=item.value,
+                        confidence=item.confidence,
+                        source_page=item.source_page,
+                        source_text=item.source_text,
+                        form_code=form_code,
+                    )
+                )
+        return tuple(normalized)
 
     async def get_latest(
         self, case_id: UUID, document_id: UUID, user: User

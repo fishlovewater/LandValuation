@@ -94,7 +94,7 @@ function categoryValue(documentId: string): DocumentCategory {
             <div class="document-list__actions">
               <button class="finding-action" type="button" @click="emit('preview', document.documentId)">預覽</button>
               <label v-if="canExtractDocument(document)" class="document-list__analysis-form">
-                <span>AI 對應表</span>
+                <span>檔名表單提示（不限制掃描範圍）</span>
                 <select
                   :value="analysisFormValue(document.documentId)"
                   :data-testid="`document-analysis-form-${document.documentId}`"
@@ -114,7 +114,7 @@ function categoryValue(documentId: string): DocumentCategory {
                 :disabled="Boolean(extractionBusyDocumentId)"
                 @click="emit('extract', document.documentId)"
               >
-                {{ extractionBusyDocumentId === document.documentId ? 'AI 辨識中…' : documentCandidateCount(document.documentId) ? '重新 AI 辨識' : '開始 AI 辨識' }}
+                {{ extractionBusyDocumentId === document.documentId ? '六表 AI 辨識中…' : documentCandidateCount(document.documentId) ? '重新六表 AI 辨識' : '開始六表 AI 辨識' }}
               </button>
               <div v-if="canManageSourceDocument(document)" class="document-list__manage">
                 <label :for="`document-category-${document.documentId}`">分類</label>

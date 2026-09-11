@@ -138,7 +138,10 @@ def test_intake_file_checksum_is_repeatable_and_rewinds_upload() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bedrock_field_analysis_scans_every_official_form(monkeypatch) -> None:
+@pytest.mark.parametrize("provider_name", ["bedrock", "ollama"])
+async def test_supported_ai_field_analysis_scans_every_official_form(
+    monkeypatch, provider_name
+) -> None:
     analyzed_form_codes: list[str] = []
 
     class FakeFieldAnalysisService:
@@ -151,7 +154,7 @@ async def test_bedrock_field_analysis_scans_every_official_form(monkeypatch) -> 
     monkeypatch.setattr(
         automation_service,
         "get_settings",
-        lambda: SimpleNamespace(ai_provider="bedrock"),
+        lambda: SimpleNamespace(ai_provider=provider_name),
     )
     monkeypatch.setattr(
         automation_service,

@@ -35,6 +35,13 @@ const createDraft = reactive({
   districtCode: '',
   landUseType: '',
 })
+const landUseOptions = [
+  { value: 'RESIDENTIAL', label: '住宅用地' },
+  { value: 'COMMERCIAL', label: '商業用地' },
+  { value: 'INDUSTRIAL', label: '工業用地' },
+  { value: 'AGRICULTURAL', label: '農業用地' },
+  { value: 'OTHER', label: '其他用途' },
+] as const
 const selectedRequirement = computed(() => formTypes.value.find((item) => item.form_type === 'F03') ?? null)
 const sortedCases = computed(() => {
   const direction = sortDirection.value === 'asc' ? 1 : -1
@@ -219,7 +226,14 @@ onMounted(() => {
           <label><span>申請機關</span><input v-model.trim="createDraft.requestingAgency" maxlength="200" /></label>
           <label><span>縣市代碼 *</span><input v-model.trim="createDraft.cityCode" required maxlength="20" /></label>
           <label><span>行政區代碼 *</span><input v-model.trim="createDraft.districtCode" required maxlength="20" /></label>
-          <label class="create-case-grid__wide"><span>土地使用類型</span><input v-model.trim="createDraft.landUseType" maxlength="100" /></label>
+          <label class="create-case-grid__wide">
+            <span>土地用途 *</span>
+            <select v-model="createDraft.landUseType" required data-testid="case-land-use-type">
+              <option disabled value="">請選擇土地用途</option>
+              <option v-for="option in landUseOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+            </select>
+            <small>請從清單選擇；系統會儲存對應的正式規則代碼。</small>
+          </label>
           <div class="create-case-fixed-form create-case-grid__wide" data-testid="create-case-starting-form">
             <span>起始查估表</span>
             <strong>F03｜比準地地價估計表</strong>
@@ -274,6 +288,7 @@ onMounted(() => {
 :deep(.valuation-create-modal .lg-modal__title) { color: var(--app-ink); }
 .create-case-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
 .create-case-grid label { display: grid; gap: 6px; color: var(--app-ink-soft); font-size: 12px; font-weight: 800; }
+.create-case-grid label small { color: var(--app-muted); font-size: 11px; font-weight: 500; line-height: 1.45; }
 .create-case-grid__wide { grid-column: 1 / -1; }
 .create-case-grid input,
 .create-case-grid select { min-height: 44px; padding: 9px 11px; border: 1px solid var(--app-line); border-radius: 10px; color: var(--app-ink); background: rgba(255,255,255,.8); font: inherit; }

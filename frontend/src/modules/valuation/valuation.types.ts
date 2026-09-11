@@ -296,6 +296,10 @@ export interface ExtractedFieldResponseDto {
   document_id: string
   form_code: string
   field_name: string
+  /** Canonical Chinese display name resolved from the six-form field catalogue. */
+  field_label?: string
+  /** Evidence and input guidance resolved from the canonical field catalogue. */
+  field_guidance?: string
   extracted_value: unknown
   confidence: string
   source_page: number | null

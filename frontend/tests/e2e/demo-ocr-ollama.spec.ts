@@ -33,12 +33,24 @@ test.describe('persistent Demo OCR + Ollama field analysis', () => {
         && path.includes(`/valuation/cases/${encodeURIComponent(caseId)}/documents/`)
         && path.endsWith('/extract')
     }, { timeout: 120_000 })
-    const analysisResponsePromise = page.waitForResponse((response) => {
-      const path = new URL(response.url()).pathname
-      return response.request().method() === 'POST'
-        && path.includes(`/valuation/cases/${encodeURIComponent(caseId)}/documents/`)
-        && path.endsWith('/extraction/analyze-fields')
-    }, { timeout: 180_000 })
+    const analysisResponsesPromise = new Promise<Response[]>((resolve) => {
+      const responses: Response[] = []
+      const handler = (response: Response) => {
+        const path = new URL(response.url()).pathname
+        if (
+          response.request().method() === 'POST'
+          && path.includes(`/valuation/cases/${encodeURIComponent(caseId)}/documents/`)
+          && path.endsWith('/extraction/analyze-fields')
+        ) {
+          responses.push(response)
+          if (responses.length === 6) {
+            page.off('response', handler)
+            resolve(responses)
+          }
+        }
+      }
+      page.on('response', handler)
+    })
 
     await documentRow.locator('button[data-testid^="extract-document-"]').click()
 
@@ -53,10 +65,18 @@ test.describe('persistent Demo OCR + Ollama field analysis', () => {
     expect(extraction.provider.toLowerCase()).toContain('local')
     expect((extraction.extracted_text ?? '').trim().length).toBeGreaterThan(100)
 
-    const analysisResponse = await analysisResponsePromise
-    expect(analysisResponse.ok()).toBeTruthy()
-    expect(analysisResponse.request().postDataJSON()).toEqual({ form_code: 'F03' })
-    const analysis = await analysisResponse.json() as {
+    const analysisResponses = await analysisResponsesPromise
+    expect(analysisResponses).toHaveLength(6)
+    expect(analysisResponses.every((response) => response.ok())).toBeTruthy()
+    expect(analysisResponses.map((response) => response.request().postDataJSON())).toEqual([
+      { form_code: 'F01' },
+      { form_code: 'F02' },
+      { form_code: 'F02-RF' },
+      { form_code: 'F03' },
+      { form_code: 'F04' },
+      { form_code: 'S01' },
+    ])
+    const analysis = await analysisResponses[5].json() as {
       candidates: Array<{
         analysis_provider: string
         model_id: string | null

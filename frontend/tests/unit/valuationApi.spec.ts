@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { http } from '../../src/api/http'
-import { valuationApi } from '../../src/modules/valuation/valuation.api'
+import { safeValuationErrorMessage, valuationApi } from '../../src/modules/valuation/valuation.api'
 
 function response<T>(data: T, config: Parameters<NonNullable<typeof http.defaults.adapter>>[0], status = 200) {
   return { data, status, statusText: 'OK', headers: {}, config }
@@ -12,6 +12,25 @@ describe('valuation API transport', () => {
   afterEach(() => {
     http.defaults.adapter = originalAdapter
     vi.restoreAllMocks()
+  })
+
+  it('shows the backend rule code and reason instead of a generic valuation error', () => {
+    const error = {
+      isAxiosError: true,
+      response: {
+        status: 422,
+        data: {
+          error: {
+            code: 'COMPARISON_ANALYSIS_REQUIRED',
+            message: '正式計算前必須指定比準地與比較分析',
+          },
+        },
+      },
+    }
+
+    expect(safeValuationErrorMessage(error)).toBe(
+      '［COMPARISON_ANALYSIS_REQUIRED］正式計算前必須指定比準地與比較分析',
+    )
   })
 
   it('creates a case with only the backend CaseCreate contract fields', async () => {
