@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     demo_quick_login_enabled: bool = False
     password_reset_token_minutes: int = Field(default=30, ge=5, le=1440)
     password_reset_debug_token_enabled: bool = False
+    public_app_url: str = "http://127.0.0.1:5173"
+    smtp_host: str | None = None
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_username: str | None = None
+    smtp_password: SecretStr | None = None
+    smtp_from_email: str | None = None
+    smtp_starttls: bool = True
     document_preview_max_bytes: int = Field(
         default=10 * 1024 * 1024, ge=1024 * 1024, le=50 * 1024 * 1024
     )
@@ -141,6 +148,18 @@ class Settings(BaseSettings):
             and self.jwt_secret_key.get_secret_value() == "change-this-competition-secret"
         ):
             raise ValueError("JWT_SECRET_KEY must be replaced outside development")
+        return self
+
+    @model_validator(mode="after")
+    def validate_password_reset_delivery(self):
+        self.public_app_url = self.public_app_url.rstrip("/")
+        if not self.public_app_url:
+            raise ValueError("PUBLIC_APP_URL must not be empty")
+        if self.app_env.lower() not in {"development", "test"}:
+            if not self.smtp_host or not self.smtp_from_email:
+                raise ValueError(
+                    "SMTP_HOST and SMTP_FROM_EMAIL are required outside development/test"
+                )
         return self
 
     @model_validator(mode="after")

@@ -82,6 +82,12 @@ docker compose -p landvaluation-persistent-demo -f docker-compose.yml -f docker-
 docker compose -p landvaluation-persistent-demo -f docker-compose.yml -f docker-compose.demo.yml --env-file .env.example exec -T api python -m app.demo status
 ```
 
+帳號申請管理刻意不加入第四個一鍵 Demo 角色。`scripts/demo-up.ps1` 會另外準備
+development-only 的 `system_admin_demo`，它只持有 `SYSTEM_ADMIN` / `auth.manage`，
+需要以一般帳密登入方式進入「帳號申請管理」。本機 Demo 也會開啟一次性密碼設定碼
+回傳，方便在沒有 SMTP 的展示環境完整走過「申請 → 核准 → 設定密碼 → 登入」；
+這個設定只存在 `docker-compose.demo.yml`，正式環境不啟用。
+
 For a shell-local run, discard seed output and parse only the safe `status` JSON
 for the case identifiers. The fixed local Demo credentials are
 `valuation_demo` / `Demo1234!`, `review_demo` / `Demo1234!`, and

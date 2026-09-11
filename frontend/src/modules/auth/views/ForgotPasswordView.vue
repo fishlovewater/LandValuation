@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import { authApi } from '../auth.api'
 
+const route = useRoute()
 const account = ref('')
-const token = ref('')
+const token = ref(typeof route.query.token === 'string' ? route.query.token : '')
 const newPassword = ref('')
 const confirmPassword = ref('')
 const busy = ref(false)

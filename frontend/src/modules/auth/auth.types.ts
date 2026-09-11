@@ -43,6 +43,29 @@ export interface AccountAccessRequestResponseDto {
   message: string
 }
 
+export type AccountAccessRequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED'
+
+export interface AccountAccessRequestAdminDto {
+  request_id: string
+  username: string
+  email: string
+  display_name: string
+  requested_role: DemoLoginRole
+  reason?: string | null
+  status: AccountAccessRequestStatus
+  decision_note?: string | null
+  created_at: string
+  handled_at?: string | null
+  handled_by_user_id?: string | null
+}
+
+export interface AccountAccessDecisionResponseDto {
+  request: AccountAccessRequestAdminDto
+  account_created: boolean
+  setup_email_sent: boolean
+  debug_setup_token?: string | null
+}
+
 export interface PasswordResetRequestResponseDto {
   message: string
   debug_token?: string | null

@@ -29,6 +29,53 @@ afterEach(() => {
 })
 
 describe('auth API adapter boundary', () => {
+  it('lists and decides account requests through the protected management endpoints', async () => {
+    http.defaults.baseURL = 'https://api.example.test/api/v1'
+    const requests: Array<{ method?: string; url?: string; data?: unknown; params?: unknown }> = []
+    http.defaults.adapter = vi.fn(async (config) => {
+      requests.push({ method: config.method, url: `${config.baseURL}${config.url}`, data: config.data, params: config.params })
+      if (config.method === 'get') {
+        return {
+          data: [{
+            request_id: 'request-admin-001', username: 'new.user', email: 'new@example.test',
+            display_name: '新使用者', requested_role: 'APPRAISER', status: 'PENDING',
+            created_at: '2026-09-12T00:00:00+08:00', reason: null, decision_note: null,
+            handled_at: null, handled_by_user_id: null,
+          }],
+          status: 200, statusText: 'OK', headers: {}, config,
+        }
+      }
+      return {
+        data: {
+          request: { request_id: 'request-admin-001', status: 'APPROVED' },
+          account_created: true,
+          setup_email_sent: true,
+        },
+        status: 200, statusText: 'OK', headers: {}, config,
+      }
+    }) as unknown as typeof originalAdapter
+
+    const listed = await authApi.listAccountRequests('PENDING')
+    const decided = await authApi.decideAccountRequest('request-admin-001', 'APPROVED', '核准')
+
+    expect(listed).toHaveLength(1)
+    expect(decided.account_created).toBe(true)
+    expect(requests).toEqual([
+      {
+        method: 'get',
+        url: 'https://api.example.test/api/v1/auth/registration-requests',
+        data: undefined,
+        params: { status: 'PENDING' },
+      },
+      {
+        method: 'post',
+        url: 'https://api.example.test/api/v1/auth/registration-requests/request-admin-001/decision',
+        data: JSON.stringify({ decision: 'APPROVED', note: '核准' }),
+        params: undefined,
+      },
+    ])
+  })
+
   it('posts account access requests to the self-service registration endpoint', async () => {
     http.defaults.baseURL = 'https://api.example.test/api/v1'
     const requests: Array<{ method?: string; url?: string; data?: unknown }> = []

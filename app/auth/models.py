@@ -101,6 +101,7 @@ class AccountAccessRequest(Base):
     requested_role: Mapped[str] = mapped_column(String(80))
     reason: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), default="PENDING")
+    decision_note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     handled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     handled_by_user_id: Mapped[UUID | None] = mapped_column(

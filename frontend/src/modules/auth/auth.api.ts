@@ -1,7 +1,10 @@
 import { http } from '../../api/http'
 import type {
+  AccountAccessDecisionResponseDto,
+  AccountAccessRequestAdminDto,
   AccountAccessRequestPayload,
   AccountAccessRequestResponseDto,
+  AccountAccessRequestStatus,
   AuthUser,
   CurrentUserDto,
   DemoLoginRole,
@@ -22,6 +25,25 @@ export function mapCurrentUser(dto: CurrentUserDto): AuthUser {
 }
 
 export const authApi = {
+  async listAccountRequests(status?: AccountAccessRequestStatus): Promise<AccountAccessRequestAdminDto[]> {
+    const response = await http.get<AccountAccessRequestAdminDto[]>('/auth/registration-requests', {
+      params: status ? { status } : undefined,
+    })
+    return response.data
+  },
+
+  async decideAccountRequest(
+    requestId: string,
+    decision: 'APPROVED' | 'REJECTED',
+    note?: string,
+  ): Promise<AccountAccessDecisionResponseDto> {
+    const response = await http.post<AccountAccessDecisionResponseDto>(
+      `/auth/registration-requests/${requestId}/decision`,
+      { decision, note: note?.trim() || null },
+    )
+    return response.data
+  },
+
   async requestAccount(payload: AccountAccessRequestPayload): Promise<AccountAccessRequestResponseDto> {
     const response = await http.post<AccountAccessRequestResponseDto>('/auth/registration-requests', payload)
     return response.data

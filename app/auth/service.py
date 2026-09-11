@@ -91,6 +91,7 @@ async def create_account_access_request(
         requested_role=payload.requested_role,
         reason=payload.reason.strip() if payload.reason and payload.reason.strip() else None,
         status="PENDING",
+        decision_note=None,
         created_at=datetime.now(UTC),
         handled_at=None,
         handled_by_user_id=None,
@@ -100,25 +101,105 @@ async def create_account_access_request(
     return request
 
 
+async def list_account_access_requests(
+    session: AsyncSession,
+    *,
+    status: str | None = None,
+) -> list[AccountAccessRequest]:
+    query = select(AccountAccessRequest).order_by(AccountAccessRequest.created_at.desc())
+    if status:
+        query = query.where(AccountAccessRequest.status == status)
+    return list((await session.scalars(query)).all())
+
+
+async def decide_account_access_request(
+    session: AsyncSession,
+    *,
+    request_id: UUID,
+    decision: str,
+    handled_by_user_id: UUID,
+    note: str | None,
+    expires_minutes: int,
+) -> tuple[AccountAccessRequest, bool, str | None, User | None]:
+    request = await session.scalar(
+        select(AccountAccessRequest)
+        .where(AccountAccessRequest.request_id == request_id)
+        .with_for_update()
+    )
+    if request is None:
+        raise AppError("ACCOUNT_REQUEST_NOT_FOUND", "找不到指定的帳號申請。", 404)
+    if request.status != "PENDING":
+        raise AppError("ACCOUNT_REQUEST_ALREADY_HANDLED", "此帳號申請已完成處理。", 409)
+
+    now = datetime.now(UTC)
+    request.status = decision
+    request.decision_note = note.strip() if note and note.strip() else None
+    request.handled_at = now
+    request.handled_by_user_id = handled_by_user_id
+
+    if decision == "REJECTED":
+        await session.flush()
+        return request, False, None, None
+
+    existing = await session.scalar(
+        select(User.user_id).where(
+            or_(User.username == request.username, User.email == request.email)
+        )
+    )
+    if existing is not None:
+        raise AppError(
+            "ACCOUNT_ALREADY_EXISTS",
+            "核准時發現帳號或 Email 已被使用，請先確認現有帳號。",
+            409,
+        )
+    role = await session.scalar(
+        select(Role).where(Role.role_code == request.requested_role, Role.is_active.is_(True))
+    )
+    if role is None:
+        raise AppError("ROLE_NOT_AVAILABLE", "申請的工作角色目前不可用。", 409)
+
+    user = User(
+        user_id=uuid4(),
+        username=request.username,
+        email=request.email,
+        password_hash=hash_password(token_urlsafe(48)),
+        display_name=request.display_name,
+        is_active=True,
+        last_login_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    user.roles.append(role)
+    session.add(user)
+    await session.flush()
+    setup_token = await _create_password_reset_token_for_user(
+        session,
+        user,
+        expires_minutes=expires_minutes,
+    )
+    return request, True, setup_token, user
+
+
 def _reset_token_hash(raw_token: str) -> str:
     return sha256(raw_token.encode("utf-8")).hexdigest()
 
 
-async def create_password_reset_token(
-    session: AsyncSession,
-    account: str,
-    *,
-    expires_minutes: int,
-) -> str | None:
+async def find_active_user_for_account(session: AsyncSession, account: str) -> User | None:
     normalized = account.strip()
-    user = await session.scalar(
+    return await session.scalar(
         select(User).where(
             User.is_active.is_(True),
             or_(User.username == normalized, User.email == normalized.lower()),
         )
     )
-    if user is None:
-        return None
+
+
+async def _create_password_reset_token_for_user(
+    session: AsyncSession,
+    user: User,
+    *,
+    expires_minutes: int,
+) -> str:
     raw_token = token_urlsafe(48)
     now = datetime.now(UTC)
     session.add(
@@ -133,6 +214,23 @@ async def create_password_reset_token(
     )
     await session.flush()
     return raw_token
+
+
+async def create_password_reset_token(
+    session: AsyncSession,
+    account: str,
+    *,
+    expires_minutes: int,
+) -> str | None:
+    normalized = account.strip()
+    user = await find_active_user_for_account(session, normalized)
+    if user is None:
+        return None
+    return await _create_password_reset_token_for_user(
+        session,
+        user,
+        expires_minutes=expires_minutes,
+    )
 
 
 async def confirm_password_reset(

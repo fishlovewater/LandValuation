@@ -3,6 +3,7 @@ import {
   PhChartLineUp as ChartLineUp,
   PhClockCounterClockwise as History,
   PhFiles as Files,
+  PhUserGear as UserGear,
 } from '@phosphor-icons/vue'
 import { HISTORY_ROLES, VALUATION_ROLES } from '../../router/roleAccess'
 
@@ -41,6 +42,14 @@ export const APP_MODULES: readonly AppModule[] = [
     path: '/app/history/search',
     roles: HISTORY_ROLES,
     icon: History,
+  },
+  {
+    key: 'access-admin',
+    label: '帳號申請管理',
+    description: '核准或拒絕工作帳號申請',
+    path: '/app/admin/access-requests',
+    permission: 'auth.manage',
+    icon: UserGear,
   },
 ]
 

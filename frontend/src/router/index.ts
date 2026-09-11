@@ -26,6 +26,7 @@ const lazyProfile = () => import('../modules/auth/views/ProfileView.vue')
 const lazyPublicInfo = () => import('../modules/auth/views/PublicInfoView.vue')
 const lazyRegisterRequest = () => import('../modules/auth/views/RegisterRequestView.vue')
 const lazyForgotPassword = () => import('../modules/auth/views/ForgotPasswordView.vue')
+const lazyAccessRequestsAdmin = () => import('../modules/auth/views/AccessRequestsAdminView.vue')
 
 export const routes: readonly RouteRecordRaw[] = [
   {
@@ -95,6 +96,18 @@ export const routes: readonly RouteRecordRaw[] = [
           title: '帳號設定',
           subsystem: '帳號',
           description: '檢視目前登入帳號與工作權限。',
+        },
+      },
+      {
+        path: 'admin/access-requests',
+        name: 'admin-access-requests',
+        component: lazyAccessRequestsAdmin,
+        meta: {
+          requiresAuth: true,
+          permissions: ['auth.manage'],
+          title: '帳號申請管理',
+          subsystem: '帳號管理',
+          description: '核准或拒絕工作帳號申請。',
         },
       },
       {

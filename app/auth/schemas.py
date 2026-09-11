@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 from typing import Literal
 
@@ -42,6 +43,34 @@ class AccountAccessRequestResponse(BaseModel):
     request_id: UUID
     status: Literal["PENDING", "APPROVED", "REJECTED"]
     message: str
+
+
+class AccountAccessRequestAdminItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    request_id: UUID
+    username: str
+    email: str
+    display_name: str
+    requested_role: str
+    reason: str | None
+    status: Literal["PENDING", "APPROVED", "REJECTED"]
+    decision_note: str | None
+    created_at: datetime
+    handled_at: datetime | None
+    handled_by_user_id: UUID | None
+
+
+class AccountAccessDecisionRequest(BaseModel):
+    decision: Literal["APPROVED", "REJECTED"]
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class AccountAccessDecisionResponse(BaseModel):
+    request: AccountAccessRequestAdminItem
+    account_created: bool = False
+    setup_email_sent: bool = False
+    debug_setup_token: str | None = None
 
 
 class PasswordResetRequest(BaseModel):
