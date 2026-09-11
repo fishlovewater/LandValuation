@@ -2,7 +2,7 @@ import { computed, onScopeDispose, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { registerUnauthorizedHandler, tokenService } from '../api/http'
 import { authApi } from '../modules/auth/auth.api'
-import type { AuthUser, LoginCredentials } from '../modules/auth/auth.types'
+import type { AuthUser, DemoLoginRole, LoginCredentials, TokenResponseDto } from '../modules/auth/auth.types'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<AuthUser | null>(null)
@@ -33,7 +33,7 @@ export const useAuthStore = defineStore('auth', () => {
   const disposeUnauthorizedHandler = registerUnauthorizedHandler(clearSession)
   onScopeDispose(disposeUnauthorizedHandler)
 
-  async function login(credentials: LoginCredentials): Promise<void> {
+  async function establishSession(requestToken: () => Promise<TokenResponseDto>): Promise<void> {
     if (isSubmitting.value) return
     isSubmitting.value = true
     invalidatePendingSession()
@@ -41,7 +41,7 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
     const requestGeneration = sessionGeneration
     try {
-      const token = await authApi.login(credentials)
+      const token = await requestToken()
       if (sessionGeneration !== requestGeneration) return
       tokenService.set(token.access_token, token.expires_in)
       const accessToken = tokenService.get()
@@ -56,6 +56,14 @@ export const useAuthStore = defineStore('auth', () => {
     } finally {
       isSubmitting.value = false
     }
+  }
+
+  async function login(credentials: LoginCredentials): Promise<void> {
+    await establishSession(() => authApi.login(credentials))
+  }
+
+  async function demoLogin(role: DemoLoginRole): Promise<void> {
+    await establishSession(() => authApi.demoLogin(role))
   }
 
   function logout(): void {
@@ -116,6 +124,7 @@ export const useAuthStore = defineStore('auth', () => {
     roles,
     permissions,
     login,
+    demoLogin,
     logout,
     restoreSession,
   }

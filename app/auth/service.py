@@ -22,6 +22,14 @@ async def authenticate_user(session: AsyncSession, username: str, password: str)
     return user
 
 
+async def get_active_user_by_username(session: AsyncSession, username: str) -> User:
+    user = await session.scalar(_user_query().where(User.username == username))
+    if user is None or not user.is_active:
+        raise AuthenticationError("使用者不存在或已停用")
+    user.last_login_at = datetime.now(UTC)
+    return user
+
+
 async def get_active_user(session: AsyncSession, user_id: UUID) -> User:
     user = await session.scalar(_user_query().where(User.user_id == user_id))
     if user is None or not user.is_active:

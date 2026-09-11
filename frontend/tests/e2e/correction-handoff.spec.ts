@@ -33,6 +33,7 @@ async function logout(page: Page): Promise<void> {
 async function submitValuation(page: Page): Promise<string> {
   await page.goto(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/prepare`)
   await expect(page.locator('#case-summary-title')).toContainText(demo.caseNo)
+  await page.getByTestId('valuation-step-4').click()
   await page.getByTestId('run-valuation').click()
   await expect(page.getByText('伺服器已完成計算、檢核、F03 提交與正式輸出。')).toBeVisible()
 
@@ -169,6 +170,7 @@ test.describe('real correction handoff workflow', () => {
     await correctionLocationButton.click()
     await expect(page.getByText(/修正要求：/)).toBeVisible()
     await expect(page.getByTestId('open-revision-fields')).toBeVisible()
+    await page.getByTestId('open-revision-fields').click()
     await expect(page.getByTestId('save-confirmed-fields')).toBeEnabled()
     await expect(page.getByTestId('prepare-revision-draft')).toHaveCount(0)
     await expect(correctionPanel).toContainText('補正要求')

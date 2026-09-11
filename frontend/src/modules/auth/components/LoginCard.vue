@@ -2,9 +2,12 @@
 import { computed, nextTick, ref } from 'vue'
 import { isAxiosError } from 'axios'
 import {
+  PhClipboardText as ClipboardText,
   PhEye as Eye,
   PhEyeSlash as EyeSlash,
   PhLockKey as LockKey,
+  PhMagnifyingGlass as MagnifyingGlass,
+  PhMapPin as MapPin,
   PhSignIn as SignIn,
   PhSpinnerGap as SpinnerGap,
 } from '@phosphor-icons/vue'
@@ -13,7 +16,7 @@ import GlassButton from '../../../components/glass/GlassButton.vue'
 import GlassCard from '../../../components/glass/GlassCard.vue'
 import GlassField from '../../../components/glass/GlassField.vue'
 import { useAuthStore } from '../../../stores/auth.store'
-import type { AuthUser } from '../auth.types'
+import type { AuthUser, DemoLoginRole } from '../auth.types'
 
 const emit = defineEmits<{
   loginSuccess: [user: AuthUser]
@@ -29,6 +32,18 @@ const formError = ref('')
 const usernameContainer = ref<HTMLElement | null>(null)
 const passwordContainer = ref<HTMLElement | null>(null)
 let enterHandled = false
+
+const demoQuickLoginEnabled = import.meta.env.DEV || import.meta.env.VITE_DEMO_QUICK_LOGIN === 'true'
+const demoAccounts: Array<{
+  role: DemoLoginRole
+  label: string
+  description: string
+  icon: typeof MapPin
+}> = [
+  { role: 'APPRAISER', label: '估價人員', description: '估價、文件與 AI 辨識', icon: MapPin },
+  { role: 'REVIEWER', label: '審查人員', description: '疑點、補件與審查決定', icon: ClipboardText },
+  { role: 'INSPECTOR', label: '案件查詢', description: '歷程、版本與追溯', icon: MagnifyingGlass },
+]
 
 const passwordType = computed(() => (passwordVisible.value ? 'text' : 'password'))
 const passwordToggleLabel = computed(() => (passwordVisible.value ? '隱藏密碼' : '顯示密碼'))
@@ -92,6 +107,19 @@ async function submit(): Promise<void> {
   }
 }
 
+async function quickLogin(role: DemoLoginRole): Promise<void> {
+  if (authStore.isSubmitting) return
+  usernameError.value = ''
+  passwordError.value = ''
+  formError.value = ''
+  try {
+    await authStore.demoLogin(role)
+    if (authStore.user) emit('loginSuccess', authStore.user)
+  } catch (error: unknown) {
+    formError.value = safeLoginError(error)
+  }
+}
+
 function handleEnter(event: KeyboardEvent): void {
   event.preventDefault()
   if (enterHandled) return
@@ -121,6 +149,31 @@ defineExpose({ focusUsername })
       <h2 id="login-title">從你的工作台開始</h2>
       <p>使用已核准的帳號登入，接續估價與審查工作。</p>
     </div>
+
+    <section v-if="demoQuickLoginEnabled" class="demo-login" aria-labelledby="demo-login-title">
+      <div class="demo-login__heading">
+        <strong id="demo-login-title">Demo 快速登入</strong>
+        <span>展示時直接選擇角色，不需要輸入帳號密碼。</span>
+      </div>
+      <div class="demo-login__grid">
+        <button
+          v-for="account in demoAccounts"
+          :key="account.role"
+          class="demo-login__button"
+          type="button"
+          :data-testid="`demo-login-${account.role.toLowerCase()}`"
+          :disabled="authStore.isSubmitting"
+          @click="quickLogin(account.role)"
+        >
+          <component :is="account.icon" :size="19" weight="duotone" aria-hidden="true" />
+          <span>
+            <strong>{{ account.label }}</strong>
+            <small>{{ account.description }}</small>
+          </span>
+        </button>
+      </div>
+      <div class="demo-login__divider"><span>或使用帳號密碼</span></div>
+    </section>
 
     <form class="login-form" novalidate @submit.prevent="handleSubmit">
       <div ref="usernameContainer">

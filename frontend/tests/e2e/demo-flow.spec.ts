@@ -130,6 +130,7 @@ async function logout(page: Page): Promise<void> {
 async function submitPreparedValuation(page: Page): Promise<string> {
   await page.goto(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/prepare`)
   await expect(page.locator('#case-summary-title')).toContainText(demo.caseNo)
+  await page.getByTestId('valuation-step-4').click()
   const runButton = page.getByTestId('run-valuation')
   await expect(runButton).toBeEnabled()
   await runButton.click()

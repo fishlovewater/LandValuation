@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ErrorState from '../../../components/common/ErrorState.vue'
 import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
@@ -28,6 +28,7 @@ import {
   type AutomatedWorkflowResponseDto,
   type BenchmarkLandCreateDto,
   type DocumentCategory,
+  type DocumentArtifactModel,
   type ExtractedFieldResponseDto,
   type F03EditableValues,
   type ParcelCreateDto,
@@ -69,6 +70,16 @@ const documentActionId = ref<string | null>(null)
 const documentCategoryDraft = reactive<Record<string, DocumentCategory>>({})
 const landContextSaving = ref(false)
 const editingParcelId = ref<string | null>(null)
+type WizardStep = 1 | 2 | 3 | 4 | 5 | 6
+type DataSection = 'overview' | 'manual' | 'land' | 'f03'
+const activeWizardStep = ref<WizardStep>(1)
+const activeDataSection = ref<DataSection>('overview')
+const previewDocumentId = ref<string | null>(null)
+const previewUrl = ref('')
+const previewLoading = ref(false)
+const previewError = ref('')
+const previewPage = ref<number | null>(null)
+const selectedCandidateId = ref<string | null>(null)
 
 const parcelDraft = reactive({
   districtCode: '',
@@ -147,16 +158,9 @@ const canReadAutomatedWorkflow = computed(() => [
   'document.upload',
   'document.download',
 ].every((permission) => auth.permissions.includes(permission)))
-const currentStep = computed<2 | 3 | 4 | 5>(() => {
-  if (flow.validation?.canGenerateReport && flow.report) return 5
-  if (flow.validation) return 4
-  if (flow.calculation) return 3
-  return 2
-})
 const canProceedToSubmit = computed(() => Boolean(flow.validation?.canGenerateReport && flow.report))
 const f03Guidance = computed(() => workflowGuidance.value?.form_guidance.find((item) => item.form_code === 'F03') ?? null)
 const workflowMissingItems = computed(() => workflowGuidance.value?.missing_items ?? [])
-const workflowWarnings = computed(() => workflowGuidance.value?.warnings ?? [])
 const allCandidates = computed(() => {
   const merged = new Map<string, ExtractedFieldResponseDto>()
   for (const candidate of workflowGuidance.value?.candidates ?? []) {
@@ -179,6 +183,21 @@ const candidateDecisionTargets = computed(() => allCandidates.value.filter(
 const selectedCandidateCount = computed(() => candidateDecisionTargets.value.filter(
   (candidate) => Boolean(candidateDecision[candidate.extracted_field_id]),
 ).length)
+const selectedCandidate = computed(() => allCandidates.value.find(
+  (candidate) => candidate.extracted_field_id === selectedCandidateId.value,
+) ?? null)
+const previewDocument = computed(() => flow.documents.find(
+  (document) => document.documentId === previewDocumentId.value,
+) ?? null)
+const previewSourceUrl = computed(() => {
+  if (!previewUrl.value) return ''
+  if (previewDocument.value?.mimeType.toLowerCase() === 'application/pdf' && previewPage.value) {
+    return `${previewUrl.value}#page=${previewPage.value}`
+  }
+  return previewUrl.value
+})
+const previewIsPdf = computed(() => previewDocument.value?.mimeType.toLowerCase() === 'application/pdf')
+const previewIsImage = computed(() => previewDocument.value?.mimeType.toLowerCase().startsWith('image/') ?? false)
 const manualFieldEntries = computed(() => {
   const keys = new Set<string>()
   for (const guidance of workflowGuidance.value?.form_guidance ?? []) {
@@ -192,6 +211,41 @@ const manualFieldEntries = computed(() => {
     return { key, formCode: key.slice(0, split), fieldName: key.slice(split + 1) }
   })
 })
+const dataIssueCounts = computed(() => ({
+  overview: (f03Guidance.value?.missing_required_fields.length ?? 0) + (!parcels.value.length ? 1 : 0) + (!flow.benchmarks.length ? 1 : 0),
+  manual: manualFieldEntries.value.length,
+  land: (!parcels.value.length ? 1 : 0) + (!flow.benchmarks.length ? 1 : 0),
+  f03: f03Guidance.value?.missing_required_fields.length ?? 0,
+}))
+const wizardIssueCounts = computed<Partial<Record<WizardStep, number>>>(() => ({
+  2: pendingCandidates.value.length + (!flow.documents.length ? 1 : 0),
+  3: dataIssueCounts.value.overview,
+  4: flow.validation?.failedCount ?? 0,
+}))
+const wizardAvailableSteps = computed<number[]>(() => [1, 2, 3, 4, ...(canProceedToSubmit.value ? [5] : [])])
+const wizardStepTitle = computed(() => ({
+  1: '案件設定',
+  2: '文件上傳與 AI 辨識',
+  3: '資料確認',
+  4: '計算與檢核',
+  5: '查估書確認',
+  6: '送審',
+}[activeWizardStep.value]))
+const wizardStepDescription = computed(() => ({
+  1: '先確認案件基本資料與目前查估表版本。',
+  2: '集中管理來源文件、預覽原文並執行 AI / OCR 辨識，再逐筆確認辨識結果。',
+  3: '依待處理狀態確認人工補充、宗地、比準地與 F03 正式採用值。',
+  4: '執行伺服器公式計算與正式檢核；若有錯誤可直接跳回對應欄位修正。',
+  5: '前往查估書三頁確認與正式 PDF。',
+  6: '完成正式送審。',
+}[activeWizardStep.value]))
+const wizardNextLabel = computed(() => {
+  if (activeWizardStep.value === 1) return '下一步：文件與 AI 辨識'
+  if (activeWizardStep.value === 2) return pendingCandidates.value.length ? `先處理 ${pendingCandidates.value.length} 筆待確認` : '下一步：資料確認'
+  if (activeWizardStep.value === 3) return dataIssueCounts.value.overview ? `尚有 ${dataIssueCounts.value.overview} 項資料待處理` : '下一步：計算與檢核'
+  if (activeWizardStep.value === 4) return canProceedToSubmit.value ? '下一步：查估書確認' : '通過檢核後才能繼續'
+  return '前往查估書確認'
+})
 const SOURCE_DOCUMENT_CATEGORIES: readonly DocumentCategory[] = [
   'original',
   'land-register',
@@ -202,25 +256,6 @@ const SOURCE_DOCUMENT_CATEGORIES: readonly DocumentCategory[] = [
   'map-zoning',
   'map-land-value-section',
 ]
-const workflowNextActionLabel = computed(() => {
-  if (isRevisionRequired.value) {
-    if (!revisionDraftReady.value) {
-      return '審查已退回補正；先建立較新的 F03 與三頁正式報告草稿，再依修正通知逐項處理。'
-    }
-    return '補正版已建立；依修正通知修改資料、重新計算與檢核後，再建立新版正式輸出並重新送審。'
-  }
-  const action = workflowGuidance.value?.next_action
-  if (action === 'REVIEW_CANDIDATES') return '先確認 OCR / AI 擷取候選資料，再回到 F03 完成正式欄位。'
-  if (action === 'FILL_REQUIRED_FIELDS') return '補齊下列必填欄位後，再執行伺服器計算。'
-  if (action === 'RUN_FORM_CALCULATION') return '必要資料已具備，可執行伺服器計算與檢核。'
-  if (action === 'COMPLETE_WORKFLOW_REQUIREMENTS') return '仍有案件或報告必要資料未完成，請先處理待辦項目。'
-  if (action === 'REVIEW_BEFORE_MANUAL_PDF_GENERATION') return '目前資料已可繼續，請確認內容後執行計算與檢核。'
-  if (!flow.documents.length) return '先上傳案件來源文件，再完成 F03 資料確認。'
-  if (!flow.f03) return 'F03 尚未可編輯，請先補齊案件、宗地與比準地資料。'
-  if (flow.validation && !flow.validation.canGenerateReport) return '依檢核結果修正欄位，儲存後重新執行計算與檢核。'
-  if (flow.validation?.canGenerateReport && flow.report) return '檢核已通過，可前往輸出預覽與送審。'
-  return '確認 F03 人工欄位後，執行伺服器計算與檢核。'
-})
 let activeCaseToken = 0
 
 const FIELD_TARGET_IDS: Readonly<Record<string, string>> = {
@@ -368,6 +403,8 @@ function documentCategoryLabel(category: string): string {
     'map-section-sketch': '地段示意圖',
     'map-zoning': '使用分區圖',
     'map-land-value-section': '地價區段圖',
+    'generated-report': '系統產生報告',
+    'complete-valuation-report': '完整查估書',
   } as Record<string, string>)[category] ?? category
 }
 
@@ -376,6 +413,172 @@ function candidateConfidenceLabel(candidate: ExtractedFieldResponseDto): string 
   if (!Number.isFinite(confidence)) return candidate.confidence || '未提供'
   const percent = confidence <= 1 ? confidence * 100 : confidence
   return `${percent.toFixed(percent >= 10 ? 0 : 1)}%`
+}
+
+function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '大小未知'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function documentCandidateCount(documentId: string): number {
+  return allCandidates.value.filter((candidate) => candidate.document_id === documentId).length
+}
+
+function documentPendingCount(documentId: string): number {
+  return pendingCandidates.value.filter((candidate) => candidate.document_id === documentId).length
+}
+
+function documentAiStatus(documentId: string): string {
+  const total = documentCandidateCount(documentId)
+  const pending = documentPendingCount(documentId)
+  if (extractionBusyDocumentId.value === documentId) return 'AI 辨識中'
+  if (!total) return '尚未辨識'
+  if (pending) return `${total} 欄位 · ${pending} 待確認`
+  return `${total} 欄位 · 已完成確認`
+}
+
+function canPreviewDocument(document: DocumentArtifactModel): boolean {
+  const mime = document.mimeType.toLowerCase()
+  return mime === 'application/pdf' || mime.startsWith('image/')
+}
+
+function clearPreviewUrl(): void {
+  if (previewUrl.value && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+    URL.revokeObjectURL(previewUrl.value)
+  }
+  previewUrl.value = ''
+}
+
+async function openDocumentPreview(documentId: string, page: number | null = null): Promise<void> {
+  const requestedCaseId = caseId.value
+  const token = activeCaseToken
+  const source = flow.documents.find((item) => item.documentId === documentId)
+  if (!source || !isCurrentCase(token, requestedCaseId)) return
+
+  activeWizardStep.value = 2
+  previewDocumentId.value = documentId
+  previewPage.value = page
+  previewError.value = ''
+  clearPreviewUrl()
+
+  if (!canPreviewDocument(source)) {
+    previewError.value = '此格式目前可下載，但不提供內嵌預覽。PDF 與圖片可直接在此檢視。'
+    return
+  }
+
+  previewLoading.value = true
+  try {
+    const blob = await valuationApi.downloadDocument(requestedCaseId, documentId)
+    if (!isCurrentCase(token, requestedCaseId) || previewDocumentId.value !== documentId) return
+    if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+      previewError.value = '目前瀏覽器環境無法建立文件預覽，可改用下載查看。'
+      return
+    }
+    previewUrl.value = URL.createObjectURL(blob)
+  } catch (caught: unknown) {
+    if (isCurrentCase(token, requestedCaseId)) previewError.value = safeValuationErrorMessage(caught)
+  } finally {
+    if (isCurrentCase(token, requestedCaseId) && previewDocumentId.value === documentId) previewLoading.value = false
+  }
+}
+
+async function downloadSourceDocument(document: DocumentArtifactModel): Promise<void> {
+  error.value = ''
+  try {
+    const blob = await valuationApi.downloadDocument(caseId.value, document.documentId)
+    if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return
+    const url = URL.createObjectURL(blob)
+    const anchor = window.document.createElement('a')
+    anchor.href = url
+    anchor.download = document.filename
+    anchor.click()
+    URL.revokeObjectURL(url)
+  } catch (caught: unknown) {
+    error.value = safeValuationErrorMessage(caught)
+  }
+}
+
+function candidateEditorType(candidate: ExtractedFieldResponseDto): 'date' | 'number' | 'text' {
+  const field = candidate.field_name.toLowerCase()
+  if (field.includes('date')) return 'date'
+  if (['price', 'weight', 'rate', 'area', 'sqm', 'latitude', 'longitude', 'amount', 'total'].some((part) => field.includes(part))) {
+    return 'number'
+  }
+  return 'text'
+}
+
+function candidateUnit(candidate: ExtractedFieldResponseDto): string {
+  const field = candidate.field_name.toLowerCase()
+  if (field.includes('sqm') || field.includes('area')) return 'm²'
+  if (field.includes('price') || field.includes('amount') || field.includes('total')) return '元'
+  return ''
+}
+
+async function openCandidateSource(candidate: ExtractedFieldResponseDto): Promise<void> {
+  selectedCandidateId.value = candidate.extracted_field_id
+  await openDocumentPreview(candidate.document_id, candidate.source_page ?? null)
+}
+
+function setWizardStep(step: WizardStep): void {
+  if (step >= 5) {
+    if (canProceedToSubmit.value) goToSubmit()
+    else {
+      activeWizardStep.value = 4
+      notice.value = '必須先完成資料、計算並通過檢核，才能進入查估書確認與送審。'
+    }
+    return
+  }
+  activeWizardStep.value = step
+  if (step === 3 && !activeDataSection.value) activeDataSection.value = 'overview'
+}
+
+function jumpToDataSection(section: DataSection): void {
+  activeWizardStep.value = 3
+  activeDataSection.value = section
+}
+
+function jumpToFirstDataIssue(): void {
+  if (manualFieldEntries.value.length) jumpToDataSection('manual')
+  else if (!parcels.value.length || !flow.benchmarks.length) jumpToDataSection('land')
+  else jumpToDataSection('f03')
+}
+
+function wizardPrevious(): void {
+  if (activeWizardStep.value <= 1) return
+  activeWizardStep.value = Math.max(1, activeWizardStep.value - 1) as WizardStep
+}
+
+function wizardNext(): void {
+  if (activeWizardStep.value === 1) {
+    activeWizardStep.value = 2
+    return
+  }
+  if (activeWizardStep.value === 2) {
+    if (pendingCandidates.value.length) {
+      selectedCandidateId.value = pendingCandidates.value[0]?.extracted_field_id ?? null
+      notice.value = `還有 ${pendingCandidates.value.length} 筆 AI 辨識結果待確認，先完成確認再進入正式資料。`
+      void focusElementById('valuation-candidate-workspace')
+      return
+    }
+    activeWizardStep.value = 3
+    activeDataSection.value = 'overview'
+    return
+  }
+  if (activeWizardStep.value === 3) {
+    if (dataIssueCounts.value.overview) {
+      notice.value = `目前仍有 ${dataIssueCounts.value.overview} 項資料待處理，已帶你前往第一個待處理區域。`
+      jumpToFirstDataIssue()
+      return
+    }
+    activeWizardStep.value = 4
+    return
+  }
+  if (activeWizardStep.value === 4) {
+    if (canProceedToSubmit.value) goToSubmit()
+    else notice.value = '請先執行伺服器計算與檢核，並處理所有阻擋項目。'
+  }
 }
 
 function initializeCandidateInputs(candidates: ExtractedFieldResponseDto[]): void {
@@ -531,6 +734,8 @@ async function ensureRevisionDrafts(): Promise<void> {
     await loadData()
     if (isCurrentCase(activeCaseToken, requestedCaseId)) {
       notice.value = '補正版已建立：F03 與 S01／F02-RF／F02 已建立較新的 DRAFT 版本，可依修正通知逐項修改。'
+      activeWizardStep.value = 3
+      activeDataSection.value = 'f03'
       void focusElementById('f03-data-section')
     }
   } catch (caught: unknown) {
@@ -597,6 +802,12 @@ function goToFinding(finding: ValidationFindingModel): void {
     notice.value = `請依檢核訊息處理：${finding.message}`
     return
   }
+  if (fieldCode === 'documents' || fieldCode === 'object_key') {
+    activeWizardStep.value = 2
+  } else {
+    activeWizardStep.value = 3
+    activeDataSection.value = 'f03'
+  }
   void focusElementById(targetId, `${findingLocationLabel(finding)}：${findingCorrectionHint(finding)}`)
 }
 
@@ -606,18 +817,24 @@ function goToWorkflowNextAction(): void {
       void ensureRevisionDrafts()
       return
     }
+    activeWizardStep.value = 3
+    activeDataSection.value = 'f03'
     void focusElementById('f03-data-section', '補正版已建立，請依修正通知逐項調整資料。')
     return
   }
   if (workflowGuidance.value?.pending_candidate_count) {
+    activeWizardStep.value = 2
+    selectedCandidateId.value = pendingCandidates.value[0]?.extracted_field_id ?? null
     void focusElementById('valuation-candidate-workspace', '目前仍有待確認候選資料；請逐筆確認、修改後採用，或拒絕。')
     return
   }
   if (workflowMissingItems.value.some((item) => item.toLowerCase().includes('document'))) {
+    activeWizardStep.value = 2
     void focusElementById('valuation-document-workspace')
     return
   }
   if (flow.validation && !flow.validation.canGenerateReport) {
+    activeWizardStep.value = 4
     void focusElementById('validation-title')
     return
   }
@@ -626,10 +843,19 @@ function goToWorkflowNextAction(): void {
     return
   }
   if (!parcels.value.length || !flow.benchmarks.length) {
+    activeWizardStep.value = 3
+    activeDataSection.value = 'land'
     void focusElementById('valuation-land-context', '請先補齊宗地與比準地資料。')
     return
   }
-  void focusElementById(flow.f03 ? 'f03-data-section' : 'valuation-document-workspace')
+  if (flow.f03) {
+    activeWizardStep.value = 3
+    activeDataSection.value = 'f03'
+    void focusElementById('f03-data-section')
+  } else {
+    activeWizardStep.value = 2
+    void focusElementById('valuation-document-workspace')
+  }
 }
 
 async function goToCorrectionItem(item: CorrectionItem): Promise<void> {
@@ -638,20 +864,26 @@ async function goToCorrectionItem(item: CorrectionItem): Promise<void> {
     if (!revisionDraftReady.value) return
   }
   if (item.document_id) {
+    activeWizardStep.value = 2
     await focusElementById('valuation-document-workspace', `修正要求：${item.requested_correction}`)
     return
   }
+  activeWizardStep.value = 3
+  activeDataSection.value = 'f03'
   await focusElementById('f03-data-section', `修正要求：${item.requested_correction}`)
 }
 
 function goToMissingItem(item: HandoffMissingItem): void {
   if (item.document_type) {
+    activeWizardStep.value = 2
     void focusElementById(
       'valuation-document-workspace',
       `審查要求補件：${item.item_name}${item.reason ? `｜${item.reason}` : ''}`,
     )
     return
   }
+  activeWizardStep.value = 3
+  activeDataSection.value = 'land'
   void focusElementById(
     'valuation-land-context',
     `審查要求補資料：${item.item_name}${item.reason ? `｜${item.reason}` : ''}`,
@@ -659,16 +891,28 @@ function goToMissingItem(item: HandoffMissingItem): void {
 }
 
 function focusRequestedRouteTarget(): void {
+  const requestedStep = typeof route.query.step === 'string' ? Number(route.query.step) : NaN
   const focus = typeof route.query.focus === 'string' ? route.query.focus : ''
   const field = typeof route.query.field === 'string' ? route.query.field : ''
+  if (Number.isInteger(requestedStep) && requestedStep >= 1 && requestedStep <= 4) {
+    activeWizardStep.value = requestedStep as WizardStep
+  }
   if (focus === 'documents') {
+    activeWizardStep.value = 2
     void focusElementById('valuation-document-workspace')
     return
   }
   if (!field) return
   const normalized = field.split(',')[0]?.trim()
   const targetId = normalized ? FIELD_TARGET_IDS[normalized] : undefined
-  if (targetId) void focusElementById(targetId, `請修正 ${FIELD_LABELS[normalized] ?? normalized} 後重新執行檢核。`)
+  if (targetId) {
+    if (normalized === 'documents' || normalized === 'object_key') activeWizardStep.value = 2
+    else {
+      activeWizardStep.value = 3
+      activeDataSection.value = 'f03'
+    }
+    void focusElementById(targetId, `請修正 ${FIELD_LABELS[normalized] ?? normalized} 後重新執行檢核。`)
+  }
 }
 
 async function loadData(): Promise<void> {
@@ -688,6 +932,11 @@ async function loadData(): Promise<void> {
   extractionCandidates.value = []
   extractionBusyDocumentId.value = null
   confirmingCandidates.value = false
+  clearPreviewUrl()
+  previewDocumentId.value = null
+  previewPage.value = null
+  previewError.value = ''
+  selectedCandidateId.value = null
   clearReactiveRecord(candidateDecision)
   clearReactiveRecord(candidateValue)
   clearReactiveRecord(manualFieldValue)
@@ -730,6 +979,7 @@ async function loadData(): Promise<void> {
     flow.forms = forms
     flow.benchmarks = benchmarkDtos.map(mapBenchmarkLandResponse)
     flow.documents = documents
+    previewDocumentId.value = documents.find((document) => document.isActive)?.documentId ?? null
     initializeDocumentCategories()
     flow.authoritativeF02 = authoritative.form
     flow.completeReport = authoritative.completeReport
@@ -772,6 +1022,7 @@ async function uploadSourceDocument(): Promise<void> {
   try {
     const uploaded = await valuationApi.uploadDocument(flow.case.caseId, uploadCategory.value, uploadFile.value)
     flow.documents = [mapDocumentResponse(uploaded), ...flow.documents.filter((item) => item.documentId !== uploaded.document_id)]
+    previewDocumentId.value = uploaded.document_id
     initializeDocumentCategories()
     notice.value = `${uploaded.original_filename} 已上傳完成，檔案版本與儲存狀態已由伺服器確認。`
     uploadFile.value = null
@@ -807,9 +1058,13 @@ async function extractDocument(documentId: string): Promise<void> {
     initializeCandidateInputs(result.candidates)
     await loadWorkflowGuidance(token, requestedCaseId)
     const pending = result.candidates.filter((candidate) => candidate.field_status === 'NEEDS_CONFIRMATION').length
+    previewDocumentId.value = documentId
+    selectedCandidateId.value = result.candidates.find((candidate) => candidate.field_status === 'NEEDS_CONFIRMATION')?.extracted_field_id
+      ?? result.candidates[0]?.extracted_field_id
+      ?? null
     notice.value = pending
-      ? `文件擷取完成，找到 ${pending} 筆待人工確認候選。`
-      : '文件擷取完成，目前沒有待人工確認候選。'
+      ? `AI 辨識完成，找到 ${pending} 筆需要人工確認的欄位。`
+      : 'AI 辨識完成，目前沒有需要人工確認的欄位。'
     if (pending) void focusElementById('valuation-candidate-workspace')
   } catch (caught: unknown) {
     if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
@@ -973,7 +1228,16 @@ async function removeDocument(documentId: string, filename: string): Promise<voi
   try {
     await valuationApi.deleteDocument(requestedCaseId, documentId)
     if (!isCurrentCase(token, requestedCaseId)) return
+    if (previewDocumentId.value === documentId) {
+      clearPreviewUrl()
+      previewDocumentId.value = null
+      previewPage.value = null
+      selectedCandidateId.value = null
+    }
     await refreshDocumentsAndWorkflow(token, requestedCaseId)
+    if (!previewDocumentId.value) {
+      previewDocumentId.value = flow.documents.find((document) => document.isActive)?.documentId ?? null
+    }
     notice.value = `${filename} 已從目前作用中的來源文件移除。`
   } catch (caught: unknown) {
     if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
@@ -1001,6 +1265,8 @@ async function downloadConfirmationExport(): Promise<void> {
 }
 
 function startParcelEdit(parcel: ParcelResponseDto): void {
+  activeWizardStep.value = 3
+  activeDataSection.value = 'land'
   editingParcelId.value = parcel.parcel_id
   Object.assign(parcelDraft, {
     districtCode: parcel.district_code,
@@ -1159,6 +1425,7 @@ async function runValuation(): Promise<void> {
   const form = f03Form.value
   if (!form || !flow.f03 || !isCurrentCase(token, requestedCaseId)) return
 
+  activeWizardStep.value = 4
   running.value = true
   error.value = ''
   notice.value = ''
@@ -1236,24 +1503,50 @@ function goToSubmit(): void {
   void router.push({ name: 'valuation-submit', params: { caseId: caseId.value } })
 }
 
+function openRevisionFields(): void {
+  activeWizardStep.value = 3
+  activeDataSection.value = 'f03'
+  void focusElementById('f03-data-section', '補正版已建立，請依上方修正通知逐項修改。')
+}
+
 watch(caseId, () => {
   void loadData()
 }, { immediate: true })
+
+onBeforeUnmount(clearPreviewUrl)
 </script>
 
 <template>
   <div class="valuation-view">
-    <ValuationStepNavigator :current-step="currentStep" />
+    <ValuationStepNavigator
+      :current-step="activeWizardStep"
+      :available-steps="wizardAvailableSteps"
+      :issue-counts="wizardIssueCounts"
+      @navigate="setWizardStep"
+    />
     <PageHeader
-      eyebrow="CASE PREPARATION"
-      title="確認估價資料"
-      description="第 2 步整合來源文件擷取、候選人工確認、宗地／比準地與正式採用值；所有寫入均使用後端既有契約。"
+      eyebrow="GUIDED VALUATION"
+      :title="wizardStepTitle"
+      :description="wizardStepDescription"
     />
 
     <LoadingSkeleton v-if="loading" :rows="7" label="案件估價資料載入中" />
     <ErrorState v-else-if="error && !flow.case" :message="error" @retry="loadData" />
 
     <template v-else-if="flow.case">
+      <section class="case-context-strip" data-testid="case-context" aria-label="目前案件">
+        <div>
+          <span>目前案件</span>
+          <strong>{{ flow.case.caseNo }}</strong>
+          <small>{{ flow.case.name }}</small>
+        </div>
+        <div class="case-context-strip__meta">
+          <span>{{ flow.case.districtCode }}</span>
+          <span>估價基準日 {{ flow.case.valuationBaseDate }}</span>
+          <span>{{ statusLabel(f03Form?.status ?? 'DRAFT') }}</span>
+        </div>
+      </section>
+
       <section
         v-if="isRevisionRequired && reviewHandoff?.correction"
         v-liquid-glass
@@ -1304,7 +1597,7 @@ watch(caseId, () => {
             class="solid-button solid-button--primary"
             type="button"
             data-testid="open-revision-fields"
-            @click="focusElementById('f03-data-section', '補正版已建立，請依上方修正通知逐項修改。')"
+            @click="openRevisionFields"
           >
             補正版已建立，開始修正
           </button>
@@ -1342,119 +1635,129 @@ watch(caseId, () => {
         </ul>
       </section>
 
-      <section v-liquid-glass data-lg class="valuation-surface workflow-guide lg" data-testid="valuation-workflow-guide" aria-labelledby="workflow-guide-title">
+      <section class="wizard-status" data-testid="valuation-workflow-guide" aria-labelledby="workflow-guide-title">
         <div class="workflow-guide__copy">
           <div>
-            <p class="valuation-eyebrow">NEXT ACTION</p>
-            <h2 id="workflow-guide-title">目前步驟與待處理事項</h2>
+            <p class="valuation-eyebrow">目前進度</p>
+            <h2 id="workflow-guide-title">{{ wizardStepTitle }}</h2>
           </div>
-          <span class="workflow-guide__step">第 {{ currentStep }} 步 / 6</span>
+          <span class="workflow-guide__step">第 {{ activeWizardStep }} 步 / 6</span>
         </div>
-        <p class="workflow-guide__next">{{ workflowNextActionLabel }}</p>
         <div class="workflow-guide__stats">
           <span>來源文件 {{ flow.documents.length }} 份</span>
-          <span v-if="workflowGuidance">待確認候選 {{ workflowGuidance.pending_candidate_count }} 筆</span>
+          <span v-if="workflowGuidance">AI 待確認 {{ workflowGuidance.pending_candidate_count }} 筆</span>
           <span v-if="f03Guidance">F03 缺欄位 {{ f03Guidance.missing_required_fields.length }} 項</span>
           <span v-if="flow.validation">檢核錯誤 {{ flow.validation.failedCount }} 項</span>
         </div>
-        <div v-if="workflowMissingItems.length || f03Guidance?.missing_required_fields.length || workflowWarnings.length || (workflowGuidance?.ignored_duplicate_files?.length ?? 0)" class="workflow-guide__issues">
-          <div v-if="f03Guidance?.missing_required_fields.length">
-            <strong>待補欄位</strong>
-            <span>{{ f03Guidance.missing_required_fields.join('、') }}</span>
-          </div>
-          <div v-if="workflowMissingItems.length">
-            <strong>流程待辦</strong>
-            <span>{{ workflowMissingItems.join('、') }}</span>
-          </div>
-          <div v-if="workflowWarnings.length">
-            <strong>系統提醒</strong>
-            <span>{{ workflowWarnings.join('、') }}</span>
-          </div>
-          <div v-if="workflowGuidance?.ignored_duplicate_files?.length">
-            <strong>已略過重複檔案</strong>
-            <span>{{ (workflowGuidance.ignored_duplicate_files ?? []).join('、') }}</span>
-          </div>
-        </div>
-        <button class="solid-button solid-button--primary" type="button" data-testid="workflow-next-action" @click="goToWorkflowNextAction">
-          {{ canProceedToSubmit ? '前往輸出與送審' : '前往下一個待處理位置' }}
+        <button
+          v-if="wizardIssueCounts[activeWizardStep]"
+          class="finding-action"
+          type="button"
+          data-testid="workflow-next-action"
+          @click="goToWorkflowNextAction"
+        >
+          查看第一個待處理項目
         </button>
       </section>
 
-      <section v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="case-summary-title">
-        <div class="surface-heading">
+      <section v-if="activeWizardStep === 1 || activeWizardStep === 2" v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="case-summary-title">
+        <div v-if="activeWizardStep === 1" class="surface-heading">
           <div>
-            <p class="valuation-eyebrow">案件與文件</p>
+            <p class="valuation-eyebrow">CASE SETUP</p>
             <h2 id="case-summary-title">{{ flow.case.caseNo }}｜{{ flow.case.name }}</h2>
           </div>
           <span class="source-marker" data-source-kind="automatic">{{ flow.case.source.label }}</span>
         </div>
-        <div class="summary-grid">
+        <div v-if="activeWizardStep === 1" class="summary-grid">
           <div><span>案件類型</span><strong>{{ flow.case.caseType }}</strong></div>
           <div><span>申請機關</span><strong>{{ flow.case.requestingAgency || '未提供' }}</strong></div>
           <div><span>估價基準日</span><strong>{{ flow.case.valuationBaseDate }}</strong></div>
           <div><span>行政區</span><strong>{{ flow.case.districtCode }}</strong></div>
         </div>
-        <div class="form-list" aria-label="已發現估價表">
+        <div v-if="activeWizardStep === 1" class="form-list" aria-label="已發現估價表">
           <div v-for="form in flow.forms" :key="form.formInstanceId" class="form-list__item">
             <strong>{{ form.formCode }}</strong>
             <span>第 {{ form.versionNo }} 版｜{{ statusLabel(form.status) }}</span>
             <small>{{ form.source.label }}</small>
           </div>
         </div>
-        <div id="valuation-document-workspace" class="document-workspace" tabindex="-1">
+        <div v-if="activeWizardStep === 2" id="valuation-document-workspace" class="document-workspace" tabindex="-1">
           <div class="document-workspace__heading">
             <div>
-              <strong>來源文件</strong>
-              <span>檔名、格式、版本與上傳狀態以後端文件紀錄為準。</span>
+              <strong>來源文件與 AI 辨識</strong>
+              <span>先選文件預覽，再執行 AI / OCR 辨識。辨識結果不會直接改寫正式資料，仍需人工確認。</span>
             </div>
             <span>{{ flow.documents.length }} 份</span>
           </div>
-          <ul v-if="flow.documents.length" class="document-list">
-            <li v-for="document in flow.documents" :key="document.documentId">
-              <div><strong>{{ document.filename }}</strong><span>{{ document.documentType }} · v{{ document.versionNo }}</span></div>
-              <div class="document-list__actions">
-                <span>{{ document.isActive ? '已上傳' : '非作用版本' }}</span>
-                <button
-                  v-if="canExtractDocument(document)"
-                  class="finding-action"
-                  type="button"
-                  :data-testid="`extract-document-${document.documentId}`"
-                  :disabled="Boolean(extractionBusyDocumentId)"
-                  @click="extractDocument(document.documentId)"
+          <div class="document-ai-grid">
+            <div class="document-ai-grid__list">
+              <ul v-if="flow.documents.length" class="document-list">
+                <li
+                  v-for="document in flow.documents"
+                  :key="document.documentId"
+                  :class="{ 'is-selected': previewDocumentId === document.documentId }"
                 >
-                  {{ extractionBusyDocumentId === document.documentId ? '擷取中…' : '擷取候選資料' }}
-                </button>
-                <div v-if="canManageSourceDocument(document)" class="document-list__manage">
-                  <label :for="`document-category-${document.documentId}`">分類</label>
-                  <select
-                    :id="`document-category-${document.documentId}`"
-                    v-model="documentCategoryDraft[document.documentId]"
-                    :data-testid="`document-category-${document.documentId}`"
-                    :disabled="documentActionId === document.documentId"
-                  >
-                    <option v-for="category in SOURCE_DOCUMENT_CATEGORIES" :key="category" :value="category">
-                      {{ documentCategoryLabel(category) }}
-                    </option>
-                  </select>
-                  <button
-                    class="finding-action"
-                    type="button"
-                    :data-testid="`reclassify-document-${document.documentId}`"
-                    :disabled="documentActionId === document.documentId || documentCategoryDraft[document.documentId] === document.documentType"
-                    @click="reclassifyDocument(document.documentId)"
-                  >套用分類</button>
-                  <button
-                    class="finding-action finding-action--danger"
-                    type="button"
-                    :data-testid="`remove-document-${document.documentId}`"
-                    :disabled="documentActionId === document.documentId"
-                    @click="removeDocument(document.documentId, document.filename)"
-                  >移除</button>
+                  <div class="document-list__identity">
+                    <strong>{{ document.filename }}</strong>
+                    <span>{{ documentCategoryLabel(document.documentType) }} · 第 {{ document.versionNo }} 版 · {{ formatFileSize(document.fileSizeBytes) }}</span>
+                    <small :data-ai-state="documentPendingCount(document.documentId) ? 'pending' : 'ready'">{{ documentAiStatus(document.documentId) }}</small>
+                  </div>
+                  <div class="document-list__actions">
+                    <button class="finding-action" type="button" @click="openDocumentPreview(document.documentId)">預覽</button>
+                    <button
+                      v-if="canExtractDocument(document)"
+                      class="finding-action finding-action--primary"
+                      type="button"
+                      :data-testid="`extract-document-${document.documentId}`"
+                      :disabled="Boolean(extractionBusyDocumentId)"
+                      @click="extractDocument(document.documentId)"
+                    >
+                      {{ extractionBusyDocumentId === document.documentId ? 'AI 辨識中…' : documentCandidateCount(document.documentId) ? '重新 AI 辨識' : '開始 AI 辨識' }}
+                    </button>
+                    <div v-if="canManageSourceDocument(document)" class="document-list__manage">
+                      <label :for="`document-category-${document.documentId}`">分類</label>
+                      <select
+                        :id="`document-category-${document.documentId}`"
+                        v-model="documentCategoryDraft[document.documentId]"
+                        :data-testid="`document-category-${document.documentId}`"
+                        :disabled="documentActionId === document.documentId"
+                      >
+                        <option v-for="category in SOURCE_DOCUMENT_CATEGORIES" :key="category" :value="category">{{ documentCategoryLabel(category) }}</option>
+                      </select>
+                      <button class="finding-action" type="button" :data-testid="`reclassify-document-${document.documentId}`" :disabled="documentActionId === document.documentId || documentCategoryDraft[document.documentId] === document.documentType" @click="reclassifyDocument(document.documentId)">套用</button>
+                      <button class="finding-action finding-action--danger" type="button" :data-testid="`remove-document-${document.documentId}`" :disabled="documentActionId === document.documentId" @click="removeDocument(document.documentId, document.filename)">移除</button>
+                    </div>
+                  </div>
+                </li>
+              </ul>
+              <p v-else class="empty-copy">尚未上傳案件來源文件。請先選擇文件類型並上傳。</p>
+            </div>
+
+            <section class="document-preview" aria-labelledby="document-preview-title">
+              <div class="document-preview__heading">
+                <div>
+                  <strong id="document-preview-title">文件預覽</strong>
+                  <span v-if="previewDocument">{{ previewDocument.filename }}{{ previewPage ? ` · 第 ${previewPage} 頁` : '' }}</span>
+                  <span v-else>從左側選擇一份文件查看內容</span>
+                </div>
+                <button v-if="previewDocument" class="finding-action" type="button" @click="downloadSourceDocument(previewDocument)">下載原檔</button>
+              </div>
+              <div class="document-preview__body">
+                <p v-if="previewLoading" class="empty-copy">正在載入文件預覽…</p>
+                <p v-else-if="previewError" class="document-preview__message">{{ previewError }}</p>
+                <iframe v-else-if="previewIsPdf && previewSourceUrl" :src="previewSourceUrl" title="PDF 文件預覽" />
+                <img v-else-if="previewIsImage && previewSourceUrl" :src="previewSourceUrl" :alt="previewDocument?.filename || '來源文件預覽'">
+                <div v-else class="document-preview__empty">
+                  <strong>{{ previewDocument ? '按「預覽」載入文件' : '尚未選擇文件' }}</strong>
+                  <span>PDF 與圖片可直接顯示；其他格式仍可下載原檔查看。</span>
                 </div>
               </div>
-            </li>
-          </ul>
-          <p v-else class="empty-copy">尚未上傳案件來源文件。</p>
+              <div v-if="selectedCandidate?.source_text && selectedCandidate.document_id === previewDocumentId" class="document-preview__evidence" data-testid="candidate-source-evidence">
+                <strong>AI 對應原文{{ selectedCandidate.source_page ? ` · 第 ${selectedCandidate.source_page} 頁` : '' }}</strong>
+                <blockquote>{{ selectedCandidate.source_text }}</blockquote>
+              </div>
+            </section>
+          </div>
           <form v-if="canUpload" class="upload-form" @submit.prevent="uploadSourceDocument">
             <label><span>文件類型</span>
               <select v-model="uploadCategory">
@@ -1474,10 +1777,10 @@ watch(caseId, () => {
             </button>
           </form>
         </div>
-        <p class="source-note">來源證據：案件原始資料（由後端案件讀取結果提供）</p>
       </section>
 
       <section
+        v-if="activeWizardStep === 2"
         id="valuation-candidate-workspace"
         v-liquid-glass
         data-lg
@@ -1488,8 +1791,8 @@ watch(caseId, () => {
       >
         <div class="surface-heading">
           <div>
-            <p class="valuation-eyebrow">EXTRACTION REVIEW</p>
-            <h2 id="candidate-workspace-title">文件擷取候選人工確認</h2>
+            <p class="valuation-eyebrow">AI REVIEW</p>
+            <h2 id="candidate-workspace-title">AI 辨識結果</h2>
           </div>
           <div class="candidate-workspace__summary">
             <span class="value-kind">待確認 {{ pendingCandidates.length }} 筆</span>
@@ -1503,31 +1806,31 @@ watch(caseId, () => {
           </div>
         </div>
         <p v-if="!candidateDecisionTargets.length" class="empty-copy">
-          目前沒有待確認候選。若要從 PDF / XLSX 取得候選資料，請在上方來源文件按「擷取候選資料」。
+          目前沒有需要人工確認的 AI 辨識結果。請在上方來源文件按「開始 AI 辨識」。
         </p>
         <div v-else class="candidate-list">
           <article
             v-for="candidate in candidateDecisionTargets"
             :key="candidate.extracted_field_id"
-            class="candidate-card"
+            :class="['candidate-card', { 'is-active': selectedCandidateId === candidate.extracted_field_id }]"
             :data-testid="`candidate-${candidate.extracted_field_id}`"
+            @click="selectedCandidateId = candidate.extracted_field_id"
           >
             <div class="candidate-card__heading">
               <div>
-                <strong>{{ candidate.form_code }} · {{ candidate.field_name }}</strong>
+                <strong>{{ fieldDisplayLabel(candidate.form_code, candidate.field_name) }}</strong>
                 <span>{{ candidateDocumentName(candidate.document_id) }}{{ candidate.source_page ? ` · 第 ${candidate.source_page} 頁` : '' }}</span>
               </div>
               <small>{{ candidate.field_status === 'NEEDS_CONFIRMATION' ? '待確認' : '重新確認中' }} · 信心度 {{ candidateConfidenceLabel(candidate) }} · {{ candidate.analysis_provider }}</small>
             </div>
-            <blockquote v-if="candidate.source_text" class="candidate-card__source">{{ candidate.source_text }}</blockquote>
+            <div v-if="candidate.source_text" class="candidate-card__source-summary">
+              <span>來源原文</span>
+              <blockquote class="candidate-card__source">{{ candidate.source_text }}</blockquote>
+              <button class="candidate-card__source-link" type="button" @click.stop="openCandidateSource(candidate)">在原文件中查看</button>
+            </div>
             <label class="candidate-card__value">
-              <span>擷取／修正後採用值</span>
-              <input
-                v-model="candidateValue[candidate.extracted_field_id]"
-                :data-testid="`candidate-value-${candidate.extracted_field_id}`"
-                type="text"
-                :disabled="candidateDecision[candidate.extracted_field_id] === 'REJECT'"
-              >
+              <span>AI 辨識值／人工修正值 <small v-if="candidateUnit(candidate)">({{ candidateUnit(candidate) }})</small></span>
+              <input v-model="candidateValue[candidate.extracted_field_id]" :data-testid="`candidate-value-${candidate.extracted_field_id}`" :type="candidateEditorType(candidate)" :step="candidateEditorType(candidate) === 'number' ? 'any' : undefined" :disabled="candidateDecision[candidate.extracted_field_id] === 'REJECT'">
             </label>
             <div class="candidate-card__actions" role="group" :aria-label="`${candidate.field_name} 人工判定`">
               <button
@@ -1544,7 +1847,7 @@ watch(caseId, () => {
                 :data-testid="`candidate-reject-${candidate.extracted_field_id}`"
                 @click="chooseCandidateDecision(candidate.extracted_field_id, 'REJECT')"
               >
-                拒絕候選
+                不採用
               </button>
             </div>
           </article>
@@ -1564,7 +1867,7 @@ watch(caseId, () => {
 
         <div v-if="processedCandidates.length" class="candidate-history" data-testid="processed-candidates">
           <div class="candidate-history__heading">
-            <strong>已處理候選</strong>
+            <strong>已處理 AI 辨識結果</strong>
             <span>已採用資料若需要補正，可以重新開啟、修改後再次套用。</span>
           </div>
           <ul>
@@ -1585,8 +1888,48 @@ watch(caseId, () => {
         </div>
       </section>
 
+      <section v-if="activeWizardStep === 3" class="data-confirmation-nav" aria-labelledby="data-confirmation-title">
+        <div class="data-confirmation-nav__heading">
+          <div>
+            <p class="valuation-eyebrow">DATA CONFIRMATION</p>
+            <h2 id="data-confirmation-title">資料確認</h2>
+            <span>只顯示目前要處理的資料類別；有缺漏時可從上方狀態或下方總覽直接跳轉。</span>
+          </div>
+          <span class="value-kind">待處理 {{ dataIssueCounts.overview }} 項</span>
+        </div>
+        <nav class="data-subnav" aria-label="資料確認子選單">
+          <button type="button" :class="{ 'is-active': activeDataSection === 'overview' }" data-testid="data-section-overview" @click="activeDataSection = 'overview'">
+            <strong>總覽</strong><small>{{ dataIssueCounts.overview ? `${dataIssueCounts.overview} 待處理` : '已完成' }}</small>
+          </button>
+          <button type="button" :class="{ 'is-active': activeDataSection === 'manual' }" data-testid="data-section-manual" @click="activeDataSection = 'manual'">
+            <strong>人工補充</strong><small>{{ dataIssueCounts.manual ? `${dataIssueCounts.manual} 可補充` : '無缺漏' }}</small>
+          </button>
+          <button type="button" :class="{ 'is-active': activeDataSection === 'land' }" data-testid="data-section-land" @click="activeDataSection = 'land'">
+            <strong>宗地與比準地</strong><small>{{ dataIssueCounts.land ? `${dataIssueCounts.land} 待處理` : '已建立' }}</small>
+          </button>
+          <button type="button" :class="{ 'is-active': activeDataSection === 'f03' }" data-testid="data-section-f03" @click="activeDataSection = 'f03'">
+            <strong>F03 正式資料</strong><small>{{ dataIssueCounts.f03 ? `${dataIssueCounts.f03} 缺欄位` : flow.f03 ? '可編輯' : '尚未建立' }}</small>
+          </button>
+        </nav>
+
+        <div v-if="activeDataSection === 'overview'" class="data-overview">
+          <article :data-state="dataIssueCounts.manual ? 'attention' : 'ready'">
+            <div><strong>人工補充</strong><span>AI / OCR 沒有取得的欄位，可在這裡人工補齊。</span></div>
+            <div><small>{{ dataIssueCounts.manual ? `${dataIssueCounts.manual} 項可補充` : '目前沒有缺漏欄位' }}</small><button type="button" @click="jumpToDataSection('manual')">前往</button></div>
+          </article>
+          <article :data-state="dataIssueCounts.land ? 'attention' : 'ready'">
+            <div><strong>宗地與比準地</strong><span>確認宗地基本資料與後續計算使用的比準地。</span></div>
+            <div><small>{{ parcels.length }} 宗地 · {{ flow.benchmarks.length }} 比準地</small><button type="button" @click="jumpToDataSection('land')">前往</button></div>
+          </article>
+          <article :data-state="dataIssueCounts.f03 ? 'attention' : flow.f03 ? 'ready' : 'attention'">
+            <div><strong>F03 正式資料</strong><span>確認最後會進入公式計算與正式檢核的採用值。</span></div>
+            <div><small>{{ flow.f03 ? dataIssueCounts.f03 ? `${dataIssueCounts.f03} 欄未完成` : '正式資料可編輯' : '尚未建立 F03' }}</small><button type="button" @click="jumpToDataSection('f03')">前往</button></div>
+          </article>
+        </div>
+      </section>
+
       <section
-        v-if="workflowGuidance && manualFieldEntries.length"
+        v-if="activeWizardStep === 3 && activeDataSection === 'manual' && workflowGuidance && manualFieldEntries.length"
         v-liquid-glass
         data-lg
         class="valuation-surface manual-fields lg"
@@ -1627,7 +1970,13 @@ watch(caseId, () => {
         </div>
       </section>
 
+      <section v-if="activeWizardStep === 3 && activeDataSection === 'manual' && !manualFieldEntries.length" class="valuation-surface data-complete-state">
+        <strong>目前沒有需要人工補充的欄位</strong>
+        <span>AI 辨識與既有資料已提供目前可確認的欄位；你可以直接前往宗地與比準地或 F03。</span>
+      </section>
+
       <section
+        v-if="activeWizardStep === 3 && activeDataSection === 'land'"
         id="valuation-land-context"
         v-liquid-glass
         data-lg
@@ -1718,7 +2067,7 @@ watch(caseId, () => {
         </div>
       </section>
 
-      <section v-if="!flow.f03" v-liquid-glass data-lg class="valuation-surface setup-required lg" aria-labelledby="setup-required-title">
+      <section v-if="activeWizardStep === 3 && activeDataSection === 'f03' && !flow.f03" v-liquid-glass data-lg class="valuation-surface setup-required lg" aria-labelledby="setup-required-title">
         <div>
           <p class="valuation-eyebrow">REQUIRED DATA</p>
           <h2 id="setup-required-title">估價資料尚未可計算</h2>
@@ -1726,7 +2075,7 @@ watch(caseId, () => {
         <p>系統不會以空值直接送出。請先完成必要來源文件、宗地與比準地資料；待後端建立 F03 正式草稿後，計算與檢核按鈕才會開放。</p>
       </section>
 
-      <section id="f03-data-section" v-if="flow.f03" v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="f03-title">
+      <section id="f03-data-section" v-if="activeWizardStep === 3 && activeDataSection === 'f03' && flow.f03" v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="f03-title">
         <div class="surface-heading">
           <div>
             <p class="valuation-eyebrow">F03 正式資料</p>
@@ -1814,23 +2163,38 @@ watch(caseId, () => {
             <button class="solid-button" data-testid="save-confirmed-fields" type="submit" :disabled="saving || !canEditF03">
               {{ saving ? '儲存中…' : '儲存確認欄位' }}
             </button>
-            <button
-              class="solid-button solid-button--primary"
-              type="button"
-              data-testid="run-valuation"
-              :disabled="running || saving || !canEditF03"
-              @click="runValuation"
-            >
-              {{ running ? '伺服器處理中…' : '執行伺服器計算與檢核' }}
-            </button>
           </div>
         </form>
+      </section>
+
+      <section v-if="activeWizardStep === 4" class="valuation-surface calculation-launch" data-testid="calculation-launch" aria-labelledby="calculation-launch-title">
+        <div class="calculation-launch__copy">
+          <div>
+            <p class="valuation-eyebrow">CALCULATE & VALIDATE</p>
+            <h2 id="calculation-launch-title">計算與檢核</h2>
+            <p>系統會使用已確認的 F03 正式資料執行公式計算，再以伺服器規則檢查缺漏與一致性。若有阻擋，結果會直接提供修正位置。</p>
+          </div>
+          <div class="calculation-launch__readiness">
+            <span :data-state="flow.f03 ? 'ready' : 'blocked'">{{ flow.f03 ? 'F03 已建立' : '缺少 F03' }}</span>
+            <span :data-state="dirty ? 'attention' : 'ready'">{{ dirty ? '有尚未儲存的修改' : '資料已同步' }}</span>
+          </div>
+        </div>
+        <button
+          class="solid-button solid-button--primary calculation-launch__button"
+          type="button"
+          data-testid="run-valuation"
+          :disabled="running || saving || !canEditF03"
+          :title="dirty ? '會先儲存尚未保存的 F03 修改，再執行計算與檢核' : '執行正式計算與檢核'"
+          @click="runValuation"
+        >
+          {{ running ? '伺服器計算與檢核中…' : dirty ? '儲存修改並執行計算與檢核' : '執行計算與檢核' }}
+        </button>
       </section>
 
       <p v-if="notice" class="inline-notice" role="status">{{ notice }}</p>
       <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
 
-      <section v-if="flow.validation" v-liquid-glass data-lg class="valuation-surface lg" data-testid="validation-results" aria-labelledby="validation-title">
+      <section v-if="activeWizardStep === 4 && flow.validation" v-liquid-glass data-lg class="valuation-surface lg validation-results" data-testid="validation-results" aria-labelledby="validation-title">
         <div class="surface-heading">
           <div>
             <p class="valuation-eyebrow">SERVER VALIDATION</p>
@@ -1887,6 +2251,23 @@ watch(caseId, () => {
           {{ canProceedToSubmit ? '前往輸出預覽與送審' : '請先完成阻擋項目' }}
         </button>
       </section>
+
+      <footer v-if="activeWizardStep <= 4" class="wizard-footer" aria-label="估價流程導覽">
+        <button class="wizard-footer__secondary" type="button" :disabled="activeWizardStep === 1" @click="wizardPrevious">← 上一步</button>
+        <div class="wizard-footer__status">
+          <strong>第 {{ activeWizardStep }} 步 / 6</strong>
+          <span>{{ wizardNextLabel }}</span>
+        </div>
+        <button
+          class="wizard-footer__primary"
+          type="button"
+          data-testid="wizard-next"
+          :disabled="activeWizardStep === 4 && !canProceedToSubmit"
+          @click="wizardNext"
+        >
+          {{ wizardNextLabel }} →
+        </button>
+      </footer>
     </template>
   </div>
 </template>
@@ -1905,6 +2286,14 @@ watch(caseId, () => {
   background: var(--app-paper-strong);
   box-shadow: var(--app-shadow-soft);
 }
+
+.case-context-strip { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:11px 14px; border:1px solid #d9e3ee; border-radius:11px; background:#f8fbfe; }
+.case-context-strip > div:first-child { display:flex; align-items:baseline; flex-wrap:wrap; gap:7px; min-width:0; }
+.case-context-strip > div:first-child > span { color:var(--app-muted); font-size:10px; font-weight:800; }
+.case-context-strip > div:first-child > strong { color:var(--app-ink); font-size:13px; }
+.case-context-strip > div:first-child > small { overflow:hidden; color:var(--app-ink-soft); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.case-context-strip__meta { display:flex; align-items:center; flex-wrap:wrap; justify-content:flex-end; gap:6px; }
+.case-context-strip__meta span { padding:5px 8px; border-radius:999px; color:#52657a; background:#edf2f7; font-size:9px; font-weight:800; }
 
 .surface-heading,
 .form-heading,
@@ -1997,6 +2386,8 @@ watch(caseId, () => {
 .candidate-card__heading strong { color: var(--app-ink); font-size: 13px; }
 .candidate-card__heading span, .candidate-card__heading small { color: var(--app-muted); font-size: 10px; }
 .candidate-card__source { margin: 0; padding: 10px 12px; border-left: 3px solid rgba(46,89,132,.35); color: var(--app-ink-soft); background: #f3f7fb; font-size: 12px; line-height: 1.65; white-space: pre-wrap; }
+.candidate-card__source-summary { display:grid; gap:6px; }
+.candidate-card__source-summary > span { color:var(--app-muted); font-size:10px; font-weight:850; }
 .candidate-card__value { display: grid; gap: 5px; color: var(--app-ink-soft); font-size: 11px; font-weight: 800; }
 .candidate-card__value input { width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink); background: #fff; }
 .candidate-card__actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -2079,9 +2470,104 @@ watch(caseId, () => {
 .calculation-result small, .report-result small { color: var(--app-muted); font-size: 11px; }
 .validation-results > .solid-button { margin-top: 18px; }
 
+.wizard-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid #d9e4ef;
+  border-radius: 12px;
+  background: #f7fbff;
+}
+.wizard-status .workflow-guide__copy { min-width: 190px; }
+.wizard-status .workflow-guide__copy h2 { font-size: 17px; }
+.wizard-status .workflow-guide__stats { flex: 1 1 auto; }
+.wizard-status > .finding-action { flex: 0 0 auto; margin: 0; }
+
+.document-ai-grid {
+  display: grid;
+  grid-template-columns: minmax(330px, .9fr) minmax(420px, 1.1fr);
+  gap: 14px;
+  min-height: 460px;
+}
+.document-ai-grid__list { min-width: 0; }
+.document-list li { border: 1px solid transparent; }
+.document-list li.is-selected { border-color: rgba(46,89,132,.36); background: #eef5fc; }
+.document-list__identity small { width: fit-content; margin-top: 3px; padding: 3px 7px; border-radius: 999px; color: #52657a; background: #eef1f5; font-size: 9px; font-weight: 800; }
+.document-list__identity small[data-ai-state="pending"] { color: #925421; background: #fff0df; }
+.finding-action--primary { border-color: rgba(46,89,132,.34); color: #244d73; background: #edf4fb; }
+.document-preview { display: grid; grid-template-rows: auto minmax(340px, 1fr) auto; min-width: 0; overflow: hidden; border: 1px solid #d8e1eb; border-radius: 12px; background: #fff; }
+.document-preview__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; border-bottom: 1px solid #e1e7ee; background: #f8fafc; }
+.document-preview__heading > div { display: grid; gap: 2px; min-width: 0; }
+.document-preview__heading strong { color: var(--app-ink); font-size: 12px; }
+.document-preview__heading span { overflow: hidden; color: var(--app-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.document-preview__body { display: grid; min-height: 340px; place-items: center; overflow: hidden; background: #eef1f4; }
+.document-preview__body iframe { width: 100%; height: 100%; min-height: 460px; border: 0; background: #fff; }
+.document-preview__body img { display: block; max-width: 100%; max-height: 520px; object-fit: contain; }
+.document-preview__empty { display: grid; gap: 5px; max-width: 300px; padding: 26px; color: #6b798a; text-align: center; }
+.document-preview__empty strong { color: #34495f; font-size: 13px; }
+.document-preview__empty span, .document-preview__message { color: #6b798a; font-size: 11px; line-height: 1.6; }
+.document-preview__message { margin: 0; padding: 24px; text-align: center; }
+.document-preview__evidence { display: grid; gap: 6px; padding: 11px 13px; border-top: 1px solid #e1e7ee; background: #fff8ee; }
+.document-preview__evidence strong { color: #8a531e; font-size: 10px; }
+.document-preview__evidence blockquote { margin: 0; color: #3d4a58; font-size: 11px; line-height: 1.6; white-space: pre-wrap; }
+
+.candidate-card { cursor: default; transition: border-color 120ms ease, box-shadow 120ms ease; }
+.candidate-card.is-active { border-color: rgba(46,89,132,.4); box-shadow: 0 0 0 3px rgba(46,89,132,.08); }
+.candidate-card__source-link { justify-self: start; padding: 0; border: 0; color: #2e5984; background: transparent; cursor: pointer; font-size: 11px; font-weight: 850; text-decoration: underline; text-underline-offset: 3px; }
+
+.data-confirmation-nav { display: grid; gap: 14px; padding: 18px; border: 1px solid #dce5ef; border-radius: var(--app-radius-md); background: #f8fbfe; }
+.data-confirmation-nav__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.data-confirmation-nav__heading h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 22px; }
+.data-confirmation-nav__heading > div > span { display: block; margin-top: 4px; color: var(--app-muted); font-size: 11px; line-height: 1.55; }
+.data-subnav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.data-subnav button { display: grid; min-height: 62px; gap: 4px; padding: 10px 12px; border: 1px solid #d9e2ec; border-radius: 10px; color: #4b5d70; background: #fff; cursor: pointer; text-align: left; }
+.data-subnav button.is-active { border-color: #2e5984; color: #244d73; background: #edf4fb; box-shadow: inset 0 0 0 1px rgba(46,89,132,.12); }
+.data-subnav strong { font-size: 11px; }
+.data-subnav small { color: #718094; font-size: 9px; }
+.data-overview { display: grid; gap: 8px; }
+.data-overview article { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 14px; border: 1px solid #dfe6ee; border-left-width: 4px; border-radius: 9px; background: #fff; }
+.data-overview article[data-state="ready"] { border-left-color: #4c9275; }
+.data-overview article[data-state="attention"] { border-left-color: #e09837; }
+.data-overview article > div { display: grid; gap: 3px; }
+.data-overview article > div:last-child { flex: 0 0 auto; grid-template-columns: auto auto; align-items: center; gap: 10px; }
+.data-overview strong { color: var(--app-ink); font-size: 12px; }
+.data-overview span, .data-overview small { color: var(--app-muted); font-size: 10px; line-height: 1.5; }
+.data-overview button { min-height: 34px; padding: 6px 10px; border: 1px solid #cbd8e5; border-radius: 8px; color: #244d73; background: #f5f9fd; cursor: pointer; font-size: 10px; font-weight: 900; }
+.data-complete-state { display: grid; gap: 5px; color: var(--app-muted); font-size: 12px; }
+.data-complete-state strong { color: var(--app-green); font-size: 14px; }
+
+.calculation-launch { display: grid; gap: 14px; border-color: rgba(46,89,132,.24); background: #f8fbff; }
+.calculation-launch__copy { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.calculation-launch__copy h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 24px; }
+.calculation-launch__copy p:last-child { max-width: 720px; margin: 7px 0 0; color: var(--app-ink-soft); font-size: 12px; line-height: 1.7; }
+.calculation-launch__readiness { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.calculation-launch__readiness span { padding: 6px 9px; border-radius: 999px; font-size: 10px; font-weight: 850; }
+.calculation-launch__readiness [data-state="ready"] { color: #2f745b; background: #edf8f3; }
+.calculation-launch__readiness [data-state="attention"] { color: #925421; background: #fff0df; }
+.calculation-launch__readiness [data-state="blocked"] { color: #9a4435; background: #fff0ed; }
+.calculation-launch__button { justify-self: start; min-width: 200px; }
+
+.wizard-footer { position: sticky; z-index: 8; bottom: 14px; display: grid; grid-template-columns: auto minmax(180px, 1fr) auto; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid rgba(190,204,220,.9); border-radius: 14px; background: rgba(255,255,255,.96); box-shadow: 0 14px 36px rgba(30,52,78,.16); backdrop-filter: blur(14px); }
+.wizard-footer button { min-height: 42px; padding: 8px 14px; border-radius: 9px; cursor: pointer; font-size: 11px; font-weight: 900; }
+.wizard-footer button:disabled { cursor: not-allowed; opacity: .48; }
+.wizard-footer__secondary { border: 1px solid #ccd7e3; color: #465a70; background: #fff; }
+.wizard-footer__primary { border: 1px solid #2e5984; color: #fff; background: #2e5984; }
+.wizard-footer__status { display: grid; gap: 2px; text-align: center; }
+.wizard-footer__status strong { color: var(--app-ink); font-size: 11px; }
+.wizard-footer__status span { color: var(--app-muted); font-size: 9px; }
+
+@media (max-width: 1100px) {
+  .document-ai-grid { grid-template-columns: 1fr; }
+  .document-preview__body iframe { min-height: 520px; }
+}
+
 @media (max-width: 760px) {
   .valuation-view { padding: 18px 16px 28px; }
   .valuation-surface { padding: 16px; }
+  .case-context-strip { align-items:flex-start; flex-direction:column; }
+  .case-context-strip__meta { justify-content:flex-start; }
   .surface-heading, .official-value, .calculation-result, .report-result { align-items: flex-start; flex-direction: column; }
   .revision-panel__heading, .revision-panel__items li, .revision-panel__actions { align-items: stretch; flex-direction: column; }
   .workflow-guide__copy { flex-direction: column; }
@@ -2091,6 +2577,13 @@ watch(caseId, () => {
   .document-list li, .supplement-panel__list li, .candidate-card__heading, .candidate-submit, .candidate-history li { align-items: stretch; flex-direction: column; }
   .document-list__actions { align-items: stretch; }
   .document-list__manage { grid-template-columns: 1fr; align-items: stretch; }
+  .document-preview__heading, .data-confirmation-nav__heading, .calculation-launch__copy { align-items: stretch; flex-direction: column; }
+  .data-subnav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .data-overview article { align-items: stretch; flex-direction: column; }
+  .data-overview article > div:last-child { grid-template-columns: 1fr auto; }
+  .wizard-status { align-items: stretch; flex-direction: column; }
+  .wizard-footer { bottom: 8px; grid-template-columns: 1fr 1fr; }
+  .wizard-footer__status { grid-column: 1 / -1; grid-row: 1; }
   .candidate-workspace__summary { justify-content: flex-start; }
   .manual-fields__grid { grid-template-columns: 1fr; }
   .land-context__grid, .land-context__fields { grid-template-columns: 1fr; }

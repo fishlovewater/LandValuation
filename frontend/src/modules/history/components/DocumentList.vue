@@ -15,6 +15,7 @@ withDefaults(
 
 const emit = defineEmits<{
   download: [document: HistoryDocumentModel]
+  preview: [document: HistoryDocumentModel]
 }>()
 
 function fileSize(value: number): string {
@@ -48,19 +49,29 @@ function fileSize(value: number): string {
             {{ errorByDocument[document.documentId] }}
           </p>
         </div>
-        <button
-          type="button"
-          class="document-list__download"
-          :data-testid="`history-download-${document.documentId}`"
-          :disabled="busyDocumentId === document.documentId || document.downloadAvailable === false"
-          :title="document.downloadAvailable === false ? '文件目前無法下載' : undefined"
-          @click="emit('download', document)"
-        >
-          <template v-if="busyDocumentId === document.documentId">下載中…</template>
-          <template v-else-if="errorByDocument[document.documentId]">再試一次</template>
-          <template v-else-if="document.downloadAvailable === false">無法下載</template>
-          <template v-else>下載文件</template>
-        </button>
+        <div class="document-list__actions">
+          <button
+            type="button"
+            class="document-list__preview"
+            :data-testid="`history-preview-${document.documentId}`"
+            :disabled="busyDocumentId === document.documentId || document.downloadAvailable === false"
+            :title="document.downloadAvailable === false ? '文件目前無法讀取' : undefined"
+            @click="emit('preview', document)"
+          >預覽</button>
+          <button
+            type="button"
+            class="document-list__download"
+            :data-testid="`history-download-${document.documentId}`"
+            :disabled="busyDocumentId === document.documentId || document.downloadAvailable === false"
+            :title="document.downloadAvailable === false ? '文件目前無法下載' : undefined"
+            @click="emit('download', document)"
+          >
+            <template v-if="busyDocumentId === document.documentId">處理中…</template>
+            <template v-else-if="errorByDocument[document.documentId]">再試一次</template>
+            <template v-else-if="document.downloadAvailable === false">無法下載</template>
+            <template v-else>下載</template>
+          </button>
+        </div>
       </li>
     </ul>
   </section>
@@ -163,7 +174,9 @@ function fileSize(value: number): string {
   font-weight: 700;
 }
 
-.document-list__download {
+.document-list__actions { display:flex; align-items:center; gap:7px; }
+.document-list__download,
+.document-list__preview {
   min-width: 94px;
   min-height: 44px;
   padding: 8px 12px;
@@ -177,12 +190,15 @@ function fileSize(value: number): string {
   white-space: nowrap;
 }
 
-.document-list__download:hover:not(:disabled) {
+.document-list__preview { min-width:70px; color:var(--app-blue); }
+.document-list__download:hover:not(:disabled),
+.document-list__preview:hover:not(:disabled) {
   border-color: var(--app-accent);
   color: var(--app-accent-deep);
 }
 
-.document-list__download:disabled { cursor: not-allowed; opacity: .55; }
+.document-list__download:disabled,
+.document-list__preview:disabled { cursor: not-allowed; opacity: .55; }
 
 .document-list__empty {
   margin: 0;
@@ -193,6 +209,6 @@ function fileSize(value: number): string {
 
 @media (max-width: 640px) {
   .document-list__item { grid-template-columns: 36px minmax(0, 1fr); }
-  .document-list__download { grid-column: 2; justify-self: start; }
+  .document-list__actions { grid-column: 2; justify-self: start; }
 }
 </style>

@@ -29,6 +29,26 @@ afterEach(() => {
 })
 
 describe('auth API adapter boundary', () => {
+  it('uses the development Demo login endpoint with only the selected role', async () => {
+    http.defaults.baseURL = 'https://api.example.test/api/v1'
+    const requests: Array<{ method?: string; url?: string; data?: unknown }> = []
+    http.defaults.adapter = vi.fn(async (config) => {
+      requests.push({ method: config.method, url: `${config.baseURL}${config.url}`, data: config.data })
+      return { data: token, status: 200, statusText: 'OK', headers: {}, config }
+    }) as unknown as typeof originalAdapter
+
+    const received = await authApi.demoLogin('REVIEWER')
+
+    expect(requests).toEqual([
+      {
+        method: 'post',
+        url: 'https://api.example.test/api/v1/auth/demo-login',
+        data: JSON.stringify({ role: 'REVIEWER' }),
+      },
+    ])
+    expect(received).toEqual(token)
+  })
+
   it('uses the exact login then me paths and maps the verified DTOs', async () => {
     http.defaults.baseURL = 'https://api.example.test/api/v1'
     const requests: Array<{ method?: string; url?: string; data?: unknown; authorization?: string }> = []

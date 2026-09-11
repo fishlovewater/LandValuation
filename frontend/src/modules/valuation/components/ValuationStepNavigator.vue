@@ -1,16 +1,29 @@
 <script setup lang="ts">
-defineProps<{
+const props = withDefaults(defineProps<{
   currentStep: 1 | 2 | 3 | 4 | 5 | 6
+  availableSteps?: number[]
+  issueCounts?: Partial<Record<1 | 2 | 3 | 4 | 5 | 6, number>>
+}>(), {
+  availableSteps: () => [1, 2, 3, 4, 5, 6],
+  issueCounts: () => ({}),
+})
+
+const emit = defineEmits<{
+  navigate: [step: 1 | 2 | 3 | 4 | 5 | 6]
 }>()
 
 const steps = [
-  { number: 1, label: '案件與文件' },
-  { number: 2, label: '資料確認' },
-  { number: 3, label: '伺服器計算' },
-  { number: 4, label: '檢核結果' },
-  { number: 5, label: '輸出預覽' },
+  { number: 1, label: '案件設定' },
+  { number: 2, label: '文件與 AI 辨識' },
+  { number: 3, label: '資料確認' },
+  { number: 4, label: '計算與檢核' },
+  { number: 5, label: '查估書確認' },
   { number: 6, label: '送審' },
-]
+] as const
+
+function isAvailable(step: number): boolean {
+  return props.availableSteps.includes(step)
+}
 
 </script>
 
@@ -26,8 +39,17 @@ const steps = [
         }"
         :aria-current="step.number === currentStep ? 'step' : undefined"
       >
-        <span class="valuation-steps__number" aria-hidden="true">{{ step.number }}</span>
-        <span>{{ step.label }}</span>
+        <button
+          type="button"
+          :data-testid="`valuation-step-${step.number}`"
+          :disabled="!isAvailable(step.number)"
+          :aria-label="`${step.number}. ${step.label}${issueCounts[step.number] ? `，${issueCounts[step.number]} 項待處理` : ''}`"
+          @click="emit('navigate', step.number)"
+        >
+          <span class="valuation-steps__number" aria-hidden="true">{{ step.number }}</span>
+          <span class="valuation-steps__label">{{ step.label }}</span>
+          <span v-if="issueCounts[step.number]" class="valuation-steps__issue" aria-hidden="true">{{ issueCounts[step.number] }}</span>
+        </button>
       </li>
     </ol>
   </nav>
@@ -52,14 +74,52 @@ const steps = [
 }
 
 .valuation-steps li {
-  display: flex;
-  align-items: center;
-  gap: 7px;
   min-width: 0;
   color: var(--app-muted);
   font-size: 11px;
   font-weight: 700;
   line-height: 1.35;
+}
+
+.valuation-steps button {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 9px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.valuation-steps button:hover:not(:disabled) {
+  background: rgba(46, 89, 132, .07);
+}
+
+.valuation-steps button:disabled {
+  cursor: not-allowed;
+  opacity: .46;
+}
+
+.valuation-steps__label {
+  min-width: 0;
+}
+
+.valuation-steps__issue {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  margin-left: auto;
+  place-items: center;
+  border-radius: 999px;
+  color: #9a4b28;
+  background: #fff0e7;
+  font-size: 10px;
+  font-weight: 900;
 }
 
 .valuation-steps__number {

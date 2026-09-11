@@ -488,12 +488,16 @@ describe('valuation demo flow', () => {
     await wrapper.get('[data-testid="case-open"]').trigger('click')
     await vi.waitFor(() => expect(router.currentRoute.value.path).toBe(`/app/valuation/cases/${ids.case}/prepare`))
     expect(wrapper.text()).toContain('來源：案件原始資料')
+    expect(wrapper.get('[data-testid="case-context"]').text()).toContain('NB-2026-0001')
+
+    await wrapper.get('[data-testid="valuation-step-3"]').trigger('click')
+    await wrapper.get('[data-testid="data-section-f03"]').trigger('click')
     expect(wrapper.text()).toContain('正式採用值')
     expect(wrapper.text()).toContain('人工確認欄位')
-
     await wrapper.get('[data-testid="f03-comparison-price"]').setValue('125001.00')
     await wrapper.get('[data-testid="save-confirmed-fields"]').trigger('click')
     await flushPromises()
+    await wrapper.get('[data-testid="valuation-step-4"]').trigger('click')
     await wrapper.get('[data-testid="run-valuation"]').trigger('click')
     await flushPromises()
 
@@ -505,7 +509,10 @@ describe('valuation demo flow', () => {
     expect(submitCount).toBe(0)
     expect(valuationFlowState.forms.find((form) => form.formInstanceId === ids.f03)?.status).toBe('DRAFT')
 
+    await wrapper.get('[data-testid="valuation-step-3"]').trigger('click')
+    await wrapper.get('[data-testid="data-section-f03"]').trigger('click')
     await wrapper.get('[data-testid="f03-comparison-price"]').setValue('125002.00')
+    await wrapper.get('[data-testid="valuation-step-4"]').trigger('click')
     await wrapper.get('[data-testid="run-valuation"]').trigger('click')
     await flushPromises()
 
@@ -533,7 +540,7 @@ describe('valuation demo flow', () => {
     expect(patchBodies[1]).toEqual(expect.objectContaining({ comparison_price: '125002.00' }))
     expect(wrapper.get('[data-testid="validation-results"]').text()).toContain('伺服器檢核結果')
     expect(wrapper.get('[data-testid="validation-results"]').text()).toContain('警示')
-    expect(wrapper.get('[data-testid="official-value"]').text()).toContain('123456.00')
+    expect(wrapper.get('[data-testid="calculation-result"]').text()).toContain('123456.00')
     expect(wrapper.text()).not.toContain('internal-bucket-must-not-render')
     expect(wrapper.text()).not.toContain('object-key-must-not-render')
 
@@ -1220,9 +1227,11 @@ describe('valuation demo flow', () => {
     await vi.waitFor(() => expect(wrapper.get('[data-testid="valuation-correction-request"]').text()).toContain('第 1 次補正要求'))
 
     expect(wrapper.get('[data-testid="valuation-correction-request"]').text()).toContain('修正調整率後重新計算')
-    expect(wrapper.get('[data-testid="save-confirmed-fields"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="save-confirmed-fields"]').exists()).toBe(false)
     await wrapper.get('[data-testid="prepare-revision-draft"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.find('[data-testid="open-revision-fields"]').exists()).toBe(true))
+    await wrapper.get('[data-testid="open-revision-fields"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="save-confirmed-fields"]').exists()).toBe(true))
 
     expect(wrapper.get('[data-testid="save-confirmed-fields"]').attributes('disabled')).toBeUndefined()
     expect(requests.some((request) => request.url === `/valuation/cases/${ids.case}/forms` && request.method === 'post')).toBe(true)
@@ -1338,6 +1347,8 @@ describe('valuation demo flow', () => {
     const router = createAppRouter(createMemoryHistory())
     await router.push(`/app/valuation/cases/${ids.case}/prepare`)
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="valuation-step-2"]').exists()).toBe(true))
+    await wrapper.get('[data-testid="valuation-step-2"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.find(`[data-testid="extract-document-${ids.sourceDocument}"]`).exists()).toBe(true))
 
     await wrapper.get(`[data-testid="extract-document-${ids.sourceDocument}"]`).trigger('click')
@@ -1448,6 +1459,10 @@ describe('valuation demo flow', () => {
     const router = createAppRouter(createMemoryHistory())
     await router.push(`/app/valuation/cases/${ids.case}/prepare`)
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="valuation-step-3"]').exists()).toBe(true))
+    await wrapper.get('[data-testid="valuation-step-3"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="data-section-manual"]').exists()).toBe(true))
+    await wrapper.get('[data-testid="data-section-manual"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.find('[data-testid="manual-field-workspace"]').exists()).toBe(true))
 
     await wrapper.get('[data-testid="manual-field-F03-decision_reason"]').setValue('人工核對附件後採用此值')
@@ -1513,6 +1528,8 @@ describe('valuation demo flow', () => {
     const router = createAppRouter(createMemoryHistory())
     await router.push(`/app/valuation/cases/${ids.case}/prepare`)
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="valuation-step-2"]').exists()).toBe(true))
+    await wrapper.get('[data-testid="valuation-step-2"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.find(`[data-testid="document-category-${ids.sourceDocument}"]`).exists()).toBe(true))
 
     await wrapper.get(`[data-testid="document-category-${ids.sourceDocument}"]`).setValue('land-register')
@@ -1629,6 +1646,10 @@ describe('valuation demo flow', () => {
     const router = createAppRouter(createMemoryHistory())
     await router.push(`/app/valuation/cases/${ids.case}/prepare`)
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="valuation-step-3"]').exists()).toBe(true))
+    await wrapper.get('[data-testid="valuation-step-3"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="data-section-land"]').exists()).toBe(true))
+    await wrapper.get('[data-testid="data-section-land"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.find('[data-testid="valuation-land-context"]').exists()).toBe(true))
 
     expect((wrapper.get('[data-testid="parcel-district-code"]').element as HTMLInputElement).value).toBe('65000030')

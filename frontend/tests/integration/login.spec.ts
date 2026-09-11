@@ -35,6 +35,38 @@ describe('LoginCard', () => {
     expect(wrapper.text()).toContain('請輸入密碼')
   })
 
+  it('offers three one-click development Demo roles without requiring credentials', async () => {
+    const demoLogin = vi.spyOn(authApi, 'demoLogin').mockResolvedValue({
+      access_token: 'demo-role-token',
+      token_type: 'bearer',
+      expires_in: 600,
+    })
+    vi.spyOn(authApi, 'me').mockResolvedValue({
+      id: 'user-appraiser',
+      username: 'valuation_demo',
+      email: 'valuation@example.test',
+      displayName: '示範估價人員',
+      roles: ['APPRAISER'],
+      permissions: ['valuation.read'],
+    })
+    const passwordLogin = vi.spyOn(authApi, 'login')
+    const wrapper = mountLogin()
+
+    expect(wrapper.findAll('[data-testid^="demo-login-"]')).toHaveLength(3)
+    expect(wrapper.text()).toContain('展示時直接選擇角色，不需要輸入帳號密碼')
+
+    await wrapper.get('[data-testid="demo-login-appraiser"]').trigger('click')
+    await flushPromises()
+
+    expect(demoLogin).toHaveBeenCalledOnce()
+    expect(demoLogin).toHaveBeenCalledWith('APPRAISER')
+    expect(passwordLogin).not.toHaveBeenCalled()
+    expect(wrapper.emitted('loginSuccess')?.[0]?.[0]).toMatchObject({
+      username: 'valuation_demo',
+      roles: ['APPRAISER'],
+    })
+  })
+
   it('preserves the username and clears the password after incorrect credentials', async () => {
     vi.spyOn(authApi, 'login').mockRejectedValue({ response: { status: 401 } })
     const wrapper = mountLogin()

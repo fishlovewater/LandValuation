@@ -31,7 +31,9 @@ test.describe('valuation remediation workflow', () => {
     await page.goto(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/prepare`)
 
     await expect(page.locator('#case-summary-title')).toContainText(demo.caseNo)
-    await expect(page.getByTestId('valuation-workflow-guide')).toContainText('第 2 步 / 6')
+    await expect(page.getByTestId('valuation-workflow-guide')).toContainText('第 1 步 / 6')
+    await page.getByTestId('valuation-step-3').click()
+    await page.getByTestId('data-section-f03').click()
 
     const valuationDate = page.locator('#f03-valuation-base-date')
     await expect(valuationDate).toBeEnabled()
@@ -45,6 +47,7 @@ test.describe('valuation remediation workflow', () => {
       return response.request().method() === 'POST'
         && path.endsWith(`/valuation/cases/${encodeURIComponent(demo.caseId)}/validations`)
     })
+    await page.getByTestId('valuation-step-4').click()
     await page.getByTestId('run-valuation').click()
     const blockedValidation = await blockedValidationResponse
     expect(blockedValidation.status()).toBe(201)
@@ -67,12 +70,18 @@ test.describe('valuation remediation workflow', () => {
       return response.request().method() === 'POST'
         && path.endsWith(`/valuation/cases/${encodeURIComponent(demo.caseId)}/validations`)
     })
+    await page.getByTestId('valuation-step-4').click()
     await page.getByTestId('run-valuation').click()
     const passingValidation = await passingValidationResponse
     expect(passingValidation.status()).toBe(201)
 
     await expect(page.getByText('伺服器已完成計算、檢核、F03 提交與正式輸出。')).toBeVisible()
     await expect(page.getByTestId('go-to-submit')).toBeEnabled()
-    await expect(page.getByTestId('valuation-workflow-guide')).toContainText('第 5 步 / 6')
+    await expect(page.getByTestId('valuation-workflow-guide')).toContainText('第 4 步 / 6')
+    await Promise.all([
+      page.waitForURL(new RegExp(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/submit$`)),
+      page.getByTestId('wizard-next').click(),
+    ])
+    await expect(page.locator('[aria-current="step"]')).toContainText('5')
   })
 })

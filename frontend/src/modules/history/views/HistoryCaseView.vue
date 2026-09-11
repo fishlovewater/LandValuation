@@ -57,6 +57,10 @@ const message = ref('')
 const activeTab = ref<DetailTab>('overview')
 const busyDocumentId = ref<string | null>(null)
 const errorByDocument = ref<Record<string, string>>({})
+const previewDocument = ref<HistoryDocumentModel | null>(null)
+const previewUrl = ref('')
+const previewLoading = ref(false)
+const previewError = ref('')
 let activeController: AbortController | null = null
 let loadSerial = 0
 
@@ -186,6 +190,29 @@ function downloadAnchor(url: string, filename: string): HTMLAnchorElement {
   return anchor
 }
 
+function clearDocumentPreview(): void {
+  if (previewUrl.value && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(previewUrl.value)
+  previewUrl.value = ''
+  previewDocument.value = null
+  previewError.value = ''
+}
+
+async function previewHistoryDocument(historyDocument: HistoryDocumentModel): Promise<void> {
+  if (previewLoading.value || historyDocument.downloadAvailable === false) return
+  if (previewDocument.value?.documentId === historyDocument.documentId && previewUrl.value) return
+  clearDocumentPreview()
+  previewDocument.value = historyDocument
+  previewLoading.value = true
+  try {
+    const blob = await historyApi.downloadDocument(historyDocument.documentId)
+    if (typeof URL.createObjectURL === 'function') previewUrl.value = URL.createObjectURL(blob)
+  } catch (caught: unknown) {
+    previewError.value = safeHistoryDownloadError(caught)
+  } finally {
+    previewLoading.value = false
+  }
+}
+
 async function downloadDocument(historyDocument: HistoryDocumentModel): Promise<void> {
   if (busyDocumentId.value || historyDocument.downloadAvailable === false) return
   busyDocumentId.value = historyDocument.documentId
@@ -212,6 +239,7 @@ async function downloadDocument(historyDocument: HistoryDocumentModel): Promise<
 }
 
 watch(caseId, () => {
+  clearDocumentPreview()
   detail.value = null
   activeTab.value = 'overview'
   void load()
@@ -220,7 +248,10 @@ watch(caseId, () => {
 watch([hasValuation, hasReview], syncTab)
 
 onMounted(load)
-onBeforeUnmount(() => activeController?.abort())
+onBeforeUnmount(() => {
+  activeController?.abort()
+  clearDocumentPreview()
+})
 </script>
 
 <template>
@@ -275,9 +306,40 @@ onBeforeUnmount(() => activeController?.abort())
             :documents="detail.documents"
             :busy-document-id="busyDocumentId"
             :error-by-document="errorByDocument"
+            @preview="previewHistoryDocument"
             @download="downloadDocument"
           />
         </div>
+        <section v-if="previewDocument" class="history-case__document-preview" data-testid="history-document-preview" aria-labelledby="history-document-preview-title">
+          <header>
+            <div>
+              <p class="history-case__eyebrow">SOURCE DOCUMENT</p>
+              <h2 id="history-document-preview-title">{{ previewDocument.fileName }}</h2>
+              <span>{{ previewDocument.documentTypeLabel }} · 第 {{ previewDocument.versionNo }} 版 · {{ previewDocument.sourceModuleLabel }}</span>
+            </div>
+            <button type="button" @click="clearDocumentPreview">關閉預覽</button>
+          </header>
+          <LoadingSkeleton v-if="previewLoading" :rows="4" label="文件預覽載入中" />
+          <ErrorState v-else-if="previewError" :message="previewError" @retry="previewHistoryDocument(previewDocument)" />
+          <iframe
+            v-else-if="previewUrl && previewDocument.contentType === 'application/pdf'"
+            class="history-case__document-frame"
+            data-testid="history-document-pdf"
+            :src="previewUrl"
+            :title="`${previewDocument.fileName} PDF 預覽`"
+          />
+          <img
+            v-else-if="previewUrl && previewDocument.contentType.startsWith('image/')"
+            class="history-case__document-image"
+            data-testid="history-document-image"
+            :src="previewUrl"
+            :alt="`${previewDocument.fileName} 預覽`"
+          >
+          <div v-else class="history-case__document-unsupported">
+            <strong>此格式目前不支援直接內嵌預覽</strong>
+            <span>仍可使用上方文件清單的「下載」查看完整內容。</span>
+          </div>
+        </section>
         <section v-if="detail.permissions.canViewValuation && detail.parcels.length" v-liquid-glass data-lg class="history-case__parcel-card lg" aria-labelledby="history-parcels-title">
           <p class="history-case__eyebrow">AUTHORIZED VALUATION CONTEXT</p>
           <h2 id="history-parcels-title">地籍資料</h2>
@@ -346,6 +408,15 @@ onBeforeUnmount(() => activeController?.abort())
 .history-case__tabs button:hover,
 .history-case__tabs button.is-active { border-color: var(--app-line); border-bottom-color: var(--app-accent); color: var(--app-accent-deep); background: var(--app-paper-strong); }
 .history-case__overview-grid { display: grid; grid-template-columns: minmax(230px, .7fr) minmax(0, 1.3fr); gap: 15px; margin-top: 15px; }
+.history-case__document-preview { display:grid; gap:12px; margin-top:15px; padding:18px; border:1px solid var(--app-line); border-radius:var(--app-radius-sm); background:var(--app-paper-strong); }
+.history-case__document-preview > header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+.history-case__document-preview h2 { margin:0; color:var(--app-ink); font-size:19px; }
+.history-case__document-preview header span { display:block; margin-top:5px; color:var(--app-muted); font-size:11px; }
+.history-case__document-preview header button { min-height:40px; padding:7px 11px; border:1px solid var(--app-line); border-radius:8px; color:var(--app-ink-soft); background:#fff; cursor:pointer; font-weight:800; }
+.history-case__document-frame { width:100%; min-height:620px; border:1px solid #d6dee8; border-radius:8px; background:#eef2f6; }
+.history-case__document-image { display:block; max-width:100%; max-height:720px; margin:auto; border-radius:8px; object-fit:contain; }
+.history-case__document-unsupported { display:grid; gap:5px; padding:28px; border:1px dashed var(--app-line); border-radius:8px; color:var(--app-muted); text-align:center; }
+.history-case__document-unsupported strong { color:var(--app-ink-soft); }
 .history-case__facts,
 .history-case__parcel-card,
 .history-case__data-section { padding: 20px; border: 1px solid rgba(255,255,255,.72); border-radius: var(--app-radius-sm); background: rgba(255,255,255,.72); box-shadow: var(--app-shadow-soft); }
@@ -388,6 +459,8 @@ onBeforeUnmount(() => activeController?.abort())
   .history-case { padding-inline: 14px; }
   .history-case__identity { flex-direction: column; }
   .history-case__identity-status { justify-content: flex-start; }
+  .history-case__document-preview > header { flex-direction:column; }
+  .history-case__document-frame { min-height:420px; }
   .history-case__parcel-list { grid-template-columns: 1fr; }
   .history-case__record dl { grid-template-columns: 1fr; }
 }

@@ -3,6 +3,8 @@ export interface LoginCredentials {
   password: string
 }
 
+export type DemoLoginRole = 'APPRAISER' | 'REVIEWER' | 'INSPECTOR'
+
 export interface TokenResponseDto {
   access_token: string
   token_type: string

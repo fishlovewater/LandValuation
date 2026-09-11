@@ -1,5 +1,5 @@
 import { http } from '../../api/http'
-import type { AuthUser, CurrentUserDto, LoginCredentials, TokenResponseDto } from './auth.types'
+import type { AuthUser, CurrentUserDto, DemoLoginRole, LoginCredentials, TokenResponseDto } from './auth.types'
 
 export function mapCurrentUser(dto: CurrentUserDto): AuthUser {
   return {
@@ -15,6 +15,11 @@ export function mapCurrentUser(dto: CurrentUserDto): AuthUser {
 export const authApi = {
   async login(credentials: LoginCredentials): Promise<TokenResponseDto> {
     const response = await http.post<TokenResponseDto>('/auth/login', credentials)
+    return response.data
+  },
+
+  async demoLogin(role: DemoLoginRole): Promise<TokenResponseDto> {
+    const response = await http.post<TokenResponseDto>('/auth/demo-login', { role })
     return response.data
   },
 

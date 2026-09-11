@@ -315,6 +315,10 @@ describe('history demo flow', () => {
     expect(reviewSection.findAll('details').some((details) => details.text().includes('FUTURE_DECISION'))).toBe(true)
 
     await wrapper.get('[data-testid="history-tab-overview"]').trigger('click')
+    await wrapper.get(`[data-testid="history-preview-${ids.missingDocument}"]`).trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="history-document-preview"]').exists()).toBe(true))
+    expect(requests).toContain(`get /history/documents/${ids.missingDocument}/download`)
+
     await wrapper.get(`[data-testid="history-download-${ids.missingDocument}"]`).trigger('click')
     await vi.waitFor(() => expect(wrapper.text()).toContain('文件目前無法下載'))
     expect(requests).toContain(`get /history/documents/${ids.missingDocument}/download`)
