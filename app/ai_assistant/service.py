@@ -69,7 +69,7 @@ def normalize_f03_confirmed_fields(values: dict[str, Any]) -> dict[str, Any]:
     if valuation_base_date is not None and valuation_base_date != valuation_date:
         raise AppError(
             "VALUATION_DATE_CONFLICT",
-            "valuation_date 與 valuation_base_date 不可填入不同值",
+            "估價基準日出現兩個不同值，請確認後再送出。",
             422,
         )
     fields["valuation_base_date"] = valuation_date
@@ -153,6 +153,22 @@ class AssistantService:
         storage: StorageService,
     ) -> AssistantQuestionResponse:
         record = await self.get_session(session_id, user)
+        existing = await self.repository.list_messages(
+            record.assistant_session_id, limit=20
+        )
+        history = [
+            {
+                "role": "user" if item.role == "USER" else "assistant",
+                "content": item.content,
+            }
+            for item in existing
+            if item.role in {"USER", "ASSISTANT"}
+        ]
+        await self._add_message(
+            record,
+            role="USER",
+            content=payload.question,
+        )
         request = KnowledgeSearchRequest(
             question=payload.question,
             case_id=record.case_id,
@@ -165,8 +181,17 @@ class AssistantService:
             storage=storage,
             user=user,
             request=request,
+            conversation_history=history,
         )
-        return self._question_response(record, result)
+        response = self._question_response(record, result)
+        await self._add_message(
+            record,
+            role="ASSISTANT",
+            content=response.answer,
+            model_id=result.model_id or record.model_id,
+            response_payload=response.model_dump(mode="json"),
+        )
+        return response
 
     @classmethod
     def _question_response(
@@ -316,7 +341,7 @@ class AssistantService:
     ) -> tuple[AssistantSessionRecord, str, AssistantProgressResponse, list[ToolExecutionResponse]]:
         record = await self.get_session(session_id, user)
         if record.session_status != "ACTIVE":
-            raise AppError("ASSISTANT_SESSION_CLOSED", "AI 工作階段已關閉", 409)
+            raise AppError("ASSISTANT_SESSION_CLOSED", "目前的智能助理對話已結束，請重新開啟智能助理。", 409)
         # Read-only conversation/tool calls remain available for submitted or
         # reviewed cases.  Any tool that mutates valuation data is checked by
         # its underlying service (F03 update/calculation/validation/report),
@@ -467,7 +492,7 @@ class AssistantService:
                 if call.name not in ALLOWED_TOOL_NAMES:
                     raise AppError(
                         "AI_TOOL_NOT_ALLOWED",
-                        f"AI 不可呼叫工具 {call.name}",
+                        "智能助理提出了目前不支援的操作。",
                         422,
                     )
                 if call.name in {"apply_confirmed_fields", "save_form_draft"}:
@@ -557,7 +582,7 @@ class AssistantService:
                         ),
                     }
                 )
-        raise AppError("AI_TOOL_LIMIT", "AI 工具呼叫次數已達上限", 503)
+        raise AppError("AI_TOOL_LIMIT", "這次操作步驟過多，請拆成較小的問題再試。", 503)
 
     async def _bedrock_reply(
         self,
@@ -583,7 +608,7 @@ class AssistantService:
                 if call.name not in ALLOWED_TOOL_NAMES:
                     raise AppError(
                         "AI_TOOL_NOT_ALLOWED",
-                        f"AI 不可呼叫工具 {call.name}",
+                        "智能助理提出了目前不支援的操作。",
                         422,
                     )
                 if call.name in {"apply_confirmed_fields", "save_form_draft"}:
@@ -663,7 +688,7 @@ class AssistantService:
                     }
                 )
             messages.append({"role": "user", "content": tool_results})
-        raise AppError("AI_TOOL_LIMIT", "AI 工具呼叫次數已達上限", 503)
+        raise AppError("AI_TOOL_LIMIT", "這次操作步驟過多，請拆成較小的問題再試。", 503)
 
     async def _execute_tool(
         self,
@@ -708,7 +733,7 @@ class AssistantService:
             return {"status": "SUCCESS", **result.model_dump(mode="json")}
         if tool_name == "run_validation":
             if self.storage is None:
-                raise AppError("STORAGE_REQUIRED", "檢核需要 MinIO 連線", 503)
+                raise AppError("STORAGE_REQUIRED", "目前暫時無法讀取必要文件，請稍後再試。", 503)
             result = await ValidationService(self.session, self.storage).run_f03(
                 record.case_id,
                 record.form_instance_id,
@@ -718,7 +743,7 @@ class AssistantService:
             return {"status": "SUCCESS", **result.model_dump(mode="json")}
         if tool_name == "generate_report_pdf":
             if self.storage is None:
-                raise AppError("STORAGE_REQUIRED", "產生 PDF 需要 MinIO 連線", 503)
+                raise AppError("STORAGE_REQUIRED", "目前暫時無法產生 PDF，請稍後再試。", 503)
             result = await ReportService(self.session, self.storage).generate_f03(
                 record.case_id,
                 record.form_instance_id,
@@ -730,7 +755,7 @@ class AssistantService:
             if payload.nearest_facility is None or not payload.confirm_action:
                 return {
                     "status": "DENIED",
-                    "reason": "步行距離查詢尚未由使用者結構化確認",
+                    "reason": "請先確認步行距離查詢條件",
                 }
             from app.valuation.facilities.schemas import FacilityOriginType
             from app.valuation.facilities.service import FacilityService
@@ -779,13 +804,13 @@ class AssistantService:
                 mode="json"
             )
             return {"status": "SUCCESS", **serialized}
-        raise AppError("AI_TOOL_NOT_ALLOWED", f"不允許的工具：{tool_name}", 422)
+        raise AppError("AI_TOOL_NOT_ALLOWED", "這項操作目前不支援。", 422)
 
     @staticmethod
     def _require_tool_permissions(user: User, tool_name: str) -> None:
         required = ASSISTANT_TOOL_PERMISSIONS.get(tool_name)
         if required is None:
-            raise AppError("AI_TOOL_NOT_ALLOWED", f"不允許的工具：{tool_name}", 422)
+            raise AppError("AI_TOOL_NOT_ALLOWED", "這項操作目前不支援。", 422)
         if not required.issubset(permission_codes(user)):
             raise PermissionDeniedError()
 
@@ -817,7 +842,7 @@ class AssistantService:
             if candidate is None:
                 raise AppError(
                     "CANDIDATE_NOT_CONFIRMED",
-                    "候選欄位不存在、已套用或尚未確認",
+                    "辨識結果不存在、已套用或尚未確認。",
                     422,
                 )
             value = candidate.confirmed_value
@@ -828,7 +853,7 @@ class AssistantService:
                 if benchmark_id is None:
                     raise AppError(
                         "BENCHMARK_LAND_NOT_FOUND",
-                        "候選比準地地號無法對應同案件比準地",
+                        "辨識到的比準地無法對應本案既有比準地。",
                         422,
                     )
                 fields.setdefault("benchmark_land_id", benchmark_id)
@@ -837,7 +862,7 @@ class AssistantService:
             else:
                 raise AppError(
                     "FIELD_NOT_ALLOWED",
-                    f"候選欄位 {candidate.field_name} 不可寫入 F03 草稿",
+                    "這筆辨識結果不能套用到 F03 草稿。",
                     422,
                 )
             candidate_records.append(candidate)
@@ -849,7 +874,7 @@ class AssistantService:
         except Exception as exc:
             raise AppError(
                 "CONFIRMED_FIELD_INVALID",
-                "已確認欄位不符合 F03 Schema，請修正後再套用",
+                "已確認內容的格式不符合 F03 欄位要求，請修正後再套用。",
                 422,
             ) from exc
         draft = await self.f03.update_draft(
@@ -916,6 +941,7 @@ class AssistantService:
         tool_result_summary: dict[str, Any] | None = None,
         request_id: UUID | None = None,
         model_id: str | None = None,
+        response_payload: dict[str, Any] | None = None,
     ) -> None:
         await self.repository.add_message(
             AssistantMessageRecord(
@@ -930,19 +956,20 @@ class AssistantService:
                 tool_result_summary=tool_result_summary or {},
                 request_id=request_id,
                 model_id=model_id,
+                response_payload=response_payload or {},
             )
         )
 
     async def _session_or_404(self, session_id: UUID) -> AssistantSessionRecord:
         record = await self.repository.get_session(session_id)
         if record is None:
-            raise ResourceNotFoundError("AI 工作階段")
+            raise ResourceNotFoundError("智能助理對話")
         return record
 
     @staticmethod
     def _require_session_user(record: AssistantSessionRecord, user: User) -> None:
         if record.user_id != user.user_id:
-            raise PermissionDeniedError("只能存取自己的 AI 工作階段")
+            raise PermissionDeniedError("只能查看自己的智能助理對話。")
 
     @staticmethod
     def _mock_reply(
@@ -951,14 +978,14 @@ class AssistantService:
         confirmation_pending: bool,
     ) -> str:
         if confirmation_pending:
-            return "已收到待套用欄位，但尚未寫入。確認內容後請將 confirm_apply 設為 true。"
-        parts = ["目前 F03 製作進度已由後端重新檢查。"]
+            return "已收到待套用欄位，但尚未保存。請確認內容後再執行套用。"
+        parts = ["目前 F03 製作進度已重新檢查。"]
         if record.missing_fields:
             parts.append("缺少欄位：" + "、".join(record.missing_fields) + "。")
         if record.missing_documents:
             parts.append("缺少文件：" + "、".join(record.missing_documents) + "。")
         if pending_candidates:
-            parts.append(f"另有 {pending_candidates} 個擷取候選欄位等待使用者確認。")
+            parts.append(f"另有 {pending_candidates} 筆辨識結果等待確認。")
         if not record.missing_fields and not record.missing_documents and not pending_candidates:
             parts.append("必要欄位與文件已齊備，可進行後續計算與製作前檢核。")
         else:

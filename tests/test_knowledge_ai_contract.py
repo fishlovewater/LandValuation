@@ -138,3 +138,63 @@ def test_parse_answer_allows_crlf_to_lf_line_ending_normalisation():
     )
 
     assert answer.evidence[0].supporting_quote == "第一行\n第二行。"
+
+
+def test_parse_answer_allows_pdf_line_wrap_to_be_returned_as_space():
+    chunk_id = uuid4()
+    packet = [
+        {
+            "chunk_id": str(chunk_id),
+            "content": "比準地指地價區段內具代表性，\n以作為各宗土地市價比較基準之宗地。",
+        }
+    ]
+
+    answer = parse_answer(
+        json.dumps(
+            {
+                "answer": "比準地指地價區段內具代表性， 以作為各宗土地市價比較基準之宗地。【來源1】",
+                "cited_chunk_ids": [str(chunk_id)],
+                "evidence": [
+                    {
+                        "chunk_id": str(chunk_id),
+                        "supporting_quote": "比準地指地價區段內具代表性， 以作為各宗土地市價比較基準之宗地。",
+                        "supported_claim": "比準地指地價區段內具代表性， 以作為各宗土地市價比較基準之宗地。",
+                    }
+                ],
+                "needs_clarification": False,
+                "clarification_question": None,
+            },
+            ensure_ascii=False,
+        ),
+        packet,
+    )
+
+    assert answer.cited_chunk_ids == [chunk_id]
+
+
+def test_parse_answer_reduces_unmatched_long_quote_to_verified_claim():
+    chunk_id = uuid4()
+    source_claim = "比準地指地價區段內具代表性之宗地。"
+    packet = [{"chunk_id": str(chunk_id), "content": source_claim}]
+
+    answer = parse_answer(
+        json.dumps(
+            {
+                "answer": f"{source_claim}【來源1】",
+                "cited_chunk_ids": [str(chunk_id)],
+                "evidence": [
+                    {
+                        "chunk_id": str(chunk_id),
+                        "supporting_quote": f"依規定，{source_claim}",
+                        "supported_claim": source_claim,
+                    }
+                ],
+                "needs_clarification": False,
+                "clarification_question": None,
+            },
+            ensure_ascii=False,
+        ),
+        packet,
+    )
+
+    assert answer.evidence[0].supporting_quote == source_claim

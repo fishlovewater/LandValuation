@@ -166,9 +166,38 @@ export interface KnowledgeQuestionResponseDto {
   answer: string
   generation_mode: string
   next_action: string
+  model_id?: string | null
   clarification_question?: string | null
   citations: KnowledgeQuestionCitationResponseDto[]
   unreadable_sources: AssistantUnreadableSourceResponseDto[]
+}
+
+export interface KnowledgeConversationDto {
+  conversation_id: string
+  title: string
+  provider: string
+  model_id: string | null
+  status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface KnowledgeConversationMessageDto {
+  message_id: string
+  message_no: number
+  role: 'USER' | 'ASSISTANT'
+  content: string
+  answer: KnowledgeQuestionResponseDto | null
+  created_at: string
+}
+
+export interface AssistantHistoryMessageDto {
+  assistant_message_id: string
+  message_no: number
+  role: 'USER' | 'ASSISTANT'
+  content: string
+  response_payload: AssistantQuestionResponseDto | Record<string, never>
+  created_at: string
 }
 
 export interface AssistantSessionModel {

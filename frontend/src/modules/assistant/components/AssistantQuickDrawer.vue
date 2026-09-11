@@ -12,6 +12,7 @@ import {
   canAskAssistantQuestion,
   canAskGeneralAssistantQuestion,
   canStartAssistantSession,
+  mapKnowledgeQuestionResponse,
   safeAssistantErrorMessage,
 } from '../assistant.api'
 import { mapAssistantQuestion } from '../assistant.mappers'
@@ -30,6 +31,7 @@ interface ConversationItem {
 }
 
 const session = ref<AssistantSessionModel | null>(null)
+const knowledgeConversationId = ref('')
 const items = ref<ConversationItem[]>([])
 const question = ref('')
 const loading = ref(false)
@@ -44,13 +46,13 @@ const canAskGeneral = computed(() => canAskGeneralAssistantQuestion(auth.permiss
 const canAsk = computed(() => (
   session.value
     ? canAskAssistantQuestion(auth.permissions)
-    : canAskGeneral.value
+    : canAskGeneral.value && Boolean(knowledgeConversationId.value)
 ))
 const contextReady = computed(() => Boolean(contextCaseId.value && contextFormId.value))
 const currentContextLabel = computed(() => {
-  if (!contextCaseId.value) return '未帶入案件資料'
-  if (!contextFormId.value) return '已取得案件，但尚無可用 F03 估價表'
-  return `案件 ${contextCaseId.value.slice(0, 8)}… · F03`
+  if (!contextCaseId.value) return '目前可查詢法規與知識文件'
+  if (!contextFormId.value) return '已帶入目前案件，但尚無可用的 F03 估價資料'
+  return '已帶入目前案件與 F03 估價資料'
 })
 
 function routeString(value: unknown): string {
@@ -75,21 +77,55 @@ async function resolveContext(): Promise<{ caseId: string; formId: string }> {
   return { caseId, formId }
 }
 
+function restoreGeneralConversation(
+  rows: Awaited<ReturnType<typeof assistantApi.getKnowledgeConversationMessages>>,
+): void {
+  const restored: ConversationItem[] = []
+  let current: ConversationItem | null = null
+  for (const row of rows) {
+    if (row.role === 'USER') {
+      current = { id: row.message_no, question: row.content, answer: null }
+      restored.push(current)
+      continue
+    }
+    if (row.role === 'ASSISTANT' && row.answer && current) {
+      current.answer = mapAssistantQuestion(mapKnowledgeQuestionResponse(row.answer))
+    }
+  }
+  items.value = restored
+}
+
+async function ensureGeneralConversation(forceNew = false): Promise<void> {
+  session.value = null
+  if (!canAskGeneral.value) return
+  if (forceNew) {
+    const created = await assistantApi.createKnowledgeConversation()
+    knowledgeConversationId.value = created.conversation_id
+    items.value = []
+    return
+  }
+  const conversations = await assistantApi.listKnowledgeConversations()
+  let selected = conversations[0]
+  if (!selected) selected = await assistantApi.createKnowledgeConversation()
+  knowledgeConversationId.value = selected.conversation_id
+  const rows = await assistantApi.getKnowledgeConversationMessages(selected.conversation_id)
+  restoreGeneralConversation(rows)
+}
+
 async function ensureSession(forceNew = false): Promise<void> {
   const token = ++serial
   error.value = ''
-  if (!canStart.value) {
-    session.value = null
-    return
-  }
   loading.value = true
   try {
     const context = await resolveContext()
     if (token !== serial) return
-    if (!context.caseId || !context.formId) {
-      session.value = null
+    if (!context.caseId || !context.formId || !canStart.value) {
+      contextCaseId.value = context.caseId
+      contextFormId.value = context.formId
+      await ensureGeneralConversation(forceNew)
       return
     }
+    knowledgeConversationId.value = ''
     if (
       !forceNew
       && session.value?.caseId === context.caseId
@@ -122,7 +158,7 @@ async function send(value = question.value): Promise<void> {
   try {
     const response = session.value
       ? await assistantApi.askQuestion(session.value.assistantSessionId, { question: content })
-      : await assistantApi.askGeneralQuestion({ question: content })
+      : await assistantApi.askKnowledgeConversation(knowledgeConversationId.value, { question: content })
     item.answer = mapAssistantQuestion(response)
   } catch (caught) {
     item.failed = true
@@ -155,6 +191,7 @@ watch(
   () => {
     serial += 1
     session.value = null
+    knowledgeConversationId.value = ''
     contextCaseId.value = ''
     contextFormId.value = ''
     items.value = []
@@ -220,7 +257,7 @@ watch(
 
       <RouterLink class="assistant-quick__full" :to="contextReady
         ? { name: 'assistant', query: { caseId: contextCaseId, formId: contextFormId } }
-        : { name: 'assistant' }" @click="emit('close')">
+        : { name: 'assistant', query: knowledgeConversationId ? { conversationId: knowledgeConversationId } : {} }" @click="emit('close')">
         開啟完整助理工作區
       </RouterLink>
       <p class="assistant-quick__disclaimer">AI 建議僅供輔助；可查看的資料與可執行操作依目前帳號權限而定。</p>

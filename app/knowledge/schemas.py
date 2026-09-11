@@ -156,4 +156,27 @@ class KnowledgeProviderStatusResponse(BaseModel):
     note: str
 
 
+class KnowledgeConversationCreate(BaseModel):
+    title: str | None = Field(default=None, max_length=160)
+
+
+class KnowledgeConversationResponse(BaseModel):
+    conversation_id: UUID
+    title: str
+    provider: str
+    model_id: str | None = None
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeConversationMessageResponse(BaseModel):
+    message_id: UUID
+    message_no: int
+    role: str
+    content: str
+    answer: KnowledgeAnswerResponse | None = None
+    created_at: datetime
+
+
 KnowledgeAnswerResponse.model_rebuild()

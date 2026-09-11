@@ -19,6 +19,9 @@ from app.knowledge.runtime_extraction import virtual_document_from_object
 from app.knowledge.schemas import (
     CaseAssistantContextResponse,
     KnowledgeAnswerResponse,
+    KnowledgeConversationCreate,
+    KnowledgeConversationMessageResponse,
+    KnowledgeConversationResponse,
     KnowledgeProviderStatusResponse,
     KnowledgeSourceDownloadResponse,
     KnowledgeSearchRequest,
@@ -42,7 +45,7 @@ def _reject_case_context(case_id) -> None:
     if case_id is not None:
         raise AppError(
             "CASE_CONTEXT_INTEGRATION_PENDING",
-            "案件情境檢索尚未完成權限與 Valuation 唯讀整合，暫不可傳入 case_id。",
+            "目前無法使用案件資料篩選這項搜尋，請改用一般知識搜尋。",
             422,
         )
 
@@ -92,6 +95,130 @@ async def ask(
         user=user,
         request=payload,
     )
+
+
+def _conversation_response(record) -> KnowledgeConversationResponse:
+    return KnowledgeConversationResponse(
+        conversation_id=record.conversation_id,
+        title=record.title,
+        provider=record.provider,
+        model_id=record.model_id,
+        status=record.status,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _conversation_message_response(record) -> KnowledgeConversationMessageResponse:
+    answer = None
+    if record.role == "ASSISTANT" and record.response_payload:
+        answer = KnowledgeAnswerResponse.model_validate(record.response_payload)
+    return KnowledgeConversationMessageResponse(
+        message_id=record.message_id,
+        message_no=record.message_no,
+        role=record.role,
+        content=record.content,
+        answer=answer,
+        created_at=record.created_at,
+    )
+
+
+@router.post("/conversations", response_model=KnowledgeConversationResponse, status_code=201)
+async def create_conversation(
+    payload: KnowledgeConversationCreate,
+    session: DbSession,
+    user: KnowledgeReader,
+) -> KnowledgeConversationResponse:
+    settings = get_settings()
+    provider_name = settings.knowledge_answer_provider.lower()
+    model_id = None
+    if provider_name != "evidence_only":
+        model_id = create_provider(settings).model_id
+    record = await KnowledgeRepository(session).create_conversation(
+        user_id=user.user_id,
+        provider=provider_name,
+        model_id=model_id,
+        title=(payload.title or "新對話").strip() or "新對話",
+    )
+    return _conversation_response(record)
+
+
+@router.get("/conversations", response_model=list[KnowledgeConversationResponse])
+async def list_conversations(
+    session: DbSession,
+    user: KnowledgeReader,
+) -> list[KnowledgeConversationResponse]:
+    records = await KnowledgeRepository(session).list_conversations(user.user_id)
+    return [_conversation_response(record) for record in records]
+
+
+@router.get(
+    "/conversations/{conversation_id}/messages",
+    response_model=list[KnowledgeConversationMessageResponse],
+)
+async def conversation_messages(
+    conversation_id: UUID,
+    session: DbSession,
+    user: KnowledgeReader,
+) -> list[KnowledgeConversationMessageResponse]:
+    repository = KnowledgeRepository(session)
+    conversation = await repository.get_conversation(conversation_id, user.user_id)
+    if conversation is None:
+        raise ResourceNotFoundError("知識助理對話")
+    records = await repository.list_conversation_messages(conversation_id)
+    return [_conversation_message_response(record) for record in records]
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages",
+    response_model=KnowledgeAnswerResponse,
+)
+async def ask_conversation(
+    conversation_id: UUID,
+    payload: KnowledgeSearchRequest,
+    session: DbSession,
+    user: KnowledgeReader,
+    storage: KnowledgeStorage,
+) -> KnowledgeAnswerResponse:
+    if payload.case_id is not None:
+        raise AppError(
+            "KNOWLEDGE_CONVERSATION_CASE_NOT_ALLOWED",
+            "知識模式不接受案件篩選；請改用案件助手查詢目前案件。",
+            422,
+        )
+    repository = KnowledgeRepository(session)
+    conversation = await repository.get_conversation(conversation_id, user.user_id)
+    if conversation is None:
+        raise ResourceNotFoundError("知識助理對話")
+    existing = await repository.list_conversation_messages(conversation_id, limit=20)
+    history = [
+        {
+            "role": "user" if item.role == "USER" else "assistant",
+            "content": item.content,
+        }
+        for item in existing
+        if item.role in {"USER", "ASSISTANT"}
+    ]
+    await repository.add_conversation_message(
+        conversation,
+        role="USER",
+        content=payload.question,
+    )
+    await repository.rename_conversation_if_new(conversation, payload.question)
+    result = await answer_knowledge_question(
+        session=session,
+        storage=storage,
+        user=user,
+        request=payload,
+        conversation_history=history,
+    )
+    await repository.add_conversation_message(
+        conversation,
+        role="ASSISTANT",
+        content=result.answer,
+        response_payload=result.model_dump(mode="json"),
+    )
+    return result
 
 
 @router.get("/provider-status", response_model=KnowledgeProviderStatusResponse)
@@ -163,9 +290,9 @@ async def source_download(
         raise ResourceNotFoundError("知識文件")
     settings = get_settings()
     if document.bucket_name != settings.minio_bucket:
-        raise StorageError("知識文件的 bucket 設定不符合目前系統設定")
+        raise StorageError("此知識文件目前無法下載，請聯絡系統管理者。")
     if not document.object_key.startswith("knowledge/"):
-        raise StorageError("知識文件不在允許的 MinIO 前綴下")
+        raise StorageError("此知識文件目前無法下載，請聯絡系統管理者。")
     return KnowledgeSourceDownloadResponse(
         document_id=document.document_id,
         document_title=document.title,

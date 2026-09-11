@@ -219,6 +219,41 @@ def field_analysis_prompt(
     )
 
 
+def ollama_field_analysis_prompt(
+    extracted_text: str,
+    form_code: str,
+    allowed_fields: dict[str, str],
+) -> str:
+    """Build a plain-text extraction prompt for local Ollama models.
+
+    The OCR payload is intentionally not wrapped in JSON.  Some local models
+    otherwise try to validate the *input* as JSON instead of treating it as
+    noisy source text, especially when the OCR contains tables or mojibake.
+    The response shape is still constrained separately by Ollama's `format`
+    JSON schema and verified again against the original OCR before persistence.
+    """
+    field_lines = "\n".join(
+        f"- {name}: {description}" for name, description in allowed_fields.items()
+    )
+    return (
+        "任務：從 OCR 原文中找出可直接由原文證明的土地估價表單欄位候選。\n"
+        f"目標表單：{form_code}\n\n"
+        "重要規則：\n"
+        "1. OCR 原文是一般文字，不是 JSON；即使有亂碼、表格殘片或不完整行，也不要回覆 Invalid JSON。\n"
+        "2. 只可使用下方允許欄位，不得建立其他 field_name。\n"
+        "3. 每個 field_name 最多回傳一筆；同欄位有多處時選擇證據最直接的一處。\n"
+        "4. source_text 必須逐字來自 OCR 原文，extracted_value 也必須是 source_text 中可直接找到的連續片段。\n"
+        "5. 不可推算、補值、改寫、正規化日期或自行組合不同位置的文字。\n"
+        "6. 沒有足夠原文證據的欄位不要回傳；完全沒有時回傳 candidates 空陣列。\n"
+        "7. 只輸出系統指定 JSON schema 的內容，不要輸出 error、message、說明文字或 Markdown。\n\n"
+        "【允許欄位】\n"
+        f"{field_lines}\n\n"
+        "【OCR 原文開始】\n"
+        f"{extracted_text}\n"
+        "【OCR 原文結束】"
+    )
+
+
 def _ai_extractable_fields(fields: dict[str, str]) -> dict[str, str]:
     """Remove workflow/computed fields that must never be invented from OCR.
 
@@ -240,12 +275,13 @@ def field_analysis_output_schema(
     allowed_fields: tuple[str, ...],
     max_candidates: int,
 ) -> dict[str, Any]:
+    candidate_limit = min(max_candidates, len(allowed_fields))
     return {
         "type": "object",
         "properties": {
             "candidates": {
                 "type": "array",
-                "maxItems": max_candidates,
+                "maxItems": candidate_limit,
                 "items": {
                     "type": "object",
                     "properties": {
@@ -462,6 +498,7 @@ class BedrockFieldAnalysisProvider:
 
 class OllamaFieldAnalysisProvider:
     provider_name = "OLLAMA"
+    batch_size = 2
 
     def __init__(self, settings: Settings, client: Any | None = None) -> None:
         self.settings = settings
@@ -487,19 +524,28 @@ class OllamaFieldAnalysisProvider:
                     "content": (
                         "你是土地估價文件欄位辨識器。只可根據使用者提供的 OCR 原文"
                         "輸出候選欄位，不得補值、推算、改寫原始證據或執行正式資料寫入。"
-                        "回覆必須完全符合指定 JSON schema。"
+                        "必須使用 submit_field_candidates 工具回傳結果，不要輸出說明文字。"
                     ),
                 },
                 {
                     "role": "user",
-                    "content": field_analysis_prompt(
+                    "content": ollama_field_analysis_prompt(
                         extracted_text,
                         form_code,
                         allowed_fields,
                     ),
                 },
             ],
-            "format": schema,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "submit_field_candidates",
+                        "description": "提交具 OCR 原文證據的表單候選欄位",
+                        "parameters": schema,
+                    },
+                }
+            ],
             "stream": False,
             "think": False,
             "options": {"temperature": 0},
@@ -521,14 +567,14 @@ class OllamaFieldAnalysisProvider:
         except httpx.RequestError as exc:
             raise AppError(
                 "OLLAMA_FIELD_ANALYSIS_UNAVAILABLE",
-                "無法連線到本機 Ollama，請確認 Ollama 已啟動且模型可用",
+                "文件辨識目前無法連線到本機 AI 服務，請稍後再試。",
                 503,
             ) from exc
 
         if response.status_code == 404:
             raise AppError(
                 "OLLAMA_FIELD_ANALYSIS_MODEL_NOT_FOUND",
-                f"Ollama 找不到模型 {self.model_id}，請先下載模型",
+                "目前設定的本機 AI 模型尚未準備完成，請聯絡系統管理者。",
                 503,
             )
         try:
@@ -536,24 +582,35 @@ class OllamaFieldAnalysisProvider:
         except httpx.HTTPStatusError as exc:
             raise AppError(
                 "OLLAMA_FIELD_ANALYSIS_UNAVAILABLE",
-                "Ollama 欄位辨識暫時無法使用",
+                "文件辨識目前無法使用，請稍後再試。",
                 503,
             ) from exc
 
         try:
             body = response.json()
-            content = body["message"]["content"]
-            if isinstance(content, str):
-                payload_raw = json.loads(content)
-            elif isinstance(content, dict):
-                payload_raw = content
+            message = body["message"]
+            tool_calls = message.get("tool_calls") or []
+            matching_calls = [
+                call
+                for call in tool_calls
+                if call.get("function", {}).get("name") == "submit_field_candidates"
+            ]
+            if matching_calls:
+                arguments = matching_calls[0]["function"]["arguments"]
+                payload_raw = json.loads(arguments) if isinstance(arguments, str) else arguments
             else:
-                raise TypeError("message.content must be JSON text or object")
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    payload_raw = json.loads(content)
+                elif isinstance(content, dict):
+                    payload_raw = content
+                else:
+                    payload_raw = {"candidates": []}
             payload = _ToolPayload.model_validate(payload_raw)
         except (ValueError, KeyError, TypeError, ValidationError, json.JSONDecodeError) as exc:
             raise AppError(
                 "OLLAMA_FIELD_ANALYSIS_INVALID_RESPONSE",
-                "Ollama 欄位辨識回應不符合受控格式",
+                "文件辨識這次沒有產生可採用的結果，請重新執行辨識。",
                 502,
             ) from exc
 
@@ -594,7 +651,7 @@ def build_field_analysis_provider(settings: Settings) -> FieldAnalysisProvider:
         return OllamaFieldAnalysisProvider(settings)
     raise AppError(
         "FIELD_ANALYSIS_PROVIDER_NOT_CONFIGURED",
-        "文件 AI 欄位辨識目前僅支援 Ollama 或 Bedrock",
+        "文件辨識服務目前尚未完成設定，請聯絡系統管理者。",
         503,
     )
 
@@ -602,6 +659,18 @@ def build_field_analysis_provider(settings: Settings) -> FieldAnalysisProvider:
 def _evidence_key(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value)
     return re.sub(r"[\s,，:：|\\\/\-_\(\)（）]", "", normalized)
+
+
+def _candidate_semantically_valid(form_code: str, field_name: str, value: str) -> bool:
+    """Apply narrow format checks for fields with unambiguous surface syntax."""
+    normalized = unicodedata.normalize("NFKC", value).strip()
+    if form_code == "F03" and field_name == "price_zone_no":
+        return bool(re.fullmatch(r"[A-Za-z]\d{3}-\d{2}", normalized))
+    if form_code == "F03" and field_name == "district_name":
+        return bool(re.fullmatch(r".{1,20}(?:區|鄉|鎮|市)", normalized))
+    if form_code == "F03" and field_name == "section_subsection_name":
+        return "段" in normalized
+    return True
 
 
 def _map_f02_rf_level(field_name: str, value: str, source_text: str) -> str | None:
@@ -652,7 +721,12 @@ class FieldAnalysisService:
 
         provider = self.provider or build_field_analysis_provider(self.settings)
         records: list[ExtractedFieldRecord] = []
-        for allowed_fields in self._field_batches(remaining_fields):
+        batch_size = (
+            provider.batch_size
+            if isinstance(provider, OllamaFieldAnalysisProvider)
+            else self.settings.ai_field_analysis_max_candidates
+        )
+        for allowed_fields in self._field_batches(remaining_fields, size=batch_size):
             result = await provider.analyze(
                 extracted_text,
                 form_code,
@@ -674,10 +748,18 @@ class FieldAnalysisService:
             extraction.extraction_id
         )
 
-    def _field_batches(self, fields: dict[str, str]) -> tuple[dict[str, str], ...]:
+    def _field_batches(
+        self,
+        fields: dict[str, str],
+        *,
+        size: int | None = None,
+    ) -> tuple[dict[str, str], ...]:
         items = list(fields.items())
-        size = self.settings.ai_field_analysis_max_candidates
-        return tuple(dict(items[index:index + size]) for index in range(0, len(items), size))
+        batch_size = size or self.settings.ai_field_analysis_max_candidates
+        return tuple(
+            dict(items[index:index + batch_size])
+            for index in range(0, len(items), batch_size)
+        )
 
     async def prepare_codex_package(
         self,
@@ -851,6 +933,12 @@ class FieldAnalysisService:
 
             final_val = extracted_val
 
+            semantic_valid = _candidate_semantically_valid(
+                form_code,
+                candidate.field_name,
+                final_val,
+            )
+
             if form_code == "F02-RF":
                 mapped_level = _map_f02_rf_level(
                     candidate.field_name, extracted_val, source_text
@@ -859,12 +947,12 @@ class FieldAnalysisService:
                     final_val = mapped_level
                     val_grounded = True
 
-            if not source_grounded or not val_grounded:
+            if not source_grounded or not val_grounded or not semantic_valid:
                 if drop_invalid_evidence:
                     continue
                 raise AppError(
                     f"{error_prefix}_FIELD_EVIDENCE_INVALID",
-                    f"{source_label} 候選值缺少可核對的 OCR 原文證據",
+                    f"{source_label} 候選值缺少可核對的 OCR 原文證據或欄位格式不符",
                     error_status,
                 )
 

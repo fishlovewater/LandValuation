@@ -159,7 +159,7 @@ describe('Assistant API transport', () => {
 
     expect(result.answer_status).toBe('EVIDENCE_ONLY')
     expect(result.claims).toEqual([{
-      text: '以下為可供人工查核的候選來源，尚未經 AI 驗證為正式規則結論。',
+      text: '以下是目前找到的相關來源，請確認內容是否符合你的問題。',
       citation_ids: [chunkId],
     }])
   })

@@ -547,6 +547,7 @@ class AssistantMessageRecord(Base):
     tool_result_summary: Mapped[dict] = mapped_column(JSONB, default=dict)
     request_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     model_id: Mapped[str | None] = mapped_column(String(200))
+    response_payload: Mapped[dict] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

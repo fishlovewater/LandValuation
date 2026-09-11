@@ -129,6 +129,18 @@ describe('cited assistant demo flow', () => {
     const wrapper = mount(AppLayout, { attachTo: document.body, global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('請輸入問題'))
 
+    const assistantContext = wrapper.get('[data-testid="assistant-context"]')
+    expect(assistantContext.text()).toContain('案件模式')
+    expect(assistantContext.text()).toContain('目前案件資料已載入')
+    expect(assistantContext.text()).toContain('必要資料已齊，可進行後續估價作業')
+    expect(assistantContext.text()).not.toContain('READY_TO_SUBMIT')
+    const modeGuide = wrapper.get('[data-testid="assistant-mode-guide"]')
+    expect(modeGuide.text()).toContain('案件模式')
+    expect(modeGuide.text()).toContain('知識模式')
+    expect(modeGuide.text()).toContain('回答會附上可核對來源')
+    expect(wrapper.get('[data-testid="assistant-return-case"]').attributes('href')).toContain(`/app/valuation/cases/${ids.case}/prepare`)
+    expect(wrapper.get('[data-testid="assistant-suggestion-0"]').text()).toContain('目前這筆案件')
+
     expect(requests[0]).toMatchObject({
       method: 'post',
       url: '/ai-assistant/sessions',
@@ -243,7 +255,7 @@ describe('cited assistant demo flow', () => {
     await vi.waitFor(() => expect(wrapper.text()).toContain('請輸入問題'))
 
     expect(wrapper.get('[data-testid="assistant-question"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-testid="assistant-permission-required"]').text()).toContain('knowledge.read')
+    expect(wrapper.get('[data-testid="assistant-permission-required"]').text()).toContain('目前帳號沒有查看案件資料與來源文件的權限')
     expect(requests.some((request) => request.endsWith('/questions'))).toBe(false)
     wrapper.unmount()
   })
@@ -412,7 +424,8 @@ describe('cited assistant demo flow', () => {
       url: `/ai-assistant/sessions/${ids.session}/messages`,
       data: { content: '執行正式計算', run_calculation: true, confirm_action: true },
     })
-    expect(wrapper.text()).toContain('目前步驟：READY_TO_SUBMIT')
+    expect(wrapper.text()).toContain('目前進度：必要資料已齊，可進行後續估價作業')
+    expect(wrapper.text()).not.toContain('READY_TO_SUBMIT')
     expect(wrapper.text()).toContain('計算結果：123.45')
     expect(wrapper.text()).not.toContain('private-bucket')
     expect(wrapper.text()).not.toContain('cases/secret/report.pdf')

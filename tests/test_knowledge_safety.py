@@ -102,6 +102,51 @@ def test_search_respects_document_type_filter() -> None:
     assert "找不到" in response.retrieval_notice
 
 
+def test_rank_prioritizes_an_explicitly_named_official_document() -> None:
+    regulation = source(
+        document_type="REGULATION",
+        content="比準地為地價區段內具代表性之宗地。",
+    )
+    regulation.document.title = "土地徵收補償市價查估辦法"
+    regulation.document.document_code = "REG-LAND-EXPROPRIATION-MARKET-VALUE"
+
+    manual = source(
+        content="土地徵收補償市價查估辦法規定比準地應作為市價比較基準。",
+    )
+    manual.document.title = "土地徵收補償市價查估作業手冊"
+
+    request = KnowledgeSearchRequest(
+        question="土地徵收補償市價查估辦法中，比準地有哪些相關規定？"
+    )
+
+    ranked = KnowledgeSafetyService().rank(request, [manual, regulation], limit=2)
+
+    assert ranked[0] is regulation
+
+
+def test_explicit_document_title_does_not_make_irrelevant_chunks_relevant() -> None:
+    relevant = source(
+        document_type="REGULATION",
+        content="比準地指地價區段內具代表性之宗地。",
+    )
+    relevant.document.title = "土地徵收補償市價查估辦法"
+
+    unrelated = source(
+        document_type="REGULATION",
+        content="買賣實例土地權利價格應扣除建物成本價格後計算。",
+    )
+    unrelated.document.title = "土地徵收補償市價查估辦法"
+
+    request = KnowledgeSearchRequest(
+        question="土地徵收補償市價查估辦法中，比準地有哪些相關規定？"
+    )
+
+    ranked = KnowledgeSafetyService().rank(request, [unrelated, relevant], limit=10)
+
+    assert relevant in ranked
+    assert unrelated not in ranked
+
+
 def test_example_reference_signals_are_excluded_at_retrieval_boundary() -> None:
     request = KnowledgeSearchRequest(question="道路條件怎麼判斷？")
     candidates = [
@@ -182,3 +227,71 @@ def test_ai_answer_exposes_the_exact_evidence_quote_to_api_clients() -> None:
     assert response.citations[0].supporting_quote == answer.evidence[0].supporting_quote
     assert response.citations[0].supported_claim == answer.evidence[0].supported_claim
     assert response.clarification_question == answer.clarification_question
+
+
+def test_ai_citation_uses_article_number_from_verified_quote_for_regulation() -> None:
+    item = source(
+        document_type="REGULATION",
+        content=(
+            "第 27 條\n其他規定。\n"
+            "第 30 條\n被徵收之土地,應按照徵收當期之市價補償其地價。"
+        ),
+    )
+    item.document.document_code = "LAW-LAND-EXPROPRIATION"
+    item.document.title = "土地徵收條例"
+    item.chunk.article_no = "第 27 條"
+    quote = "第 30 條\n被徵收之土地,應按照徵收當期之市價補償其地價。"
+    answer = AiAnswer(
+        answer=f"{quote}【來源1】",
+        cited_chunk_ids=[item.chunk.chunk_id],
+        evidence=[
+            AiCitationEvidence(
+                chunk_id=item.chunk.chunk_id,
+                supporting_quote=quote,
+                supported_claim=quote,
+            )
+        ],
+        needs_clarification=False,
+        clarification_question=None,
+    )
+
+    response = KnowledgeSafetyService().ai_answer_response(
+        answer,
+        [item],
+        provider_name="ollama",
+        model_id="qwen3.5:latest",
+    )
+
+    assert response.citations[0].article_no == "第 30 條"
+
+
+def test_ai_manual_citation_does_not_show_incidental_article_number() -> None:
+    item = source(
+        document_type="MANUAL",
+        content="二、注意事項：本表應依實例情形選用並查填之。另參考第7條規定。",
+    )
+    item.document.document_code = "MANUAL-NTPC-FORMS-CH4-10"
+    item.chunk.article_no = "第7條"
+    quote = "二、注意事項：本表應依實例情形選用並查填之。"
+    answer = AiAnswer(
+        answer=f"{quote}【來源1】",
+        cited_chunk_ids=[item.chunk.chunk_id],
+        evidence=[
+            AiCitationEvidence(
+                chunk_id=item.chunk.chunk_id,
+                supporting_quote=quote,
+                supported_claim=quote,
+            )
+        ],
+        needs_clarification=False,
+        clarification_question=None,
+    )
+
+    response = KnowledgeSafetyService().ai_answer_response(
+        answer,
+        [item],
+        provider_name="ollama",
+        model_id="qwen3.5:latest",
+    )
+
+    assert response.citations[0].article_no is None

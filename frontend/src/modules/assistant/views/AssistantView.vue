@@ -17,6 +17,7 @@ import {
   canAskGeneralAssistantQuestion,
   canStartAssistantSession,
   canUpdateAssistantValuation,
+  mapKnowledgeQuestionResponse,
   safeAssistantErrorMessage,
 } from '../assistant.api'
 import {
@@ -31,7 +32,9 @@ import type {
   AssistantMessageRequestDto,
   AssistantMessageResponseDto,
   AssistantQuestionRequestDto,
+  AssistantQuestionResponseDto,
   AssistantSessionModel,
+  KnowledgeConversationDto,
 } from '../assistant.types'
 
 const route = useRoute()
@@ -39,6 +42,8 @@ const router = useRouter()
 const authStore = useAuthStore()
 
 const session = ref<AssistantSessionModel | null>(null)
+const knowledgeConversationId = ref('')
+const knowledgeConversations = ref<KnowledgeConversationDto[]>([])
 const messages = ref<AssistantChatMessage[]>([])
 const loading = ref(false)
 const sending = ref(false)
@@ -98,7 +103,9 @@ const generalKnowledgeMode = computed(() => !routeSessionId.value && !hasContext
 const canAskQuestion = computed(() => (
   session.value
     ? canAskCaseQuestion.value
-    : generalKnowledgeMode.value && canAskGeneralQuestion.value
+    : generalKnowledgeMode.value
+      && canAskGeneralQuestion.value
+      && Boolean(knowledgeConversationId.value)
 ))
 const latestAnswer = computed<AssistantAnswerModel | null>(() => {
   for (let index = messages.value.length - 1; index >= 0; index -= 1) {
@@ -107,6 +114,34 @@ const latestAnswer = computed<AssistantAnswerModel | null>(() => {
   }
   return null
 })
+const suggestedQuestions = computed(() => generalKnowledgeMode.value
+  ? [
+      '土地徵收補償市價查估的主要流程是什麼？',
+      '比準地在查估流程中的用途是什麼？',
+      '正式查估書通常需要核對哪些資料？',
+    ]
+  : [
+      '目前這筆案件還缺少哪些資料？',
+      '這筆案件下一步應該做什麼？',
+      '目前有哪些來源文件可以核對？',
+    ])
+const assistantContextText = computed(() => {
+  if (session.value) return '目前案件資料已載入'
+  if (generalKnowledgeMode.value) return '可查詢法規、條文與知識文件'
+  return '尚未帶入案件資料'
+})
+const emptyConversationDescription = computed(() => generalKnowledgeMode.value
+  ? '可直接詢問法規、條文、查估流程或知識文件內容；回答會附上可核對來源。'
+  : '可詢問目前案件缺件、處理進度、來源依據或下一步作業。')
+
+function assistantStepLabel(step: string): string {
+  return ({
+    COLLECT_FIELDS: '補齊必要欄位',
+    COLLECT_DOCUMENTS: '補齊必要文件',
+    REVIEW_EXTRACTION: '確認 AI／OCR 辨識結果',
+    READY_TO_SUBMIT: '必要資料已齊，可進行後續估價作業',
+  } as Record<string, string>)[step] ?? '依目前案件資料接續處理'
+}
 
 function isCurrent(serial: number): boolean {
   return serial === loadSerial.value
@@ -119,6 +154,81 @@ function currentQuery(): Record<string, string> {
   if (caseId) query.caseId = caseId
   if (formId) query.formId = formId
   return query
+}
+
+const routeConversationId = computed(() => queryValue('conversationId', 'conversation_id'))
+
+function restoreKnowledgeMessages(rows: Awaited<ReturnType<typeof assistantApi.getKnowledgeConversationMessages>>): void {
+  messages.value = rows.flatMap((row): AssistantChatMessage[] => {
+    if (row.role === 'USER') {
+      return [{ id: row.message_id, role: 'user', content: row.content }]
+    }
+    if (!row.answer) return []
+    return [{
+      id: row.message_id,
+      role: 'assistant',
+      answer: mapAssistantQuestion(mapKnowledgeQuestionResponse(row.answer)),
+    }]
+  })
+}
+
+async function loadKnowledgeConversation(controller: AbortController, serial: number): Promise<void> {
+  const conversations = await assistantApi.listKnowledgeConversations(controller.signal)
+  if (!isCurrent(serial)) return
+  knowledgeConversations.value = conversations
+  const requestedId = routeConversationId.value
+  let selected = conversations.find((item) => item.conversation_id === requestedId) ?? conversations[0]
+  if (!selected) {
+    selected = await assistantApi.createKnowledgeConversation(controller.signal)
+    if (!isCurrent(serial)) return
+    knowledgeConversations.value = [selected]
+  }
+  knowledgeConversationId.value = selected.conversation_id
+  const rows = await assistantApi.getKnowledgeConversationMessages(selected.conversation_id, controller.signal)
+  if (!isCurrent(serial)) return
+  restoreKnowledgeMessages(rows)
+  if (routeConversationId.value !== selected.conversation_id) {
+    await router.replace({ name: 'assistant', query: { conversationId: selected.conversation_id } })
+  }
+}
+
+async function createNewKnowledgeConversation(): Promise<void> {
+  if (loading.value || sending.value || !canAskGeneralQuestion.value) return
+  loading.value = true
+  error.value = ''
+  try {
+    const created = await assistantApi.createKnowledgeConversation()
+    knowledgeConversations.value = [created, ...knowledgeConversations.value]
+    knowledgeConversationId.value = created.conversation_id
+    messages.value = []
+    await router.replace({ name: 'assistant', query: { conversationId: created.conversation_id } })
+  } catch (caught: unknown) {
+    error.value = safeAssistantErrorMessage(caught)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function selectKnowledgeConversation(event: Event): Promise<void> {
+  const target = event.target as HTMLSelectElement
+  const conversationId = target.value
+  if (!conversationId || conversationId === knowledgeConversationId.value) return
+  await router.replace({ name: 'assistant', query: { conversationId } })
+}
+
+function restoreCaseMessages(rows: Awaited<ReturnType<typeof assistantApi.getSessionMessages>>): void {
+  messages.value = rows.flatMap((row): AssistantChatMessage[] => {
+    if (row.role === 'USER') {
+      return [{ id: row.assistant_message_id, role: 'user', content: row.content }]
+    }
+    const payload = row.response_payload as Partial<AssistantQuestionResponseDto>
+    if (!payload.answer_status || typeof payload.answer !== 'string') return []
+    return [{
+      id: row.assistant_message_id,
+      role: 'assistant',
+      answer: mapAssistantQuestion(payload as AssistantQuestionResponseDto),
+    }]
+  })
 }
 
 async function loadSession(): Promise<void> {
@@ -143,17 +253,24 @@ async function loadSession(): Promise<void> {
   messages.value = []
   workflowResponse.value = null
   session.value = null
-
-  if (!canStartSession.value) {
-    loading.value = false
-    return
-  }
+  knowledgeConversationId.value = ''
 
   try {
+    if (generalKnowledgeMode.value) {
+      if (!canAskGeneralQuestion.value) return
+      await loadKnowledgeConversation(controller, serial)
+      return
+    }
+
+    if (!canStartSession.value) return
+
     if (requestedSessionId) {
       const loaded = await assistantApi.getSession(requestedSessionId, controller.signal)
       if (!isCurrent(serial)) return
       session.value = loaded
+      const rows = await assistantApi.getSessionMessages(loaded.assistantSessionId, controller.signal)
+      if (!isCurrent(serial)) return
+      restoreCaseMessages(rows)
     } else if (hasContext.value) {
       const created = await assistantApi.createSession(context.value, controller.signal)
       if (!isCurrent(serial)) return
@@ -194,12 +311,15 @@ async function sendQuestion(value = question.value): Promise<void> {
   try {
     const response = currentSession
       ? await assistantApi.askQuestion(currentSession.assistantSessionId, request, controller.signal)
-      : await assistantApi.askGeneralQuestion(request, controller.signal)
+      : await assistantApi.askKnowledgeConversation(knowledgeConversationId.value, request, controller.signal)
     if (!isCurrent(serial)) return
     if (currentSession && session.value?.assistantSessionId !== currentSession.assistantSessionId) return
     if (!currentSession && !generalKnowledgeMode.value) return
     const answer = mapAssistantQuestion(response)
     messages.value.push({ id: `assistant-answer-${messageSerial.value}`, role: 'assistant', answer })
+    if (!currentSession) {
+      knowledgeConversations.value = await assistantApi.listKnowledgeConversations(controller.signal)
+    }
   } catch (caught: unknown) {
     if (isCurrent(serial) && !controller.signal.aborted) error.value = safeAssistantErrorMessage(caught)
   } finally {
@@ -285,7 +405,7 @@ function workflowToolSummary(tool: AssistantMessageResponseDto['tools'][number])
     const failed = typeof result.failed_count === 'number' ? result.failed_count : null
     const warnings = typeof result.warning_count === 'number' ? result.warning_count : null
     if (failed !== null || warnings !== null) {
-      return `檢核結果：ERROR ${failed ?? 0} 項，警示 ${warnings ?? 0} 項。`
+      return `檢核結果：錯誤 ${failed ?? 0} 項，警示 ${warnings ?? 0} 項。`
     }
     return '系統已完成製作前檢核。'
   }
@@ -312,7 +432,7 @@ function submitDrawerQuestion(value: string): void {
 }
 
 watch(
-  [routeSessionId, () => route.query.caseId, () => route.query.case_id, () => route.query.formId, () => route.query.form_id, permissionKey],
+  [routeSessionId, () => route.query.caseId, () => route.query.case_id, () => route.query.formId, () => route.query.form_id, routeConversationId, permissionKey],
   () => { void loadSession() },
   { immediate: true },
 )
@@ -334,6 +454,14 @@ onBeforeUnmount(() => {
         : '可針對目前案件提問，並以系統中的案件資料與來源協助核對。'"
       >
       <template #actions>
+        <RouterLink
+          v-if="session && context.caseId"
+          class="assistant-view__case-link"
+          data-testid="assistant-return-case"
+          :to="{ name: 'valuation-prepare', params: { caseId: context.caseId } }"
+        >
+          返回目前案件
+        </RouterLink>
         <button
           v-if="session"
           class="assistant-view__drawer-button"
@@ -358,7 +486,7 @@ onBeforeUnmount(() => {
       </template>
 
       <LoadingSkeleton v-if="loading" :rows="4" label="正在載入智能助理" />
-      <ErrorState v-else-if="error && !session" :message="error" @retry="loadSession" />
+      <ErrorState v-else-if="error && !session && !generalKnowledgeMode" :message="error" @retry="loadSession" />
       <EmptyState
         v-else-if="!generalKnowledgeMode && !hasContext && !session"
         title="尚未選取可用的 F03 案件"
@@ -371,8 +499,44 @@ onBeforeUnmount(() => {
       <template v-else>
         <div class="assistant-context" data-testid="assistant-context" role="status">
           <span class="assistant-context__dot" aria-hidden="true" />
-          <span>{{ session ? '目前案件資料已載入' : '目前未帶入案件資料' }}</span>
-          <span v-if="session" class="assistant-context__step">目前步驟：{{ session.currentStep }}</span>
+          <span>{{ session ? '案件模式' : '知識模式' }}｜{{ assistantContextText }}</span>
+          <span v-if="session" class="assistant-context__step">目前進度：{{ assistantStepLabel(session.currentStep) }}</span>
+        </div>
+
+        <section class="assistant-mode-guide" data-testid="assistant-mode-guide" aria-label="智能助理使用方式">
+          <article :data-active="session ? 'true' : 'false'">
+            <strong>案件模式</strong>
+            <span>針對目前案件詢問缺件、進度、來源與下一步；可直接返回案件繼續作業。</span>
+          </article>
+          <article :data-active="generalKnowledgeMode ? 'true' : 'false'">
+            <strong>知識模式</strong>
+            <span>查詢法規、條文、查估流程與知識文件；回答會附上可核對來源。</span>
+          </article>
+        </section>
+
+        <div v-if="generalKnowledgeMode" class="assistant-history" data-testid="assistant-history">
+          <label for="assistant-history-select">對話紀錄</label>
+          <select
+            id="assistant-history-select"
+            :value="knowledgeConversationId"
+            :disabled="loading || sending"
+            @change="selectKnowledgeConversation"
+          >
+            <option
+              v-for="item in knowledgeConversations"
+              :key="item.conversation_id"
+              :value="item.conversation_id"
+            >
+              {{ item.title }}
+            </option>
+          </select>
+          <button
+            type="button"
+            :disabled="loading || sending || !canAskGeneralQuestion"
+            @click="createNewKnowledgeConversation"
+          >
+            新增對話
+          </button>
         </div>
 
         <div v-if="error" class="assistant-view__inline-error" role="alert">{{ error }}</div>
@@ -380,7 +544,19 @@ onBeforeUnmount(() => {
         <div class="assistant-conversation" aria-live="polite">
           <div v-if="!messages.length" class="assistant-conversation__empty">
             <strong>請輸入問題</strong>
-            <p>回答只會使用目前可核對的案件資料與文件來源。</p>
+            <p>{{ emptyConversationDescription }}</p>
+            <div class="assistant-conversation__suggestions" aria-label="常用問題">
+              <button
+                v-for="(suggestion, index) in suggestedQuestions"
+                :key="suggestion"
+                type="button"
+                :data-testid="`assistant-suggestion-${index}`"
+                :disabled="!canAskQuestion || sending || loading"
+                @click="sendQuestion(suggestion)"
+              >
+                {{ suggestion }}
+              </button>
+            </div>
           </div>
           <div v-for="message in messages" :key="message.id" class="assistant-message" :class="`assistant-message--${message.role}`">
             <div v-if="message.role === 'user'" class="assistant-message__user">{{ message.content }}</div>
@@ -445,9 +621,9 @@ onBeforeUnmount(() => {
           <div class="assistant-workflow__heading">
             <div>
               <span class="assistant-workflow__eyebrow">估價作業</span>
-              <h3 id="assistant-workflow-title">估價工作操作</h3>
+              <h3 id="assistant-workflow-title">案件快捷操作</h3>
             </div>
-            <p>計算、檢核與報告會依目前已確認的案件資料執行；尚未確認的辨識結果不會直接套用。</p>
+            <p>下列按鈕會直接對目前案件執行作業。系統只使用已確認資料，尚未確認的辨識結果不會自動套用。</p>
           </div>
           <div class="assistant-workflow__actions">
             <button
@@ -478,7 +654,7 @@ onBeforeUnmount(() => {
 
           <section v-if="workflowResponse" class="assistant-workflow__result" data-testid="assistant-workflow-result" aria-live="polite">
             <h4>處理結果</h4>
-            <p>目前步驟：{{ workflowResponse.progress.current_step }}</p>
+            <p>目前進度：{{ assistantStepLabel(workflowResponse.progress.current_step) }}</p>
             <p>
               進度：{{ workflowResponse.progress.completed_items }} / {{ workflowResponse.progress.total_items }}；
               已確認資料 {{ workflowResponse.progress.confirmed_candidate_count }} 筆；
@@ -545,6 +721,21 @@ onBeforeUnmount(() => {
   font-weight: 800;
 }
 
+.assistant-view__case-link {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  padding: 9px 14px;
+  border: 1px solid var(--app-line);
+  border-radius: 9px;
+  color: var(--app-ink-soft);
+  background: var(--app-paper-strong);
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+}
+.assistant-view__case-link:hover { border-color: var(--app-accent); color: var(--app-accent-deep); }
+
 .assistant-view__drawer-button:hover,
 .assistant-composer__submit:hover:not(:disabled) { background: var(--app-accent-deep); }
 
@@ -579,6 +770,48 @@ onBeforeUnmount(() => {
   font-size: 12px;
   font-weight: 600;
 }
+
+.assistant-mode-guide { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.assistant-mode-guide article { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid var(--app-line); border-radius: 10px; background: #fafbfd; }
+.assistant-mode-guide article[data-active="true"] { border-color: #bfd0e2; background: #f4f8fc; box-shadow: inset 3px 0 0 #2e5984; }
+.assistant-mode-guide strong { color: var(--app-ink); font-size: 12px; }
+.assistant-mode-guide span { color: var(--app-muted); font-size: 10px; line-height: 1.55; }
+
+.assistant-history {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--app-line);
+  border-radius: 10px;
+  background: var(--app-paper-strong);
+}
+
+.assistant-history label {
+  color: var(--app-ink);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.assistant-history select,
+.assistant-history button {
+  min-height: 40px;
+  border: 1px solid var(--app-line);
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+}
+
+.assistant-history select { padding: 7px 10px; color: var(--app-ink); }
+.assistant-history button {
+  padding: 7px 13px;
+  color: var(--app-accent-deep);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+.assistant-history button:disabled { cursor: not-allowed; opacity: .55; }
 
 .assistant-view__inline-error {
   padding: 12px 14px;
@@ -616,6 +849,10 @@ onBeforeUnmount(() => {
 
 .assistant-conversation__empty strong { color: var(--app-ink); }
 .assistant-conversation__empty p { font-size: 13px; }
+.assistant-conversation__suggestions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; max-width: 760px; margin-top: 8px; }
+.assistant-conversation__suggestions button { min-height: 38px; padding: 7px 11px; border: 1px solid #d8e1eb; border-radius: 999px; color: #2e5984; background: #f7fbff; cursor: pointer; font-size: 11px; font-weight: 800; }
+.assistant-conversation__suggestions button:hover:not(:disabled) { border-color: #9eb7d0; background: #edf4fb; }
+.assistant-conversation__suggestions button:disabled { cursor: not-allowed; opacity: .5; }
 
 .assistant-message--user {
   justify-self: end;

@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request, status
 
 from app.ai_assistant.schemas import (
+    AssistantHistoryMessageResponse,
     AssistantMessageRequest,
     AssistantMessageResponse,
     AssistantProgressResponse,
@@ -65,6 +66,32 @@ async def get_assistant_session(
 ) -> AssistantSessionResponse:
     record = await AssistantService(session).get_session(session_id, user)
     return AssistantSessionResponse.model_validate(record)
+
+
+@router.get(
+    "/sessions/{session_id}/messages",
+    response_model=list[AssistantHistoryMessageResponse],
+)
+async def get_assistant_messages(
+    session_id: UUID,
+    session: DbSession,
+    user: AssistantUser,
+) -> list[AssistantHistoryMessageResponse]:
+    service = AssistantService(session)
+    record = await service.get_session(session_id, user)
+    rows = await service.repository.list_messages(record.assistant_session_id)
+    return [
+        AssistantHistoryMessageResponse(
+            assistant_message_id=row.assistant_message_id,
+            message_no=row.message_no,
+            role=row.role,
+            content=row.content,
+            response_payload=row.response_payload or {},
+            created_at=row.created_at,
+        )
+        for row in rows
+        if row.role in {"USER", "ASSISTANT"}
+    ]
 
 
 @router.get(

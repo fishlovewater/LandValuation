@@ -69,12 +69,31 @@ def _matches_request(document: object, payload: KnowledgeSearchRequest) -> bool:
     return True
 
 
+def _contextual_question(
+    question: str, conversation_history: list[dict[str, str]] | None
+) -> str:
+    if not conversation_history:
+        return question
+    recent = conversation_history[-8:]
+    lines = [
+        "以下是最近對話，只用來理解『它／那一條／前面提到的』等指涉；不得把舊回答當成事實來源："
+    ]
+    for item in recent:
+        role = "使用者" if item.get("role") == "user" else "助理"
+        content = " ".join(str(item.get("content") or "").split())[:1200]
+        if content:
+            lines.append(f"{role}：{content}")
+    lines.append(f"目前問題：{question}")
+    return "\n".join(lines)
+
+
 async def answer_knowledge_question(
     *,
     session: AsyncSession,
     storage: StorageService,
     user: User,
     request: KnowledgeSearchRequest,
+    conversation_history: list[dict[str, str]] | None = None,
 ) -> KnowledgeAnswerResponse:
     """Answer a knowledge question using only authorized, cited sources."""
 
@@ -102,13 +121,23 @@ async def answer_knowledge_question(
             return safety.unreadable_answer(unreadable_sources).model_copy(
                 update={"case_context": case_context}
             )
-        # /search is intentionally a broad candidate view.  /ask must send the
-        # provider only the most relevant candidates so an unrelated same-document
-        # page cannot be selected merely because it shares common legal keywords.
+        # /search is intentionally a broad candidate view. /ask keeps a wider
+        # backend candidate pool so the provider can compare primary law/regulation
+        # against manuals, then the provider itself narrows that pool before Qwen
+        # sees it. This preserves source breadth without recreating the old prompt
+        # overload problem.
+        # For follow-up questions, recent conversation text is used only to resolve
+        # references such as "that article"; it is never treated as evidence.
+        contextual_question = _contextual_question(
+            request.question, conversation_history
+        )
+        ranking_request = request.model_copy(
+            update={"question": contextual_question}
+        )
         ranked_candidates = safety.rank(
-            request,
+            ranking_request,
             candidates,
-            limit=max(request.limit * 4, 12),
+            limit=max(request.limit * 4, 20),
         )
         if not ranked_candidates:
             return safety.evidence_only_answer(
@@ -119,17 +148,36 @@ async def answer_knowledge_question(
                 request, ranked_candidates, unreadable_sources
             ).model_copy(update={"case_context": case_context})
         provider = create_provider(settings)
-        answer = await provider.answer(
-            question=request.question,
-            candidates=ranked_candidates,
-        )
-        return safety.ai_answer_response(
-            answer,
-            ranked_candidates,
-            provider_name=provider.provider_name,
-            model_id=provider.model_id,
-            unreadable_sources=unreadable_sources,
-        ).model_copy(update={"case_context": case_context})
+        try:
+            answer = await provider.answer(
+                question=contextual_question,
+                candidates=ranked_candidates,
+            )
+            return safety.ai_answer_response(
+                answer,
+                ranked_candidates,
+                provider_name=provider.provider_name,
+                model_id=provider.model_id,
+                unreadable_sources=unreadable_sources,
+            ).model_copy(update={"case_context": case_context})
+        except AppError as exc:
+            # Local models are allowed to fail closed into deterministic source
+            # review when their generated JSON/citation contract is invalid.
+            # The invalid model output is never returned or persisted.  Real
+            # provider availability failures (503), authorization failures, and
+            # every non-Ollama provider error remain visible to the caller.
+            if provider.provider_name == "ollama" and exc.code == "AI_PROVIDER_INVALID_RESPONSE":
+                logger.warning(
+                    "Ollama knowledge answer failed source contract; falling back to evidence-only: %s",
+                    exc.details,
+                    extra={"error_code": exc.code},
+                )
+                return safety.evidence_only_answer(
+                    request,
+                    ranked_candidates,
+                    unreadable_sources,
+                ).model_copy(update={"case_context": case_context})
+            raise
     except AppError:
         raise
     except Exception as exc:

@@ -40,6 +40,18 @@ def _excerpt(content: str, limit: int = 360) -> str:
     return compact if len(compact) <= limit else f"{compact[: limit - 3]}..."
 
 
+_ARTICLE_QUOTE_PATTERN = re.compile(
+    r"第\s*[0-9０-９一二三四五六七八九十百千之\-]+\s*條"
+)
+
+
+def _article_no_from_supporting_quote(value: str | None) -> str | None:
+    if not value:
+        return None
+    match = _ARTICLE_QUOTE_PATTERN.search(value)
+    return " ".join(match.group(0).split()) if match else None
+
+
 class KnowledgeSafetyService:
     """Ranks authorized MinIO sources and never creates unsupported facts."""
 
@@ -50,7 +62,7 @@ class KnowledgeSafetyService:
         *,
         limit: int | None = None,
     ) -> list[RetrievedKnowledge]:
-        terms = _terms(request.question)
+        normalized_question = request.question.lower().strip()
         ranked: list[tuple[int, RetrievedKnowledge]] = []
         for item in candidates:
             document = item.document
@@ -61,16 +73,28 @@ class KnowledgeSafetyService:
                 continue
             if request.document_types and getattr(document, "document_type", None) not in request.document_types:
                 continue
-            haystack = " ".join(
+            document_title = str(getattr(document, "title", "") or "").lower().strip()
+            title_is_explicit = bool(document_title and document_title in normalized_question)
+            topic_question = (
+                normalized_question.replace(document_title, " ")
+                if title_is_explicit
+                else normalized_question
+            )
+            terms = _terms(topic_question)
+            topic_haystack = " ".join(
                 str(value or "")
                 for value in (
-                    getattr(document, "title", None),
                     getattr(chunk, "section_title", None),
                     getattr(chunk, "article_no", None),
                     getattr(chunk, "content", None),
                 )
             ).lower()
-            score = sum(term in haystack for term in terms)
+            score = sum(term in topic_haystack for term in terms)
+            if title_is_explicit and score:
+                score += max(20, len(terms) * 2)
+            elif not title_is_explicit:
+                full_haystack = f"{document_title} {topic_haystack}"
+                score = sum(term in full_haystack for term in terms)
             if score:
                 ranked.append((score, item))
         ranked.sort(
@@ -123,7 +147,7 @@ class KnowledgeSafetyService:
                 answer_status=KnowledgeAnswerStatus.NO_RELEVANT_SOURCE,
                 citations=result.citations,
                 unreadable_sources=result.unreadable_sources,
-                answer="目前可讀取且適用的 MinIO 知識文件中，找不到足以支持此問題的來源。",
+                answer="目前可讀取且適用的知識文件中，找不到足以支持此問題的來源。",
                 generation_mode="EVIDENCE_ONLY",
                 next_action="ASK_FOR_CLARIFICATION_OR_PUBLISH_RELEVANT_SOURCE",
             )
@@ -132,8 +156,8 @@ class KnowledgeSafetyService:
             citations=result.citations,
             unreadable_sources=result.unreadable_sources,
             answer=(
-                "已找到可供查核的 MinIO 資料。此階段只回傳來源證據，"
-                "不以未核准的模型自行推論或產生正式規則結論。"
+                "已找到可供查核的來源資料；目前僅提供可核對的來源內容，"
+                "不會自行補充未收錄的結論。"
             ),
             generation_mode="EVIDENCE_ONLY",
             next_action="REVIEW_CITED_SOURCES",
@@ -168,7 +192,7 @@ class KnowledgeSafetyService:
 
             raise AppError(
                 "AI_PROVIDER_INVALID_RESPONSE",
-                "AI 回傳的引用無法對應到本次已授權來源，結果未被採用。",
+                "智能助理這次產生的引用無法通過來源核對，結果未被採用。請重新提問。",
                 502,
             )
         citations = [
@@ -207,6 +231,17 @@ class KnowledgeSafetyService:
     ) -> KnowledgeCitation:
         document = item.document
         chunk = item.chunk
+        article_no = chunk.article_no
+        document_code = str(getattr(document, "document_code", "") or "")
+        if document_code.startswith(("LAW-", "REG-")):
+            if supporting_quote is not None:
+                article_no = _article_no_from_supporting_quote(supporting_quote)
+        elif supporting_quote is not None:
+            # Manual chunks can contain quoted legal provisions elsewhere on the
+            # same page.  Their first detected article number is not the manual's
+            # own section identifier, so showing it on the citation card is
+            # misleading; page/section metadata remains available instead.
+            article_no = None
         return KnowledgeCitation(
             document_id=document.document_id,
             document_title=document.title,
@@ -218,7 +253,7 @@ class KnowledgeSafetyService:
             page_start=chunk.page_start,
             page_end=chunk.page_end,
             section_title=chunk.section_title,
-            article_no=chunk.article_no,
+            article_no=article_no,
             quoted_text=_excerpt(chunk.content),
             supporting_quote=supporting_quote,
             supported_claim=supported_claim,

@@ -62,4 +62,47 @@ class KnowledgeChunk(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class KnowledgeConversationRecord(Base):
+    __tablename__ = "conversations"
+    __table_args__ = {"schema": "knowledge"}
+
+    conversation_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("auth.users.user_id")
+    )
+    title: Mapped[str] = mapped_column(String(160), default="新對話")
+    provider: Mapped[str] = mapped_column(String(30), default="evidence_only")
+    model_id: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(20), default="ACTIVE")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class KnowledgeConversationMessageRecord(Base):
+    __tablename__ = "messages"
+    __table_args__ = {"schema": "knowledge"}
+
+    message_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    conversation_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("knowledge.conversations.conversation_id", ondelete="CASCADE"),
+    )
+    message_no: Mapped[int] = mapped_column(Integer)
+    role: Mapped[str] = mapped_column(String(20))
+    content: Mapped[str] = mapped_column(Text)
+    model_name: Mapped[str | None] = mapped_column(String(200))
+    response_payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 KnowledgeDocument = KnowledgeDocumentRecord

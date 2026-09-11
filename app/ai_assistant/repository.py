@@ -56,6 +56,22 @@ class AssistantRepository:
         await self.session.refresh(record)
         return record
 
+    async def list_messages(
+        self, session_id: UUID, *, limit: int = 60
+    ) -> list[AssistantMessageRecord]:
+        rows = list(
+            (
+                await self.session.scalars(
+                    select(AssistantMessageRecord)
+                    .where(AssistantMessageRecord.assistant_session_id == session_id)
+                    .order_by(AssistantMessageRecord.message_no.desc())
+                    .limit(limit)
+                )
+            ).all()
+        )
+        rows.reverse()
+        return rows
+
     async def list_active_document_types(self, case_id: UUID) -> set[str]:
         values = await self.session.scalars(
             select(DocumentRecord.document_type).where(

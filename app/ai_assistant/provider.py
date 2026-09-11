@@ -120,14 +120,14 @@ class OllamaChatProvider:
         except httpx.RequestError as exc:
             raise AppError(
                 "OLLAMA_UNAVAILABLE",
-                "無法連線到本機 Ollama，請確認 Ollama 已啟動且連線位址正確",
+                "智能助理目前無法連線到本機 AI 服務，請稍後再試。",
                 503,
             ) from exc
 
         if response.status_code == 404:
             raise AppError(
                 "OLLAMA_MODEL_NOT_FOUND",
-                f"Ollama 找不到模型 {self.settings.ollama_model}，請先執行 ollama pull",
+                "目前設定的本機 AI 模型尚未準備完成，請聯絡系統管理者。",
                 503,
             )
         try:
@@ -135,7 +135,7 @@ class OllamaChatProvider:
         except httpx.HTTPStatusError as exc:
             raise AppError(
                 "OLLAMA_UNAVAILABLE",
-                "Ollama 回傳錯誤，暫時無法完成 AI 回覆",
+                "智能助理目前無法完成回答，請稍後再試。",
                 503,
             ) from exc
 
@@ -145,7 +145,7 @@ class OllamaChatProvider:
         except (ValueError, KeyError, TypeError) as exc:
             raise AppError(
                 "OLLAMA_INVALID_RESPONSE",
-                "Ollama 回傳格式無法解析",
+                "智能助理這次沒有產生可採用的回答，請重新提問。",
                 503,
             ) from exc
 
@@ -163,13 +163,13 @@ class OllamaChatProvider:
                 except json.JSONDecodeError as exc:
                     raise AppError(
                         "OLLAMA_INVALID_TOOL_CALL",
-                        f"Ollama 工具 {name} 的參數不是有效 JSON",
+                        "智能助理提出的操作內容無法處理，請重新描述需求。",
                         503,
                     ) from exc
             if not isinstance(arguments, dict):
                 raise AppError(
                     "OLLAMA_INVALID_TOOL_CALL",
-                    f"Ollama 工具 {name} 的參數格式錯誤",
+                    "智能助理提出的操作內容無法處理，請重新描述需求。",
                     503,
                 )
             calls.append(

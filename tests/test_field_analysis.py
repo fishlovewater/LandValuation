@@ -17,6 +17,7 @@ from app.valuation.extraction.field_analysis import (
     build_field_analysis_provider,
     field_analysis_prompt,
     field_analysis_output_schema,
+    ollama_field_analysis_prompt,
 )
 from app.valuation.extraction.schemas import CodexCandidateImportRequest
 from app.valuation.models import DocumentExtractionRecord
@@ -195,9 +196,24 @@ async def test_ollama_field_analysis_uses_json_schema_and_preserves_provenance()
     client = FakeOllamaClient(
         {
             "message": {
-                "content": '{"candidates":[{"field_name":"valuation_base_date",'
-                '"extracted_value":"1050901","confidence":0.96,'
-                '"source_text":"估價基準日:1050901"}]}'
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "submit_field_candidates",
+                            "arguments": {
+                                "candidates": [
+                                    {
+                                        "field_name": "valuation_base_date",
+                                        "extracted_value": "1050901",
+                                        "confidence": 0.96,
+                                        "source_text": "估價基準日:1050901",
+                                    }
+                                ]
+                            },
+                        }
+                    }
+                ],
             }
         }
     )
@@ -218,7 +234,30 @@ async def test_ollama_field_analysis_uses_json_schema_and_preserves_provenance()
     assert client.request["stream"] is False
     assert client.request["think"] is False
     assert client.request["options"] == {"temperature": 0}
-    assert client.request["format"]["properties"]["candidates"]["items"]["properties"]["field_name"]["enum"] == ["valuation_base_date"]
+    tool_schema = client.request["tools"][0]["function"]["parameters"]
+    assert tool_schema["properties"]["candidates"]["maxItems"] == 1
+    assert tool_schema["properties"]["candidates"]["items"]["properties"]["field_name"]["enum"] == ["valuation_base_date"]
+    user_prompt = client.request["messages"][1]["content"]
+    assert "【OCR 原文開始】" in user_prompt
+    assert "OCR 原文是一般文字，不是 JSON" in user_prompt
+    assert "估價基準日:1050901" in user_prompt
+
+
+def test_ollama_prompt_keeps_ocr_as_plain_text_instead_of_json_payload() -> None:
+    prompt = ollama_field_analysis_prompt(
+        "區段號\nP001-00\n00區",
+        "F03",
+        {
+            "price_zone_no": "區段號",
+            "district_name": "鄉鎮市區",
+        },
+    )
+
+    assert not prompt.lstrip().startswith("{")
+    assert "- price_zone_no: 區段號" in prompt
+    assert "- district_name: 鄉鎮市區" in prompt
+    assert "【OCR 原文開始】\n區段號\nP001-00\n00區\n【OCR 原文結束】" in prompt
+    assert "不要輸出 error、message" in prompt
 
 
 @pytest.mark.asyncio
@@ -357,6 +396,44 @@ def test_ollama_candidate_without_verbatim_source_can_be_dropped_safely() -> Non
     )
 
     assert records == []
+
+
+def test_ollama_candidate_with_wrong_f03_surface_shape_is_dropped() -> None:
+    extraction = extraction_record("區段號\nP001-00\n00區")
+    result = FieldAnalysisResult(
+        candidates=(
+            AnalyzedFieldCandidate(
+                field_name="price_zone_no",
+                extracted_value="00區",
+                confidence=Decimal("0.9500"),
+                source_text="00區",
+            ),
+        ),
+        provider="OLLAMA",
+        model_id="qwen3.5:latest",
+        prompt_version="field-analysis-test-v1",
+    )
+
+    records = FieldAnalysisService._candidate_records(
+        extraction,
+        "F03",
+        result,
+        {"price_zone_no": "區段號"},
+        drop_invalid_evidence=True,
+    )
+
+    assert records == []
+
+
+def test_ollama_batches_are_small_but_default_batches_remain_configured_size() -> None:
+    service = FieldAnalysisService(
+        None,
+        settings=Settings(_env_file=None, ai_field_analysis_max_candidates=30),
+    )
+    fields = {f"f{index}": str(index) for index in range(5)}
+
+    assert [len(batch) for batch in service._field_batches(fields, size=2)] == [2, 2, 1]
+    assert [len(batch) for batch in service._field_batches(fields)] == [5]
 
 
 def test_field_analysis_does_not_pretend_mock_is_bedrock() -> None:

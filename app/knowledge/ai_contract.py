@@ -193,25 +193,59 @@ def parse_answer(output: str, packet: list[dict]) -> AiAnswer:
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise AppError(
             "AI_PROVIDER_INVALID_RESPONSE",
-            "AI 回傳格式不符合知識助手契約。",
+            "智能助理這次沒有產生可採用的回答格式，請重新提問。",
             502,
             details={"reason": "MALFORMED_JSON_CONTRACT", "exception_type": type(exc).__name__},
         ) from exc
     valid_ids = {UUID(item["chunk_id"]) for item in packet}
-    evidence_ids = [item.chunk_id for item in evidence]
     packet_by_id = {UUID(item["chunk_id"]): item for item in packet}
-    evidence_is_verifiable = all(
-        len(item.supporting_quote) >= 8
-        and item.supported_claim
-        and _normalise_for_evidence(item.supporting_quote)
-        in _normalise_for_evidence(str(packet_by_id[item.chunk_id]["content"]))
-        and _normalise_for_evidence(item.supported_claim)
-        in _normalise_for_evidence(item.supporting_quote)
-        and _normalise_for_evidence(item.supported_claim)
-        in _normalise_for_evidence(answer)
-        for item in evidence
-        if item.chunk_id in packet_by_id
-    )
+    canonical_evidence: list[AiCitationEvidence] = []
+    for item in evidence:
+        packet_item = packet_by_id.get(item.chunk_id)
+        if packet_item is None:
+            canonical_evidence.append(item)
+            continue
+        source = _normalise_for_evidence(str(packet_item["content"]))
+        quote = _normalise_for_evidence(item.supporting_quote)
+        claim = _normalise_for_evidence(item.supported_claim)
+        if (
+            quote not in source
+            and len(item.supported_claim) >= 8
+            and claim
+            and claim in source
+        ):
+            canonical_evidence.append(
+                AiCitationEvidence(
+                    chunk_id=item.chunk_id,
+                    supporting_quote=item.supported_claim,
+                    supported_claim=item.supported_claim,
+                )
+            )
+        else:
+            canonical_evidence.append(item)
+    evidence = canonical_evidence
+    evidence_ids = [item.chunk_id for item in evidence]
+    evidence_validation_errors: list[str] = []
+    for item in evidence:
+        if item.chunk_id not in packet_by_id:
+            continue
+        quote = _normalise_for_evidence(item.supporting_quote)
+        claim = _normalise_for_evidence(item.supported_claim)
+        source = _normalise_for_evidence(str(packet_by_id[item.chunk_id]["content"]))
+        normalised_answer = _normalise_for_evidence(answer)
+        if len(item.supporting_quote) < 8:
+            evidence_validation_errors.append("SUPPORTING_QUOTE_TOO_SHORT")
+        if not item.supported_claim:
+            evidence_validation_errors.append("SUPPORTED_CLAIM_EMPTY")
+        if quote not in source:
+            evidence_validation_errors.append("SUPPORTING_QUOTE_NOT_IN_SOURCE")
+        if claim and claim not in source:
+            evidence_validation_errors.append("SUPPORTED_CLAIM_NOT_IN_SOURCE")
+        if claim and claim not in quote:
+            evidence_validation_errors.append("SUPPORTED_CLAIM_NOT_IN_QUOTE")
+        if claim and claim not in normalised_answer:
+            evidence_validation_errors.append("SUPPORTED_CLAIM_NOT_IN_ANSWER")
+    evidence_is_verifiable = not evidence_validation_errors
     validation_errors = []
     if not answer:
         validation_errors.append("ANSWER_EMPTY")
@@ -239,9 +273,12 @@ def parse_answer(output: str, packet: list[dict]) -> AiAnswer:
     if validation_errors:
         raise AppError(
             "AI_PROVIDER_INVALID_RESPONSE",
-            "AI 缺少有效 MinIO 來源引用，結果未被採用。",
+            "智能助理這次的來源引用無法通過核對，結果未被採用。",
             502,
-            details={"validation_errors": validation_errors},
+            details={
+                "validation_errors": validation_errors,
+                "evidence_validation_errors": evidence_validation_errors,
+            },
         )
     return AiAnswer(
         answer=answer,
@@ -253,6 +290,11 @@ def parse_answer(output: str, packet: list[dict]) -> AiAnswer:
 
 
 def _normalise_for_evidence(value: str) -> str:
-    # Allow only newline representation differences. Keep all other spaces and
-    # paragraph boundaries so a quote cannot be assembled from separate text.
-    return value.replace("\r\n", "\n").replace("\r", "\n")
+    # PDF text extraction frequently inserts single line-wrap newlines inside a
+    # sentence while local models return the same text with spaces.  Treat those
+    # layout-only differences as equivalent, but preserve blank-line paragraph
+    # boundaries so two separate paragraphs still cannot be stitched together
+    # into one fabricated quotation.
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    paragraphs = normalized.split("\n\n")
+    return "\n\n".join(" ".join(paragraph.split()) for paragraph in paragraphs)

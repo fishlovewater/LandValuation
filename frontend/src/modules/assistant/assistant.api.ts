@@ -3,12 +3,15 @@ import { ForbiddenError, http } from '../../api/http'
 import { buildAssistantContextPayload, isUsableAssistantContext, mapAssistantSession } from './assistant.mappers'
 import type {
   AssistantContext,
+  AssistantHistoryMessageDto,
   AssistantMessageResponseDto,
   AssistantMessageRequestDto,
   AssistantQuestionRequestDto,
   AssistantQuestionResponseDto,
   AssistantSessionModel,
   AssistantSessionResponseDto,
+  KnowledgeConversationDto,
+  KnowledgeConversationMessageDto,
   KnowledgeQuestionResponseDto,
 } from './assistant.types'
 
@@ -57,6 +60,51 @@ export function canUpdateAssistantValuation(permissions: readonly string[]): boo
 function hasPermissions(permissions: readonly string[], required: readonly string[]): boolean {
   const granted = new Set(permissions)
   return required.every((permission) => granted.has(permission))
+}
+
+export function mapKnowledgeQuestionResponse(data: KnowledgeQuestionResponseDto): AssistantQuestionResponseDto {
+  const citations = (data.citations ?? []).map((citation) => ({
+    citation_id: citation.chunk_id,
+    document_id: citation.document_id,
+    document_title: citation.document_title,
+    document_code: citation.document_code,
+    version_no: citation.version_no,
+    effective_from: citation.effective_from,
+    effective_to: citation.effective_to,
+    page_start: citation.page_start,
+    page_end: citation.page_end,
+    section_title: citation.section_title,
+    article_no: citation.article_no,
+    quoted_text: citation.quoted_text,
+    supporting_quote: citation.supporting_quote,
+    supported_claim: citation.supported_claim,
+  }))
+  const citationIdsByClaim = new Map<string, string[]>()
+  for (const citation of citations) {
+    const claim = citation.supported_claim?.trim()
+    if (!claim) continue
+    const ids = citationIdsByClaim.get(claim) ?? []
+    if (!ids.includes(citation.citation_id)) ids.push(citation.citation_id)
+    citationIdsByClaim.set(claim, ids)
+  }
+  const claims = Array.from(citationIdsByClaim, ([text, citation_ids]) => ({ text, citation_ids }))
+  if (data.answer_status === 'EVIDENCE_ONLY' && citations.length && !claims.length) {
+    claims.push({
+      text: '以下是目前找到的相關來源，請確認內容是否符合你的問題。',
+      citation_ids: citations.map((citation) => citation.citation_id),
+    })
+  }
+  return {
+    assistant_session_id: '',
+    answer_status: data.answer_status,
+    answer: data.answer,
+    generation_mode: data.generation_mode,
+    next_action: data.next_action,
+    clarification_question: data.clarification_question,
+    claims,
+    citations,
+    unreadable_sources: data.unreadable_sources ?? [],
+  }
 }
 
 export const assistantApi = {
@@ -132,6 +180,61 @@ export const assistantApi = {
     return response.data
   },
 
+  async getSessionMessages(sessionId: string, signal?: AbortSignal): Promise<AssistantHistoryMessageDto[]> {
+    const normalizedId = sessionId.trim()
+    if (!normalizedId) throw new AssistantContextError()
+    const response = await http.get<AssistantHistoryMessageDto[]>(
+      `/ai-assistant/sessions/${encodeURIComponent(normalizedId)}/messages`,
+      { signal },
+    )
+    return response.data
+  },
+
+  async createKnowledgeConversation(signal?: AbortSignal): Promise<KnowledgeConversationDto> {
+    const response = await http.post<KnowledgeConversationDto>('/knowledge/conversations', {}, { signal })
+    return response.data
+  },
+
+  async listKnowledgeConversations(signal?: AbortSignal): Promise<KnowledgeConversationDto[]> {
+    const response = await http.get<KnowledgeConversationDto[]>('/knowledge/conversations', { signal })
+    return response.data
+  },
+
+  async getKnowledgeConversationMessages(
+    conversationId: string,
+    signal?: AbortSignal,
+  ): Promise<KnowledgeConversationMessageDto[]> {
+    const normalizedId = conversationId.trim()
+    if (!normalizedId) return []
+    const response = await http.get<KnowledgeConversationMessageDto[]>(
+      `/knowledge/conversations/${encodeURIComponent(normalizedId)}/messages`,
+      { signal },
+    )
+    return response.data
+  },
+
+  async askKnowledgeConversation(
+    conversationId: string,
+    request: AssistantQuestionRequestDto,
+    signal?: AbortSignal,
+  ): Promise<AssistantQuestionResponseDto> {
+    const normalizedId = conversationId.trim()
+    const question = request.question.trim()
+    if (!normalizedId) throw new AssistantContextError()
+    if (question.length < ASSISTANT_QUESTION_MIN_LENGTH) throw new AssistantQuestionValidationError()
+    if (question.length > 2000) throw new Error('問題內容不可超過 2000 字。')
+    const payload: AssistantQuestionRequestDto = { question }
+    if (request.as_of_date !== undefined) payload.as_of_date = request.as_of_date
+    if (request.document_types !== undefined) payload.document_types = [...request.document_types]
+    if (request.limit !== undefined) payload.limit = request.limit
+    const response = await http.post<KnowledgeQuestionResponseDto>(
+      `/knowledge/conversations/${encodeURIComponent(normalizedId)}/messages`,
+      payload,
+      { signal },
+    )
+    return mapKnowledgeQuestionResponse(response.data)
+  },
+
   async askGeneralQuestion(
     request: AssistantQuestionRequestDto,
     signal?: AbortSignal,
@@ -139,57 +242,12 @@ export const assistantApi = {
     const question = request.question.trim()
     if (question.length < ASSISTANT_QUESTION_MIN_LENGTH) throw new AssistantQuestionValidationError()
     if (question.length > 2000) throw new Error('問題內容不可超過 2000 字。')
-
     const payload: AssistantQuestionRequestDto = { question }
     if (request.as_of_date !== undefined) payload.as_of_date = request.as_of_date
     if (request.document_types !== undefined) payload.document_types = [...request.document_types]
     if (request.limit !== undefined) payload.limit = request.limit
-
     const response = await http.post<KnowledgeQuestionResponseDto>('/knowledge/ask', payload, { signal })
-    const citations = (response.data.citations ?? []).map((citation) => ({
-      citation_id: citation.chunk_id,
-      document_id: citation.document_id,
-      document_title: citation.document_title,
-      document_code: citation.document_code,
-      version_no: citation.version_no,
-      effective_from: citation.effective_from,
-      effective_to: citation.effective_to,
-      page_start: citation.page_start,
-      page_end: citation.page_end,
-      section_title: citation.section_title,
-      article_no: citation.article_no,
-      quoted_text: citation.quoted_text,
-      supporting_quote: citation.supporting_quote,
-      supported_claim: citation.supported_claim,
-    }))
-    const citationIdsByClaim = new Map<string, string[]>()
-    for (const citation of citations) {
-      const claim = citation.supported_claim?.trim()
-      if (!claim) continue
-      const ids = citationIdsByClaim.get(claim) ?? []
-      if (!ids.includes(citation.citation_id)) ids.push(citation.citation_id)
-      citationIdsByClaim.set(claim, ids)
-    }
-
-    const claims = Array.from(citationIdsByClaim, ([text, citation_ids]) => ({ text, citation_ids }))
-    if (response.data.answer_status === 'EVIDENCE_ONLY' && citations.length && !claims.length) {
-      claims.push({
-        text: '以下是目前找到的相關來源，請確認內容是否符合你的問題。',
-        citation_ids: citations.map((citation) => citation.citation_id),
-      })
-    }
-
-    return {
-      assistant_session_id: '',
-      answer_status: response.data.answer_status,
-      answer: response.data.answer,
-      generation_mode: response.data.generation_mode,
-      next_action: response.data.next_action,
-      clarification_question: response.data.clarification_question,
-      claims,
-      citations,
-      unreadable_sources: response.data.unreadable_sources ?? [],
-    }
+    return mapKnowledgeQuestionResponse(response.data)
   },
 }
 

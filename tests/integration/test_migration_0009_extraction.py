@@ -142,6 +142,26 @@ def test_canonical_provider_and_provenance_constraints(admin_cursor):
         """,
         (case_id, extraction_id, document_id, Jsonb({"value": "100"})),
     )
+    admin_cursor.execute(
+        """
+        INSERT INTO valuation.extracted_fields (
+            case_id, extraction_id, document_id, form_code, field_name,
+            extracted_value, confidence, analysis_provider, model_id, prompt_version
+        ) VALUES (%s, %s, %s, 'F03', 'ollama_field',
+                  %s, 0.8500, 'OLLAMA', 'qwen3.5:latest', 'field-analysis-v1')
+        """,
+        (case_id, extraction_id, document_id, Jsonb({"value": "100"})),
+    )
+    admin_cursor.execute(
+        """
+        INSERT INTO valuation.extracted_fields (
+            case_id, extraction_id, document_id, form_code, field_name,
+            extracted_value, confidence, analysis_provider, prompt_version
+        ) VALUES (%s, %s, %s, 'F01', 'xlsx_rule_field',
+                  %s, 0.9000, 'XLSX_RULE', 'xlsx-comparison-target-v1')
+        """,
+        (case_id, extraction_id, document_id, Jsonb({"value": "100"})),
+    )
 
     with pytest.raises(Exception):
         create_extraction(admin_cursor, user_id, case_id, document_id, provider="REMOTE_XLSX")

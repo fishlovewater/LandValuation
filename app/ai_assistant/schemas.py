@@ -107,9 +107,9 @@ class AssistantMessageRequest(BaseModel):
         if len(set(self.confirmed_candidate_ids)) != len(
             self.confirmed_candidate_ids
         ):
-            raise ValueError("confirmed_candidate_ids 不可重複")
+            raise ValueError("同一筆辨識結果不能重複選取")
         if self.nearest_facility is not None and not self.confirm_action:
-            raise ValueError("步行距離查詢必須將 confirm_action 設為 true")
+            raise ValueError("請先確認步行距離查詢條件")
         return self
 
 
@@ -124,3 +124,12 @@ class AssistantMessageResponse(BaseModel):
     reply: str
     progress: AssistantProgressResponse
     tools: list[ToolExecutionResponse]
+
+
+class AssistantHistoryMessageResponse(BaseModel):
+    assistant_message_id: UUID
+    message_no: int
+    role: str
+    content: str
+    response_payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
