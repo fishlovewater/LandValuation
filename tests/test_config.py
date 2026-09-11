@@ -41,7 +41,10 @@ def test_gemini_provider_requires_dedicated_api_key():
         Settings(ai_provider="gemini")
 
 
-def test_ollama_provider_uses_local_defaults_without_api_key():
+def test_ollama_provider_uses_local_defaults_without_api_key(monkeypatch):
+    monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+    monkeypatch.delenv("OLLAMA_MODEL", raising=False)
+    monkeypatch.delenv("OLLAMA_TIMEOUT_SECONDS", raising=False)
     settings = Settings(app_env="test", _env_file=None, ai_provider="ollama")
 
     assert settings.ollama_base_url == "http://localhost:11434"

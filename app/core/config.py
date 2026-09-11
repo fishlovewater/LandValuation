@@ -193,7 +193,10 @@ class Settings(BaseSettings):
             raise ValueError(
                 "BEDROCK_REGION and BEDROCK_MODEL_ID are required for AI_PROVIDER=bedrock"
             )
-        if self.ai_provider == "gemini" and self.gemini_api_key is None:
+        if self.ai_provider == "gemini" and (
+            self.gemini_api_key is None
+            or not self.gemini_api_key.get_secret_value().strip()
+        ):
             raise ValueError(
                 "GEMINI_API_KEY is required while AI_PROVIDER=gemini"
             )

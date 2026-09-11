@@ -386,6 +386,7 @@ def test_provider_factory_rejects_codex_cli_outside_development_and_test(app_env
                 knowledge_answer_provider="codex_cli",
                 app_env=app_env,
                 minio_bucket="land-valuation",
+                jwt_secret_key="unit-test-production-secret",
                 smtp_host="smtp.example.test",
                 smtp_from_email="no-reply@example.test",
             )
@@ -402,6 +403,7 @@ def test_provider_status_reports_safe_evidence_only_mode_in_production(monkeypat
         knowledge_answer_provider="evidence_only",
         app_env="production",
         minio_bucket="land-valuation",
+        jwt_secret_key="unit-test-production-secret",
         smtp_host="smtp.example.test",
         smtp_from_email="no-reply@example.test",
     )
