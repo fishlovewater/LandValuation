@@ -29,7 +29,7 @@ export const valuationRoutes: readonly RouteRecordRaw[] = [
       permissions: ['case.read', 'valuation.read', 'valuation.update', 'document.download'],
       title: '準備估價資料',
       subsystem: '估價作業',
-      description: '確認案件來源與可由 API 支援的正式估價欄位。',
+      description: '確認案件來源、文件與正式估價資料。',
     },
   },
   {
@@ -42,7 +42,7 @@ export const valuationRoutes: readonly RouteRecordRaw[] = [
       permissions: ['case.read', 'valuation.read', 'valuation.submit_review', 'valuation.update', 'document.download'],
       title: '送審確認',
       subsystem: '估價作業',
-      description: '查看伺服器檢核與輸出狀態，送出一次正式審查。',
+      description: '確認檢核與正式輸出後送交審查。',
     },
   },
 ]

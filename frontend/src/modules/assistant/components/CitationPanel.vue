@@ -21,7 +21,7 @@ function pageLabel(citation: AssistantCitationModel): string {
 <template>
   <section class="citation-panel" :data-testid="`assistant-citation-panel-${index}`" aria-label="引用來源">
     <div class="citation-panel__heading">
-      <span class="citation-panel__eyebrow">SOURCE {{ index }}</span>
+      <span class="citation-panel__eyebrow">來源 {{ index }}</span>
       <h3>{{ citation.documentName || '文件名稱未提供' }}</h3>
     </div>
     <dl class="citation-panel__facts">

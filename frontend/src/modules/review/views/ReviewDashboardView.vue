@@ -144,9 +144,9 @@ onBeforeUnmount(() => {
 <template>
   <section class="review-dashboard" data-testid="review-dashboard">
     <PageHeader
-      eyebrow="REVIEW WORKBENCH"
+      eyebrow="案件審查"
       title="審查工作台"
-      description="以案件風險、伺服器檢核結果與正式證據接續審查工作。"
+      description="依案件風險、檢核結果與來源文件接續審查工作。"
     >
       <template #actions>
         <button class="review-dashboard__refresh" type="button" data-testid="refresh-review-queue" @click="loadData">
@@ -198,7 +198,7 @@ onBeforeUnmount(() => {
       <section v-liquid-glass data-lg class="review-dashboard__queue lg" aria-labelledby="review-queue-title">
         <div class="review-dashboard__queue-heading">
           <div>
-            <p class="review-dashboard__eyebrow">CASE QUEUE</p>
+            <p class="review-dashboard__eyebrow">待辦案件</p>
             <h2 id="review-queue-title">案件佇列</h2>
           </div>
           <span class="review-dashboard__queue-count">共 {{ total }} 件</span>

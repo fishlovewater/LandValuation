@@ -28,14 +28,14 @@ function roleLabel(role: string): string {
 <template>
   <section class="app-home" data-testid="app-home">
     <PageHeader
-      eyebrow="WORKSPACE OVERVIEW"
+      eyebrow="工作台"
       title="工作台總覽"
       :description="`${displayName}，以下只顯示目前帳號可以使用的工作模組。`"
     />
 
     <section v-liquid-glass data-lg class="app-home__identity lg" aria-labelledby="workspace-user-title">
       <div>
-        <span class="app-home__eyebrow">CURRENT SESSION</span>
+        <span class="app-home__eyebrow">目前帳號</span>
         <h2 id="workspace-user-title">{{ displayName }}</h2>
         <p>{{ authStore.user?.email || authStore.user?.username || '已登入工作帳號' }}</p>
       </div>
@@ -47,7 +47,7 @@ function roleLabel(role: string): string {
     <section class="app-home__modules" aria-labelledby="workspace-modules-title">
       <div class="app-home__section-heading">
         <div>
-          <span class="app-home__eyebrow">AVAILABLE MODULES</span>
+          <span class="app-home__eyebrow">可用功能</span>
           <h2 id="workspace-modules-title">開始工作</h2>
         </div>
         <span>{{ modules.length }} 個可用模組</span>

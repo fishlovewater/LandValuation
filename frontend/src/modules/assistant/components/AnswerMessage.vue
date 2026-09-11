@@ -30,7 +30,7 @@ function selectCitation(citationId: string): void {
 <template>
   <article class="answer-message" data-testid="assistant-answer">
     <div class="answer-message__heading">
-      <span class="answer-message__eyebrow">ASSISTANT RESPONSE</span>
+      <span class="answer-message__eyebrow">回答</span>
       <h3>智能助理回應</h3>
     </div>
 

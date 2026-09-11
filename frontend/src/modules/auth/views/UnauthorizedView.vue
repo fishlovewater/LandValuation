@@ -19,12 +19,12 @@ function returnToLogin(): void {
 
 <template>
   <section class="unauthorized-view" aria-labelledby="unauthorized-title">
-    <PageHeader eyebrow="ACCESS CONTROL" title="目前無法開啟這個功能" description="你的帳號尚未被授予此工作模組的權限。若你認為這是錯誤，請向系統管理者確認。" />
+    <PageHeader eyebrow="使用權限" title="目前無法開啟這個功能" description="你的帳號目前沒有使用此功能的權限。若你認為這是錯誤，請向系統管理者確認。" />
     <div class="unauthorized-view__card">
       <span class="unauthorized-view__code" aria-hidden="true">403</span>
       <div>
         <h2 id="unauthorized-title">權限不足</h2>
-        <p>頁面內容不會在瀏覽器中載入，請從目前帳號可用的工作模組繼續。</p>
+        <p>請返回目前帳號可使用的工作功能繼續操作。</p>
         <RouterLink v-if="!isUnknownRole" class="unauthorized-view__link" :to="safeHome">回到可用工作台</RouterLink>
         <button
           v-else

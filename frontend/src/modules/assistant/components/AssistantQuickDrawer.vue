@@ -48,7 +48,7 @@ const canAsk = computed(() => (
 ))
 const contextReady = computed(() => Boolean(contextCaseId.value && contextFormId.value))
 const currentContextLabel = computed(() => {
-  if (!contextCaseId.value) return '一般知識模式 · 不帶入案件資料'
+  if (!contextCaseId.value) return '未帶入案件資料'
   if (!contextFormId.value) return '已取得案件，但尚無可用 F03 估價表'
   return `案件 ${contextCaseId.value.slice(0, 8)}… · F03`
 })
@@ -168,15 +168,15 @@ watch(
     <div class="assistant-quick">
       <section class="assistant-quick__context" data-testid="assistant-quick-context">
         <Sparkle :size="18" weight="duotone" aria-hidden="true" />
-        <div><strong>目前提問脈絡</strong><span>{{ currentContextLabel }}</span></div>
+        <div><strong>目前資料範圍</strong><span>{{ currentContextLabel }}</span></div>
       </section>
 
-      <p v-if="loading" class="assistant-quick__notice" role="status">正在建立安全工作階段…</p>
+      <p v-if="loading" class="assistant-quick__notice" role="status">正在準備智能助理…</p>
       <p v-else-if="!canStart && !canAskGeneral" class="assistant-quick__notice" role="status">
         此帳號沒有啟用 AI 助理或知識資料讀取權限。
       </p>
       <p v-else-if="!contextReady" class="assistant-quick__notice" role="status">
-        目前為一般知識模式，可直接查詢法規、條文與知識文件，不會帶入案件資料。
+        可直接查詢法規、條文與知識文件；目前不會帶入案件資料。
       </p>
       <p v-if="error" class="assistant-quick__error" role="alert">{{ error }}</p>
 
@@ -223,7 +223,7 @@ watch(
         : { name: 'assistant' }" @click="emit('close')">
         開啟完整助理工作區
       </RouterLink>
-      <p class="assistant-quick__disclaimer">AI 建議僅供輔助；可見來源與可執行操作仍由後端權限決定。</p>
+      <p class="assistant-quick__disclaimer">AI 建議僅供輔助；可查看的資料與可執行操作依目前帳號權限而定。</p>
     </div>
   </GlassDrawer>
 </template>

@@ -52,9 +52,9 @@ function submit(): void {
   >
     <div class="assistant-drawer__content">
       <p id="assistant-drawer-description" class="assistant-drawer__description">
-        僅在目前帳號可使用的案件脈絡中傳送問題；系統不會顯示未回傳的法規資訊。
+        可針對目前案件提問；回答只會使用你有權查看的案件資料與可核對來源。
       </p>
-      <div v-if="loading" class="assistant-drawer__state" role="status" aria-live="polite">工作階段載入中…</div>
+      <div v-if="loading" class="assistant-drawer__state" role="status" aria-live="polite">正在載入智能助理…</div>
       <p v-else-if="error" class="assistant-drawer__error" role="alert">{{ error }}</p>
       <AnswerMessage v-if="answer" :answer="answer" />
       <form class="assistant-drawer__form" @submit.prevent="submit">
@@ -80,7 +80,7 @@ function submit(): void {
           {{ questionValidationMessage }}
         </p>
         <p v-if="!canAsk" class="assistant-drawer__permission" data-testid="assistant-drawer-permission" role="status">
-          引用問答需要 knowledge.read 與 case.read 權限。
+          目前帳號沒有查看案件來源與知識文件的權限。
         </p>
         <button data-testid="assistant-drawer-submit" type="submit" :disabled="!canAsk || loading || sending || question.trim().length < ASSISTANT_QUESTION_MIN_LENGTH" @click.prevent="submit">
           {{ sending ? '送出中…' : '送出問題' }}

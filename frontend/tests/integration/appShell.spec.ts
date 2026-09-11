@@ -43,6 +43,7 @@ function shellRouter() {
     history: createMemoryHistory(),
     routes: [
       { path: '/', component: { template: '<div />' } },
+      { path: '/app', component: { template: '<div />' } },
       { path: '/app/valuation/dashboard', component: { template: '<div />' } },
       { path: '/app/review/dashboard', component: { template: '<div />' } },
       { path: '/app/history/search', component: { template: '<div />' } },

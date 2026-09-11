@@ -87,6 +87,16 @@ const latestCorrection = computed(() => {
     null,
   )
 })
+
+function recheckOutcomeLabel(value: string): string {
+  const labels: Record<string, string> = {
+    NOT_EVALUATED: '尚未重新檢核',
+    RESOLVED: '已修正',
+    STILL_PRESENT: '仍需處理',
+    CHANGED: '內容已變更，請再次確認',
+  }
+  return labels[value] ?? '已完成重新檢核'
+}
 const confirmedFindings = computed(() =>
   detail.value?.findings.filter((finding) => finding.statusCode === 'CONFIRMED_ISSUE') ?? [],
 )
@@ -548,7 +558,7 @@ onBeforeUnmount(() => {
 <template>
   <section class="review-workbench" data-testid="review-workbench">
     <PageHeader
-      eyebrow="CASE REVIEW"
+      eyebrow="案件審查"
       :title="detail?.caseTitle ?? '案件審查'"
       :description="detail ? `${detail.caseNo} · ${detail.districtCode} · 評價基準日 ${detail.valuationBaseDate}` : '讀取審查案件與證據。'"
     >
@@ -571,7 +581,7 @@ onBeforeUnmount(() => {
         <div v-if="showStartReview" v-liquid-glass data-lg class="review-workbench__start-panel lg" data-testid="review-start-panel">
           <div>
             <strong>尚未開始智慧審查</strong>
-            <p>先執行完整性檢查與伺服器規則檢核，完成後才能處理疑點與完成審查。</p>
+            <p>先執行資料完整性與規則檢核，完成後才能處理疑點並完成審查。</p>
           </div>
           <button
             type="button"
@@ -618,7 +628,7 @@ onBeforeUnmount(() => {
         >
           <div class="review-workbench__supplement-heading">
             <div>
-              <span>COMPLETENESS</span>
+              <span>資料完整性</span>
               <strong id="review-missing-items-title">缺件與補件要求</strong>
             </div>
             <button
@@ -641,7 +651,7 @@ onBeforeUnmount(() => {
             <li v-for="item in detail.missingItems" :key="item.missing_item_id">
               <div>
                 <strong>{{ item.item_name }}</strong>
-                <span>{{ item.reason || '伺服器完整性檢查判定缺少必要資料。' }}</span>
+                <span>{{ item.reason || '系統檢查後發現缺少必要資料。' }}</span>
                 <small v-if="item.field_path">欄位：{{ item.field_path }}</small>
               </div>
               <div class="review-workbench__supplement-status">
@@ -668,7 +678,7 @@ onBeforeUnmount(() => {
             <li v-for="item in latestCorrection.items" :key="item.correction_request_item_id">
               <strong>{{ item.issue_summary }}</strong>
               <span>要求修正：{{ item.requested_correction }}</span>
-              <small v-if="item.recheck_outcome !== 'NOT_EVALUATED'">重檢：{{ item.recheck_outcome }}</small>
+              <small v-if="item.recheck_outcome !== 'NOT_EVALUATED'">重新檢核：{{ recheckOutcomeLabel(item.recheck_outcome) }}</small>
             </li>
           </ul>
         </section>
@@ -683,7 +693,7 @@ onBeforeUnmount(() => {
         >
           <div class="review-workbench__diffs-heading">
             <div>
-              <span>VERSION DIFF</span>
+              <span>版本變更</span>
               <strong id="review-version-diffs-title">補正前後欄位差異</strong>
             </div>
             <small>{{ detail.versionDiffs.length }} 項變更</small>
@@ -714,7 +724,7 @@ onBeforeUnmount(() => {
         </section>
 
         <div class="review-workbench__mobile-tools" aria-label="輔助面板">
-          <button type="button" data-testid="open-review-context" aria-controls="review-context-drawer" :aria-expanded="drawer === 'left'" @click="openDrawer('left', $event)">案件脈絡</button>
+          <button type="button" data-testid="open-review-context" aria-controls="review-context-drawer" :aria-expanded="drawer === 'left'" @click="openDrawer('left', $event)">案件資料</button>
           <button type="button" data-testid="open-review-finding" aria-controls="review-finding-drawer" :aria-expanded="drawer === 'right'" @click="openDrawer('right', $event)">疑點內容</button>
         </div>
 
@@ -723,7 +733,7 @@ onBeforeUnmount(() => {
           type="button"
           class="review-workbench__drawer-backdrop"
           data-testid="review-drawer-backdrop"
-          :aria-label="drawer === 'left' ? '關閉案件脈絡' : '關閉疑點內容'"
+          :aria-label="drawer === 'left' ? '關閉案件資料' : '關閉疑點內容'"
           @click="closeDrawer"
         />
 
@@ -737,11 +747,11 @@ onBeforeUnmount(() => {
             :role="drawer === 'left' ? 'dialog' : undefined"
             :aria-modal="drawer === 'left' ? 'true' : undefined"
             aria-labelledby="review-context-title"
-            aria-label="案件脈絡"
+            aria-label="案件資料"
           >
             <div class="review-workbench__panel-heading">
-              <div><p>CASE CONTEXT</p><h2 id="review-context-title">案件脈絡</h2></div>
-              <button v-if="drawer === 'left'" type="button" aria-label="關閉案件脈絡" @click="closeDrawer">×</button>
+              <div><p>案件資料</p><h2 id="review-context-title">案件概況</h2></div>
+              <button v-if="drawer === 'left'" type="button" aria-label="關閉案件資料" @click="closeDrawer">×</button>
             </div>
             <dl class="review-workbench__case-facts">
               <div><dt>案件編號</dt><dd>{{ detail.caseNo }}</dd></div>
@@ -828,7 +838,7 @@ onBeforeUnmount(() => {
     <ConfirmDialog
       :open="confirmation === 'finalize'"
       title="完成審查確認"
-      :message="`目前有 ${unresolvedCount} 個尚未處理的疑點。伺服器會再次檢查案件狀態，確定要送出完成審查嗎？`"
+      :message="`目前有 ${unresolvedCount} 個尚未處理的疑點。系統會再次確認案件狀態，確定要完成審查嗎？`"
       confirm-label="完成審查"
       :busy="mutating"
       @cancel="confirmation = null"
@@ -844,7 +854,7 @@ onBeforeUnmount(() => {
       @close="correctionOpen = false"
     >
       <form class="review-workbench__correction-form" data-testid="correction-request-form" @submit.prevent="createAndSendCorrection">
-        <p>修正通知會保存目前已確認問題的快照，送出後案件會正式退回估價端。估價端必須建立較新的正式版本再重新送審。</p>
+        <p>送出後會保存本次已確認的問題內容，案件將正式退回估價端；估價端修正後需以新版資料重新送審。</p>
         <label>
           <span>修正內容 *</span>
           <textarea id="review-correction-message" v-model="correctionMessage" rows="7" maxlength="4000" required />
@@ -876,7 +886,7 @@ onBeforeUnmount(() => {
       @close="supplementOpen = false"
     >
       <form class="review-workbench__correction-form" data-testid="supplement-request-form" @submit.prevent="sendSupplementRequest">
-        <p>這是完整性缺件流程，不會把缺件冒充成審查疑點。送出後，所有目前 OPEN 的缺件會由後端標記為已要求補件並保存期限。</p>
+        <p>送出後，尚未補齊的必要資料會正式列為補件項目，並保存你設定的補件期限。</p>
         <section class="review-workbench__correction-preview" aria-label="本次補件項目">
           <strong>本次要求補件 {{ requestableMissingItems.length }} 項</strong>
           <ul>

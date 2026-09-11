@@ -183,9 +183,12 @@ describe('LoginCard', () => {
 
   it('renders the public fold content and focuses the username after the hero action', async () => {
     window.LiquidGlass = { init: vi.fn(), attach: vi.fn() }
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/')
+    await router.isReady()
     const wrapper = mount(AuthLandingView, {
       attachTo: document.body,
-      global: { plugins: [createPinia()] },
+      global: { plugins: [router, createPinia()] },
     })
 
     expect(wrapper.findAll('.value-card')).toHaveLength(4)
@@ -197,7 +200,7 @@ describe('LoginCard', () => {
     wrapper.unmount()
   })
 
-  it.each(['/register', '/forgot-password', '/privacy'])(
+  it.each(['/privacy'])(
     'routes the public %s login CTA to the login form and focuses the username',
     async (path) => {
       window.LiquidGlass = { init: vi.fn(), attach: vi.fn() }

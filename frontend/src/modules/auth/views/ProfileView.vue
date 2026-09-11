@@ -28,6 +28,8 @@ const permissionLabels: Readonly<Record<string, string>> = {
   'document.upload': '上傳文件',
   'document.download': '下載文件',
   'review.execute': '執行審查',
+  'review.decide': '做出審查決定',
+  'knowledge.read': '查詢法規與知識文件',
 }
 
 function roleLabel(role: string): string {
@@ -35,21 +37,21 @@ function roleLabel(role: string): string {
 }
 
 function permissionLabel(permission: string): string {
-  return permissionLabels[permission] ?? permission
+  return permissionLabels[permission] ?? '其他工作權限'
 }
 </script>
 
 <template>
   <section class="profile-view" data-testid="profile-view">
     <PageHeader
-      eyebrow="ACCOUNT & ACCESS"
+      eyebrow="帳號資料"
       title="帳號與工作權限"
-      description="此頁顯示目前登入工作階段由伺服器回傳的帳號、角色與權限。"
+      description="查看目前帳號資料、角色與可使用的工作功能。"
     />
 
     <div class="profile-view__grid">
       <section v-liquid-glass data-lg class="profile-view__card lg" aria-labelledby="profile-account-title">
-        <span class="profile-view__eyebrow">ACCOUNT</span>
+        <span class="profile-view__eyebrow">帳號</span>
         <h2 id="profile-account-title">帳號資料</h2>
         <dl>
           <div><dt>顯示名稱</dt><dd>{{ user?.displayName || '—' }}</dd></div>
@@ -59,7 +61,7 @@ function permissionLabel(permission: string): string {
       </section>
 
       <section v-liquid-glass data-lg class="profile-view__card lg" aria-labelledby="profile-role-title">
-        <span class="profile-view__eyebrow">ROLES</span>
+        <span class="profile-view__eyebrow">角色</span>
         <h2 id="profile-role-title">目前角色</h2>
         <div v-if="authStore.roles.length" class="profile-view__chips">
           <span v-for="role in authStore.roles" :key="role">{{ roleLabel(role) }}</span>
@@ -71,7 +73,7 @@ function permissionLabel(permission: string): string {
     <section v-liquid-glass data-lg class="profile-view__card profile-view__permissions lg" aria-labelledby="profile-permissions-title">
       <div class="profile-view__heading">
         <div>
-          <span class="profile-view__eyebrow">SERVER PERMISSIONS</span>
+          <span class="profile-view__eyebrow">可使用功能</span>
           <h2 id="profile-permissions-title">工作權限</h2>
         </div>
         <span>{{ authStore.permissions.length }} 項</span>
@@ -79,10 +81,9 @@ function permissionLabel(permission: string): string {
       <ul v-if="authStore.permissions.length">
         <li v-for="permission in authStore.permissions" :key="permission">
           <strong>{{ permissionLabel(permission) }}</strong>
-          <code>{{ permission }}</code>
         </li>
       </ul>
-      <p v-else class="profile-view__empty">目前帳號沒有額外 permission code；可用功能仍可能依角色契約開啟。</p>
+      <p v-else class="profile-view__empty">目前帳號沒有額外工作權限。</p>
     </section>
   </section>
 </template>

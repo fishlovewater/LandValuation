@@ -6,12 +6,14 @@ import pytest
 from app.core.config import Settings
 from app.core.exceptions import AppError
 from app.valuation.extraction.field_analysis import (
+    _ai_extractable_fields,
     _analysis_source_text,
     AnalyzedFieldCandidate,
     BedrockFieldAnalysisProvider,
     FieldAnalysisResult,
     FieldAnalysisService,
     FIELD_ANALYSIS_FIELDS,
+    OllamaFieldAnalysisProvider,
     build_field_analysis_provider,
     field_analysis_prompt,
     field_analysis_output_schema,
@@ -30,12 +32,47 @@ class FakeBedrockClient:
         return self.response
 
 
+class FakeOllamaResponse:
+    status_code = 200
+
+    def __init__(self, body):
+        self.body = body
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self.body
+
+
+class FakeOllamaClient:
+    def __init__(self, body):
+        self.response = FakeOllamaResponse(body)
+        self.url = None
+        self.request = None
+
+    async def post(self, url, *, json):
+        self.url = url
+        self.request = json
+        return self.response
+
+
 def bedrock_settings() -> Settings:
     return Settings(
         _env_file=None,
         ai_provider="bedrock",
         bedrock_region="ap-northeast-1",
         bedrock_model_id="test-model",
+        ai_field_analysis_prompt_version="field-analysis-test-v1",
+    )
+
+
+def ollama_settings() -> Settings:
+    return Settings(
+        _env_file=None,
+        ai_provider="ollama",
+        ollama_base_url="http://ollama.test:11434",
+        ollama_model="qwen3.5:latest",
         ai_field_analysis_prompt_version="field-analysis-test-v1",
     )
 
@@ -153,6 +190,77 @@ async def test_bedrock_field_analysis_rejects_missing_tool_call() -> None:
     assert error.value.code == "BEDROCK_INVALID_RESPONSE"
 
 
+@pytest.mark.asyncio
+async def test_ollama_field_analysis_uses_json_schema_and_preserves_provenance() -> None:
+    client = FakeOllamaClient(
+        {
+            "message": {
+                "content": '{"candidates":[{"field_name":"valuation_base_date",'
+                '"extracted_value":"1050901","confidence":0.96,'
+                '"source_text":"估價基準日:1050901"}]}'
+            }
+        }
+    )
+    provider = OllamaFieldAnalysisProvider(ollama_settings(), client=client)
+
+    result = await provider.analyze(
+        "估價基準日:1050901",
+        "F03",
+        {"valuation_base_date": "估價基準日"},
+    )
+
+    assert result.provider == "OLLAMA"
+    assert result.model_id == "qwen3.5:latest"
+    assert result.prompt_version == "field-analysis-test-v1"
+    assert result.candidates[0].confidence == Decimal("0.9600")
+    assert client.url == "http://ollama.test:11434/api/chat"
+    assert client.request["model"] == "qwen3.5:latest"
+    assert client.request["stream"] is False
+    assert client.request["think"] is False
+    assert client.request["options"] == {"temperature": 0}
+    assert client.request["format"]["properties"]["candidates"]["items"]["properties"]["field_name"]["enum"] == ["valuation_base_date"]
+
+
+@pytest.mark.asyncio
+async def test_ollama_field_analysis_deduplicates_overproduced_fields() -> None:
+    candidates = [
+        {
+            "field_name": "valuation_base_date",
+            "extracted_value": "1050901",
+            "confidence": 0.9,
+            "source_text": "估價基準日:1050901",
+        }
+        for _ in range(20)
+    ]
+    client = FakeOllamaClient(
+        {"message": {"content": __import__("json").dumps({"candidates": candidates})}}
+    )
+    provider = OllamaFieldAnalysisProvider(ollama_settings(), client=client)
+
+    result = await provider.analyze(
+        "估價基準日:1050901",
+        "F03",
+        {"valuation_base_date": "估價基準日"},
+    )
+
+    assert len(result.candidates) == 1
+    assert result.candidates[0].field_name == "valuation_base_date"
+
+
+def test_ai_extractable_fields_excludes_system_and_backend_only_fields() -> None:
+    fields = _ai_extractable_fields(FIELD_ANALYSIS_FIELDS["F03"])
+
+    assert "case_no" not in fields
+    assert "approval_fields" not in fields
+    assert "benchmark_land_id" not in fields
+    assert "benchmark_land_price" not in fields
+    assert "rounding_increment" not in fields
+    assert "weight_total" not in fields
+    assert "valuation_base_date" in fields
+    assert "land_no" in fields
+    assert "comparison_weight" in fields
+
+
 def extraction_record(text: str) -> DocumentExtractionRecord:
     return DocumentExtractionRecord(
         extraction_id=uuid4(),
@@ -224,13 +332,47 @@ def test_candidate_without_verbatim_source_is_rejected() -> None:
     assert error.value.code == "BEDROCK_FIELD_EVIDENCE_INVALID"
 
 
+def test_ollama_candidate_without_verbatim_source_can_be_dropped_safely() -> None:
+    extraction = extraction_record("估價基準日:1050901")
+    result = FieldAnalysisResult(
+        candidates=(
+            AnalyzedFieldCandidate(
+                field_name="land_no",
+                extracted_value="不存在地號",
+                confidence=Decimal("0.9000"),
+                source_text="不存在的 OCR 證據",
+            ),
+        ),
+        provider="OLLAMA",
+        model_id="qwen3.5:latest",
+        prompt_version="field-analysis-test-v1",
+    )
+
+    records = FieldAnalysisService._candidate_records(
+        extraction,
+        "F03",
+        result,
+        {"land_no": "地號"},
+        drop_invalid_evidence=True,
+    )
+
+    assert records == []
+
+
 def test_field_analysis_does_not_pretend_mock_is_bedrock() -> None:
     settings = Settings(_env_file=None, ai_provider="mock")
 
     with pytest.raises(AppError) as error:
         build_field_analysis_provider(settings)
 
-    assert error.value.code == "BEDROCK_FIELD_ANALYSIS_NOT_CONFIGURED"
+    assert error.value.code == "FIELD_ANALYSIS_PROVIDER_NOT_CONFIGURED"
+
+
+def test_field_analysis_builds_ollama_provider() -> None:
+    provider = build_field_analysis_provider(ollama_settings())
+
+    assert isinstance(provider, OllamaFieldAnalysisProvider)
+    assert provider.model_id == "qwen3.5:latest"
 
 
 def test_codex_schema_is_limited_to_remaining_fields() -> None:

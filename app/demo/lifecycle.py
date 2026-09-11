@@ -65,6 +65,11 @@ DEMO_LEGACY_RULE_VERSION_NAME = "Persistent F03 demonstration rules"
 DEMO_FRONTEND_URL = "http://localhost:5173"
 DEMO_API_DOCS_URL = "http://localhost:8000/docs"
 DEMO_SOURCE_PDF = "比準地查估.pdf"
+DEMO_ANALYSIS_SOURCE_PDFS = (
+    "買賣實例.pdf",
+    "比較法查估.pdf",
+    "土地市價查估表.pdf",
+)
 
 F03_VALIDATION_RULES = (
     (
@@ -824,6 +829,18 @@ def _upload_seed_objects(
         document_type="original",
         uploads=uploads,
     )
+    for filename in DEMO_ANALYSIS_SOURCE_PDFS:
+        document_id = uuid4()
+        _upload_object(
+            storage,
+            case_object_key(material.case_id, document_id, filename),
+            _demo_source_pdf(filename),
+            bucket=settings.minio_bucket,
+            filename=filename,
+            document_id=document_id,
+            document_type="attachments",
+            uploads=uploads,
+        )
     _upload_object(
         storage,
         case_object_key(material.case_id, material.report_document_id, report_name),
@@ -1116,6 +1133,29 @@ def _write_seed_rows(cursor, uploads: _UploadBatch) -> None:
             original["storage_etag"],
         ),
     )
+    for attachment in (item for item in uploads if item["document_type"] == "attachments"):
+        cursor.execute(
+            """
+            INSERT INTO valuation.documents (
+                document_id, case_id, document_type, original_filename, mime_type,
+                bucket_name, object_key, checksum_sha256, file_size_bytes, version_no,
+                uploaded_by_user_id, is_active, document_group_id, storage_etag
+            ) VALUES (%s, %s, 'attachments', %s, 'application/pdf', %s, %s, %s, %s, 1,
+                      %s, true, %s, %s)
+            """,
+            (
+                attachment["document_id"],
+                material.case_id,
+                attachment["filename"],
+                attachment["bucket_name"],
+                attachment["object_key"],
+                attachment["checksum_sha256"],
+                attachment["file_size_bytes"],
+                appraiser_id,
+                uuid4(),
+                attachment["storage_etag"],
+            ),
+        )
     cursor.execute(
         """
         INSERT INTO valuation.documents (
@@ -1383,7 +1423,12 @@ def _write_seed_rows(cursor, uploads: _UploadBatch) -> None:
             knowledge_upload["file_size_bytes"],
             knowledge_upload["storage_etag"],
             today,
-            Jsonb({"owner": DEMO_OWNER, "case_no": DEMO_CASE_NO, "source": "seeded-postgresql"}),
+            Jsonb({
+                "owner": DEMO_OWNER,
+                "case_no": DEMO_CASE_NO,
+                "source": "seeded-postgresql",
+                "source_usage": "DEMO_REFERENCE",
+            }),
             appraiser_id,
             appraiser_id,
         ),

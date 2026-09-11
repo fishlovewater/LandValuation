@@ -115,7 +115,7 @@ onBeforeUnmount(() => {
     @keydown="handleKeydown"
   >
     <div class="app-sidebar__intro">
-      <span class="app-sidebar__eyebrow">WORKSPACE</span>
+      <span class="app-sidebar__eyebrow">工作功能</span>
       <div class="app-sidebar__intro-row">
         <p id="app-sidebar-title">依權限開啟工作模組</p>
         <button

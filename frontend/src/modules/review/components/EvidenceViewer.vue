@@ -66,7 +66,7 @@ onBeforeUnmount(clearPreview)
   <section class="evidence-viewer" data-testid="evidence-viewer" aria-label="證據與表單">
     <header class="evidence-viewer__header">
       <div>
-        <p class="evidence-viewer__eyebrow">SOLID EVIDENCE SURFACE</p>
+        <p class="evidence-viewer__eyebrow">來源文件</p>
         <h2>證據／表單檢視</h2>
       </div>
       <span v-if="document" class="evidence-viewer__version">第 {{ document.versionNo }} 版</span>
@@ -87,18 +87,21 @@ onBeforeUnmount(clearPreview)
         <span v-if="pageNumber">第 {{ pageNumber }} 頁</span>
         <span v-if="fieldPath">已定位至相關欄位</span>
       </div>
-      <iframe
+      <object
         v-if="previewSource && document.mimeType === 'application/pdf'"
         :key="previewSource"
         data-testid="evidence-pdf"
         class="evidence-viewer__pdf"
-        :src="previewSource"
-        :title="`${document.filename} PDF 預覽`"
-      />
+        :data="previewSource"
+        type="application/pdf"
+        :aria-label="`${document.filename} PDF 預覽`"
+      >
+        <p>瀏覽器無法內嵌此 PDF，請使用文件下載功能查看完整內容。</p>
+      </object>
       <div v-else class="evidence-viewer__form" role="status">
         <div class="evidence-viewer__form-mark" aria-hidden="true">PDF</div>
-        <p>已透過授權下載端點取得文件內容。</p>
-        <small>目前瀏覽器預覽器未提供內嵌畫面，請使用文件下載功能查看完整表單。</small>
+        <p>文件已可讀取，但目前無法直接在這裡預覽。</p>
+        <small>請使用文件下載功能查看完整內容。</small>
       </div>
       <details class="evidence-viewer__technical">
         <summary>查看文件技術細節</summary>

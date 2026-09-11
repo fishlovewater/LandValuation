@@ -1,10 +1,12 @@
 from datetime import date
 from io import BytesIO
+from pathlib import Path
 
 from openpyxl import Workbook
 import pytest
 
 from app.core.spreadsheet_preview import (
+    XLS_MIME_TYPE,
     SpreadsheetPreviewTooLargeError,
     build_spreadsheet_preview,
     preview_storage_xlsx,
@@ -94,3 +96,18 @@ async def test_preview_storage_xlsx_stops_reading_after_configured_limit() -> No
 
     assert response.closed is True
     assert response.released is True
+
+
+def test_build_spreadsheet_preview_supports_legacy_xls() -> None:
+    fixture = Path(__file__).with_name("fixtures") / "legacy-preview.xls"
+
+    preview = build_spreadsheet_preview(fixture.read_bytes(), mime_type=XLS_MIME_TYPE)
+
+    assert preview.kind == "spreadsheet"
+    assert preview.truncated is False
+    assert len(preview.sheets) == 1
+    sheet = preview.sheets[0]
+    assert sheet.name == "Legacy"
+    assert sheet.total_rows == 2
+    assert sheet.total_columns == 2
+    assert sheet.rows == [["地號", "面積"], ["489", 123.5]]

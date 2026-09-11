@@ -33,7 +33,7 @@ function selectIssue(target: string): void {
   >
     <header class="issue-drawer__heading">
       <div>
-        <span class="issue-drawer__eyebrow">WORKFLOW CHECKLIST</span>
+        <span class="issue-drawer__eyebrow">作業檢查</span>
         <h2 id="valuation-issue-title">{{ count ? `待處理事項 ${count} 項` : '目前流程已完成' }}</h2>
       </div>
       <span class="issue-drawer__status" :class="{ 'is-complete': count === 0 }">
@@ -54,7 +54,7 @@ function selectIssue(target: string): void {
     </div>
     <div v-else class="issue-drawer__empty">
       <strong>目前沒有阻擋事項</strong>
-      <p>必要資料、人工確認與伺服器檢核目前都已完成。</p>
+      <p>必要資料、人工確認與系統檢核目前都已完成。</p>
     </div>
   </section>
 </template>

@@ -17,7 +17,7 @@ export const ASSISTANT_QUESTION_VALIDATION_MESSAGE = '問題至少需要 2 個�
 
 export class AssistantContextError extends Error {
   constructor() {
-    super('請先從已授權的 F03 案件脈絡開啟智能助理。')
+    super('請先開啟一筆可查看的 F03 案件，再使用案件相關功能。')
     this.name = 'AssistantContextError'
   }
 }
@@ -174,7 +174,7 @@ export const assistantApi = {
     const claims = Array.from(citationIdsByClaim, ([text, citation_ids]) => ({ text, citation_ids }))
     if (response.data.answer_status === 'EVIDENCE_ONLY' && citations.length && !claims.length) {
       claims.push({
-        text: '以下為可供人工查核的候選來源，尚未經 AI 驗證為正式規則結論。',
+        text: '以下是目前找到的相關來源，請確認內容是否符合你的問題。',
         citation_ids: citations.map((citation) => citation.citation_id),
       })
     }
@@ -204,12 +204,12 @@ export function safeAssistantErrorMessage(error: unknown): string {
   if (error instanceof AssistantQuestionValidationError) return error.message
   if (error instanceof ForbiddenError) return error.message
   if (isAxiosError(error) && error.response?.status === 404) {
-    return '找不到目前智能助理工作階段，請從已授權的案件重新開啟。'
+    return '目前的智能助理對話已失效，請重新開啟智能助理。'
   }
   if (isAxiosError(error) && error.response?.status === 409) {
     const code = responseErrorCode(error)
     if (code === 'ASSISTANT_SESSION_CLOSED') {
-      return '目前智能助理工作階段已關閉，請重新建立工作階段。'
+      return '目前的智能助理對話已結束，請重新開啟智能助理。'
     }
     if (code === 'CASE_STATE_CONFLICT') {
       return '案件目前已進入不可修改狀態；仍可查詢案件或法規，但不能執行修改型操作。'

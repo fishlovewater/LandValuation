@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, Table, Text
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index, String, Table, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -66,3 +66,55 @@ class Permission(Base):
     resource: Mapped[str] = mapped_column(String(100))
     action: Mapped[str] = mapped_column(String(50))
     description: Mapped[str | None] = mapped_column(Text)
+
+
+class AccountAccessRequest(Base):
+    __tablename__ = "account_access_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "requested_role IN ('APPRAISER', 'REVIEWER', 'INSPECTOR')",
+            name="ck_account_access_requests_role",
+        ),
+        CheckConstraint(
+            "status IN ('PENDING', 'APPROVED', 'REJECTED')",
+            name="ck_account_access_requests_status",
+        ),
+        Index(
+            "uq_account_access_requests_pending_username",
+            "username",
+            unique=True,
+            postgresql_where=text("status = 'PENDING'"),
+        ),
+        Index(
+            "uq_account_access_requests_pending_email",
+            "email",
+            unique=True,
+            postgresql_where=text("status = 'PENDING'"),
+        ),
+        {"schema": "auth"},
+    )
+
+    request_id: Mapped[UUID] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(100))
+    email: Mapped[str] = mapped_column(String(320))
+    display_name: Mapped[str] = mapped_column(String(200))
+    requested_role: Mapped[str] = mapped_column(String(80))
+    reason: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), default="PENDING")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    handled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    handled_by_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("auth.users.user_id")
+    )
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+    __table_args__ = {"schema": "auth"}
+
+    token_id: Mapped[UUID] = mapped_column(primary_key=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("auth.users.user_id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     docs_enabled: bool = True
     log_level: str = "INFO"
     demo_quick_login_enabled: bool = False
+    password_reset_token_minutes: int = Field(default=30, ge=5, le=1440)
+    password_reset_debug_token_enabled: bool = False
     document_preview_max_bytes: int = Field(
         default=10 * 1024 * 1024, ge=1024 * 1024, le=50 * 1024 * 1024
     )

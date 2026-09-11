@@ -42,7 +42,7 @@ const confirmedSource = (documentId: string | null): SourceMarker => ({
 
 const calculatedSource: SourceMarker = {
   kind: 'calculated',
-  label: '來源：伺服器計算',
+  label: '來源：系統計算',
 }
 
 function displayValidationValue(value: unknown): string | null {

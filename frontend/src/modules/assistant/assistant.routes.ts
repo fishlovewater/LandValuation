@@ -7,7 +7,7 @@ const assistantMeta = {
   permission: 'assistant.use',
   title: '智能助理',
   subsystem: '智能助理',
-  description: '在授權的估價案件脈絡中使用輔助問答。',
+  description: '查詢估價案件、法規與可核對的知識來源。',
 }
 
 export const assistantRoutes: readonly RouteRecordRaw[] = [

@@ -35,12 +35,12 @@ describe('EvidenceViewer', () => {
     })
     await flushPromises()
 
-    expect(wrapper.get('[data-testid="evidence-pdf"]').attributes('src')).toBe('blob:evidence#page=3')
+    expect(wrapper.get('[data-testid="evidence-pdf"]').attributes('data')).toBe('blob:evidence#page=3')
     expect(vi.mocked(reviewApi.getDocumentContent)).toHaveBeenCalledTimes(1)
 
     await wrapper.setProps({ pageNumber: 7 })
     await flushPromises()
-    expect(wrapper.get('[data-testid="evidence-pdf"]').attributes('src')).toBe('blob:evidence#page=7')
+    expect(wrapper.get('[data-testid="evidence-pdf"]').attributes('data')).toBe('blob:evidence#page=7')
     expect(vi.mocked(reviewApi.getDocumentContent)).toHaveBeenCalledTimes(1)
   })
 })

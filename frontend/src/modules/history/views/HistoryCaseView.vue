@@ -234,7 +234,10 @@ async function previewHistoryDocument(historyDocument: HistoryDocumentModel): Pr
   previewDocument.value = historyDocument
   previewLoading.value = true
   try {
-    if (historyDocument.contentType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+    if (
+      historyDocument.contentType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      || historyDocument.contentType === 'application/vnd.ms-excel'
+    ) {
       previewSpreadsheet.value = await historyApi.previewSpreadsheet(historyDocument.documentId)
       return
     }
@@ -295,7 +298,7 @@ onBeforeUnmount(() => {
 <template>
   <section class="history-case" data-testid="history-case">
     <PageHeader
-      eyebrow="CASE HISTORY DETAIL"
+      eyebrow="案件歷程"
       :title="detail?.caseNo || '案件歷程明細'"
       :description="detail ? detail.caseTitle : '查看授權的案件資料、文件與歷程。'"
     >
@@ -312,7 +315,7 @@ onBeforeUnmount(() => {
 
       <section v-liquid-glass data-lg class="history-case__identity lg" aria-labelledby="history-case-identity-title">
         <div>
-          <p class="history-case__eyebrow">CASE IDENTITY</p>
+          <p class="history-case__eyebrow">案件資訊</p>
           <h2 id="history-case-identity-title">{{ detail.caseTitle }}</h2>
           <p class="history-case__identity-meta">{{ detail.caseNo }} · {{ detail.cityCode }} / {{ detail.districtCode }} · 基準日 {{ readableDate(detail.valuationBaseDate) }}</p>
         </div>
@@ -332,7 +335,7 @@ onBeforeUnmount(() => {
       <template v-if="activeTab === 'overview'">
         <div class="history-case__overview-grid">
           <section v-liquid-glass data-lg class="history-case__facts lg" aria-labelledby="history-case-facts-title">
-            <p class="history-case__eyebrow">CASE FACTS</p>
+            <p class="history-case__eyebrow">基本資料</p>
             <h2 id="history-case-facts-title">案件基本資料</h2>
             <dl>
               <div><dt>案件編號</dt><dd>{{ detail.caseNo }}</dd></div>
@@ -352,7 +355,7 @@ onBeforeUnmount(() => {
         <section v-if="previewDocument" class="history-case__document-preview" data-testid="history-document-preview" aria-labelledby="history-document-preview-title">
           <header>
             <div>
-              <p class="history-case__eyebrow">SOURCE DOCUMENT</p>
+              <p class="history-case__eyebrow">文件預覽</p>
               <h2 id="history-document-preview-title">{{ previewDocument.fileName }}</h2>
               <span>{{ previewDocument.documentTypeLabel }} · 第 {{ previewDocument.versionNo }} 版 · {{ previewDocument.sourceModuleLabel }}</span>
             </div>
@@ -382,7 +385,7 @@ onBeforeUnmount(() => {
           </div>
         </section>
         <section v-if="detail.permissions.canViewValuation && detail.parcels.length" v-liquid-glass data-lg class="history-case__parcel-card lg" aria-labelledby="history-parcels-title">
-          <p class="history-case__eyebrow">AUTHORIZED VALUATION CONTEXT</p>
+          <p class="history-case__eyebrow">土地資料</p>
           <h2 id="history-parcels-title">地籍資料</h2>
           <div class="history-case__parcel-list">
             <div v-for="(parcel, index) in detail.parcels" :key="`parcel-${index}`" class="history-case__parcel">
@@ -396,8 +399,8 @@ onBeforeUnmount(() => {
 
       <section v-else-if="activeTab === 'valuation'" v-liquid-glass data-lg class="history-case__data-section lg" data-testid="history-valuation-section" aria-labelledby="history-valuation-title">
         <div class="history-case__section-heading">
-          <div><p class="history-case__eyebrow">AUTHORIZED VALUATION</p><h2 id="history-valuation-title">估價資料</h2></div>
-          <span>{{ valuationItems.length }} 筆結構化紀錄</span>
+          <div><p class="history-case__eyebrow">估價紀錄</p><h2 id="history-valuation-title">估價資料</h2></div>
+          <span>{{ valuationItems.length }} 筆估價紀錄</span>
         </div>
         <p v-if="!valuationItems.length" class="history-case__empty">目前沒有可顯示的估價結構化資料。</p>
         <div v-else class="history-case__record-grid">
@@ -414,8 +417,8 @@ onBeforeUnmount(() => {
 
       <section v-else-if="activeTab === 'review'" v-liquid-glass data-lg class="history-case__data-section lg" data-testid="history-review-section" aria-labelledby="history-review-title">
         <div class="history-case__section-heading">
-          <div><p class="history-case__eyebrow">AUTHORIZED REVIEW</p><h2 id="history-review-title">審查資料</h2></div>
-          <span>{{ reviewItems.length }} 筆結構化紀錄</span>
+          <div><p class="history-case__eyebrow">審查紀錄</p><h2 id="history-review-title">審查資料</h2></div>
+          <span>{{ reviewItems.length }} 筆審查紀錄</span>
         </div>
         <p v-if="!reviewItems.length" class="history-case__empty">目前沒有可顯示的審查結構化資料。</p>
         <div v-else class="history-case__record-grid">
@@ -432,7 +435,7 @@ onBeforeUnmount(() => {
 
       <section v-else-if="activeTab === 'versions'" class="history-case__version-section" data-testid="history-version-section" aria-labelledby="history-version-title">
         <div class="history-case__section-heading">
-          <div><p class="history-case__eyebrow">VERSION HISTORY</p><h2 id="history-version-title">版本前後比較</h2></div>
+          <div><p class="history-case__eyebrow">版本變更</p><h2 id="history-version-title">版本前後比較</h2></div>
           <span>{{ detail.versionDiffs.length }} 個欄位變更</span>
         </div>
 

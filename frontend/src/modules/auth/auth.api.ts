@@ -1,5 +1,14 @@
 import { http } from '../../api/http'
-import type { AuthUser, CurrentUserDto, DemoLoginRole, LoginCredentials, TokenResponseDto } from './auth.types'
+import type {
+  AccountAccessRequestPayload,
+  AccountAccessRequestResponseDto,
+  AuthUser,
+  CurrentUserDto,
+  DemoLoginRole,
+  LoginCredentials,
+  PasswordResetRequestResponseDto,
+  TokenResponseDto,
+} from './auth.types'
 
 export function mapCurrentUser(dto: CurrentUserDto): AuthUser {
   return {
@@ -13,6 +22,24 @@ export function mapCurrentUser(dto: CurrentUserDto): AuthUser {
 }
 
 export const authApi = {
+  async requestAccount(payload: AccountAccessRequestPayload): Promise<AccountAccessRequestResponseDto> {
+    const response = await http.post<AccountAccessRequestResponseDto>('/auth/registration-requests', payload)
+    return response.data
+  },
+
+  async requestPasswordReset(account: string): Promise<PasswordResetRequestResponseDto> {
+    const response = await http.post<PasswordResetRequestResponseDto>('/auth/password-reset-requests', { account })
+    return response.data
+  },
+
+  async confirmPasswordReset(token: string, newPassword: string): Promise<{ message: string }> {
+    const response = await http.post<{ message: string }>('/auth/password-reset-confirm', {
+      token,
+      new_password: newPassword,
+    })
+    return response.data
+  },
+
   async login(credentials: LoginCredentials): Promise<TokenResponseDto> {
     const response = await http.post<TokenResponseDto>('/auth/login', credentials)
     return response.data

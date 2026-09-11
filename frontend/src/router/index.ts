@@ -24,6 +24,8 @@ declare module 'vue-router' {
 const lazyAppHome = () => import('../views/AppHomeView.vue')
 const lazyProfile = () => import('../modules/auth/views/ProfileView.vue')
 const lazyPublicInfo = () => import('../modules/auth/views/PublicInfoView.vue')
+const lazyRegisterRequest = () => import('../modules/auth/views/RegisterRequestView.vue')
+const lazyForgotPassword = () => import('../modules/auth/views/ForgotPasswordView.vue')
 
 export const routes: readonly RouteRecordRaw[] = [
   {
@@ -38,21 +40,21 @@ export const routes: readonly RouteRecordRaw[] = [
   {
     path: '/register',
     name: 'register',
-    component: lazyPublicInfo,
+    component: lazyRegisterRequest,
     meta: {
       guestOnly: true,
       title: '申請工作帳號',
-      description: '帳號申請流程將由系統管理者另行核發。',
+      description: '提交工作帳號與角色申請，由系統管理者審核後核發。',
     },
   },
   {
     path: '/forgot-password',
     name: 'forgot-password',
-    component: lazyPublicInfo,
+    component: lazyForgotPassword,
     meta: {
       guestOnly: true,
       title: '找回登入方式',
-      description: '請聯絡系統管理者協助確認帳號與登入方式。',
+      description: '建立一次性密碼重設要求並設定新密碼。',
     },
   },
   {

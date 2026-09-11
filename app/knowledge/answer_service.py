@@ -16,6 +16,7 @@ from app.knowledge.runtime_extraction import (
 )
 from app.knowledge.schemas import KnowledgeAnswerResponse, KnowledgeSearchRequest
 from app.knowledge.service import KnowledgeSafetyService, RetrievedKnowledge
+from app.knowledge.source_policy import is_demo_reference
 from app.storage.service import StorageService
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,13 @@ async def answer_knowledge_question(
             storage=storage,
             payload=request,
         )
+        # Development fixtures may be useful when explaining the seeded demo
+        # case, but they must never appear to be official law in a context-free
+        # legal/knowledge question.
+        if request.case_id is None:
+            candidates = [
+                item for item in candidates if not is_demo_reference(item.document)
+            ]
         settings = get_settings()
         safety = KnowledgeSafetyService()
         if not candidates and unreadable_sources:
@@ -138,7 +146,7 @@ async def answer_knowledge_question(
             }
         raise AppError(
             "KNOWLEDGE_ASK_PROCESSING_ERROR",
-            "知識 AI 處理問答時失敗，結果未被採用。",
+            "智能助理目前無法完成這次查詢，請稍後再試。",
             502,
             details=details,
         ) from exc

@@ -40,7 +40,7 @@ const fieldDefinitions: Readonly<Record<ReportPageCode, readonly FieldDefinition
       key: 'observations',
       label: '勘查觀察項目',
       kind: 'json',
-      help: '結構化項目。可修改觀察值與來源資料；儲存前會檢查 JSON 格式。',
+      help: '可修改觀察值與來源資料；儲存前系統會檢查內容格式。',
     },
     { key: 'notes', label: '備註', kind: 'textarea' },
     { key: 'site_opinion', label: '現場意見', kind: 'textarea' },
@@ -54,7 +54,7 @@ const fieldDefinitions: Readonly<Record<ReportPageCode, readonly FieldDefinition
       key: 'factor_rows',
       label: '區域因素級距',
       kind: 'json',
-      help: '可修正各因素的 reported / confirmed level、來源說明與人工確認狀態；伺服器計算出的調整率不會由此欄位覆寫。',
+      help: '可修正各因素的填報值、確認值、來源說明與人工確認狀態；系統計算出的調整率不會由此欄位覆寫。',
     },
     { key: 'other_influences', label: '其他影響因素', kind: 'textarea' },
     { key: 'notes', label: '備註', kind: 'textarea' },
@@ -115,7 +115,7 @@ function parseField(field: FieldDefinition): unknown {
     try {
       return stripServerCalculatedFields(props.page.page_code, field.key, JSON.parse(raw))
     } catch {
-      throw new Error(`${field.label}不是有效的 JSON，請先修正格式。`)
+      throw new Error(`${field.label}的內容格式不正確，請先修正。`)
     }
   }
   if (field.kind === 'number') {
@@ -148,14 +148,14 @@ watch(() => [props.page.page_code, props.page.version_no, props.page.data] as co
   <section class="report-page-editor" :data-page-code="page.page_code" :aria-labelledby="`report-editor-${page.page_code}`">
     <header class="report-page-editor__header">
       <div>
-        <p>EDIT {{ page.page_code }}</p>
+        <p>{{ page.page_code }} 資料編輯</p>
         <h3 :id="`report-editor-${page.page_code}`">{{ page.page_code }} 可修改資料</h3>
         <span>第 {{ page.version_no }} 版｜{{ page.form_status }}</span>
       </div>
       <button type="button" :disabled="saving || !dirty" @click="resetDraft">還原本頁</button>
     </header>
 
-    <p class="report-page-editor__note">這裡修改的是後端 PATCH 契約允許的草稿欄位。正式計算結果、調整率與價格仍由伺服器產生。</p>
+    <p class="report-page-editor__note">這裡可修改目前草稿中的人工填寫欄位；正式計算結果、調整率與價格仍由系統計算。</p>
 
     <div class="report-page-editor__grid">
       <label v-for="field in fields" :key="field.key" :class="{ 'is-wide': field.kind === 'textarea' || field.kind === 'json' }">
@@ -184,7 +184,7 @@ watch(() => [props.page.page_code, props.page.version_no, props.page.data] as co
 
     <p v-if="error" class="report-page-editor__error" role="alert">{{ error }}</p>
     <footer class="report-page-editor__actions">
-      <span>{{ dirty ? '有尚未儲存的修改' : '目前內容已與伺服器版本同步' }}</span>
+      <span>{{ dirty ? '有尚未儲存的修改' : '目前內容已儲存' }}</span>
       <button type="button" data-testid="save-report-page-editor" :disabled="saving || !dirty" @click="save">
         {{ saving ? '儲存中…' : `儲存 ${page.page_code} 修改` }}
       </button>

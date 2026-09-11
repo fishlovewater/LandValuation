@@ -89,7 +89,7 @@ onBeforeUnmount(() => document.documentElement.classList.remove('drawer-open'))
         >
           <header class="glass-drawer__header">
             <div>
-              <span class="glass-drawer__eyebrow">ASSISTED KNOWLEDGE</span>
+              <span class="glass-drawer__eyebrow">智能助理</span>
               <h2>{{ title }}</h2>
             </div>
             <button class="glass-drawer__close" type="button" aria-label="關閉" @click="close">

@@ -2,10 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ErrorState from '../../../components/common/ErrorState.vue'
-import DocumentTextPreview from '../../../components/common/DocumentTextPreview.vue'
 import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
 import PageHeader from '../../../components/common/PageHeader.vue'
-import SpreadsheetPreview from '../../../components/common/SpreadsheetPreview.vue'
 import { liquidGlass as vLiquidGlass } from '../../../directives/liquidGlass'
 import { useAuthStore } from '../../../stores/auth.store'
 import type { DocumentTextPreviewDto } from '../../../types/documentPreview'
@@ -45,6 +43,11 @@ import {
 } from '../valuation.types'
 import ValuationStepNavigator from '../components/ValuationStepNavigator.vue'
 import ValuationIssueDrawer from '../components/ValuationIssueDrawer.vue'
+import ValuationDocumentWorkspace from '../components/ValuationDocumentWorkspace.vue'
+import ValuationCandidateWorkspace from '../components/ValuationCandidateWorkspace.vue'
+import ValuationLandContext from '../components/ValuationLandContext.vue'
+import ValuationF03Section from '../components/ValuationF03Section.vue'
+import ValuationValidationSection from '../components/ValuationValidationSection.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -73,6 +76,8 @@ const manualFieldValue = reactive<Record<string, string>>({})
 const manualFieldsSaving = ref(false)
 const documentActionId = ref<string | null>(null)
 const documentCategoryDraft = reactive<Record<string, DocumentCategory>>({})
+type FieldAnalysisFormCode = 'S01' | 'F01' | 'F02' | 'F02-RF' | 'F03' | 'F04'
+const documentAnalysisForm = reactive<Record<string, FieldAnalysisFormCode>>({})
 const landContextSaving = ref(false)
 const editingParcelId = ref<string | null>(null)
 type WizardStep = 1 | 2 | 3 | 4 | 5 | 6
@@ -99,6 +104,29 @@ const FORM_DISPLAY_NAMES: Readonly<Record<string, string>> = {
 
 function formDisplayName(code: string): string {
   return FORM_DISPLAY_NAMES[code] ?? '查估書表'
+}
+
+const FIELD_ANALYSIS_FORM_CODES = Object.keys(FORM_DISPLAY_NAMES) as FieldAnalysisFormCode[]
+
+function inferDocumentAnalysisForm(filename: string): FieldAnalysisFormCode {
+  if (filename.includes('買賣實例')) return 'F01'
+  if (filename.includes('比較法')) return 'F02'
+  if (filename.includes('比準地')) return 'F03'
+  if (filename.includes('宗地市價') || filename.includes('土地市價')) return 'F04'
+  if (filename.includes('地價區段')) return 'S01'
+  return 'F03'
+}
+
+function setDocumentAnalysisForm(documentId: string, formCode: FieldAnalysisFormCode): void {
+  documentAnalysisForm[documentId] = formCode
+}
+
+function setDocumentCategory(documentId: string, category: DocumentCategory): void {
+  documentCategoryDraft[documentId] = category
+}
+
+function setCandidateValue(candidateId: string, value: string): void {
+  candidateValue[candidateId] = value
 }
 
 const parcelDraft = reactive({
@@ -219,7 +247,11 @@ const previewSourceUrl = computed(() => {
 })
 const previewIsPdf = computed(() => previewDocument.value?.mimeType.toLowerCase() === 'application/pdf')
 const previewIsImage = computed(() => previewDocument.value?.mimeType.toLowerCase().startsWith('image/') ?? false)
-const previewIsSpreadsheet = computed(() => previewDocument.value?.mimeType.toLowerCase() === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+const previewIsSpreadsheet = computed(() => {
+  const mime = previewDocument.value?.mimeType.toLowerCase()
+  return mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    || mime === 'application/vnd.ms-excel'
+})
 const previewIsDocx = computed(() => previewDocument.value?.mimeType.toLowerCase() === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
 function f03DraftHasField(fieldName: string): boolean {
   if (fieldName === 'benchmark_land_id') return Boolean(draft.benchmarkLandId)
@@ -290,7 +322,7 @@ const wizardStepDescription = computed(() => ({
   1: '先確認案件基本資料與目前查估表版本。',
   2: '集中管理來源文件、預覽原文並執行 AI / OCR 辨識，再逐筆確認辨識結果。',
   3: '依待處理狀態確認人工補充、宗地、比準地與 F03 正式採用值。',
-  4: '執行伺服器公式計算與正式檢核；若有錯誤可直接跳回對應欄位修正。',
+  4: '執行公式計算與正式檢核；若有錯誤可直接跳回對應欄位修正。',
   5: '前往查估書三頁確認與正式 PDF。',
   6: '完成正式送審。',
 }[activeWizardStep.value]))
@@ -348,7 +380,7 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   object_key: '案件與文件 → 來源文件儲存狀態',
   prices: 'F03 → 比較法／收益法價格',
   'case/form/benchmark/date': 'F03 → 比準地與估價基準日',
-  benchmark_land_price: 'F03 → 伺服器計算結果',
+  benchmark_land_price: 'F03 → 正式計算結果',
 }
 
 function emptyDraft(): F03EditableValues {
@@ -448,6 +480,7 @@ function initializeDocumentCategories(): void {
     if (SOURCE_DOCUMENT_CATEGORIES.includes(document.documentType as DocumentCategory)) {
       documentCategoryDraft[document.documentId] = document.documentType as DocumentCategory
     }
+    documentAnalysisForm[document.documentId] ??= inferDocumentAnalysisForm(document.filename)
   }
 }
 
@@ -519,6 +552,7 @@ function canPreviewDocument(document: DocumentArtifactModel): boolean {
   const mime = document.mimeType.toLowerCase()
   return mime === 'application/pdf'
     || mime.startsWith('image/')
+    || mime === 'application/vnd.ms-excel'
     || mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     || mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 }
@@ -551,7 +585,10 @@ async function openDocumentPreview(documentId: string, page: number | null = nul
 
   previewLoading.value = true
   try {
-    if (source.mimeType.toLowerCase() === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+    if (
+      source.mimeType.toLowerCase() === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      || source.mimeType.toLowerCase() === 'application/vnd.ms-excel'
+    ) {
       spreadsheetPreview.value = await valuationApi.previewSpreadsheet(requestedCaseId, documentId)
       return
     }
@@ -693,7 +730,7 @@ function wizardNext(): void {
   }
   if (activeWizardStep.value === 4) {
     if (canProceedToSubmit.value) goToSubmit()
-    else notice.value = '請先執行伺服器計算與檢核，並處理所有阻擋項目。'
+    else notice.value = '請先完成計算與檢核，並處理所有待修正項目。'
   }
 }
 
@@ -883,7 +920,7 @@ function findingLocationLabel(finding: ValidationFindingModel): string {
 
 function findingCorrectionHint(finding: ValidationFindingModel): string {
   if (finding.ruleCode === 'F03_CALCULATION_MATCH') {
-    return '此欄位由伺服器計算。請先修正上游資料，再重新執行「伺服器計算與檢核」。'
+    return '此欄位由系統計算。請先修正相關資料，再重新執行「計算與檢核」。'
   }
   if (finding.ruleCode === 'F03_REQUIRED_DOCUMENTS' || finding.ruleCode === 'F03_MINIO_OBJECTS') {
     return '請到來源文件區補上或重新上傳缺少的文件，完成後再執行檢核。'
@@ -941,7 +978,7 @@ function goToWorkflowNextAction(): void {
   if (workflowGuidance.value?.pending_candidate_count) {
     activeWizardStep.value = 2
     selectedCandidateId.value = pendingCandidates.value[0]?.extracted_field_id ?? null
-    void focusElementById('valuation-candidate-workspace', '目前仍有待確認候選資料；請逐筆確認、修改後採用，或拒絕。')
+    void focusElementById('valuation-candidate-workspace', '目前仍有待確認的辨識結果；請逐筆確認、修正後採用，或標記不採用。')
     return
   }
   if (workflowMissingItems.value.some((item) => item.toLowerCase().includes('document'))) {
@@ -1140,7 +1177,7 @@ async function uploadSourceDocument(): Promise<void> {
     flow.documents = [mapDocumentResponse(uploaded), ...flow.documents.filter((item) => item.documentId !== uploaded.document_id)]
     previewDocumentId.value = uploaded.document_id
     initializeDocumentCategories()
-    notice.value = `${uploaded.original_filename} 已上傳完成，檔案版本與儲存狀態已由伺服器確認。`
+    notice.value = `${uploaded.original_filename} 已上傳完成。`
     uploadFile.value = null
     const input = document.querySelector<HTMLInputElement>('#valuation-source-file')
     if (input) input.value = ''
@@ -1165,8 +1202,24 @@ async function extractDocument(documentId: string): Promise<void> {
   error.value = ''
   notice.value = ''
   try {
-    const result = await valuationApi.startDocumentExtraction(requestedCaseId, documentId)
+    let result = await valuationApi.startDocumentExtraction(requestedCaseId, documentId)
     if (!isCurrentCase(token, requestedCaseId)) return
+    const analysisForm = documentAnalysisForm[documentId] ?? 'F03'
+    if (result.extraction_status === 'COMPLETED') {
+      try {
+        result = await valuationApi.analyzeDocumentFields(requestedCaseId, documentId, analysisForm)
+      } catch (analysisError: unknown) {
+        extractionCandidates.value = [
+          ...extractionCandidates.value.filter((candidate) => candidate.document_id !== documentId),
+          ...result.candidates,
+        ]
+        initializeCandidateInputs(result.candidates)
+        await loadWorkflowGuidance(token, requestedCaseId)
+        notice.value = `OCR 文字擷取已完成；${formDisplayName(analysisForm)}的 AI 欄位分析未完成。`
+        error.value = safeValuationErrorMessage(analysisError)
+        return
+      }
+    }
     extractionCandidates.value = [
       ...extractionCandidates.value.filter((candidate) => candidate.document_id !== documentId),
       ...result.candidates,
@@ -1179,8 +1232,8 @@ async function extractDocument(documentId: string): Promise<void> {
       ?? result.candidates[0]?.extracted_field_id
       ?? null
     notice.value = pending
-      ? `AI 辨識完成，找到 ${pending} 筆需要人工確認的欄位。`
-      : 'AI 辨識完成，目前沒有需要人工確認的欄位。'
+      ? `${formDisplayName(analysisForm)} AI 辨識完成，找到 ${pending} 筆需要人工確認的欄位。`
+      : `${formDisplayName(analysisForm)} AI 辨識完成，目前沒有需要人工確認的欄位。`
     if (pending) void focusElementById('valuation-candidate-workspace')
   } catch (caught: unknown) {
     if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
@@ -1257,8 +1310,8 @@ async function submitCandidateDecisions(): Promise<void> {
       }
     }
     notice.value = response.pending_candidate_count
-      ? `已保存本次判定；尚有 ${response.pending_candidate_count} 筆候選需要人工確認。`
-      : '候選資料已全部完成人工判定；可繼續確認正式採用值。'
+      ? `已保存本次判定；尚有 ${response.pending_candidate_count} 筆辨識結果需要人工確認。`
+      : '辨識結果已全部完成人工判定；可繼續確認正式採用值。'
   } catch (caught: unknown) {
     if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
   } finally {
@@ -1278,7 +1331,7 @@ async function saveManualFields(): Promise<void> {
     ;(values[entry.formCode] ??= {})[entry.fieldName] = value
   }
   if (!Object.keys(values).length) {
-    notice.value = '請至少填寫一個人工補充欄位；空白欄位不會送到伺服器。'
+    notice.value = '請至少填寫一個人工補充欄位；空白欄位不會儲存。'
     return
   }
 
@@ -1518,7 +1571,7 @@ function chooseBenchmarkForF03(benchmarkId: string): void {
   dirty.value = true
   activeWizardStep.value = 3
   activeDataSection.value = 'f03'
-  notice.value = '已切換 F03 預計採用的比準地；請確認正式資料後按「儲存確認欄位」才會寫入伺服器。'
+  notice.value = '已切換 F03 預計採用的比準地；確認正式資料後請按「儲存確認欄位」。'
   void focusElementById('f03-benchmark-land')
 }
 
@@ -1538,7 +1591,7 @@ async function saveConfirmedFields(
     flow.f03 = mapF03DraftResponse(updated, form.sourceDocumentId, form.formInstanceId)
     copyDraft()
     await loadWorkflowGuidance(token, requestedCaseId)
-    notice.value = '人工確認欄位已由伺服器儲存並重新載入。'
+    notice.value = '人工確認欄位已儲存。'
     return true
   } catch (caught: unknown) {
     if (!isCurrentCase(token, requestedCaseId)) return false
@@ -1560,7 +1613,7 @@ async function runValuation(): Promise<void> {
   if (!form || !flow.f03 || !isCurrentCase(token, requestedCaseId)) return
 
   if (!canRunValuation.value) {
-    notice.value = `計算前還有 ${preCalculationIssueCount.value} 項前置資料待處理。「待處理事項」是計算前必要資料；「伺服器檢核」則是在資料齊全後檢查公式與資料一致性。`
+    notice.value = `計算前還有 ${preCalculationIssueCount.value} 項資料待處理。請先完成必要資料，再執行公式與資料一致性檢核。`
     jumpToFirstDataIssue()
     return
   }
@@ -1603,7 +1656,7 @@ async function runValuation(): Promise<void> {
 
     if (!flow.validation.canGenerateReport) {
       await loadWorkflowGuidance(token, requestedCaseId)
-      notice.value = '伺服器檢核回傳阻擋項目，請依結果補正後再執行。'
+      notice.value = '檢核發現仍有待修正項目，請修正後重新執行。'
       return
     }
 
@@ -1614,7 +1667,7 @@ async function runValuation(): Promise<void> {
       item.formInstanceId === submittedForm.formInstanceId ? submittedForm : item,
     )
     if (submittedForm.status !== 'READY') {
-      notice.value = '伺服器未將 F03 轉為 READY，暫停正式輸出。'
+      notice.value = 'F03 尚未完成可正式輸出的條件，請確認檢核結果。'
       return
     }
     currentForm = f03Form.value
@@ -1626,7 +1679,7 @@ async function runValuation(): Promise<void> {
     if (!isCurrentCase(token, requestedCaseId)) return
     flow.report = mapReportResponse(report)
     await loadWorkflowGuidance(token, requestedCaseId)
-    notice.value = '伺服器已完成計算、檢核、F03 提交與正式輸出。'
+    notice.value = '已完成計算、檢核、F03 確認與正式輸出。'
   } catch (caught: unknown) {
     if (!isCurrentCase(token, requestedCaseId)) return
     error.value = safeValuationErrorMessage(caught)
@@ -1637,7 +1690,7 @@ async function runValuation(): Promise<void> {
 
 function goToSubmit(): void {
   if (!canProceedToSubmit.value) {
-    notice.value = '目前仍有阻擋項目，必須先完成修正並通過伺服器檢核，才能進入輸出與送審。'
+    notice.value = '目前仍有待修正項目，必須先完成修正並通過檢核，才能進入輸出與送審。'
     return
   }
   void router.push({ name: 'valuation-submit', params: { caseId: caseId.value } })
@@ -1665,7 +1718,7 @@ onBeforeUnmount(clearPreviewUrl)
       @navigate="setWizardStep"
     />
     <PageHeader
-      eyebrow="GUIDED VALUATION"
+      eyebrow="估價作業"
       :title="wizardStepTitle"
       :description="wizardStepDescription"
     />
@@ -1698,7 +1751,7 @@ onBeforeUnmount(clearPreviewUrl)
       >
         <div class="revision-panel__heading">
           <div>
-            <p class="valuation-eyebrow">REVISION REQUIRED</p>
+            <p class="valuation-eyebrow">補正要求</p>
             <h2 id="revision-panel-title">第 {{ reviewHandoff.correction.request_no }} 次補正要求</h2>
           </div>
           <span>{{ new Date(reviewHandoff.correction.due_at).toLocaleString('zh-TW') }} 前</span>
@@ -1756,7 +1809,7 @@ onBeforeUnmount(clearPreviewUrl)
       >
         <div class="surface-heading">
           <div>
-            <p class="valuation-eyebrow">SUPPLEMENT REQUIRED</p>
+            <p class="valuation-eyebrow">補件要求</p>
             <h2 id="supplement-panel-title">審查補件要求</h2>
           </div>
           <span class="value-kind">{{ formalSupplementMissingItems.length }} 項待補</span>
@@ -1786,7 +1839,7 @@ onBeforeUnmount(clearPreviewUrl)
         </div>
         <div class="workflow-guide__stats">
           <span>來源文件 {{ flow.documents.length }} 份</span>
-          <span v-if="workflowGuidance">AI 待確認 {{ workflowGuidance.pending_candidate_count }} 筆</span>
+          <span v-if="workflowGuidance">辨識結果待確認 {{ workflowGuidance.pending_candidate_count }} 筆</span>
           <span v-if="f03Guidance">F03 缺欄位 {{ unresolvedF03RequiredFields.length }} 項</span>
           <span v-if="flow.validation">檢核錯誤 {{ flow.validation.failedCount }} 項</span>
         </div>
@@ -1804,7 +1857,7 @@ onBeforeUnmount(clearPreviewUrl)
       <section v-if="activeWizardStep === 1 || activeWizardStep === 2" v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="case-summary-title">
         <div v-if="activeWizardStep === 1" class="surface-heading">
           <div>
-            <p class="valuation-eyebrow">CASE SETUP</p>
+            <p class="valuation-eyebrow">案件資料</p>
             <h2 id="case-summary-title">{{ flow.case.caseNo }}｜{{ flow.case.name }}</h2>
           </div>
           <span class="source-marker" data-source-kind="automatic">{{ flow.case.source.label }}</span>
@@ -1824,228 +1877,86 @@ onBeforeUnmount(clearPreviewUrl)
             <small>{{ form.source.label }}</small>
           </div>
         </div>
-        <div v-if="activeWizardStep === 2" id="valuation-document-workspace" class="document-workspace" tabindex="-1">
-          <div class="document-workspace__heading">
-            <div>
-              <strong>來源文件與 AI 辨識</strong>
-              <span>先選文件預覽，再執行 AI / OCR 辨識。辨識結果不會直接改寫正式資料，仍需人工確認。</span>
-            </div>
-            <span>{{ flow.documents.length }} 份</span>
-          </div>
-          <div class="document-ai-grid">
-            <div class="document-ai-grid__list">
-              <ul v-if="flow.documents.length" class="document-list">
-                <li
-                  v-for="document in flow.documents"
-                  :key="document.documentId"
-                  :class="{ 'is-selected': previewDocumentId === document.documentId }"
-                >
-                  <div class="document-list__identity">
-                    <strong>{{ document.filename }}</strong>
-                    <span>{{ documentCategoryLabel(document.documentType) }} · 第 {{ document.versionNo }} 版 · {{ formatFileSize(document.fileSizeBytes) }}</span>
-                    <small :data-ai-state="documentPendingCount(document.documentId) ? 'pending' : 'ready'">{{ documentAiStatus(document.documentId) }}</small>
-                  </div>
-                  <div class="document-list__actions">
-                    <button class="finding-action" type="button" @click="openDocumentPreview(document.documentId)">預覽</button>
-                    <button
-                      v-if="canExtractDocument(document)"
-                      class="finding-action finding-action--primary"
-                      type="button"
-                      :data-testid="`extract-document-${document.documentId}`"
-                      :disabled="Boolean(extractionBusyDocumentId)"
-                      @click="extractDocument(document.documentId)"
-                    >
-                      {{ extractionBusyDocumentId === document.documentId ? 'AI 辨識中…' : documentCandidateCount(document.documentId) ? '重新 AI 辨識' : '開始 AI 辨識' }}
-                    </button>
-                    <div v-if="canManageSourceDocument(document)" class="document-list__manage">
-                      <label :for="`document-category-${document.documentId}`">分類</label>
-                      <select
-                        :id="`document-category-${document.documentId}`"
-                        v-model="documentCategoryDraft[document.documentId]"
-                        :data-testid="`document-category-${document.documentId}`"
-                        :disabled="documentActionId === document.documentId"
-                      >
-                        <option v-for="category in SOURCE_DOCUMENT_CATEGORIES" :key="category" :value="category">{{ documentCategoryLabel(category) }}</option>
-                      </select>
-                      <button class="finding-action" type="button" :data-testid="`reclassify-document-${document.documentId}`" :disabled="documentActionId === document.documentId || documentCategoryDraft[document.documentId] === document.documentType" @click="reclassifyDocument(document.documentId)">套用</button>
-                      <button class="finding-action finding-action--danger" type="button" :data-testid="`remove-document-${document.documentId}`" :disabled="documentActionId === document.documentId" @click="removeDocument(document.documentId, document.filename)">移除</button>
-                    </div>
-                  </div>
-                </li>
-              </ul>
-              <p v-else class="empty-copy">尚未上傳案件來源文件。請先選擇文件類型並上傳。</p>
-            </div>
-
-            <section class="document-preview" aria-labelledby="document-preview-title">
-              <div class="document-preview__heading">
-                <div>
-                  <strong id="document-preview-title">文件預覽</strong>
-                  <span v-if="previewDocument">{{ previewDocument.filename }}{{ previewPage ? ` · 第 ${previewPage} 頁` : '' }}</span>
-                  <span v-else>從左側選擇一份文件查看內容</span>
-                </div>
-                <button v-if="previewDocument" class="finding-action" type="button" @click="downloadSourceDocument(previewDocument)">下載原檔</button>
-              </div>
-              <div class="document-preview__body">
-                <p v-if="previewLoading" class="empty-copy">正在載入文件預覽…</p>
-                <p v-else-if="previewError" class="document-preview__message">{{ previewError }}</p>
-                <iframe v-else-if="previewIsPdf && previewSourceUrl" :src="previewSourceUrl" title="PDF 文件預覽" />
-                <img v-else-if="previewIsImage && previewSourceUrl" :src="previewSourceUrl" :alt="previewDocument?.filename || '來源文件預覽'">
-                <SpreadsheetPreview v-else-if="previewIsSpreadsheet && spreadsheetPreview" :preview="spreadsheetPreview" />
-                <DocumentTextPreview v-else-if="previewIsDocx && textPreview" :preview="textPreview" />
-                <div v-else class="document-preview__empty">
-                  <strong>{{ previewDocument ? '按「預覽」載入文件' : '尚未選擇文件' }}</strong>
-                  <span>PDF、圖片、Excel 與 DOCX 可直接預覽；其他格式仍可下載原檔查看。</span>
-                </div>
-              </div>
-              <div v-if="selectedCandidate?.source_text && selectedCandidate.document_id === previewDocumentId" class="document-preview__evidence" data-testid="candidate-source-evidence">
-                <strong>AI 對應原文{{ selectedCandidate.source_page ? ` · 第 ${selectedCandidate.source_page} 頁` : '' }}</strong>
-                <blockquote>{{ selectedCandidate.source_text }}</blockquote>
-              </div>
-            </section>
-          </div>
-          <form v-if="canUpload" class="upload-form" @submit.prevent="uploadSourceDocument">
-            <label><span>文件類型</span>
-              <select v-model="uploadCategory">
-                <option value="original">原始文件</option>
-                <option value="cadastral-map">地籍圖</option>
-                <option value="land-register">土地登記資料</option>
-                <option value="photos">照片</option>
-                <option value="attachments">其他附件</option>
-                <option value="map-section-sketch">地段示意圖</option>
-                <option value="map-zoning">使用分區圖</option>
-                <option value="map-land-value-section">地價區段圖</option>
-              </select>
-            </label>
-            <label class="upload-form__file"><span>選擇檔案</span><input id="valuation-source-file" type="file" required @change="chooseUpload" /></label>
-            <button class="solid-button" type="submit" :disabled="uploading || !uploadFile">
-              {{ uploading ? '上傳中…' : '上傳文件' }}
-            </button>
-          </form>
-        </div>
+        <ValuationDocumentWorkspace
+          v-if="activeWizardStep === 2"
+          :documents="flow.documents"
+          :preview-document-id="previewDocumentId"
+          :preview-document="previewDocument"
+          :preview-page="previewPage"
+          :preview-loading="previewLoading"
+          :preview-error="previewError"
+          :preview-source-url="previewSourceUrl"
+          :preview-is-pdf="previewIsPdf"
+          :preview-is-image="previewIsImage"
+          :preview-is-spreadsheet="previewIsSpreadsheet"
+          :preview-is-docx="previewIsDocx"
+          :spreadsheet-preview="spreadsheetPreview"
+          :text-preview="textPreview"
+          :selected-candidate="selectedCandidate"
+          :can-upload="canUpload"
+          :uploading="uploading"
+          :upload-file="uploadFile"
+          :upload-category="uploadCategory"
+          :extraction-busy-document-id="extractionBusyDocumentId"
+          :document-action-id="documentActionId"
+          :document-category-draft="documentCategoryDraft"
+          :document-analysis-form="documentAnalysisForm"
+          :analysis-form-codes="FIELD_ANALYSIS_FORM_CODES"
+          :source-categories="SOURCE_DOCUMENT_CATEGORIES"
+          :form-display-name="formDisplayName"
+          :document-category-label="documentCategoryLabel"
+          :format-file-size="formatFileSize"
+          :document-pending-count="documentPendingCount"
+          :document-candidate-count="documentCandidateCount"
+          :document-ai-status="documentAiStatus"
+          :can-extract-document="canExtractDocument"
+          :can-manage-source-document="canManageSourceDocument"
+          @preview="openDocumentPreview"
+          @extract="extractDocument"
+          @reclassify="reclassifyDocument"
+          @remove="removeDocument"
+          @download="downloadSourceDocument"
+          @update-analysis-form="setDocumentAnalysisForm"
+          @update-category="setDocumentCategory"
+          @update-upload-category="uploadCategory = $event"
+          @choose-upload="chooseUpload"
+          @upload="uploadSourceDocument"
+        />
       </section>
 
-      <section
+      <ValuationCandidateWorkspace
         v-if="activeWizardStep === 2"
-        id="valuation-candidate-workspace"
-        v-liquid-glass
-        data-lg
-        class="valuation-surface candidate-workspace lg"
-        data-testid="valuation-candidate-workspace"
-        tabindex="-1"
-        aria-labelledby="candidate-workspace-title"
-      >
-        <div class="surface-heading">
-          <div>
-            <p class="valuation-eyebrow">AI REVIEW</p>
-            <h2 id="candidate-workspace-title">AI 辨識結果</h2>
-          </div>
-          <div class="candidate-workspace__summary">
-            <span class="value-kind">待確認 {{ pendingCandidates.length }} 筆</span>
-            <button
-              v-if="workflowGuidance?.confirmation_export"
-              class="finding-action"
-              type="button"
-              data-testid="download-confirmation-export"
-              @click="downloadConfirmationExport"
-            >下載確認 Excel</button>
-          </div>
-        </div>
-        <p v-if="!candidateDecisionTargets.length" class="empty-copy">
-          目前沒有需要人工確認的 AI 辨識結果。請在上方來源文件按「開始 AI 辨識」。
-        </p>
-        <div v-else class="candidate-list">
-          <article
-            v-for="candidate in candidateDecisionTargets"
-            :key="candidate.extracted_field_id"
-            :class="['candidate-card', { 'is-active': selectedCandidateId === candidate.extracted_field_id }]"
-            :data-testid="`candidate-${candidate.extracted_field_id}`"
-            @click="selectedCandidateId = candidate.extracted_field_id"
-          >
-            <div class="candidate-card__heading">
-              <div>
-                <strong>{{ fieldDisplayLabel(candidate.form_code, candidate.field_name) }}</strong>
-                <span>{{ candidateDocumentName(candidate.document_id) }}{{ candidate.source_page ? ` · 第 ${candidate.source_page} 頁` : '' }}</span>
-              </div>
-              <small>{{ candidate.field_status === 'NEEDS_CONFIRMATION' ? '待確認' : '重新確認中' }} · 信心度 {{ candidateConfidenceLabel(candidate) }} · {{ candidateProviderLabel(candidate.analysis_provider) }}</small>
-            </div>
-            <div v-if="candidate.source_text" class="candidate-card__source-summary">
-              <span>來源原文</span>
-              <blockquote class="candidate-card__source">{{ candidate.source_text }}</blockquote>
-              <button class="candidate-card__source-link" type="button" @click.stop="openCandidateSource(candidate)">在原文件中查看</button>
-            </div>
-            <label class="candidate-card__value">
-              <span>AI 辨識值／人工修正值 <small v-if="candidateUnit(candidate)">({{ candidateUnit(candidate) }})</small></span>
-              <input v-model="candidateValue[candidate.extracted_field_id]" :data-testid="`candidate-value-${candidate.extracted_field_id}`" :type="candidateEditorType(candidate)" :step="candidateEditorType(candidate) === 'number' ? 'any' : undefined" :disabled="candidateDecision[candidate.extracted_field_id] === 'REJECT'">
-            </label>
-            <div class="candidate-card__actions" role="group" :aria-label="`${candidate.field_name} 人工判定`">
-              <button
-                type="button"
-                :class="{ 'is-selected': candidateDecision[candidate.extracted_field_id] === 'CONFIRM' }"
-                :data-testid="`candidate-confirm-${candidate.extracted_field_id}`"
-                @click="chooseCandidateDecision(candidate.extracted_field_id, 'CONFIRM')"
-              >
-                確認採用
-              </button>
-              <button
-                type="button"
-                :class="{ 'is-selected is-reject': candidateDecision[candidate.extracted_field_id] === 'REJECT' }"
-                :data-testid="`candidate-reject-${candidate.extracted_field_id}`"
-                @click="chooseCandidateDecision(candidate.extracted_field_id, 'REJECT')"
-              >
-                標記不採用
-              </button>
-              <button
-                v-if="candidate.field_status !== 'NEEDS_CONFIRMATION'"
-                class="candidate-card__restore"
-                type="button"
-                :data-testid="`cancel-reopen-candidate-${candidate.extracted_field_id}`"
-                @click.stop="cancelCandidateReopen(candidate)"
-              >
-                取消修改／還原
-              </button>
-            </div>
-          </article>
-          <div class="candidate-submit">
-            <span>已選擇 {{ selectedCandidateCount }} / {{ candidateDecisionTargets.length }} 筆判定。上方選擇只是暫存，按右側按鈕後才會寫入伺服器。</span>
-            <button
-              class="solid-button solid-button--primary"
-              type="button"
-              data-testid="submit-candidate-decisions"
-              :disabled="!selectedCandidateCount || confirmingCandidates"
-              @click="submitCandidateDecisions"
-            >
-              {{ confirmingCandidates ? '保存判定中…' : '保存已選判定並套用' }}
-            </button>
-          </div>
-        </div>
-
-        <div v-if="processedCandidates.length" class="candidate-history" data-testid="processed-candidates">
-          <div class="candidate-history__heading">
-            <strong>已處理 AI 辨識結果</strong>
-            <span>已採用或已略過的資料都可以重新判定；若不想變更，使用「取消修改／還原」即可回到原本已儲存狀態。</span>
-          </div>
-          <ul>
-            <li v-for="candidate in processedCandidates" :key="`processed-${candidate.extracted_field_id}`">
-              <div>
-                <strong>{{ fieldDisplayLabel(candidate.form_code, candidate.field_name) }}</strong>
-                <span>{{ candidateStatusLabel(candidate.field_status) }} · {{ displayCandidateValue(candidate.confirmed_value ?? candidate.extracted_value) || '未採用值' }}</span>
-              </div>
-              <button
-                v-if="!candidateDecision[candidate.extracted_field_id]"
-                class="finding-action"
-                type="button"
-                :data-testid="`reopen-candidate-${candidate.extracted_field_id}`"
-                @click="reopenCandidate(candidate)"
-              >{{ candidate.field_status === 'REJECTED' ? '重新判定' : '重新修改' }}</button>
-            </li>
-          </ul>
-        </div>
-      </section>
+        :candidates="candidateDecisionTargets"
+        :processed-candidates="processedCandidates"
+        :pending-count="pendingCandidates.length"
+        :selected-candidate-id="selectedCandidateId"
+        :selected-candidate-count="selectedCandidateCount"
+        :candidate-decision="candidateDecision"
+        :candidate-value="candidateValue"
+        :confirming-candidates="confirmingCandidates"
+        :has-confirmation-export="Boolean(workflowGuidance?.confirmation_export)"
+        :field-display-label="fieldDisplayLabel"
+        :candidate-document-name="candidateDocumentName"
+        :candidate-confidence-label="candidateConfidenceLabel"
+        :candidate-provider-label="candidateProviderLabel"
+        :candidate-unit="candidateUnit"
+        :candidate-editor-type="candidateEditorType"
+        :candidate-status-label="candidateStatusLabel"
+        :display-candidate-value="displayCandidateValue"
+        @select="selectedCandidateId = $event"
+        @open-source="openCandidateSource"
+        @choose-decision="chooseCandidateDecision"
+        @update-value="setCandidateValue"
+        @cancel-reopen="cancelCandidateReopen"
+        @reopen="reopenCandidate"
+        @submit="submitCandidateDecisions"
+        @download-export="downloadConfirmationExport"
+      />
 
       <section v-if="activeWizardStep === 3" class="data-confirmation-nav" aria-labelledby="data-confirmation-title">
         <div class="data-confirmation-nav__heading">
           <div>
-            <p class="valuation-eyebrow">DATA CONFIRMATION</p>
+            <p class="valuation-eyebrow">資料確認</p>
             <h2 id="data-confirmation-title">資料確認</h2>
             <span>只顯示目前要處理的資料類別；有缺漏時可從上方狀態或下方總覽直接跳轉。</span>
           </div>
@@ -2068,7 +1979,7 @@ onBeforeUnmount(clearPreviewUrl)
 
         <div v-if="activeDataSection === 'overview'" class="data-overview">
           <article :data-state="dataIssueCounts.manual ? 'attention' : 'ready'">
-            <div><strong>人工補充</strong><span>AI / OCR 沒有取得的欄位，可在這裡人工補齊。</span></div>
+            <div><strong>人工補充</strong><span>文件辨識沒有取得的欄位，可在這裡人工補齊。</span></div>
             <div><small>{{ dataIssueCounts.manual ? `${dataIssueCounts.manual} 項可補充` : '目前沒有缺漏欄位' }}</small><button type="button" @click="jumpToDataSection('manual')">前往</button></div>
           </article>
           <article :data-state="dataIssueCounts.land ? 'attention' : 'ready'">
@@ -2092,8 +2003,8 @@ onBeforeUnmount(clearPreviewUrl)
       >
         <div class="surface-heading">
           <div>
-            <p class="valuation-eyebrow">MANUAL FALLBACK</p>
-            <h2 id="manual-fields-title">AI / OCR 未取得欄位的人工補充</h2>
+            <p class="valuation-eyebrow">人工補充</p>
+            <h2 id="manual-fields-title">補齊未辨識到的欄位</h2>
           </div>
           <span class="value-kind">{{ manualFieldEntries.length }} 項</span>
         </div>
@@ -2142,294 +2053,59 @@ onBeforeUnmount(clearPreviewUrl)
         <span>AI 辨識與既有資料已提供目前可確認的欄位；你可以直接前往宗地與比準地或 F03。</span>
       </section>
 
-      <section
+      <ValuationLandContext
         v-if="activeWizardStep === 3 && activeDataSection === 'land'"
-        id="valuation-land-context"
-        v-liquid-glass
-        data-lg
-        class="valuation-surface land-context lg"
-        data-testid="valuation-land-context"
-        tabindex="-1"
-        aria-labelledby="land-context-title"
-      >
-        <div class="surface-heading">
-          <div>
-            <p class="valuation-eyebrow">LAND CONTEXT</p>
-            <h2 id="land-context-title">宗地與比準地</h2>
-          </div>
-          <span class="value-kind">宗地 {{ parcels.length }} · 比準地 {{ flow.benchmarks.length }}</span>
-        </div>
-        <div class="land-context__grid">
-          <section class="land-context__panel">
-            <div class="land-context__panel-heading"><strong>宗地資料</strong><span>後端支援新增與修改</span></div>
-            <p class="land-context__help">宗地是本案要記錄與估價的土地資料。先確認段名、地號、面積與使用分區；資料有誤可直接修改既有宗地。</p>
-            <ul v-if="parcels.length" class="land-context__records">
-              <li v-for="parcel in parcels" :key="parcel.parcel_id">
-                <div>
-                  <strong>{{ parcel.section_name }} {{ parcel.land_no }}</strong>
-                  <span>{{ parcel.area_sqm }} m² · {{ parcel.district_code }}</span>
-                </div>
-                <button v-if="canEditLandContext" type="button" :data-testid="`edit-parcel-${parcel.parcel_id}`" @click="startParcelEdit(parcel)">修改</button>
-              </li>
-            </ul>
-            <p v-else class="empty-copy">尚未建立宗地；請直接使用下方表單建立。</p>
-            <form id="parcel-editor" class="land-context__form" tabindex="-1" @submit.prevent="saveParcel">
-              <h3>{{ editingParcelId ? '修改宗地' : '新增宗地' }}</h3>
-              <div class="land-context__fields">
-                <label><span>行政區代碼 *</span><input v-model="parcelDraft.districtCode" data-testid="parcel-district-code" required></label>
-                <label><span>段名 *</span><input v-model="parcelDraft.sectionName" data-testid="parcel-section-name" required></label>
-                <label><span>小段</span><input v-model="parcelDraft.subsectionName"></label>
-                <label><span>地號 *</span><input v-model="parcelDraft.landNo" data-testid="parcel-land-no" required></label>
-                <label><span>面積 m² *</span><input v-model="parcelDraft.areaSqm" data-testid="parcel-area-sqm" inputmode="decimal" required></label>
-                <label><span>使用分區</span><input v-model="parcelDraft.landUseZone"></label>
-                <label><span>指定用途</span><input v-model="parcelDraft.designatedUse"></label>
-                <label><span>來源文件</span>
-                  <select v-model="parcelDraft.sourceDocumentId">
-                    <option value="">不指定</option>
-                    <option v-for="document in flow.documents" :key="document.documentId" :value="document.documentId">{{ document.filename }}</option>
-                  </select>
-                </label>
-              </div>
-              <div class="land-context__form-actions">
-                <button v-if="editingParcelId" type="button" class="solid-button" @click="resetParcelDraft">取消修改</button>
-                <button class="solid-button solid-button--primary" type="submit" data-testid="save-parcel" :disabled="!canEditLandContext || landContextSaving">
-                  {{ landContextSaving ? '儲存中…' : editingParcelId ? '儲存宗地修改' : '建立宗地' }}
-                </button>
-              </div>
-            </form>
-          </section>
+        :parcels="parcels"
+        :benchmarks="flow.benchmarks"
+        :documents="flow.documents"
+        :parcel-draft="parcelDraft"
+        :benchmark-draft="benchmarkDraft"
+        :editing-parcel-id="editingParcelId"
+        :selected-benchmark-land-id="draft.benchmarkLandId"
+        :can-edit-land-context="canEditLandContext"
+        :can-edit-f03="canEditF03"
+        :has-f03="Boolean(flow.f03)"
+        :saving="landContextSaving"
+        @edit-parcel="startParcelEdit"
+        @reset-parcel="resetParcelDraft"
+        @save-parcel="saveParcel"
+        @save-benchmark="saveBenchmarkLand"
+        @choose-benchmark="chooseBenchmarkForF03"
+      />
 
-          <section class="land-context__panel">
-            <div class="land-context__panel-heading"><strong>比準地資料</strong><span>如需更換比準地資料，請新增一筆，再明確指定給 F03；既有紀錄不直接覆寫</span></div>
-            <p class="land-context__help">比準地是後續查估所使用的比較基準。此系統建立時需指定來源宗地、比準地編號與地價區段；要改用另一筆時，新增後按「採用此比準地」。</p>
-            <ul v-if="flow.benchmarks.length" class="land-context__records">
-              <li v-for="benchmark in flow.benchmarks" :key="benchmark.benchmarkLandId">
-                <div>
-                  <strong>{{ benchmark.benchmarkLandNo }}</strong>
-                  <span>地價區段 {{ benchmark.priceZoneNo }}</span>
-                </div>
-                <div class="land-context__record-actions">
-                  <span v-if="draft.benchmarkLandId === benchmark.benchmarkLandId" class="benchmark-current">目前 F03 採用</span>
-                  <button
-                    v-else-if="flow.f03 && canEditF03"
-                    type="button"
-                    :data-testid="`choose-benchmark-${benchmark.benchmarkLandId}`"
-                    @click="chooseBenchmarkForF03(benchmark.benchmarkLandId)"
-                  >採用此比準地</button>
-                </div>
-              </li>
-            </ul>
-            <p v-else class="empty-copy">尚未建立比準地；建立後才能初始化／選擇 F03 比準地。</p>
-            <form class="land-context__form" @submit.prevent="saveBenchmarkLand">
-              <h3>新增比準地</h3>
-              <div class="land-context__fields">
-                <label><span>來源宗地 *</span>
-                  <select v-model="benchmarkDraft.parcelId" data-testid="benchmark-parcel" required>
-                    <option value="">請選擇宗地</option>
-                    <option v-for="parcel in parcels" :key="parcel.parcel_id" :value="parcel.parcel_id">{{ parcel.section_name }} {{ parcel.land_no }}</option>
-                  </select>
-                </label>
-                <label><span>比準地編號 *</span><input v-model="benchmarkDraft.benchmarkLandNo" data-testid="benchmark-no" required></label>
-                <label><span>地價區段 *</span><input v-model="benchmarkDraft.priceZoneNo" data-testid="benchmark-zone" required></label>
-                <label><span>重劃序號</span><input v-model="benchmarkDraft.landConsolidationSerial"></label>
-                <label><span>緯度</span><input v-model="benchmarkDraft.latitude" inputmode="decimal"></label>
-                <label><span>經度</span><input v-model="benchmarkDraft.longitude" inputmode="decimal"></label>
-              </div>
-              <div class="land-context__form-actions">
-                <button class="solid-button solid-button--primary" type="submit" data-testid="save-benchmark" :disabled="!canEditLandContext || !parcels.length || landContextSaving">
-                  {{ landContextSaving ? '儲存中…' : '建立比準地' }}
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
-      </section>
+      <ValuationF03Section
+        v-if="activeWizardStep === 3 && activeDataSection === 'f03'"
+        :f03="flow.f03"
+        :benchmarks="flow.benchmarks"
+        :draft="draft"
+        :calculated-source="calculatedSource"
+        :can-edit-f03="canEditF03"
+        :saving="saving"
+        @dirty="dirty = true"
+        @save="handleSave"
+      />
 
-      <section v-if="activeWizardStep === 3 && activeDataSection === 'f03' && !flow.f03" v-liquid-glass data-lg class="valuation-surface setup-required lg" aria-labelledby="setup-required-title">
-        <div>
-          <p class="valuation-eyebrow">REQUIRED DATA</p>
-          <h2 id="setup-required-title">估價資料尚未可計算</h2>
-        </div>
-        <p>系統不會以空值直接送出。請先完成必要來源文件、宗地與比準地資料；待後端建立 F03 正式草稿後，計算與檢核按鈕才會開放。</p>
-      </section>
-
-      <section id="f03-data-section" v-if="activeWizardStep === 3 && activeDataSection === 'f03' && flow.f03" v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="f03-title">
-        <div class="surface-heading">
-          <div>
-            <p class="valuation-eyebrow">F03 正式資料</p>
-            <h2 id="f03-title">資料確認與正式採用值</h2>
-          </div>
-          <span class="source-marker" data-source-kind="human-confirmed">{{ flow.f03.source.label }}</span>
-        </div>
-
-        <div class="official-value" data-testid="official-value">
-          <div>
-            <span>比準地正式採用價格</span>
-            <strong>{{ flow.f03.benchmarkLandPrice || '尚未由伺服器提供' }}</strong>
-          </div>
-          <span class="value-kind" data-value-kind="calculated" data-source-kind="calculated">{{ calculatedSource.label }}</span>
-        </div>
-
-        <form class="confirmed-form" @submit.prevent="handleSave">
-          <div class="form-heading">
-            <h3>人工確認欄位</h3>
-            <span class="value-kind" data-value-kind="human-confirmed">可編輯欄位依 F03 PATCH 契約</span>
-          </div>
-          <fieldset class="field-grid" :disabled="!canEditF03">
-            <label>
-              <span>比準地</span>
-              <select
-                id="f03-benchmark-land"
-                v-model="draft.benchmarkLandId"
-                data-value-kind="human-confirmed"
-                @input="dirty = true"
-              >
-                <option :value="null">請選擇比準地</option>
-                <option v-for="land in flow.benchmarks" :key="land.benchmarkLandId" :value="land.benchmarkLandId">
-                  {{ land.benchmarkLandNo }}｜{{ land.priceZoneNo }}
-                </option>
-              </select>
-            </label>
-            <label>
-              <span>估價基準日</span>
-              <input id="f03-valuation-base-date" v-model="draft.valuationBaseDate" type="date" @input="dirty = true" />
-            </label>
-            <label>
-              <span>比較法價格（正式值）</span>
-              <input
-                v-model="draft.comparisonPrice"
-                id="f03-comparison-price"
-                data-testid="f03-comparison-price"
-                inputmode="decimal"
-                @input="dirty = true"
-              />
-            </label>
-            <label>
-              <span>比較法權重</span>
-              <input id="f03-comparison-weight" v-model="draft.comparisonWeight" inputmode="decimal" @input="dirty = true" />
-            </label>
-            <label>
-              <span>收益法價格（正式值）</span>
-              <input id="f03-income-price" v-model="draft.incomePrice" inputmode="decimal" @input="dirty = true" />
-            </label>
-            <label>
-              <span>收益法權重</span>
-              <input id="f03-income-weight" v-model="draft.incomeWeight" inputmode="decimal" @input="dirty = true" />
-            </label>
-            <label>
-              <span>市場期間起日</span>
-              <input id="f03-market-period-start" v-model="draft.marketPeriodStart" type="date" @input="dirty = true" />
-            </label>
-            <label>
-              <span>市場期間迄日</span>
-              <input id="f03-market-period-end" v-model="draft.marketPeriodEnd" type="date" @input="dirty = true" />
-            </label>
-            <label class="field-grid__wide">
-              <span>市場條件</span>
-              <input id="f03-market-condition" v-model="draft.marketCondition" @input="dirty = true" />
-            </label>
-            <label class="field-grid__wide">
-              <span>選擇範圍理由</span>
-              <textarea id="f03-selection-scope-reason" v-model="draft.selectionScopeReason" rows="2" @input="dirty = true" />
-            </label>
-            <label class="field-grid__wide">
-              <span>採用決策理由</span>
-              <textarea id="f03-decision-reason" v-model="draft.decisionReason" rows="2" @input="dirty = true" />
-            </label>
-          </fieldset>
-          <div class="action-row">
-            <button class="solid-button" data-testid="save-confirmed-fields" type="submit" :disabled="saving || !canEditF03">
-              {{ saving ? '儲存中…' : '儲存確認欄位' }}
-            </button>
-          </div>
-        </form>
-      </section>
-
-      <section v-if="activeWizardStep === 4" class="valuation-surface calculation-launch" data-testid="calculation-launch" aria-labelledby="calculation-launch-title">
-        <div class="calculation-launch__copy">
-          <div>
-            <p class="valuation-eyebrow">CALCULATE & VALIDATE</p>
-            <h2 id="calculation-launch-title">計算與檢核</h2>
-            <p>系統會使用已確認的 F03 正式資料執行公式計算，再以伺服器規則檢查缺漏與一致性。若有阻擋，結果會直接提供修正位置。</p>
-          </div>
-          <div class="calculation-launch__readiness">
-            <span :data-state="flow.f03 ? 'ready' : 'blocked'">{{ flow.f03 ? 'F03 已建立' : '缺少 F03' }}</span>
-            <span v-if="preCalculationIssueCount" data-state="blocked">前置資料尚有 {{ preCalculationIssueCount }} 項</span>
-            <span :data-state="dirty ? 'attention' : 'ready'">{{ dirty ? '有尚未儲存的修改' : '資料已同步' }}</span>
-          </div>
-        </div>
-        <button
-          class="solid-button solid-button--primary calculation-launch__button"
-          type="button"
-          data-testid="run-valuation"
-          :disabled="running || saving || !canRunValuation"
-          :title="!canRunValuation ? '請先完成待處理前置資料' : dirty ? '會先儲存尚未保存的 F03 修改，再執行計算與檢核' : '執行正式計算與檢核'"
-          @click="runValuation"
-        >
-          {{ running ? '伺服器計算與檢核中…' : dirty ? '儲存修改並執行計算與檢核' : '執行計算與檢核' }}
-        </button>
-      </section>
+      <ValuationValidationSection
+        v-if="activeWizardStep === 4"
+        :validation="flow.validation"
+        :calculation="flow.calculation"
+        :report="flow.report"
+        :has-f03="Boolean(flow.f03)"
+        :pre-calculation-issue-count="preCalculationIssueCount"
+        :dirty="dirty"
+        :running="running"
+        :saving="saving"
+        :can-run-valuation="canRunValuation"
+        :can-proceed-to-submit="canProceedToSubmit"
+        :finding-location-label="findingLocationLabel"
+        :finding-correction-hint="findingCorrectionHint"
+        @run="runValuation"
+        @fix-finding="goToFinding"
+        @go-submit="goToSubmit"
+      />
 
       <p v-if="notice" class="inline-notice" role="status">{{ notice }}</p>
       <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
-
-      <section v-if="activeWizardStep === 4 && flow.validation" v-liquid-glass data-lg class="valuation-surface lg validation-results" data-testid="validation-results" aria-labelledby="validation-title">
-        <div class="surface-heading">
-          <div>
-            <p class="valuation-eyebrow">SERVER VALIDATION</p>
-            <h2 id="validation-title">伺服器檢核結果</h2>
-          </div>
-          <span class="value-kind" :data-validation-state="flow.validation.canGenerateReport ? 'ready' : 'blocked'">
-            {{ flow.validation.canGenerateReport ? '可產生正式輸出' : '有伺服器阻擋項目' }}
-          </span>
-        </div>
-        <div class="validation-counts">
-          <span>通過 {{ flow.validation.passedCount }}</span>
-          <span>警示 {{ flow.validation.warningCount }}</span>
-          <span>錯誤 {{ flow.validation.failedCount }}</span>
-        </div>
-        <ul v-if="flow.validation.findings.length" class="finding-list">
-          <li v-for="finding in flow.validation.findings" :key="finding.findingId" :data-severity="finding.severity">
-            <strong>{{ finding.severity === 'ERROR' ? '阻擋' : '警示' }}｜{{ finding.ruleCode }}</strong>
-            <span>{{ finding.message }}</span>
-            <small><b>問題位置：</b>{{ findingLocationLabel(finding) }}</small>
-            <small>實際值：{{ finding.actualValue ?? '—' }}</small>
-            <small>預期值（expected）：{{ finding.expectedValue ?? '—' }}</small>
-            <small><b>建議修正：</b>{{ findingCorrectionHint(finding) }}</small>
-            <button class="finding-action" type="button" :data-testid="`fix-finding-${finding.findingId}`" @click="goToFinding(finding)">
-              前往修正
-            </button>
-          </li>
-        </ul>
-        <p v-else class="empty-copy">伺服器沒有回傳其他檢核訊息。</p>
-        <div v-if="flow.validation.correctionHints.length" class="correction-hints">
-          <strong>伺服器修正提示</strong>
-          <ul>
-            <li v-for="hint in flow.validation.correctionHints" :key="hint">{{ hint }}</li>
-          </ul>
-        </div>
-
-        <div v-if="flow.calculation" class="calculation-result" data-testid="calculation-result" data-source-kind="calculated">
-          <span>伺服器計算正式結果</span>
-          <strong>{{ flow.calculation.result }} {{ flow.calculation.currencyCode }}</strong>
-          <small>公式版本：{{ flow.calculation.formulaVersion }}</small>
-        </div>
-        <div v-if="flow.report" class="report-result" data-testid="report-result">
-          <span>F03 單表輸出</span>
-          <strong>{{ flow.report.filename }}</strong>
-          <small>第 {{ flow.report.versionNo }} 版｜{{ flow.report.fileSizeBytes }} bytes</small>
-        </div>
-        <button
-          class="solid-button solid-button--primary"
-          type="button"
-          data-testid="go-to-submit"
-          :disabled="!canProceedToSubmit"
-          :title="canProceedToSubmit ? '前往輸出預覽與送審' : '必須先修正 ERROR 並通過檢核'"
-          @click="goToSubmit"
-        >
-          {{ canProceedToSubmit ? '前往輸出預覽與送審' : '請先完成阻擋項目' }}
-        </button>
-      </section>
 
       <footer v-if="activeWizardStep <= 4" class="wizard-footer" aria-label="估價流程導覽">
         <button class="wizard-footer__secondary" type="button" :disabled="activeWizardStep === 1" @click="wizardPrevious">← 上一步</button>
@@ -2541,6 +2217,9 @@ onBeforeUnmount(clearPreviewUrl)
 .document-list li span { color: var(--app-muted); font-size: 10px; }
 .document-list__actions { display: flex !important; width: 100%; min-width: 0; align-items: center; flex-wrap: wrap; gap: 6px !important; }
 .document-list__actions .finding-action { margin-top: 0; white-space: nowrap; }
+.document-list__analysis-form { display: flex; min-width: 210px; flex: 1 1 240px; align-items: center; gap: 6px; color: var(--app-muted); font-size: 10px; font-weight: 800; }
+.document-list__analysis-form > span { flex: 0 0 auto; }
+.document-list__analysis-form select { width: 100%; min-width: 0; min-height: 36px; padding: 6px 8px; border: 1px solid var(--app-line); border-radius: 7px; color: var(--app-ink); background: #fff; font-size: 11px; }
 .document-list__manage { display: grid !important; grid-template-columns: auto minmax(0, 1fr) auto auto; flex: 1 1 100%; width: 100%; min-width: 0; align-items: center; gap: 6px !important; }
 .document-list__manage label { color: var(--app-muted); font-size: 10px; font-weight: 800; }
 .document-list__manage select { width: 100%; min-width: 0; min-height: 36px; padding: 6px 8px; border: 1px solid var(--app-line); border-radius: 7px; color: var(--app-ink); background: #fff; font-size: 11px; }
@@ -2764,6 +2443,7 @@ onBeforeUnmount(clearPreviewUrl)
   .upload-form { grid-template-columns: 1fr; }
   .document-list li, .supplement-panel__list li, .candidate-card__heading, .candidate-submit, .candidate-history li { align-items: stretch; flex-direction: column; }
   .document-list__actions { align-items: stretch; }
+  .document-list__analysis-form { min-width: 0; align-items: stretch; flex-direction: column; }
   .document-list__manage { grid-template-columns: 1fr; align-items: stretch; }
   .document-preview__heading, .data-confirmation-nav__heading, .calculation-launch__copy { align-items: stretch; flex-direction: column; }
   .data-subnav { grid-template-columns: repeat(2, minmax(0, 1fr)); }

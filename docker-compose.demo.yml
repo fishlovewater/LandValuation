@@ -19,6 +19,29 @@ services:
   minio-init:
     container_name: land_valuation_persistent_demo_minio_init
 
+  knowledge-init:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    container_name: land_valuation_persistent_demo_knowledge_init
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./需要放入MINIO的東西:/demo-sources:ro
+    entrypoint: >-
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
+      mc cp '/demo-sources/土地徵收條例.pdf' 'local/land-valuation/knowledge/official/土地徵收條例.pdf' &&
+      mc cp '/demo-sources/土地徵收條例施行細則.pdf' 'local/land-valuation/knowledge/official/土地徵收條例施行細則.pdf' &&
+      mc cp '/demo-sources/土地徵收補償市價查估辦法.pdf' 'local/land-valuation/knowledge/official/土地徵收補償市價查估辦法.pdf' &&
+      mc cp '/demo-sources/土地徵收補償市價查估作業手冊.pdf' 'local/land-valuation/knowledge/official/土地徵收補償市價查估作業手冊.pdf' &&
+      mc cp '/demo-sources/新北市土地徵收補償市價查估書表製作手冊4-10章.pdf' 'local/land-valuation/knowledge/official/新北市土地徵收補償市價查估書表製作手冊4-10章.pdf' &&
+      mc cp '/demo-sources/新北市土地徵收補償市價查估書表製作手冊11章(提案表範例).pdf' 'local/land-valuation/knowledge/official/新北市土地徵收補償市價查估書表製作手冊11章(提案表範例).pdf'
+      "
+    restart: "no"
+
   api:
     container_name: land_valuation_persistent_demo_api
     ports: !override
@@ -28,6 +51,7 @@ services:
       DEMO_QUICK_LOGIN_ENABLED: "true"
       DEMO_SOURCE_DIR: /app/demo-sources
       DOCUMENT_EXTRACTION_PROVIDER: local_ocr
+      KNOWLEDGE_ANSWER_PROVIDER: ollama
       AI_PROVIDER: ollama
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: qwen3.5:latest

@@ -261,7 +261,7 @@ function workflowToolLabel(toolName: string): string {
     run_validation: '製作前檢核',
     generate_report_pdf: '正式報告 PDF',
   }
-  return labels[toolName] ?? '後端工作'
+  return labels[toolName] ?? '系統作業'
 }
 
 function workflowStatusLabel(status: string): string {
@@ -279,7 +279,7 @@ function workflowToolSummary(tool: AssistantMessageResponseDto['tools'][number])
   if (!result || typeof result !== 'object' || Array.isArray(result)) return ''
   if (tool.tool_name === 'run_calculation') {
     const value = result.result
-    return typeof value === 'string' || typeof value === 'number' ? `計算結果：${value}` : '後端已完成計算。'
+    return typeof value === 'string' || typeof value === 'number' ? `計算結果：${value}` : '系統已完成計算。'
   }
   if (tool.tool_name === 'run_validation') {
     const failed = typeof result.failed_count === 'number' ? result.failed_count : null
@@ -287,10 +287,10 @@ function workflowToolSummary(tool: AssistantMessageResponseDto['tools'][number])
     if (failed !== null || warnings !== null) {
       return `檢核結果：ERROR ${failed ?? 0} 項，警示 ${warnings ?? 0} 項。`
     }
-    return '後端已完成製作前檢核。'
+    return '系統已完成製作前檢核。'
   }
   if (tool.tool_name === 'generate_report_pdf') {
-    return tool.status === 'SUCCESS' ? '後端已產生正式報告。' : '後端尚未產生正式報告。'
+    return tool.status === 'SUCCESS' ? '系統已產生正式報告。' : '目前尚未產生正式報告。'
   }
   return ''
 }
@@ -327,11 +327,11 @@ onBeforeUnmount(() => {
 <template>
   <div class="assistant-view" data-testid="assistant-view">
     <PageHeader
-      eyebrow="ASSISTED KNOWLEDGE WORKSPACE"
+      eyebrow="智能助理"
       title="智能助理"
       :description="generalKnowledgeMode
-        ? '可直接查詢法規、條文與知識文件；一般知識模式不會帶入任何案件資料。'
-        : '在已授權的估價案件工作階段中提問，並以後端回傳的來源協助核對。'"
+        ? '可直接查詢法規、條文與知識文件，回答會附上可核對來源。'
+        : '可針對目前案件提問，並以系統中的案件資料與來源協助核對。'"
       >
       <template #actions>
         <button
@@ -350,19 +350,19 @@ onBeforeUnmount(() => {
     </PageHeader>
 
     <GlassCard class="assistant-frame">
-      <template #title>{{ generalKnowledgeMode ? '法規與知識問答' : '案件脈絡中的問答' }}</template>
+      <template #title>智能助理問答</template>
       <template #meta>
         {{ generalKnowledgeMode
-          ? '不需要選取案件；只使用知識庫中可核對的來源回答。'
-          : '只顯示目前回應所附的資料；不自行補寫法規、頁碼或案件摘要。' }}
+          ? '只使用知識庫中可核對的來源回答。'
+          : '目前已帶入案件資料；回答仍以可核對的系統資料與來源為準。' }}
       </template>
 
-      <LoadingSkeleton v-if="loading" :rows="4" label="智能助理工作階段載入中" />
+      <LoadingSkeleton v-if="loading" :rows="4" label="正在載入智能助理" />
       <ErrorState v-else-if="error && !session" :message="error" @retry="loadSession" />
       <EmptyState
         v-else-if="!generalKnowledgeMode && !hasContext && !session"
-        title="尚未選取可用的 F03 案件脈絡"
-        :description="canStartSession ? '請先從已授權的估價案件開啟智能助理；未經授權的案件資料不會送出。' : '目前帳號缺少 valuation.read，無法建立案件工作階段。'"
+        title="尚未選取可用的 F03 案件"
+        :description="canStartSession ? '請先從可查看的估價案件開啟智能助理。' : '目前帳號沒有查看估價案件的權限。'"
       >
         <template #action>
           <RouterLink class="assistant-view__back-link" to="/app/valuation/dashboard">回到估價作業</RouterLink>
@@ -371,7 +371,7 @@ onBeforeUnmount(() => {
       <template v-else>
         <div class="assistant-context" data-testid="assistant-context" role="status">
           <span class="assistant-context__dot" aria-hidden="true" />
-          <span>{{ session ? '已建立案件工作階段' : '一般知識模式 · 不帶入案件資料' }}</span>
+          <span>{{ session ? '目前案件資料已載入' : '目前未帶入案件資料' }}</span>
           <span v-if="session" class="assistant-context__step">目前步驟：{{ session.currentStep }}</span>
         </div>
 
@@ -380,7 +380,7 @@ onBeforeUnmount(() => {
         <div class="assistant-conversation" aria-live="polite">
           <div v-if="!messages.length" class="assistant-conversation__empty">
             <strong>請輸入問題</strong>
-            <p>回答只會以後端回傳內容與可核對引用為依據。</p>
+            <p>回答只會使用目前可核對的案件資料與文件來源。</p>
           </div>
           <div v-for="message in messages" :key="message.id" class="assistant-message" :class="`assistant-message--${message.role}`">
             <div v-if="message.role === 'user'" class="assistant-message__user">{{ message.content }}</div>
@@ -401,7 +401,7 @@ onBeforeUnmount(() => {
             :aria-describedby="questionValidationMessage ? 'assistant-question-validation' : undefined"
             :placeholder="generalKnowledgeMode
               ? '例如：請查詢土地估價相關條文與適用依據。'
-              : '例如：請說明目前工作階段還缺少哪些資料？'"
+              : '例如：請說明目前這筆案件還缺少哪些資料？'"
           />
           <p
             v-if="!canAskQuestion"
@@ -410,8 +410,8 @@ onBeforeUnmount(() => {
             role="status"
           >
             {{ generalKnowledgeMode
-              ? '一般知識問答需要 assistant.use 與 knowledge.read 權限。'
-              : '案件引用問答需要 knowledge.read 與 case.read 權限。' }}
+              ? '目前帳號沒有查詢法規與知識文件的權限。'
+              : '目前帳號沒有查看案件資料與來源文件的權限。' }}
           </p>
           <p
             v-if="questionValidationMessage"
@@ -444,10 +444,10 @@ onBeforeUnmount(() => {
         >
           <div class="assistant-workflow__heading">
             <div>
-              <span class="assistant-workflow__eyebrow">SERVER WORKFLOW</span>
+              <span class="assistant-workflow__eyebrow">估價作業</span>
               <h3 id="assistant-workflow-title">估價工作操作</h3>
             </div>
-            <p>只送出後端既有操作旗標；欄位套用與草稿儲存需先有實際候選資料。</p>
+            <p>計算、檢核與報告會依目前已確認的案件資料執行；尚未確認的辨識結果不會直接套用。</p>
           </div>
           <div class="assistant-workflow__actions">
             <button
@@ -477,12 +477,12 @@ onBeforeUnmount(() => {
           </div>
 
           <section v-if="workflowResponse" class="assistant-workflow__result" data-testid="assistant-workflow-result" aria-live="polite">
-            <h4>後端工作結果</h4>
+            <h4>處理結果</h4>
             <p>目前步驟：{{ workflowResponse.progress.current_step }}</p>
             <p>
               進度：{{ workflowResponse.progress.completed_items }} / {{ workflowResponse.progress.total_items }}；
-              已確認候選 {{ workflowResponse.progress.confirmed_candidate_count }} 筆；
-              待確認 {{ workflowResponse.progress.pending_candidate_count }} 筆。
+              已確認資料 {{ workflowResponse.progress.confirmed_candidate_count }} 筆；
+              待確認資料 {{ workflowResponse.progress.pending_candidate_count }} 筆。
             </p>
             <ul v-if="workflowResponse.tools.length" class="assistant-workflow__tools">
               <li v-for="tool in workflowResponse.tools" :key="`${tool.tool_name}-${tool.status}`">

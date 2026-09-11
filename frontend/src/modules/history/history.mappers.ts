@@ -34,7 +34,7 @@ const DOCUMENT_TYPE_LABELS: Readonly<Record<string, string>> = {
   PHOTOS: '現場照片',
   ATTACHMENTS: '附件',
   'COMPLETE-VALUATION-REPORT': '完整估價報告',
-  'CANDIDATE-CONFIRMATION-EXPORT': '候選確認匯出',
+  'CANDIDATE-CONFIRMATION-EXPORT': '辨識結果確認匯出',
   'GENERATED-DRAFT-REPORT': '草稿報告',
   'GENERATED-REPORT': '正式報告',
   'REVIEW-REPORT': '審查風險報告',
@@ -281,7 +281,7 @@ export function mapHistoryTimeline(dto: HistoryCaseDetailDto): HistoryTimelineEv
     idKey: 'valuation_id',
     description: (row) => {
       const status = stringValue(row.result_status)
-      return status ? `估價結果：${statusLabel(status)}` : '伺服器已保存估價結果。'
+      return status ? `估價結果：${statusLabel(status)}` : '估價結果已保存。'
     },
   })
   addRowEvent(events, rows(valuation, 'validation_runs'), {
@@ -292,7 +292,7 @@ export function mapHistoryTimeline(dto: HistoryCaseDetailDto): HistoryTimelineEv
     idKey: 'validation_run_id',
     description: (row) => {
       const status = stringValue(row.run_status)
-      return status ? `檢核狀態：${statusLabel(status)}` : '伺服器已完成估價檢核。'
+      return status ? `檢核狀態：${statusLabel(status)}` : '估價檢核已完成。'
     },
   })
 
@@ -351,7 +351,7 @@ export function mapHistoryTimeline(dto: HistoryCaseDetailDto): HistoryTimelineEv
     idKey: 'risk_summary_id',
     description: (row) => {
       const level = stringValue(row.overall_risk_level)
-      return level ? `風險等級：${riskLabel(level)}` : '伺服器已更新風險摘要。'
+      return level ? `風險等級：${riskLabel(level)}` : '風險摘要已更新。'
     },
   })
 

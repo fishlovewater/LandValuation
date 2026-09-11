@@ -52,7 +52,7 @@ watch(() => route?.hash, focusLoginFromHash)
         <p class="eyebrow"><span class="eyebrow__dot" aria-hidden="true" />土地估價審查工作台</p>
         <h1 id="hero-title">讓每一次估價，<em>都有可追溯的依據。</em></h1>
         <p class="hero__lead">
-          把估價資料、審查判斷與案件脈絡放在同一條清楚的工作線上，讓團隊更快看懂、更穩定交付。
+          把估價資料、審查判斷與案件資訊放在同一條清楚的工作線上，讓團隊更快看懂、更穩定完成作業。
         </p>
         <div class="hero__actions">
           <GlassButton variant="accent" pill size="lg" @click="focusLogin">
@@ -65,7 +65,7 @@ watch(() => route?.hash, focusLoginFromHash)
           </a>
         </div>
         <div class="hero__proof" aria-label="平台重點">
-          <span><Check :size="15" weight="bold" aria-hidden="true" />證據有脈絡</span>
+          <span><Check :size="15" weight="bold" aria-hidden="true" />來源可追溯</span>
           <span><Check :size="15" weight="bold" aria-hidden="true" />判斷可說明</span>
           <span><Check :size="15" weight="bold" aria-hidden="true" />流程可協作</span>
         </div>
@@ -79,7 +79,7 @@ watch(() => route?.hash, focusLoginFromHash)
 
     <section id="capabilities" class="capabilities public-container" aria-labelledby="capabilities-title">
       <div class="section-heading">
-        <p class="eyebrow">一個入口，四段工作脈絡</p>
+        <p class="eyebrow">一個入口，串起四段作業</p>
         <h2 id="capabilities-title">每個角色，都看見下一個清楚的動作。</h2>
       </div>
       <div class="value-grid">
@@ -92,8 +92,8 @@ watch(() => route?.hash, focusLoginFromHash)
         <GlassCard class="value-card">
           <span class="value-card__icon value-card__icon--blue" aria-hidden="true"><Sparkle :size="22" weight="duotone" /></span>
           <p class="value-card__label">智能助理</p>
-          <h3>在需要時補上脈絡</h3>
-          <p>把問題留在案件上下文中，協助你找到可核對的資訊。</p>
+          <h3>在需要時補上資訊</h3>
+          <p>可直接針對目前案件提問，協助你找到可核對的資料與來源。</p>
         </GlassCard>
         <GlassCard class="value-card">
           <span class="value-card__icon value-card__icon--green" aria-hidden="true"><ShieldCheck :size="22" weight="duotone" /></span>
@@ -119,7 +119,7 @@ watch(() => route?.hash, focusLoginFromHash)
         <article class="process-step">
           <span class="process-step__number">01</span>
           <h3>整理</h3>
-          <p>在同一個案件脈絡中備妥資料與必要文件。</p>
+          <p>在同一個案件中備妥資料與必要文件。</p>
         </article>
         <article class="process-step">
           <span class="process-step__number">02</span>

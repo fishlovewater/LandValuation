@@ -18,7 +18,7 @@ function moduleLabel(module: HistoryTimelineEvent['module']): string {
   <section class="case-timeline" aria-labelledby="case-timeline-title">
     <div class="case-timeline__heading">
       <div>
-        <p class="case-timeline__eyebrow">CHRONOLOGICAL RECORD</p>
+        <p class="case-timeline__eyebrow">案件歷程</p>
         <h2 id="case-timeline-title">案件時間軸</h2>
       </div>
       <span class="case-timeline__count">{{ events.length }} 筆事件</span>

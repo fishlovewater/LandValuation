@@ -30,13 +30,13 @@ function fileSize(value: number): string {
   <section class="document-list" aria-labelledby="history-documents-title">
     <div class="document-list__heading">
       <div>
-        <p class="document-list__eyebrow">AUTHORIZED DOCUMENTS</p>
-        <h2 id="history-documents-title">授權文件</h2>
+        <p class="document-list__eyebrow">相關文件</p>
+        <h2 id="history-documents-title">案件文件</h2>
       </div>
       <span class="document-list__count">{{ documents.length }} 份</span>
     </div>
 
-    <p v-if="!documents.length" class="document-list__empty">目前沒有文件 metadata。</p>
+    <p v-if="!documents.length" class="document-list__empty">目前沒有可查看的案件文件。</p>
     <ul v-else class="document-list__items">
       <li v-for="document in documents" :key="document.documentId" class="document-list__item">
         <div class="document-list__icon" aria-hidden="true">↗</div>

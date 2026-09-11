@@ -93,7 +93,7 @@ async function setEnabled(next: boolean): Promise<void> {
     await valuationApi.updateReportPage(props.caseId, props.reportId, 'F02', { comparison_workflow_enabled: next })
     notice.value = next
       ? '已啟用比較分析；正式計算前請建立或套用一組可追溯的比較分析。'
-      : '已停用本報告的比較分析；正式計算將依後端規則走不使用比較標的的合法流程。'
+      : '已停用本報告的比較分析；正式計算會依目前案件設定處理，不再要求比較標的。'
     emit('changed')
   } catch (caught: unknown) {
     enabled.value = previous
@@ -159,22 +159,22 @@ watch(targetCount, syncTargetCount)
   <section class="comparison-setup" data-testid="comparison-setup" tabindex="-1" aria-labelledby="comparison-setup-title">
     <header class="comparison-setup__header">
       <div>
-        <p>STRUCTURED COMPARISON</p>
+        <p>比較法資料</p>
         <h3 id="comparison-setup-title">比較法設定</h3>
-        <span>比準地、交易案例與權重由正式後端流程建立，不需要輸入資料庫 UUID 或修改 raw JSON。</span>
+        <span>請選擇比準地、交易案例與權重；系統會自動處理必要的資料關聯。</span>
       </div>
       <label class="comparison-setup__toggle">
         <input :checked="enabled" type="checkbox" data-testid="comparison-workflow-enabled" :disabled="busy || page.form_status !== 'DRAFT'" @change="setEnabled(($event.target as HTMLInputElement).checked)">
         <span>啟用比較分析</span>
       </label>
     </header>
-    <p class="comparison-setup__rule-note">正式規則版本由伺服器依案件類型、行政區、土地使用與有效日期自動選用；一般使用者不需手動輸入 rule version ID。</p>
+    <p class="comparison-setup__rule-note">適用的正式規則會依案件類型、行政區、土地使用與有效日期自動選用，不需要手動指定。</p>
     <p v-if="loading" class="comparison-setup__muted">正在載入比較分析資料…</p>
     <p v-if="error" class="comparison-setup__error" role="alert">{{ error }}</p>
     <p v-if="notice" class="comparison-setup__notice" role="status">{{ notice }}</p>
 
     <template v-if="!loading && context">
-      <div v-if="!enabled" class="comparison-setup__disabled" data-testid="comparison-disabled-note">本報告目前不使用比較標的。正式計算仍由伺服器執行，且不會要求比準地、比較分析或比較標的。</div>
+      <div v-if="!enabled" class="comparison-setup__disabled" data-testid="comparison-disabled-note">本報告目前不使用比較標的，因此不需要建立比準地、比較分析或比較案例。</div>
       <template v-else>
         <section class="comparison-setup__existing" aria-labelledby="existing-comparison-title">
           <div><strong id="existing-comparison-title">套用既有分析</strong><span>{{ currentAnalysisId ? '目前正式頁面已連結一組比較分析。' : '若此案件已有可用分析，可直接套用到目前報告版本。' }}</span></div>

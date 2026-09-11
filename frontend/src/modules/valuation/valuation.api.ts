@@ -313,6 +313,18 @@ export const valuationApi = {
     return response.data
   },
 
+  async analyzeDocumentFields(
+    caseId: string,
+    documentId: string,
+    formCode: 'S01' | 'F01' | 'F02' | 'F02-RF' | 'F03' | 'F04',
+  ): Promise<ExtractionResponseDto> {
+    const response = await http.post<ExtractionResponseDto>(
+      `/valuation/cases/${caseId}/documents/${documentId}/extraction/analyze-fields`,
+      { form_code: formCode },
+    )
+    return response.data
+  },
+
   async getReportProgress(caseId: string): Promise<ReportProgressResponseDto> {
     const response = await http.get<ReportProgressResponseDto>(
       `/valuation/cases/${caseId}/report-progress`,

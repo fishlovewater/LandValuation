@@ -257,9 +257,9 @@ onBeforeUnmount(() => activeController?.abort())
 <template>
   <section class="history-search" data-testid="history-search">
     <PageHeader
-      eyebrow="CASE HISTORY"
+      eyebrow="案件查詢"
       title="案件歷程"
-      description="以伺服器支援的條件搜尋案件、結構化資料與授權文件歷程。"
+      description="搜尋你有權查看的案件，並查看估價、審查、文件與歷程資料。"
     >
       <template #actions>
         <span class="history-search__permission">{{ formatPermissionText() }}</span>
@@ -269,7 +269,7 @@ onBeforeUnmount(() => activeController?.abort())
     <form v-liquid-glass data-lg class="history-search__form lg" data-testid="history-search-form" @submit.prevent="applySearch">
       <div class="history-search__form-heading">
         <div>
-          <p class="history-search__eyebrow">SUPPORTED SEARCH</p>
+          <p class="history-search__eyebrow">搜尋案件</p>
           <h2>搜尋條件</h2>
         </div>
         <div class="history-search__form-tools">
@@ -369,7 +369,7 @@ onBeforeUnmount(() => activeController?.abort())
     <section v-liquid-glass data-lg class="history-search__results lg" aria-labelledby="history-results-title">
       <div class="history-search__results-heading">
         <div>
-          <p class="history-search__eyebrow">CASE RECORDS</p>
+          <p class="history-search__eyebrow">搜尋結果</p>
           <h2 id="history-results-title">案件清單</h2>
         </div>
         <span class="history-search__total">共 {{ total }} 件 · 第 {{ page }} / {{ pageCount }} 頁</span>
@@ -400,7 +400,7 @@ onBeforeUnmount(() => activeController?.abort())
                   <button type="button" class="history-search__case-link" @click="openCase(item)">{{ item.name }}</button>
                   <div class="history-search__case-meta">
                     <span v-if="item.hasStructuredData">有結構化資料</span>
-                    <span v-if="!item.hasDocumentMetadata">尚無文件 metadata</span>
+                    <span v-if="!item.hasDocumentMetadata">尚無文件資料</span>
                   </div>
                 </td>
                 <td>{{ item.district || '—' }}</td>

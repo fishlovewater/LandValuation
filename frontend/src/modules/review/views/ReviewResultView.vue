@@ -134,7 +134,7 @@ onMounted(load)
 <template>
   <section class="review-result" data-testid="review-result">
     <PageHeader
-      eyebrow="REVIEW RESULT"
+      eyebrow="審查結果"
       title="審查結果"
       :description="detail ? `${detail.caseNo} · ${detail.caseTitle}` : '查看授權的審查報告與輸出。'"
     >
@@ -164,7 +164,7 @@ onMounted(load)
       <section v-liquid-glass data-lg class="review-result__report lg" aria-labelledby="review-report-title">
         <div class="review-result__heading">
           <div>
-            <p class="review-result__eyebrow">AUTHORIZED REPORT ACCESS</p>
+            <p class="review-result__eyebrow">審查報告</p>
             <h2 id="review-report-title">結構化審查報告</h2>
           </div>
           <div class="review-result__actions">

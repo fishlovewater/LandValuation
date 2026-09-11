@@ -28,3 +28,22 @@ export interface AuthUser {
   roles: string[]
   permissions: string[]
 }
+
+export interface AccountAccessRequestPayload {
+  username: string
+  email: string
+  display_name: string
+  requested_role: DemoLoginRole
+  reason?: string | null
+}
+
+export interface AccountAccessRequestResponseDto {
+  request_id: string
+  status: 'PENDING' | 'APPROVED' | 'REJECTED'
+  message: string
+}
+
+export interface PasswordResetRequestResponseDto {
+  message: string
+  debug_token?: string | null
+}

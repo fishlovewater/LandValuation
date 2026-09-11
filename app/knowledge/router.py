@@ -103,9 +103,22 @@ async def provider_status(_user: KnowledgeReader) -> KnowledgeProviderStatusResp
             provider=provider,
             configured=True,
             runtime_available=True,
-            note="目前未啟用 Codex CLI 測試 provider。",
+            note="目前只顯示可核對來源，不會由 AI 整理答案。",
         )
     selected = create_provider(settings)
+    if provider == "ollama":
+        configured = selected.configured()
+        return KnowledgeProviderStatusResponse(
+            provider=provider,
+            configured=configured,
+            runtime_available=configured,
+            model_id=selected.model_id,
+            note=(
+                "本機 AI 問答已設定完成。"
+                if configured
+                else "本機 AI 問答尚未完成設定。"
+            ),
+        )
     if provider == "bedrock":
         configured = selected.configured()
         return KnowledgeProviderStatusResponse(

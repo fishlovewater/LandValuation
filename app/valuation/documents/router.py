@@ -16,9 +16,11 @@ from app.core.document_text_preview import (
 )
 from app.core.exceptions import AppError, StorageError
 from app.core.spreadsheet_preview import (
+    XLS_MIME_TYPE,
+    XLSX_MIME_TYPE,
     SpreadsheetPreview,
     SpreadsheetPreviewTooLargeError,
-    preview_storage_xlsx,
+    preview_storage_spreadsheet,
 )
 from app.storage.dependencies import Storage
 from app.valuation.documents.schemas import (
@@ -147,13 +149,18 @@ async def preview_spreadsheet_document(
     user: DocumentDownloader,
 ) -> SpreadsheetPreview:
     record = await DocumentService(session, storage).get_document(case_id, document_id, user)
-    if record.mime_type != "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+    if record.mime_type not in {XLSX_MIME_TYPE, XLS_MIME_TYPE}:
         raise AppError("PREVIEW_NOT_SUPPORTED", "此文件不是可預覽的 Excel 活頁簿", 415)
     max_bytes = get_settings().document_preview_max_bytes
     if record.file_size_bytes > max_bytes:
         raise AppError("PREVIEW_TOO_LARGE", "Excel 檔案過大，請下載後查看完整內容", 413)
     try:
-        return await preview_storage_xlsx(storage, record.object_key, max_bytes=max_bytes)
+        return await preview_storage_spreadsheet(
+            storage,
+            record.object_key,
+            mime_type=record.mime_type,
+            max_bytes=max_bytes,
+        )
     except SpreadsheetPreviewTooLargeError as exc:
         raise AppError("PREVIEW_TOO_LARGE", "Excel 檔案過大，請下載後查看完整內容", 413) from exc
     except StorageError as exc:

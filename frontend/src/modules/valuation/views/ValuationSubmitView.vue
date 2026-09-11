@@ -149,15 +149,15 @@ const readinessMessage = computed(() => {
   if (!flow.authoritativeF02) return '尚未取得 F02 最終表單，無法建立權威送審來源。'
   if (!flow.reportPackageId) return 'F02 尚未提供正式報告包識別碼。'
   if (!flow.completeReport && !flow.formalReport) return '尚未找到啟用中的完整估價報告文件，無法送審。'
-  if (flow.validation && !flow.validation.canGenerateReport) return '送審動作依伺服器檢核結果暫停。'
-  if (flow.validation && !flow.report) return '尚未取得伺服器正式輸出。'
-  if (expectedCaseVersion.value === null) return '尚未取得權威 F02 版本，無法建立送審命令。'
+  if (flow.validation && !flow.validation.canGenerateReport) return '目前仍有待修正的檢核項目，暫時無法送審。'
+  if (flow.validation && !flow.report) return '尚未產生 F03 正式輸出。'
+  if (expectedCaseVersion.value === null) return '尚未取得可送審的 F02 版本。'
   if (!flow.formalValidation) return '請先執行 F02 正式檢核。'
   if (!flow.formalValidation.canGenerateFormalReport) return 'F02 正式檢核回傳阻擋項目，暫停送審。'
   if (!warningsAcknowledged.value) return '請逐項確認正式檢核警示後產生 PDF。'
   if (!flow.formalReport) return '請先產生完整送審 PDF。'
   if (!formalOutputReady.value) return '正式 PDF 或 F02 FINAL 狀態尚未完成，暫停送審。'
-  return '伺服器已提供可送審的正式輸出。'
+  return '正式輸出已準備完成，可以送審。'
 })
 
 function reportPageLabel(code: ReportPageCode): string {
@@ -282,7 +282,7 @@ async function loadReportPageEditors(): Promise<void> {
     ])
     if (!isCurrentCase(token, requestedCaseId)) return
     reportPageEditors.value = { S01: s01, 'F02-RF': f02Rf, F02: f02 }
-    editorNotice.value = '三頁草稿已由伺服器載入。可修改後逐頁儲存，再進行三頁確認、正式計算與檢核。'
+    editorNotice.value = '三頁草稿已載入。可修改後逐頁儲存，再進行確認、正式計算與檢核。'
   } catch (caught: unknown) {
     if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
   } finally {
@@ -409,7 +409,7 @@ async function goToFormalFinding(finding: FormalValidationFindingModel): Promise
     return
   }
   if (target.systemRule) {
-    editorNotice.value = `${finding.code}：正式規則版本由伺服器依案件適用範圍自動選用。若沒有可用的 PUBLISHED / VERIFIED 規則，需由規則管理流程處理，估價人員不應手動輸入 UUID。`
+    editorNotice.value = '正式規則會依案件適用範圍自動選用；若目前沒有可用規則，請由規則管理人員處理。'
     return
   }
   if (!Object.keys(reportPageEditors.value).length) await loadReportPageEditors()
@@ -419,7 +419,7 @@ async function goToFormalFinding(finding: FormalValidationFindingModel): Promise
     const setup = document.querySelector<HTMLElement>('[data-testid="comparison-setup"]')
     setup?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
     setup?.focus?.()
-    editorNotice.value = `${finding.code}：請在「比較法設定」建立或套用可追溯的比較分析；不需要手動修改比較分析 ID 或 raw JSON。`
+    editorNotice.value = '請在「比較法設定」建立或套用可追溯的比較分析。'
     return
   }
   if (!target.pageCode) return
@@ -542,7 +542,7 @@ async function validateReportPages(): Promise<void> {
     flow.formalReport = null
     acknowledgedWarningCodes.value = []
     if (!result.can_generate_formal_report) {
-      error.value = '三頁正式檢核仍有阻擋項目，請依伺服器結果補正。'
+      error.value = '三頁正式檢核仍有待修正項目，請依檢核結果補正。'
       return
     }
     if (!(await refreshAuthoritativePackage(token, requestedCaseId))) {
@@ -775,7 +775,7 @@ async function generateFormalPdf(): Promise<void> {
     !isCurrentCase(token, requestedCaseId)
   ) {
     if (formalValidation && !warningsAcknowledged.value) {
-      error.value = '請先逐項確認所有正式檢核 WARNING，不能由系統代為確認。'
+      error.value = '請先逐項確認所有正式檢核警示；系統不會代為確認。'
     }
     return
   }
@@ -877,9 +877,9 @@ watch(caseId, () => {
   <div class="valuation-view">
     <ValuationStepNavigator :current-step="currentStep" />
     <PageHeader
-      eyebrow="SUBMIT FOR REVIEW"
+      eyebrow="送審確認"
       title="送審確認"
-      description="送審命令只帶入伺服器回傳的檢核、正式輸出與版本資訊；前端不自行判定或計算門檻。"
+      description="確認檢核結果、正式輸出與版本均已完成後，再送交審查。"
     />
     <ValuationIssueDrawer
       v-if="flow.case"
@@ -900,10 +900,10 @@ watch(caseId, () => {
           <span class="source-marker" :data-status="flow.submission?.caseStatus ?? flow.case.status">案件狀態：{{ displayedCaseStatus }}</span>
         </div>
         <div class="summary-grid">
-          <div><span>案件來源</span><strong>伺服器案件資料</strong></div>
-          <div><span>F02 權威版本</span><strong>{{ flow.authoritativeF02 ? `第 ${flow.authoritativeF02.versionNo} 版` : '尚未取得' }}</strong></div>
+          <div><span>案件資料</span><strong>已載入目前案件</strong></div>
+          <div><span>F02 正式版本</span><strong>{{ flow.authoritativeF02 ? `第 ${flow.authoritativeF02.versionNo} 版` : '尚未取得' }}</strong></div>
           <div><span>完整估價報告</span><strong>{{ flow.formalReport?.filename || flow.completeReport?.filename || '尚未找到啟用文件' }}</strong></div>
-          <div><span>檢核批次</span><strong>{{ flow.validation?.validationRunId || '尚未執行' }}</strong></div>
+          <div><span>檢核狀態</span><strong>{{ flow.validation ? '已執行' : '尚未執行' }}</strong></div>
           <div><span>送審準備</span><strong>{{ readinessMessage }}</strong></div>
         </div>
       </section>
@@ -911,14 +911,14 @@ watch(caseId, () => {
       <section v-if="reportPageDraftId" v-liquid-glass data-lg class="valuation-surface report-package-flow lg" data-testid="report-package-draft-flow" aria-labelledby="report-package-title">
         <div class="surface-heading">
           <div>
-            <p class="valuation-eyebrow">REPORT PACKAGE DRAFT</p>
+            <p class="valuation-eyebrow">查估書確認</p>
             <h2 id="report-package-title">完整查估書三頁確認</h2>
           </div>
-          <span class="value-kind">報告包：{{ reportPageDraftId }}</span>
+          <span class="value-kind">三頁草稿</span>
         </div>
         <div v-if="flow.authoritativeF02" class="package-authoritative" data-testid="report-package-authoritative">
-          <strong>三頁已完成伺服器正式檢核</strong>
-          <span>F02 第 {{ flow.authoritativeF02.versionNo }} 版｜權威識別碼：{{ flow.reportPackageId }}</span>
+          <strong>三頁已完成正式檢核</strong>
+          <span>F02 第 {{ flow.authoritativeF02.versionNo }} 版</span>
         </div>
         <template v-else>
           <p class="empty-copy">先檢視或修改 S01、F02-RF、F02，再逐頁確認。修改後必須重新保存確認、正式計算與檢核。</p>
@@ -984,11 +984,11 @@ watch(caseId, () => {
       <section v-if="flow.validation" v-liquid-glass data-lg class="valuation-surface lg" data-testid="submit-validation" aria-labelledby="submit-validation-title">
         <div class="surface-heading">
           <div>
-            <p class="valuation-eyebrow">SERVER RESULT</p>
+            <p class="valuation-eyebrow">檢核結果</p>
             <h2 id="submit-validation-title">檢核與未解決項目</h2>
           </div>
           <span class="value-kind" :data-validation-state="flow.validation.canGenerateReport ? 'ready' : 'blocked'">
-            {{ flow.validation.canGenerateReport ? '伺服器允許產出' : '伺服器回傳阻擋' }}
+            {{ flow.validation.canGenerateReport ? '可以產出' : '仍有待修正項目' }}
           </span>
         </div>
         <div class="validation-counts">
@@ -998,25 +998,25 @@ watch(caseId, () => {
         </div>
         <ul v-if="flow.validation.findings.length" class="finding-list">
           <li v-for="finding in flow.validation.findings" :key="finding.findingId" :data-severity="finding.severity">
-            <strong>{{ finding.severity === 'ERROR' ? '阻擋' : '警示' }}｜{{ finding.ruleCode }}</strong>
+            <strong>{{ finding.severity === 'ERROR' ? '需要修正' : '請確認' }}</strong>
             <span>{{ finding.message }}</span>
             <small>實際值：{{ finding.actualValue ?? '—' }}</small>
-            <small>預期值（expected）：{{ finding.expectedValue ?? '—' }}</small>
+            <small>預期值：{{ finding.expectedValue ?? '—' }}</small>
             <button class="finding-action" type="button" @click="goBackToGeneralFinding(finding.fieldPath)">返回資料確認修正</button>
           </li>
         </ul>
-        <p v-else class="empty-copy">伺服器沒有回傳其他檢核訊息。</p>
-        <p v-if="blockers.length" class="blocker-note">仍有 {{ blockers.length }} 項伺服器阻擋項目，請回到資料確認頁處理。</p>
+        <p v-else class="empty-copy">目前沒有其他需要處理的檢核項目。</p>
+        <p v-if="blockers.length" class="blocker-note">仍有 {{ blockers.length }} 項待修正內容，請回到資料確認頁處理。</p>
       </section>
 
       <section v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="formal-validation-title">
         <div class="surface-heading">
           <div>
-            <p class="valuation-eyebrow">F02 FORMAL VALIDATION</p>
+            <p class="valuation-eyebrow">正式檢核</p>
             <h2 id="formal-validation-title">完整報告正式檢核</h2>
           </div>
           <span v-if="flow.formalValidation" class="value-kind" :data-validation-state="flow.formalValidation.canGenerateFormalReport ? 'ready' : 'blocked'">
-            {{ flow.formalValidation.canGenerateFormalReport ? '伺服器允許正式報告' : '伺服器回傳阻擋' }}
+            {{ flow.formalValidation.canGenerateFormalReport ? '可產生正式報告' : '仍有待修正項目' }}
           </span>
           <span v-else class="value-kind" data-validation-state="pending">尚未執行</span>
         </div>
@@ -1028,9 +1028,9 @@ watch(caseId, () => {
           </div>
           <ul v-if="flow.formalValidation.findings.length" class="finding-list">
             <li v-for="finding in flow.formalValidation.findings" :key="`${finding.code}-${finding.fieldCode ?? ''}`" :data-severity="finding.severity">
-              <strong>{{ finding.severity === 'ERROR' ? '阻擋' : '警示' }}｜{{ finding.code }}</strong>
+              <strong>{{ finding.severity === 'ERROR' ? '需要修正' : '請確認' }}</strong>
               <span>{{ finding.message }}</span>
-              <small v-if="finding.fieldCode">欄位：{{ formalFieldLabel(finding.fieldCode) }}（{{ finding.fieldCode }}）</small>
+              <small v-if="finding.fieldCode">欄位：{{ formalFieldLabel(finding.fieldCode) }}</small>
               <button
                 v-if="finding.severity === 'ERROR'"
                 class="finding-action"
@@ -1053,10 +1053,10 @@ watch(caseId, () => {
           </ul>
           <p v-else class="empty-copy">正式檢核沒有回傳其他訊息。</p>
           <p v-if="flow.formalValidation.canGenerateFormalReport && formalWarningCodes.length && !warningsAcknowledged" class="blocker-note">
-            請逐項確認所有 WARNING 後，才能產生正式 PDF；系統不會代為確認。
+            請逐項確認所有警示後，才能產生正式 PDF；系統不會代為確認。
           </p>
         </div>
-        <p v-else class="empty-copy">正式 PDF 產出前，必須先執行伺服器正式檢核。</p>
+        <p v-else class="empty-copy">正式 PDF 產出前，必須先完成正式檢核。</p>
         <div class="formal-actions">
           <button
             class="solid-button"
@@ -1083,14 +1083,14 @@ watch(caseId, () => {
       <section v-if="flow.formalReport" v-liquid-glass data-lg class="valuation-surface lg" data-testid="formal-pdf-result" aria-labelledby="formal-pdf-title">
         <div class="surface-heading">
           <div>
-            <p class="valuation-eyebrow">FORMAL PDF</p>
+            <p class="valuation-eyebrow">正式文件</p>
             <h2 id="formal-pdf-title">完整送審 PDF</h2>
           </div>
-          <span class="source-marker" data-source-kind="calculated">狀態：F02 FINAL</span>
+          <span class="source-marker" data-source-kind="calculated">正式版本</span>
         </div>
         <div class="artifact-card">
           <strong>{{ flow.formalReport.filename }}</strong>
-          <span>第 {{ flow.formalReport.versionNo }} 版｜{{ flow.formalReport.mimeType }}｜{{ flow.formalReport.fileSizeBytes }} bytes</span>
+          <span>第 {{ flow.formalReport.versionNo }} 版｜檔案大小 {{ Math.max(1, Math.round(flow.formalReport.fileSizeBytes / 1024)) }} KB</span>
           <small>這是主要送審產物。頁數依本案實際查估書表與附圖內容產生，不以固定六頁作為流程條件。</small>
           <button
             class="solid-button solid-button--primary artifact-card__download"
@@ -1107,14 +1107,14 @@ watch(caseId, () => {
       <section v-if="flow.report" v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="artifact-title">
         <div class="surface-heading">
           <div>
-            <p class="valuation-eyebrow">AVAILABLE OUTPUT</p>
+            <p class="valuation-eyebrow">流程附件</p>
             <h2 id="artifact-title">F03 單表輸出（流程附件）</h2>
           </div>
-          <span class="source-marker" data-source-kind="calculated">來源：伺服器輸出</span>
+          <span class="source-marker" data-source-kind="calculated">系統產生</span>
         </div>
         <div class="artifact-card">
           <strong>{{ flow.report.filename }}</strong>
-          <span>第 {{ flow.report.versionNo }} 版｜{{ flow.report.mimeType }}｜{{ flow.report.fileSizeBytes }} bytes</span>
+          <span>第 {{ flow.report.versionNo }} 版｜檔案大小 {{ Math.max(1, Math.round(flow.report.fileSizeBytes / 1024)) }} KB</span>
           <small>這是前段 F03 計算產生的單表輸出，保留作流程追溯；正式送審以「完整送審 PDF」為主。</small>
           <button
             class="solid-button artifact-card__download"
@@ -1135,7 +1135,7 @@ watch(caseId, () => {
         <div>
           <strong>{{ flow.submission ? '案件已送出審查' : readinessMessage }}</strong>
           <p v-if="flow.submission">送審時間：{{ formatDateZhTw(flow.submission.submittedAt) }}</p>
-          <p v-else>送審按鈕狀態只依伺服器回傳結果與正式輸出是否存在。</p>
+          <p v-else>完成必要檢核與正式輸出後即可送出審查。</p>
         </div>
         <button
           v-if="!flow.submission"

@@ -119,7 +119,7 @@ function save(): void {
           <article class="finding-panel__value-card finding-panel__value-card--system">
             <span>系統值</span>
             <strong data-testid="system-value">{{ display(finding.systemValue) }}</strong>
-            <small>伺服器規則結果，唯讀</small>
+            <small>系統依檢核規則計算，無法直接修改</small>
           </article>
         </div>
         <div v-if="finding.reportedGrade || finding.systemGrade" class="finding-panel__subvalues">
@@ -177,7 +177,7 @@ function save(): void {
             id="finding-reason"
             v-model="reason"
             label="審查理由（必填）"
-            hint="理由會原樣送交伺服器保存。"
+            hint="理由會完整保存於本次審查紀錄。"
             as="textarea"
             :rows="4"
             surface="solid"

@@ -153,7 +153,7 @@ onMounted(() => {
   <div class="valuation-view">
     <ValuationStepNavigator :current-step="1" />
     <PageHeader
-      eyebrow="VALUATION WORKSPACE"
+      eyebrow="估價作業"
       title="估價作業"
       description="建立或接續估價案件，依表單需求完成文件、欄位、計算、檢核與正式送審。"
     >
@@ -173,7 +173,7 @@ onMounted(() => {
           <p class="valuation-eyebrow">案件與文件</p>
           <h2 id="valuation-case-list-title">最近可處理案件</h2>
         </div>
-        <span class="source-marker" data-source-kind="automatic">來源：伺服器案件清單</span>
+        <span class="source-marker" data-source-kind="automatic">目前可處理案件</span>
       </div>
 
       <CaseTable

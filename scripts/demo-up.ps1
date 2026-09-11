@@ -26,8 +26,21 @@ function Invoke-DemoCompose {
         [switch]$DiscardOutput
     )
 
-    $output = & docker compose @ComposeArgs @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Docker Compose writes normal build/progress messages to stderr. Under
+        # Windows PowerShell, ErrorActionPreference=Stop can turn those messages
+        # into NativeCommandError records before LASTEXITCODE can be inspected.
+        # Treat the native process exit code as authoritative instead.
+        $ErrorActionPreference = 'Continue'
+        $output = & docker compose @ComposeArgs @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($exitCode -ne 0) {
         $summary = ($output | Select-Object -Last 12 | Out-String).Trim()
         throw "Demo Compose command failed: docker compose $($Arguments -join ' ')`n$summary"
     }
@@ -86,7 +99,7 @@ try {
     Write-Host 'Starting isolated Demo PostgreSQL, MinIO, migration, and API services...'
     Invoke-DemoCompose -Arguments @(
         'up', '-d',
-        'db', 'db-role-init', 'migrate', 'minio', 'minio-init', 'api'
+        'db', 'db-role-init', 'migrate', 'minio', 'minio-init', 'knowledge-init', 'api'
     ) -DiscardOutput
 
     Wait-DemoApiReady

@@ -2,6 +2,7 @@ from app.core.config import Settings
 from app.core.exceptions import AppError
 from app.knowledge.bedrock_provider import BedrockKnowledgeProvider
 from app.knowledge.codex_provider import CodexCliKnowledgeProvider
+from app.knowledge.ollama_provider import OllamaKnowledgeProvider
 
 
 def create_provider(settings: Settings):
@@ -16,8 +17,10 @@ def create_provider(settings: Settings):
         return CodexCliKnowledgeProvider(settings)
     if provider == "bedrock":
         return BedrockKnowledgeProvider(settings)
+    if provider == "ollama":
+        return OllamaKnowledgeProvider(settings)
     raise AppError(
         "AI_PROVIDER_CONFIGURATION_ERROR",
-        "KNOWLEDGE_ANSWER_PROVIDER 必須是 codex_cli、bedrock 或 evidence_only。",
+        "目前選用的知識問答服務未啟用，請聯絡系統管理者。",
         503,
     )

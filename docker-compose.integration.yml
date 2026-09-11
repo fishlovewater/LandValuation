@@ -95,6 +95,7 @@ services:
       MINIO_ACCESS_KEY: integration-root
       MINIO_SECRET_KEY: integration-minio-secret
       MINIO_SECURE: "false"
+      JWT_SECRET_KEY: integration-test-jwt-secret-at-least-32-bytes-long
       PYTEST_ARGS: ${PYTEST_ARGS}
       TMPDIR: /tmp
     volumes:
