@@ -72,8 +72,8 @@ function categoryValue(documentId: string): DocumentCategory {
   <div id="valuation-document-workspace" class="document-workspace" tabindex="-1">
     <div class="document-workspace__heading">
       <div>
-        <strong>來源文件與 AI 辨識</strong>
-        <span>先選文件預覽，再執行 AI / OCR 辨識。辨識結果不會直接改寫正式資料，仍需人工確認。</span>
+        <strong>來源文件與文件辨識</strong>
+        <span>先選擇文件預覽，再開始文件辨識（AI／OCR）。辨識結果不會直接改寫正式資料，仍需人工確認。</span>
       </div>
       <span>{{ documents.length }} 份</span>
     </div>
@@ -94,7 +94,7 @@ function categoryValue(documentId: string): DocumentCategory {
             <div class="document-list__actions">
               <button class="finding-action" type="button" @click="emit('preview', document.documentId)">預覽</button>
               <label v-if="canExtractDocument(document)" class="document-list__analysis-form">
-                <span>AI 對應表</span>
+                <span>辨識目標表單</span>
                 <select
                   :value="analysisFormValue(document.documentId)"
                   :data-testid="`document-analysis-form-${document.documentId}`"
@@ -114,7 +114,7 @@ function categoryValue(documentId: string): DocumentCategory {
                 :disabled="Boolean(extractionBusyDocumentId)"
                 @click="emit('extract', document.documentId)"
               >
-                {{ extractionBusyDocumentId === document.documentId ? 'AI 辨識中…' : documentCandidateCount(document.documentId) ? '重新 AI 辨識' : '開始 AI 辨識' }}
+                {{ extractionBusyDocumentId === document.documentId ? '辨識中…' : documentCandidateCount(document.documentId) ? '重新辨識' : '開始辨識' }}
               </button>
               <div v-if="canManageSourceDocument(document)" class="document-list__manage">
                 <label :for="`document-category-${document.documentId}`">分類</label>
@@ -170,7 +170,7 @@ function categoryValue(documentId: string): DocumentCategory {
           </div>
         </div>
         <div v-if="selectedCandidate?.source_text && selectedCandidate.document_id === previewDocumentId" class="document-preview__evidence" data-testid="candidate-source-evidence">
-          <strong>AI 對應原文{{ selectedCandidate.source_page ? ` · 第 ${selectedCandidate.source_page} 頁` : '' }}</strong>
+          <strong>辨識來源原文{{ selectedCandidate.source_page ? ` · 第 ${selectedCandidate.source_page} 頁` : '' }}</strong>
           <blockquote>{{ selectedCandidate.source_text }}</blockquote>
         </div>
       </section>

@@ -50,7 +50,7 @@ const emit = defineEmits<{
     <form class="confirmed-form" @submit.prevent="emit('save')">
       <div class="form-heading">
         <h3>人工確認欄位</h3>
-        <span class="value-kind" data-value-kind="human-confirmed">人工確認後保存</span>
+        <span class="value-kind" data-value-kind="human-confirmed">人工確認後儲存</span>
       </div>
       <fieldset class="field-grid" :disabled="!canEditF03">
         <label>

@@ -508,7 +508,7 @@ class FormalReportService:
             if self.storage is None or not await self.storage.object_exists(
                 document.object_key
             ):
-                warning("FORMAL_MAP_OBJECT_MISSING", f"MinIO 找不到附圖：{document_type}")
+                warning("FORMAL_MAP_OBJECT_MISSING", f"附圖目前無法讀取：{document_type}")
 
 
         fingerprint = None

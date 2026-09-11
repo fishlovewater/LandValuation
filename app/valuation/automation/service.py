@@ -108,6 +108,22 @@ F01_AUTO_APPLY_FIELDS = frozenset(
     {*F01DraftUpdate.model_fields, *F01_CANDIDATE_TO_DRAFT_FIELD}
 )
 
+# F04 is intentionally more conservative than F01.  These are the only
+# evidence fields that can be copied directly after a human confirmation.
+# Rule references, F03 result references, parcel rows/adjustments and all
+# calculated prices remain owned by the formal backend workflow.
+F04_CANDIDATE_TO_DRAFT_FIELD = {
+    "case_note": "notes",
+}
+F04_AUTO_APPLY_FIELDS = frozenset(
+    {
+        "valuation_base_date",
+        "price_zone_no",
+        "notes",
+        *F04_CANDIDATE_TO_DRAFT_FIELD,
+    }
+)
+
 AUTO_EXTRACT_MIME_TYPES = frozenset(
     {
         "application/pdf",
@@ -443,6 +459,11 @@ class AutomatedWorkflowService:
             warnings,
         )
         await self._apply_confirmed_codex_f01_candidates(
+            case_id,
+            user,
+            warnings,
+        )
+        await self._apply_confirmed_f04_candidates(
             case_id,
             user,
             warnings,
@@ -962,6 +983,109 @@ class AutomatedWorkflowService:
             if applied_any:
                 applied_form_ids.append(form.form_instance_id)
         return applied_form_ids
+
+    @staticmethod
+    def _normalized_confirmed_f04_value(field_name: str, value: object) -> object:
+        """Normalize only unambiguous F04 display values before schema validation."""
+        if value is None:
+            return None
+        if field_name == "valuation_base_date" and isinstance(value, str):
+            raw = value.strip().replace("/", "-").replace(".", "-")
+            try:
+                return date.fromisoformat(raw)
+            except ValueError:
+                match = re.fullmatch(r"(\d{2,3})\D+(\d{1,2})\D+(\d{1,2})\D*", value.strip())
+                if match:
+                    year, month, day = (int(part) for part in match.groups())
+                    try:
+                        return date(year + 1911, month, day)
+                    except ValueError:
+                        return value
+        return value
+
+    async def _apply_confirmed_f04_candidates(
+        self,
+        case_id: UUID,
+        user: User,
+        warnings: list[str],
+    ) -> UUID | None:
+        """Apply only human-confirmed, non-calculated F04 evidence to a draft."""
+        candidates = list(
+            (
+                await self.session.scalars(
+                    select(ExtractedFieldRecord)
+                    .where(
+                        ExtractedFieldRecord.case_id == case_id,
+                        ExtractedFieldRecord.form_code == "F04",
+                        ExtractedFieldRecord.field_status.in_(("CONFIRMED", "APPLIED")),
+                    )
+                    .order_by(ExtractedFieldRecord.confirmed_at.desc())
+                )
+            ).all()
+        )
+        if not candidates:
+            return None
+
+        applicable = [
+            candidate
+            for candidate in candidates
+            if candidate.field_name in F04_AUTO_APPLY_FIELDS
+            and candidate.confirmed_value is not None
+        ]
+        deferred = [candidate for candidate in candidates if candidate not in applicable]
+        if deferred:
+            warning = "F04_CONFIRMED_CANDIDATES_AWAIT_FORMAL_DEPENDENCIES"
+            if warning not in warnings:
+                warnings.append(warning)
+        if not applicable:
+            return None
+
+        forms = await self.valuation.list_forms(case_id, user)
+        f04_forms = [item for item in forms if item.form_code == FormCode.F04.value]
+        form = max(f04_forms, key=lambda item: item.version_no, default=None)
+        if form is None:
+            case = await self.valuation.get_case(case_id, user)
+            form = await self.valuation.create_form(
+                case_id,
+                FormCreate(
+                    form_code=FormCode.F04,
+                    prepared_date=case.valuation_base_date,
+                ),
+                user,
+            )
+
+        f04 = F01F04Service(self.session)
+        seen_fields: set[str] = set()
+        applied_any = False
+        for candidate in applicable:
+            draft_field = F04_CANDIDATE_TO_DRAFT_FIELD.get(
+                candidate.field_name, candidate.field_name
+            )
+            if draft_field in seen_fields:
+                continue
+            seen_fields.add(draft_field)
+            value = self._normalized_confirmed_f04_value(
+                draft_field, candidate.confirmed_value
+            )
+            try:
+                payload = F04DraftUpdate.model_validate({draft_field: value})
+                await f04.update(
+                    case_id,
+                    form.form_instance_id,
+                    FormCode.F04.value,
+                    payload,
+                    user,
+                )
+            except (ValueError, AppError):
+                warning = "CONFIRMED_F04_VALUE_INVALID_REQUIRES_CORRECTION"
+                if warning not in warnings:
+                    warnings.append(warning)
+                continue
+            await self.extraction_repository.apply_candidate(
+                candidate, form.form_instance_id
+            )
+            applied_any = True
+        return form.form_instance_id if applied_any else None
 
     async def _save_three_page_draft(
         self,

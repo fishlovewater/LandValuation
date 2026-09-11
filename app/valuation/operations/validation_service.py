@@ -209,7 +209,7 @@ class ValidationService:
                 "F03_CALCULATION_MATCH",
                 "benchmark_land_price",
                 None if latest_calculation is None else str(latest_calculation.valuation_id),
-                "latest matching F03 calculation",
+                "與目前 F03 資料一致的最新計算結果",
                 "最新計算結果與目前 F03 輸入不一致，請重新計算",
             )
 
@@ -223,8 +223,8 @@ class ValidationService:
                 "F03_MINIO_OBJECTS",
                 "object_key",
                 missing_objects,
-                "MinIO object exists",
-                "必要文件 metadata 對應的 MinIO 物件不存在：" + "、".join(missing_objects),
+                "必要文件皆可正常讀取",
+                "必要文件目前無法讀取：" + "、".join(missing_objects),
             )
 
         ruleset_snapshot = {

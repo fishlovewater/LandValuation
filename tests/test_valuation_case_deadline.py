@@ -1,7 +1,11 @@
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
-from app.valuation.schemas import CaseCreate, CaseResponse, CaseStatus, CaseUpdate
+import pytest
+
+from app.valuation.schemas import CaseCreate, CaseResponse, CaseStatus, CaseUpdate, FormCode
+from app.valuation.service import ValuationService
 
 
 def test_case_create_and_response_keep_optional_valuation_due_date() -> None:
@@ -50,3 +54,53 @@ def test_case_deadline_remains_optional_and_can_be_cleared() -> None:
     update_payload = CaseUpdate(valuation_due_date=None)
     assert update_payload.model_fields_set == {"valuation_due_date"}
     assert update_payload.valuation_due_date is None
+
+
+@pytest.mark.asyncio
+async def test_case_bootstrap_uses_same_request_to_create_initial_f03() -> None:
+    payload = CaseCreate(
+        case_no="VAL-2026-BOOTSTRAP",
+        case_title="原子建立案件",
+        case_type="LAND",
+        valuation_base_date=date(2026, 9, 12),
+        city_code="65000",
+        district_code="65000010",
+    )
+    user = SimpleNamespace(user_id=uuid4())
+    case_id = uuid4()
+    form_id = uuid4()
+    created_case = SimpleNamespace(case_id=case_id)
+    current_case = SimpleNamespace(case_id=case_id, case_status="PROCESSING")
+    initial_form = SimpleNamespace(form_instance_id=form_id, form_code="F03")
+    calls: list[tuple[str, object]] = []
+
+    async def create_case(value, actor):
+        assert value is payload
+        assert actor is user
+        calls.append(("case", value))
+        return created_case
+
+    async def create_form(value_case_id, value, actor):
+        assert value_case_id == case_id
+        assert actor is user
+        calls.append(("form", value))
+        return initial_form
+
+    async def get_case(value_case_id, actor):
+        assert value_case_id == case_id
+        assert actor is user
+        return current_case
+
+    service = object.__new__(ValuationService)
+    service.create_case = create_case
+    service.create_form = create_form
+    service.get_case = get_case
+
+    case, form = await service.bootstrap_case(payload, user)
+
+    assert case is current_case
+    assert form is initial_form
+    assert [name for name, _ in calls] == ["case", "form"]
+    form_payload = calls[1][1]
+    assert form_payload.form_code == FormCode.F03
+    assert form_payload.prepared_date == payload.valuation_base_date

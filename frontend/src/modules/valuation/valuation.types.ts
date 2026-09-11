@@ -103,6 +103,11 @@ export interface FormResponseDto {
   updated_at: string
 }
 
+export interface CaseBootstrapResponseDto {
+  case: CaseResponseDto
+  initial_form: FormResponseDto
+}
+
 export interface FormCreateDto {
   form_code: FormCode
   prepared_date?: string | null

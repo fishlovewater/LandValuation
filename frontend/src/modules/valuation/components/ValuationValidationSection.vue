@@ -47,7 +47,7 @@ const emit = defineEmits<{
       type="button"
       data-testid="run-valuation"
       :disabled="running || saving || !canRunValuation"
-      :title="!canRunValuation ? '請先完成待處理前置資料' : dirty ? '會先儲存尚未保存的 F03 修改，再執行計算與檢核' : '執行正式計算與檢核'"
+      :title="!canRunValuation ? '請先完成待處理前置資料' : dirty ? '會先儲存尚未儲存的 F03 修改，再執行計算與檢核' : '執行正式計算與檢核'"
       @click="emit('run')"
     >
       {{ running ? '計算與檢核中…' : dirty ? '儲存修改並執行計算與檢核' : '執行計算與檢核' }}
@@ -60,7 +60,7 @@ const emit = defineEmits<{
         <p class="valuation-eyebrow">檢核結果</p>
         <h2 id="validation-title">計算與資料檢核</h2>
       </div>
-      <span class="value-kind" :data-validation-state="validation.canGenerateReport ? 'ready' : 'blocked'">{{ validation.canGenerateReport ? '可產生正式輸出' : '仍有待修正項目' }}</span>
+      <span class="value-kind" :data-validation-state="validation.canGenerateReport ? 'ready' : 'blocked'">{{ validation.canGenerateReport ? '可產生 F03 單表' : '仍有待修正項目' }}</span>
     </div>
     <div class="validation-counts">
       <span>通過 {{ validation.passedCount }}</span>
@@ -93,7 +93,7 @@ const emit = defineEmits<{
       <strong>{{ report.filename }}</strong>
       <small>第 {{ report.versionNo }} 版｜檔案大小 {{ Math.max(1, Math.round(report.fileSizeBytes / 1024)) }} KB</small>
     </div>
-    <button class="solid-button solid-button--primary" type="button" data-testid="go-to-submit" :disabled="!canProceedToSubmit" :title="canProceedToSubmit ? '前往輸出預覽與送審' : '必須先修正 ERROR 並通過檢核'" @click="emit('goSubmit')">{{ canProceedToSubmit ? '前往輸出預覽與送審' : '請先完成阻擋項目' }}</button>
+    <button class="solid-button solid-button--primary" type="button" data-testid="go-to-submit" :disabled="!canProceedToSubmit" :title="canProceedToSubmit ? '前往輸出預覽與送審' : '必須先修正阻擋項目並通過檢核'" @click="emit('goSubmit')">{{ canProceedToSubmit ? '前往輸出預覽與送審' : '請先完成阻擋項目' }}</button>
   </section>
 </template>
 

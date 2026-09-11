@@ -5,6 +5,7 @@ from app.main import app
 
 GUIDE_PATHS = {
     "/api/v1/valuation/cases",
+    "/api/v1/valuation/cases/bootstrap",
     "/api/v1/valuation/cases/{case_id}",
     "/api/v1/valuation/cases/{case_id}/archive",
     "/api/v1/valuation/cases/{case_id}/parcels",

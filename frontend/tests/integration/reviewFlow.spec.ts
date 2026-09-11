@@ -317,7 +317,7 @@ describe('review demo flow', () => {
         expect(requestBody(config.data)).toEqual({
           review_id: idsWithDetail.review,
           decision: 'DISMISSED_FALSE_POSITIVE',
-          reason: '依據報告與伺服器規則結果確認。',
+          reason: '依據報告與檢核規則結果確認。',
         })
         detailDto = {
           ...detailDto,
@@ -327,7 +327,7 @@ describe('review demo flow', () => {
             review_id: idsWithDetail.review,
             finding_id: idsWithDetail.finding,
             decision: 'DISMISSED_FALSE_POSITIVE',
-            reason: '依據報告與伺服器規則結果確認。',
+            reason: '依據報告與檢核規則結果確認。',
             decided_by_user_id: reviewer.id,
             decided_at: '2026-09-07T01:03:00Z',
             request_id: null,
@@ -353,17 +353,19 @@ describe('review demo flow', () => {
     expect(wrapper.get('[data-testid="report-value"]').text()).toContain('0.10')
     expect(wrapper.get('[data-testid="system-value"]').text()).toContain('0.08')
     expect(wrapper.get('[data-testid="ai-explanation"]').text()).toContain('系統發現')
+    expect(wrapper.get('[data-testid="review-action-bar"]').text()).toContain('疑點已處理 0 / 1')
     await wrapper.get('#finding-decision').setValue('DISMISSED_FALSE_POSITIVE')
     await wrapper.get('[data-testid="save-finding-decision"]').trigger('click')
     expect(wrapper.text()).toContain('請填寫審查理由')
     expect(requests.filter((request) => request.url?.includes('/triage'))).toHaveLength(0)
 
-    await wrapper.get('[data-testid="finding-reason"]').setValue('依據報告與伺服器規則結果確認。')
+    await wrapper.get('[data-testid="finding-reason"]').setValue('依據報告與檢核規則結果確認。')
     await wrapper.get('[data-testid="save-finding-decision"]').trigger('click')
     await vi.waitFor(() => expect(requests.filter((request) => request.url?.includes('/triage'))).toHaveLength(1))
     await vi.waitFor(() => expect(requests.filter((request) => request.url === '/review/workbench/summary')).toHaveLength(1))
     await flushPromises()
-    expect(wrapper.get('[data-testid="finding-panel"]').text()).toContain('已保存')
+    expect(wrapper.get('[data-testid="finding-panel"]').text()).toContain('已儲存')
+    expect(wrapper.get('[data-testid="review-action-bar"]').text()).toContain('疑點已處理 1 / 1')
     expect(requests.filter((request) => request.url === '/review/workbench/summary')).toHaveLength(1)
     expect(requests.filter((request) => request.url === '/review/workbench/cases')).toHaveLength(1)
 
@@ -771,7 +773,7 @@ describe('review demo flow', () => {
     await wrapper.get('[data-testid="request-correction"]').trigger('click')
     await wrapper.get('#review-correction-message').setValue('請修正調整率並重新送審。')
     await wrapper.get('[data-testid="correction-request-form"]').trigger('submit')
-    await vi.waitFor(() => expect(wrapper.get('[data-testid="correction-status-panel"]').text()).toContain('SENT'))
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="correction-status-panel"]').text()).toContain('已送出'))
 
     expect(wrapper.get('[data-testid="awaiting-correction"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-testid="correction-status-panel"]').text()).toContain('請修正調整率並附上依據')
@@ -830,7 +832,7 @@ describe('review demo flow', () => {
 
     await wrapper.get('[data-testid="recheck-correction"]').trigger('click')
     await vi.waitFor(() => expect(recheckCount).toBe(1))
-    await vi.waitFor(() => expect(wrapper.get('[data-testid="correction-status-panel"]').text()).toContain('RECHECKED'))
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="correction-status-panel"]').text()).toContain('已重新檢核'))
     wrapper.unmount()
   })
 
@@ -942,8 +944,8 @@ describe('review demo flow', () => {
     const contextDrawer = wrapper.get('#review-context-drawer')
     expect(contextDrawer.attributes('role')).toBe('dialog')
     expect(contextDrawer.attributes('aria-modal')).toBe('true')
-    expect(document.activeElement).toBe(contextDrawer.get('button[aria-label="關閉案件脈絡"]').element)
-    const contextClose = contextDrawer.get('button[aria-label="關閉案件脈絡"]')
+    expect(document.activeElement).toBe(contextDrawer.get('button[aria-label="關閉案件資料"]').element)
+    const contextClose = contextDrawer.get('button[aria-label="關閉案件資料"]')
     const contextFinding = contextDrawer.get(`[data-testid="finding-select-${idsWithDetail.finding}"]`)
     contextClose.element.focus()
     await contextDrawer.trigger('keydown', { key: 'Tab', shiftKey: true })

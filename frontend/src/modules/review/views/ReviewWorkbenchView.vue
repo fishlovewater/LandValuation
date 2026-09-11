@@ -15,9 +15,12 @@ import FindingPanel from '../components/FindingPanel.vue'
 import ReviewActionBar from '../components/ReviewActionBar.vue'
 import { reviewApi, safeReviewErrorMessage } from '../review.api'
 import {
+  correctionStatusLabel,
+  fieldPathLabel,
   latestGeneratedReport,
   latestRunId as latestRunIdForDetail,
   mapWorkbenchDetail,
+  missingItemStatusLabel,
   selectEvidenceDocument,
 } from '../review.mappers'
 import type {
@@ -603,6 +606,7 @@ onBeforeUnmount(() => {
           :correction-status="latestCorrection?.status ?? null"
           :correction-action-reason="correctionActionReason"
           :review-status-code="detail.reviewStatusCode"
+          :total-finding-count="detail.findings.length"
           :unresolved-finding-count="unresolvedCount"
           :latest-run-id="latestRun?.validationRunId"
           :report-document="latestReport"
@@ -652,11 +656,11 @@ onBeforeUnmount(() => {
               <div>
                 <strong>{{ item.item_name }}</strong>
                 <span>{{ item.reason || '系統檢查後發現缺少必要資料。' }}</span>
-                <small v-if="item.field_path">欄位：{{ item.field_path }}</small>
+                <small v-if="item.field_path">相關欄位：{{ fieldPathLabel(item.field_path) }}</small>
               </div>
               <div class="review-workbench__supplement-status">
                 <b :data-status="item.notification_status || item.status">
-                  {{ item.status !== 'OPEN' ? item.status : ['PENDING', 'SENT', 'ACKNOWLEDGED'].includes(item.notification_status || '') ? '已要求補件' : item.notification_status === 'FAILED' ? '通知失敗，可重送' : '待提出補件' }}
+                  {{ item.status !== 'OPEN' ? missingItemStatusLabel(item.status) : ['PENDING', 'SENT', 'ACKNOWLEDGED'].includes(item.notification_status || '') ? '已要求補件' : item.notification_status === 'FAILED' ? '通知失敗，可重送' : '待提出補件' }}
                 </b>
                 <small v-if="item.due_at">期限：{{ new Date(item.due_at).toLocaleString('zh-TW') }}</small>
               </div>
@@ -670,7 +674,7 @@ onBeforeUnmount(() => {
               <span>補正流程</span>
               <strong>第 {{ latestCorrection.request_no }} 次修正通知</strong>
             </div>
-            <b :data-status="latestCorrection.status">{{ latestCorrection.status }}</b>
+            <b :data-status="latestCorrection.status">{{ correctionStatusLabel(latestCorrection.status) }}</b>
           </div>
           <p>{{ latestCorrection.message }}</p>
           <small>期限：{{ new Date(latestCorrection.due_at).toLocaleString('zh-TW') }}</small>
@@ -702,18 +706,17 @@ onBeforeUnmount(() => {
             <article v-for="diff in detail.versionDiffs" :key="diff.key">
               <div class="review-workbench__diff-title">
                 <strong>{{ diff.fieldLabel }}</strong>
-                <code>{{ diff.fieldPath || diff.fieldCode }}</code>
               </div>
               <div class="review-workbench__diff-values">
                 <div class="is-before">
-                  <span>補正前 · v{{ diff.previousDocumentVersion }}</span>
+                  <span>補正前 · 第 {{ diff.previousDocumentVersion }} 版</span>
                   <strong>{{ diff.previousValue }}</strong>
                   <small v-if="diff.previousPageNumber">第 {{ diff.previousPageNumber }} 頁</small>
                   <p v-if="diff.previousRawText">{{ diff.previousRawText }}</p>
                 </div>
                 <span class="review-workbench__diff-arrow" aria-hidden="true">→</span>
                 <div class="is-after">
-                  <span>補正後 · v{{ diff.currentDocumentVersion }}</span>
+                  <span>補正後 · 第 {{ diff.currentDocumentVersion }} 版</span>
                   <strong>{{ diff.currentValue }}</strong>
                   <small v-if="diff.currentPageNumber">第 {{ diff.currentPageNumber }} 頁</small>
                   <p v-if="diff.currentRawText">{{ diff.currentRawText }}</p>
@@ -769,14 +772,14 @@ onBeforeUnmount(() => {
               <p v-else class="review-workbench__muted">目前沒有可預覽文件。</p>
             </section>
             <section class="review-workbench__context-section">
-              <h3>檢核執行（{{ detail.runs.length }}）</h3>
+              <h3>檢核紀錄（{{ detail.runs.length }}）</h3>
               <ul v-if="detail.runs.length" class="review-workbench__plain-list">
                 <li v-for="run in detail.runs" :key="run.validationRunId">
                   <span>第 {{ run.runNo ?? '—' }} 次：{{ run.runStatusLabel }}</span>
                   <small>{{ run.failedCount }} 個阻擋項目</small>
                 </li>
               </ul>
-              <p v-else class="review-workbench__muted">目前沒有檢核執行紀錄。</p>
+              <p v-else class="review-workbench__muted">目前沒有檢核紀錄。</p>
             </section>
             <section class="review-workbench__context-section">
               <h3>疑點（{{ detail.findings.length }}）</h3>
@@ -797,7 +800,7 @@ onBeforeUnmount(() => {
             </section>
             <section class="review-workbench__context-section review-workbench__context-summary">
               <h3>補正與決定</h3>
-              <p>補正通知 {{ detail.correctionRequests.length }} 件 · 已保存決定 {{ detail.decisions.length }} 筆</p>
+              <p>補正通知 {{ detail.correctionRequests.length }} 件 · 已儲存決定 {{ detail.decisions.length }} 筆</p>
             </section>
           </aside>
 
@@ -854,7 +857,7 @@ onBeforeUnmount(() => {
       @close="correctionOpen = false"
     >
       <form class="review-workbench__correction-form" data-testid="correction-request-form" @submit.prevent="createAndSendCorrection">
-        <p>送出後會保存本次已確認的問題內容，案件將正式退回估價端；估價端修正後需以新版資料重新送審。</p>
+        <p>送出後會儲存本次已確認的問題內容，案件將正式退回估價端；估價端修正後需以新版資料重新送審。</p>
         <label>
           <span>修正內容 *</span>
           <textarea id="review-correction-message" v-model="correctionMessage" rows="7" maxlength="4000" required />
@@ -886,7 +889,7 @@ onBeforeUnmount(() => {
       @close="supplementOpen = false"
     >
       <form class="review-workbench__correction-form" data-testid="supplement-request-form" @submit.prevent="sendSupplementRequest">
-        <p>送出後，尚未補齊的必要資料會正式列為補件項目，並保存你設定的補件期限。</p>
+        <p>送出後，尚未補齊的必要資料會正式列為補件項目，並儲存你設定的補件期限。</p>
         <section class="review-workbench__correction-preview" aria-label="本次補件項目">
           <strong>本次要求補件 {{ requestableMissingItems.length }} 項</strong>
           <ul>
@@ -981,10 +984,11 @@ onBeforeUnmount(() => {
 .review-workbench__correction-actions button { min-height: 42px; padding: 8px 14px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: #fff; cursor: pointer; font-weight: 800; }
 .review-workbench__correction-actions button[type="submit"] { border-color: var(--app-accent); color: #fff; background: var(--app-accent); }
 .review-workbench__correction-actions button:disabled { cursor: not-allowed; opacity: .55; }
+.review-workbench :deep(.review-action-bar) { position: sticky; z-index: 18; top: 104px; margin-top: 12px; box-shadow: 0 12px 28px rgba(30, 52, 78, .12); }
 .review-workbench__layout { display: grid; grid-template-columns: minmax(190px, 230px) minmax(380px, 1fr) minmax(320px, 410px); align-items: start; gap: 16px; margin-top: 16px; }
-.review-workbench__left { position: sticky; top: 20px; display: grid; max-height: calc(100vh - 40px); gap: 16px; overflow: auto; padding: 18px; border: 1px solid var(--app-line); border-radius: var(--app-radius-md); background: #f7f8fb; }
+.review-workbench__left { position: sticky; top: 190px; display: grid; max-height: calc(100vh - 210px); gap: 16px; overflow: auto; padding: 18px; border: 1px solid var(--app-line); border-radius: var(--app-radius-md); background: #f7f8fb; }
 .review-workbench__center { min-width: 0; }
-.review-workbench__right { min-width: 0; }
+.review-workbench__right { position: sticky; top: 190px; min-width: 0; max-height: calc(100vh - 210px); overflow: auto; }
 .review-workbench__finding-frame { padding: 0; overflow: hidden; background: rgba(255, 255, 255, .82); }
 .review-workbench__panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .review-workbench__panel-heading p { margin: 0 0 4px; color: var(--app-accent-deep); font-size: 9px; font-weight: 900; letter-spacing: .14em; }
@@ -1015,11 +1019,12 @@ onBeforeUnmount(() => {
 @media (max-width: 1180px) {
   .review-workbench { padding-inline: 18px; }
   .review-workbench__layout { grid-template-columns: minmax(175px, 210px) minmax(340px, 1fr); }
-  .review-workbench__right { grid-column: 1 / -1; }
+  .review-workbench__right { position: static; grid-column: 1 / -1; max-height: none; overflow: visible; }
   .review-workbench__finding-frame { max-width: none; }
 }
 
 @media (max-width: 980px) {
+  .review-workbench :deep(.review-action-bar) { position: static; margin-top: 12px; box-shadow: none; }
   .review-workbench__diff-grid { grid-template-columns: 1fr; }
   .review-workbench__mobile-tools { display: flex; gap: 8px; margin-top: 14px; }
   .review-workbench__mobile-tools button { min-height: 44px; padding: 8px 14px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: var(--app-paper-strong); cursor: pointer; font-size: 12px; font-weight: 800; }

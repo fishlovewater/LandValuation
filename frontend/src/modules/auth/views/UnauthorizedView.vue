@@ -21,7 +21,7 @@ function returnToLogin(): void {
   <section class="unauthorized-view" aria-labelledby="unauthorized-title">
     <PageHeader eyebrow="使用權限" title="目前無法開啟這個功能" description="你的帳號目前沒有使用此功能的權限。若你認為這是錯誤，請向系統管理者確認。" />
     <div class="unauthorized-view__card">
-      <span class="unauthorized-view__code" aria-hidden="true">403</span>
+      <span class="unauthorized-view__code" aria-hidden="true">無權限</span>
       <div>
         <h2 id="unauthorized-title">權限不足</h2>
         <p>請返回目前帳號可使用的工作功能繼續操作。</p>

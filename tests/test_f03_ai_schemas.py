@@ -48,7 +48,7 @@ def test_f03_market_period_is_ordered() -> None:
 
 def test_assistant_candidate_ids_cannot_repeat() -> None:
     candidate_id = uuid4()
-    with pytest.raises(ValidationError, match="不可重複"):
+    with pytest.raises(ValidationError, match="不能重複"):
         AssistantMessageRequest(
             content="確認",
             confirmed_candidate_ids=[candidate_id, candidate_id],
@@ -65,7 +65,7 @@ def test_assistant_mock_reply_reports_only_backend_state() -> None:
 
     assert "benchmark_land_id" in reply
     assert "land-register" in reply
-    assert "2 個" in reply
+    assert "2 筆" in reply
     assert "不會自行填入" in reply
 
 

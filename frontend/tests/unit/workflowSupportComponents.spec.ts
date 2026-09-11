@@ -4,6 +4,7 @@ import DocumentTextPreview from '../../src/components/common/DocumentTextPreview
 import SpreadsheetPreview from '../../src/components/common/SpreadsheetPreview.vue'
 import ValuationIssueDrawer from '../../src/modules/valuation/components/ValuationIssueDrawer.vue'
 import ValuationStepNavigator from '../../src/modules/valuation/components/ValuationStepNavigator.vue'
+import ReviewActionBar from '../../src/modules/review/components/ReviewActionBar.vue'
 
 describe('SpreadsheetPreview', () => {
   it('switches sheets and exposes truncated preview guidance', async () => {
@@ -98,5 +99,28 @@ describe('DocumentTextPreview', () => {
     expect(wrapper.text()).toContain('完整內容請下載原始文件')
     expect(wrapper.get('pre').text()).toContain('土地估價報告')
     expect(wrapper.get('pre').text()).toContain('欄位 | 值')
+  })
+})
+
+describe('ReviewActionBar', () => {
+  it('highlights the current review action instead of keeping finalize primary during correction flow', () => {
+    const draft = mount(ReviewActionBar, {
+      props: {
+        correctionStatus: 'DRAFT',
+        canSendCorrection: true,
+        canFinalize: true,
+      },
+    })
+
+    expect(draft.get('[data-testid="send-correction"]').classes()).toContain('lg-btn--accent')
+    expect(draft.get('[data-testid="finalize-review"]').classes()).not.toContain('lg-btn--accent')
+
+    const regular = mount(ReviewActionBar, {
+      props: {
+        correctionStatus: null,
+        canFinalize: true,
+      },
+    })
+    expect(regular.get('[data-testid="finalize-review"]').classes()).toContain('lg-btn--accent')
   })
 })

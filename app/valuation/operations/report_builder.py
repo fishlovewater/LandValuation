@@ -154,7 +154,7 @@ def build_f03_report_pdf(data: dict) -> bytes:
             [
                 ("檢核規則版本", data["ruleset_version"]),
                 ("通過／警告／錯誤", data["validation_summary"]),
-                ("檢核結果 ID", data["validation_run_id"]),
+                ("檢核批次", data["validation_run_id"]),
             ],
         )
     )
@@ -162,11 +162,11 @@ def build_f03_report_pdf(data: dict) -> bytes:
         [
             Spacer(1, 5 * mm),
             Paragraph(
-                "本文件由後端已確認資料與固定計算規則產生；AI 不會重新生成價格或案件事實。",
+                "本文件由已確認資料與固定計算規則產生；AI 不會重新生成價格或案件事實。",
                 small_style,
             ),
             Paragraph(
-                f"產生追蹤 ID：{escape(str(data.get('request_id') or '—'))}",
+                f"文件追蹤碼：{escape(str(data.get('request_id') or '—'))}",
                 small_style,
             ),
         ]

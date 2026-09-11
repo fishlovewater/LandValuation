@@ -103,14 +103,6 @@ onBeforeUnmount(clearPreview)
         <p>文件已可讀取，但目前無法直接在這裡預覽。</p>
         <small>請使用文件下載功能查看完整內容。</small>
       </div>
-      <details class="evidence-viewer__technical">
-        <summary>查看文件技術細節</summary>
-        <dl>
-          <div><dt>文件類型</dt><dd>{{ document.documentType }}</dd></div>
-          <div><dt>檔案格式</dt><dd>{{ document.mimeType }}</dd></div>
-          <div v-if="fieldPath"><dt>技術欄位路徑</dt><dd>{{ fieldPath }}</dd></div>
-        </dl>
-      </details>
     </div>
   </section>
 </template>

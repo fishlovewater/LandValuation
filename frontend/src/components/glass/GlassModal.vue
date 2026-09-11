@@ -165,7 +165,7 @@ onBeforeUnmount(() => {
           aria-label="關閉"
           @click.stop="requestClose"
         >
-          <slot name="close">關閉</slot>
+          <slot name="close"><span aria-hidden="true">×</span></slot>
         </button>
       </header>
       <div class="lg-modal__body"><slot /></div>
@@ -173,3 +173,46 @@ onBeforeUnmount(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.lg-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.lg-modal__title {
+  min-width: 0;
+  margin: 0;
+}
+
+.lg-modal__close {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--app-ink-soft, #475569);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 24px;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.lg-modal__close:hover {
+  border-color: var(--app-line, rgba(71, 85, 105, .2));
+  background: rgba(71, 85, 105, .07);
+}
+
+.lg-modal__close:focus-visible {
+  outline: 3px solid rgba(46, 89, 132, .18);
+  outline-offset: 2px;
+}
+</style>

@@ -47,8 +47,15 @@ const calculatedSource: SourceMarker = {
 
 function displayValidationValue(value: unknown): string | null {
   if (value === null || value === undefined) return null
-  if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'required') return '必填'
+    if (normalized === 'true') return '是'
+    if (normalized === 'false') return '否'
+    return value
+  }
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  if (typeof value === 'number' || typeof value === 'bigint') {
     return String(value)
   }
   try {

@@ -513,6 +513,142 @@
   }
 }
 
+@media (min-width: 981px) and (max-height: 820px) {
+  .public-header {
+    padding-top: 10px;
+  }
+
+  .public-nav {
+    min-height: 54px;
+  }
+
+  .public-main {
+    padding-top: 8px;
+  }
+
+  .hero {
+    gap: 32px;
+    padding-top: 6px;
+    padding-bottom: 8px;
+  }
+
+  .hero h1 {
+    font-size: clamp(38px, 4vw, 52px);
+    line-height: 1.08;
+  }
+
+  .hero__lead {
+    margin-top: 12px;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .hero__actions {
+    gap: 16px;
+    margin-top: 10px;
+  }
+
+  .hero__actions .lg-btn {
+    min-height: 44px;
+  }
+
+  .hero__proof {
+    gap: 12px;
+    margin-top: 8px;
+  }
+
+  .login-card {
+    padding: 12px;
+  }
+
+  .login-card__eyebrow-icon {
+    width: 26px;
+    height: 26px;
+  }
+
+  .login-card__heading h2 {
+    margin-top: 5px;
+    font-size: 18px;
+  }
+
+  .login-card__heading p,
+  .login-card__note {
+    font-size: 11px;
+    line-height: 1.4;
+  }
+
+  .demo-login {
+    gap: 6px;
+    margin-top: 8px;
+  }
+
+  .demo-login__heading > span:not(.demo-login__sequence) {
+    display: none;
+  }
+
+  .demo-login__button {
+    min-height: 64px;
+    gap: 7px;
+    padding: 8px 7px;
+  }
+
+  .demo-login__icon {
+    width: 30px;
+    height: 30px;
+  }
+
+  .demo-login__button small {
+    display: none;
+  }
+
+  .login-form {
+    gap: 5px;
+    margin-top: 7px;
+  }
+
+  .lg-field__box--solid {
+    min-height: 44px;
+  }
+
+  .login-card .lg-field__input {
+    min-height: 44px;
+  }
+
+  .login-submit {
+    min-height: 44px;
+    margin-top: 0;
+  }
+
+  .login-card__note {
+    margin-top: 4px;
+  }
+
+  .capabilities {
+    padding-top: 8px;
+    padding-bottom: 48px;
+  }
+
+  .capabilities .section-heading h2 {
+    font-size: 24px;
+  }
+
+  .public-layout .value-grid {
+    gap: 10px;
+    margin-top: 8px;
+  }
+
+  .public-layout .value-card {
+    min-height: 88px;
+    padding: 8px;
+  }
+
+  .public-layout .value-card__icon {
+    width: 24px;
+    height: 24px;
+    margin-bottom: 3px;
+  }
+}
+
 .value-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

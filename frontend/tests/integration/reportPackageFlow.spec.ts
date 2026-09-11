@@ -203,7 +203,8 @@ describe('persistent report-package form transition', () => {
       `patch /valuation/cases/${ids.case}/reports/${ids.report}/pages/F02-RF`,
       `patch /valuation/cases/${ids.case}/reports/${ids.report}/pages/F02`,
     ])
-    expect(wrapper.get('[data-testid="report-package-authoritative"]').text()).toContain(ids.report)
+    expect(wrapper.get('[data-testid="report-package-authoritative"]').text()).toContain('三頁已完成正式檢核')
+    expect(wrapper.get('[data-testid="report-package-authoritative"]').text()).not.toContain(ids.report)
     wrapper.unmount()
   })
 })

@@ -12,6 +12,7 @@ from app.auth.models import User
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.valuation.schemas import (
+    CaseBootstrapResponse,
     CaseCreate,
     CaseResponse,
     CaseStatus,
@@ -67,6 +68,10 @@ TEST_UI_PATH = Path(__file__).with_name("test_ui") / "index.html"
 
 CaseReader = Annotated[User, Depends(require_permissions("case.read"))]
 CaseCreator = Annotated[User, Depends(require_permissions("case.create"))]
+CaseBootstrapCreator = Annotated[
+    User,
+    Depends(require_permissions("case.create", "valuation.update")),
+]
 CaseEditor = Annotated[User, Depends(require_permissions("case.update"))]
 ValuationReader = Annotated[User, Depends(require_permissions("valuation.read"))]
 ValuationEditor = Annotated[User, Depends(require_permissions("valuation.update"))]
@@ -181,6 +186,24 @@ async def create_case(
 ) -> CaseResponse:
     record = await ValuationService(session).create_case(payload, user)
     return CaseResponse.model_validate(record)
+
+
+@router.post(
+    "/cases/bootstrap",
+    response_model=CaseBootstrapResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="原子建立案件與初始 F03 工作表",
+)
+async def bootstrap_case(
+    payload: CaseCreate,
+    session: DbSession,
+    user: CaseBootstrapCreator,
+) -> CaseBootstrapResponse:
+    case, initial_form = await ValuationService(session).bootstrap_case(payload, user)
+    return CaseBootstrapResponse(
+        case=CaseResponse.model_validate(case),
+        initial_form=FormResponse.model_validate(initial_form),
+    )
 
 
 @router.get("/cases", response_model=list[CaseResponse])

@@ -33,12 +33,12 @@ const DOCUMENT_TYPE_LABELS: Readonly<Record<string, string>> = {
   'CADASTRAL-MAP': '地籍圖',
   PHOTOS: '現場照片',
   ATTACHMENTS: '附件',
-  'COMPLETE-VALUATION-REPORT': '完整估價報告',
+  'COMPLETE-VALUATION-REPORT': '完整送審 PDF',
   'CANDIDATE-CONFIRMATION-EXPORT': '辨識結果確認匯出',
   'GENERATED-DRAFT-REPORT': '草稿報告',
   'GENERATED-REPORT': '正式報告',
-  'REVIEW-REPORT': '審查風險報告',
-  'REVIEW-REPORT-PDF': '審查風險報告',
+  'REVIEW-REPORT': '審查報告',
+  'REVIEW-REPORT-PDF': '審查報告',
   'CORRECTION-REQUEST': '修正通知',
 }
 
@@ -84,8 +84,7 @@ export function valuationTypeLabel(value: string | null | undefined): string {
 }
 
 function documentTypeLabel(value: string): string {
-  const raw = value.trim()
-  return DOCUMENT_TYPE_LABELS[normalized(value)] ?? `其他文件（${raw || '未標示類型'}）`
+  return DOCUMENT_TYPE_LABELS[normalized(value)] ?? '其他文件'
 }
 
 function mimeTypeLabel(value: string): string {
@@ -281,7 +280,7 @@ export function mapHistoryTimeline(dto: HistoryCaseDetailDto): HistoryTimelineEv
     idKey: 'valuation_id',
     description: (row) => {
       const status = stringValue(row.result_status)
-      return status ? `估價結果：${statusLabel(status)}` : '估價結果已保存。'
+      return status ? `估價結果：${statusLabel(status)}` : '估價結果已儲存。'
     },
   })
   addRowEvent(events, rows(valuation, 'validation_runs'), {
@@ -336,11 +335,11 @@ export function mapHistoryTimeline(dto: HistoryCaseDetailDto): HistoryTimelineEv
     module: 'review',
     sourceType: 'review_decision',
     dateKeys: ['decided_at', 'created_at'],
-    title: '審查決定保存',
+    title: '審查決定儲存',
     idKey: 'decision_id',
     description: (row) => {
       const decision = stringValue(row.decision)
-      return decision ? `決定：${decisionLabel(decision)}` : '審查決定已保存。'
+      return decision ? `決定：${decisionLabel(decision)}` : '審查決定已儲存。'
     },
   })
   addRowEvent(events, rows(review, 'risk_summaries'), {
@@ -443,8 +442,8 @@ export function readableFieldLabel(value: string): string {
     risk_level: '風險等級',
     risk_score: '風險分數',
     summary: '摘要',
-    finding_code: '疑點代碼',
-    rule_code: '規則代碼',
+    finding_code: '疑點項目',
+    rule_code: '檢核項目',
     field_path: '檢核欄位',
     severity: '嚴重程度',
     decision: '決定',

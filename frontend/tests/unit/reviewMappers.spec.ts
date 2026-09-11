@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
+  correctionStatusLabel,
   documentTypeLabel,
   fieldPathLabel,
   latestGeneratedReport,
   mapDocument,
   mapWorkbenchDetail,
   mimeTypeLabel,
+  missingItemStatusLabel,
   selectEvidenceDocument,
   statusGroupLabel,
+  verificationStatusLabel,
 } from '../../src/modules/review/review.mappers'
 
 const ids = {
@@ -23,7 +26,11 @@ describe('review mappers', () => {
     expect(documentTypeLabel('original')).toBe('原始查估文件')
     expect(mimeTypeLabel('application/pdf')).toBe('PDF 文件')
     expect(fieldPathLabel('comparison.adjustment_rate')).toBe('調整率')
-    expect(fieldPathLabel('unknown.path')).toBe('其他檢核欄位')
+    expect(fieldPathLabel('comparables[0].adjustment_rate')).toBe('調整率')
+    expect(fieldPathLabel('unknown.path')).toBe('相關必要欄位')
+    expect(missingItemStatusLabel('VERIFIED')).toBe('已確認')
+    expect(correctionStatusLabel('RESUBMITTED')).toBe('已重新送審')
+    expect(verificationStatusLabel('APPLIED')).toBe('已確認並套用')
   })
 
   it('counts confirmed issues as unresolved until correction recheck', () => {
@@ -95,7 +102,11 @@ describe('review mappers', () => {
         document_version: null,
         page_number: null,
         field_path: 'comparison.adjustment_rate',
-        source_evidence: [],
+        source_evidence: [{
+          field_code: 'ADJUSTMENT_RATE',
+          extracted_field_id: 'internal-extracted-field-id',
+          verification_status: 'APPLIED',
+        }],
         reported_text: null,
         reported_value: '0.10',
         legal_basis: [],
@@ -121,6 +132,8 @@ describe('review mappers', () => {
     })
 
     expect(detail.unresolvedFindingCount).toBe(1)
+    expect(detail.findings[0].sourceEvidence[0].title).toBe('資料來源｜調整率')
+    expect(detail.findings[0].sourceEvidence[0].title).not.toContain('internal-extracted-field-id')
   })
 
   it('chooses the latest active original PDF and never falls back to correction files', () => {

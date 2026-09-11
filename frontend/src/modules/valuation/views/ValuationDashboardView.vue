@@ -6,16 +6,17 @@ import PageHeader from '../../../components/common/PageHeader.vue'
 import GlassModal from '../../../components/glass/GlassModal.vue'
 import { liquidGlass as vLiquidGlass } from '../../../directives/liquidGlass'
 import { useAuthStore } from '../../../stores/auth.store'
+import { statusLabel } from '../../../utils/enumLabels'
+import { formatDateZhTw } from '../../../utils/formatters'
 import { safeValuationErrorMessage, valuationApi } from '../valuation.api'
 import { mapCaseResponse } from '../valuation.mappers'
 import { resetValuationFlow } from '../valuation.types'
-import type { FormRequirementResponseDto, ValuationCaseModel } from '../valuation.types'
+import type { ValuationCaseModel } from '../valuation.types'
 import ValuationStepNavigator from '../components/ValuationStepNavigator.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
 const cases = ref<ValuationCaseModel[]>([])
-const formTypes = ref<FormRequirementResponseDto[]>([])
 const loading = ref(false)
 const creating = ref(false)
 const error = ref('')
@@ -35,7 +36,16 @@ const createDraft = reactive({
   districtCode: '',
   landUseType: '',
 })
-const selectedRequirement = computed(() => formTypes.value.find((item) => item.form_type === 'F03') ?? null)
+const casesWithDeadlineCount = computed(() => cases.value.filter((item) => Boolean(item.valuationDueDate)).length)
+const priorityCase = computed(() => {
+  if (!cases.value.length) return null
+  return [...cases.value].sort((left, right) => {
+    const leftDue = left.valuationDueDate ?? '9999-12-31'
+    const rightDue = right.valuationDueDate ?? '9999-12-31'
+    if (leftDue !== rightDue) return leftDue.localeCompare(rightDue)
+    return right.updatedAt.localeCompare(left.updatedAt)
+  })[0] ?? null
+})
 const sortedCases = computed(() => {
   const direction = sortDirection.value === 'asc' ? 1 : -1
   const key = sortBy.value
@@ -62,20 +72,6 @@ const sortedCases = computed(() => {
   })
 })
 
-function requirementFieldLabel(field: string): string {
-  return ({
-    valuation_base_date: '估價基準日',
-    benchmark_land_id: '比準地',
-  } as Record<string, string>)[field] ?? field
-}
-
-function requirementDocumentLabel(document: string): string {
-  return ({
-    'land-register': '土地登記資料',
-    'cadastral-map': '地籍圖',
-  } as Record<string, string>)[document] ?? document
-}
-
 async function loadCases(): Promise<void> {
   loading.value = true
   error.value = ''
@@ -88,11 +84,6 @@ async function loadCases(): Promise<void> {
     loading.value = false
   }
 
-  try {
-    formTypes.value = await valuationApi.getFormTypes()
-  } catch {
-    formTypes.value = []
-  }
 }
 
 function resetCreateDraft(): void {
@@ -113,7 +104,7 @@ async function createCase(): Promise<void> {
   error.value = ''
   notice.value = ''
   try {
-    const created = await valuationApi.createCase({
+    const { case: created } = await valuationApi.bootstrapCase({
       case_no: createDraft.caseNo,
       case_title: createDraft.title,
       case_type: createDraft.caseType,
@@ -123,10 +114,6 @@ async function createCase(): Promise<void> {
       city_code: createDraft.cityCode,
       district_code: createDraft.districtCode,
       land_use_type: createDraft.landUseType || null,
-    })
-    await valuationApi.createForm(created.case_id, {
-      form_code: 'F03',
-      prepared_date: createDraft.valuationBaseDate,
     })
     createOpen.value = false
     resetCreateDraft()
@@ -164,8 +151,61 @@ onMounted(() => {
       </template>
     </PageHeader>
 
+    <section class="dashboard-workflow" data-testid="valuation-dashboard-workflow" aria-labelledby="valuation-dashboard-workflow-title">
+      <div class="dashboard-workflow__heading">
+        <div>
+          <p class="valuation-eyebrow">作業流程</p>
+          <h2 id="valuation-dashboard-workflow-title">一個案件會依序完成這 5 個階段</h2>
+        </div>
+        <small>進入案件後，系統會保留目前進度，不需要一次把所有資料填完。</small>
+      </div>
+      <ol>
+        <li><b>1</b><div><strong>建立案件</strong><span>建立案件基本資料，系統會準備後續估價工作環境。</span></div></li>
+        <li><b>2</b><div><strong>文件與 AI 辨識</strong><span>上傳來源文件，辨識後由人員確認候選值。</span></div></li>
+        <li><b>3</b><div><strong>資料確認</strong><span>確認宗地、比準地與查估必要欄位。</span></div></li>
+        <li><b>4</b><div><strong>計算與檢核</strong><span>資料齊全後執行正式計算與規則檢核。</span></div></li>
+        <li><b>5</b><div><strong>正式文件與送審</strong><span>確認完整查估書、產生完整送審 PDF，再送交審查。</span></div></li>
+      </ol>
+    </section>
+
     <p v-if="notice" class="dashboard-notice" role="status">{{ notice }}</p>
     <p v-if="error && cases.length" class="dashboard-error" role="alert">{{ error }}</p>
+
+    <section
+      v-if="cases.length"
+      class="dashboard-overview"
+      data-testid="valuation-dashboard-overview"
+      aria-label="估價案件工作摘要"
+    >
+      <article>
+        <span>目前案件</span>
+        <strong>{{ cases.length }} 件</strong>
+        <small>可從下方案件清單接續處理。</small>
+      </article>
+      <article>
+        <span>已設定作業期限</span>
+        <strong>{{ casesWithDeadlineCount }} 件</strong>
+        <small>案件清單預設依作業期限由近到遠排列。</small>
+      </article>
+      <article v-if="priorityCase" class="dashboard-overview__priority">
+        <div>
+          <span>建議先處理</span>
+          <strong>{{ priorityCase.caseNo }}｜{{ priorityCase.name }}</strong>
+          <small>
+            {{ statusLabel(priorityCase.status) }} ·
+            {{ priorityCase.valuationDueDate ? `作業期限 ${formatDateZhTw(priorityCase.valuationDueDate)}` : '尚未設定作業期限' }}
+          </small>
+        </div>
+        <button
+          class="case-action-button"
+          type="button"
+          data-testid="priority-case-open"
+          @click="openCase(priorityCase.caseId)"
+        >
+          繼續此案件
+        </button>
+      </article>
+    </section>
 
     <section v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="valuation-case-list-title">
       <div class="valuation-surface__heading">
@@ -220,28 +260,12 @@ onMounted(() => {
           <label><span>縣市代碼 *</span><input v-model.trim="createDraft.cityCode" required maxlength="20" /></label>
           <label><span>行政區代碼 *</span><input v-model.trim="createDraft.districtCode" required maxlength="20" /></label>
           <label class="create-case-grid__wide"><span>土地使用類型</span><input v-model.trim="createDraft.landUseType" maxlength="100" /></label>
-          <div class="create-case-fixed-form create-case-grid__wide" data-testid="create-case-starting-form">
-            <span>起始查估表</span>
-            <strong>F03｜比準地地價估計表</strong>
-            <small>新增案件會先建立目前估價工作台的 F03 草稿；其他查估書表會依後續比較、區域因素與正式報告流程建立或確認，不需要在這裡先選一張表。</small>
-          </div>
         </div>
-
-        <section v-if="selectedRequirement" class="requirement-preview" aria-label="所需資料清單">
-          <div>
-            <strong>{{ selectedRequirement.form_name }} 所需資料</strong>
-            <span>這裡只列出 F03 起始草稿的必要條件，不代表整個徵收市價查估作業只有這一張表。</span>
-          </div>
-          <ul>
-            <li v-for="field in selectedRequirement.required_fields" :key="`field-${field}`">欄位：{{ requirementFieldLabel(field) }}</li>
-            <li v-for="document in selectedRequirement.required_documents" :key="`doc-${document}`">文件：{{ requirementDocumentLabel(document) }}</li>
-          </ul>
-        </section>
 
         <div class="create-case-actions">
           <button class="solid-button" type="button" :disabled="creating" @click="createOpen = false">取消</button>
           <button class="solid-button solid-button--primary" type="submit" :disabled="creating">
-            {{ creating ? '建立中…' : '建立案件與表單' }}
+            {{ creating ? '建立中…' : '建立案件' }}
           </button>
         </div>
       </form>
@@ -269,6 +293,41 @@ onMounted(() => {
 .dashboard-notice { color: var(--app-green); background: rgba(59, 129, 102, .09); }
 .dashboard-error { color: #a44334; background: rgba(255, 240, 237, .9); }
 
+.dashboard-workflow { display: grid; gap: 13px; padding: 18px 20px; border: 1px solid #dce5ef; border-radius: var(--app-radius-md); background: #f8fbfe; }
+.dashboard-workflow__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.dashboard-workflow__heading h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 20px; }
+.dashboard-workflow__heading > small { max-width: 420px; color: var(--app-muted); font-size: 10px; line-height: 1.6; text-align: right; }
+.dashboard-workflow ol { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.dashboard-workflow li { display: grid; grid-template-columns: auto minmax(0, 1fr); align-content: start; gap: 8px; min-width: 0; padding: 11px; border: 1px solid #dfe6ee; border-radius: 10px; background: #fff; }
+.dashboard-workflow li b { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 999px; color: #fff; background: #2e5984; font-size: 10px; }
+.dashboard-workflow li div { display: grid; gap: 3px; min-width: 0; }
+.dashboard-workflow li strong { color: var(--app-ink); font-size: 11px; }
+.dashboard-workflow li span { color: var(--app-muted); font-size: 9px; line-height: 1.5; }
+
+.dashboard-overview {
+  display: grid;
+  grid-template-columns: minmax(150px, .7fr) minmax(180px, .8fr) minmax(320px, 1.5fr);
+  gap: 10px;
+}
+.dashboard-overview article {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 15px 16px;
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-sm);
+  background: #f9fbfd;
+}
+.dashboard-overview article > span,
+.dashboard-overview article small { color: var(--app-muted); font-size: 10px; line-height: 1.5; }
+.dashboard-overview article > span { font-weight: 900; letter-spacing: .08em; }
+.dashboard-overview article > strong { color: var(--app-ink); font-size: 18px; line-height: 1.35; }
+.dashboard-overview__priority { grid-template-columns: minmax(0, 1fr) auto; align-items: center; border-color: rgba(46, 89, 132, .2) !important; background: #f5f9fd !important; }
+.dashboard-overview__priority > div { display: grid; gap: 4px; min-width: 0; }
+.dashboard-overview__priority strong { overflow-wrap: anywhere; color: var(--app-ink); font-size: 13px; }
+.dashboard-overview__priority .case-action-button { align-self: center; }
+
 .create-case-form { display: grid; width: 100%; min-width: 0; gap: 18px; }
 :deep(.valuation-create-modal.lg-modal__panel) { width: min(860px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
 :deep(.valuation-create-modal .lg-modal__title) { color: var(--app-ink); }
@@ -279,16 +338,6 @@ onMounted(() => {
 .create-case-grid select { min-height: 44px; padding: 9px 11px; border: 1px solid var(--app-line); border-radius: 10px; color: var(--app-ink); background: rgba(255,255,255,.8); font: inherit; }
 .create-case-grid input:focus,
 .create-case-grid select:focus { outline: 3px solid rgba(200, 91, 67, .16); border-color: var(--app-accent); }
-.create-case-fixed-form { display: grid; gap: 4px; padding: 12px 13px; border: 1px solid rgba(46,89,132,.18); border-radius: 10px; background: #f7fbff; }
-.create-case-fixed-form > span { color: var(--app-muted); font-size: 10px; font-weight: 800; }
-.create-case-fixed-form strong { color: var(--app-ink); font-size: 13px; }
-.create-case-fixed-form small { color: var(--app-ink-soft); font-size: 11px; font-weight: 500; line-height: 1.6; }
-.requirement-preview { display: grid; gap: 10px; padding: 14px; border: 1px solid rgba(46, 89, 132, .18); border-radius: 14px; background: rgba(237, 244, 251, .66); }
-.requirement-preview div { display: grid; gap: 3px; }
-.requirement-preview strong { color: var(--app-ink); }
-.requirement-preview span { color: var(--app-muted); font-size: 11px; }
-.requirement-preview ul { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.requirement-preview li { padding: 6px 9px; border-radius: 999px; color: var(--app-ink-soft); background: rgba(255,255,255,.76); font-size: 11px; }
 .create-case-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 .valuation-surface__heading {
@@ -367,6 +416,13 @@ onMounted(() => {
   .valuation-surface {
     padding: 16px;
   }
+
+  .dashboard-overview { grid-template-columns: 1fr; }
+  .dashboard-overview__priority { grid-template-columns: 1fr; }
+  .dashboard-overview__priority .case-action-button { width: 100%; margin-top: 6px; }
+  .dashboard-workflow__heading { flex-direction: column; }
+  .dashboard-workflow__heading > small { text-align: left; }
+  .dashboard-workflow ol { grid-template-columns: 1fr; }
 
   .valuation-surface__heading {
     align-items: flex-start;

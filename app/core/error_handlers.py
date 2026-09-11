@@ -61,5 +61,5 @@ def register_error_handlers(app: FastAPI) -> None:
         logger.exception("Unhandled application error", exc_info=exc)
         return JSONResponse(
             status_code=500,
-            content=_payload(request, "INTERNAL_ERROR", "伺服器發生未預期錯誤"),
+            content=_payload(request, "INTERNAL_ERROR", "系統發生未預期錯誤，請稍後再試。"),
         )

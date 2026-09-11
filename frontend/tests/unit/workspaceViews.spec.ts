@@ -55,7 +55,7 @@ describe('workspace views', () => {
     expect(wrapper.find('[data-testid="home-module-review"]').exists()).toBe(false)
   })
 
-  it('shows the current account, role, and server permission codes on profile', async () => {
+  it('shows the current account, role, and readable work permissions on profile', async () => {
     const appRouter = router()
     await appRouter.push('/')
     useAuthStore().user = reviewer
@@ -66,6 +66,6 @@ describe('workspace views', () => {
     expect(wrapper.text()).toContain('review_demo')
     expect(wrapper.text()).toContain('審查人員')
     expect(wrapper.text()).toContain('執行審查')
-    expect(wrapper.text()).toContain('review.execute')
+    expect(wrapper.text()).not.toContain('review.execute')
   })
 })

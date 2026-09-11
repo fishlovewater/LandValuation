@@ -42,7 +42,7 @@ export const valuationRoutes: readonly RouteRecordRaw[] = [
       permissions: ['case.read', 'valuation.read', 'valuation.submit_review', 'valuation.update', 'document.download'],
       title: '送審確認',
       subsystem: '估價作業',
-      description: '確認檢核與正式輸出後送交審查。',
+      description: '確認檢核與完整送審 PDF 後送交審查。',
     },
   },
 ]

@@ -34,7 +34,7 @@ class StorageService:
         try:
             return await run_in_threadpool(self.client.bucket_exists, self.bucket)
         except S3Error as exc:
-            raise StorageError("無法確認 MinIO bucket") from exc
+            raise StorageError("文件服務目前無法使用，請稍後再試。") from exc
 
     async def upload(
         self,
@@ -70,14 +70,14 @@ class StorageService:
                 "etag": result.etag,
             }
         except (S3Error, OSError) as exc:
-            raise StorageError("MinIO 上傳失敗") from exc
+            raise StorageError("文件上傳失敗，請稍後再試。") from exc
 
     async def download(self, object_key: str):
         key = validate_object_key(object_key)
         try:
             return await run_in_threadpool(self.client.get_object, self.bucket, key)
         except S3Error as exc:
-            raise StorageError("MinIO 下載失敗") from exc
+            raise StorageError("文件下載失敗，請稍後再試。") from exc
 
     async def list_objects(self, prefix: str, *, limit: int | None = None) -> list:
         if prefix != "knowledge/":
@@ -96,14 +96,14 @@ class StorageService:
         try:
             return await run_in_threadpool(collect_objects)
         except S3Error as exc:
-            raise StorageError("無法列出 MinIO 知識文件") from exc
+            raise StorageError("目前無法讀取知識文件，請稍後再試。") from exc
 
     async def delete(self, object_key: str) -> None:
         key = validate_object_key(object_key)
         try:
             await run_in_threadpool(self.client.remove_object, self.bucket, key)
         except S3Error as exc:
-            raise StorageError("MinIO 刪除失敗") from exc
+            raise StorageError("文件刪除失敗，請稍後再試。") from exc
 
     async def object_exists(self, object_key: str) -> bool:
         key = validate_object_key(object_key)
@@ -113,7 +113,7 @@ class StorageService:
         except S3Error as exc:
             if exc.code in {"NoSuchKey", "NoSuchObject", "NotFound"}:
                 return False
-            raise StorageError("無法確認 MinIO 物件") from exc
+            raise StorageError("目前無法確認文件狀態，請稍後再試。") from exc
 
     async def presigned_download_url(self, object_key: str) -> str:
         key = validate_object_key(object_key)
@@ -125,4 +125,4 @@ class StorageService:
                 expires=timedelta(seconds=self.settings.minio_presigned_expiry_seconds),
             )
         except S3Error as exc:
-            raise StorageError("無法建立短效下載網址") from exc
+            raise StorageError("目前無法建立文件下載連結，請稍後再試。") from exc

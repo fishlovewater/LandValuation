@@ -9,6 +9,7 @@ import type {
   BenchmarkLandResponseDto,
   CalculationRequestDto,
   CalculationResponseDto,
+  CaseBootstrapResponseDto,
   CaseCreateDto,
   CaseResponseDto,
   ComparisonSetupApplyDto,
@@ -123,6 +124,11 @@ export const valuationApi = {
 
   async createCase(payload: CaseCreateDto): Promise<CaseResponseDto> {
     const response = await http.post<CaseResponseDto>('/valuation/cases', payload)
+    return response.data
+  },
+
+  async bootstrapCase(payload: CaseCreateDto): Promise<CaseBootstrapResponseDto> {
+    const response = await http.post<CaseBootstrapResponseDto>('/valuation/cases/bootstrap', payload)
     return response.data
   },
 

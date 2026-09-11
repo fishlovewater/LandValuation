@@ -26,6 +26,7 @@ const cases: CaseSummary[] = [
 describe('shared enum and display helpers', () => {
   it('uses a safe label for unknown status values while preserving diagnostics', () => {
     expect(statusLabel('UNRECOGNIZED')).toBe('未知狀態')
+    expect(statusLabel('BLOCKED')).toBe('受阻')
 
     const wrapper = mount(StatusBadge, { props: { status: 'UNRECOGNIZED' } })
     const badge = wrapper.get('[data-status]')
@@ -74,6 +75,17 @@ describe('page-state components', () => {
     expect(error.text()).toContain('暫時無法載入案件')
     await error.get('button').trigger('click')
     expect(error.emitted('retry')).toHaveLength(1)
+  })
+
+  it('renders custom empty-state actions without nesting interactive controls', () => {
+    const wrapper = mount(EmptyState, {
+      props: { title: '尚未選取案件' },
+      slots: { action: '<a href="/app/valuation/dashboard">回到案件清單</a>' },
+    })
+
+    expect(wrapper.get('.page-state__slot-action > a').attributes('href')).toBe('/app/valuation/dashboard')
+    expect(wrapper.find('.page-state__slot-action > button').exists()).toBe(false)
+    expect(wrapper.find('button a').exists()).toBe(false)
   })
 })
 

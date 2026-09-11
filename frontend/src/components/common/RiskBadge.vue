@@ -23,9 +23,7 @@ const rawRisk = computed(() => props.risk ?? props.riskLevel ?? props.level ?? '
 const known = computed(() => isKnownRisk(rawRisk.value))
 const normalized = computed(() => normalizedEnumValue(rawRisk.value))
 const displayLabel = computed(() => riskLabel(rawRisk.value))
-const diagnosticLabel = computed(() =>
-  known.value ? displayLabel.value : `${displayLabel.value}（${rawRisk.value || '空值'}）`,
-)
+const diagnosticLabel = computed(() => known.value ? displayLabel.value : '未知風險等級')
 const dataRisk = computed(() => (known.value ? normalized.value.toLowerCase() : 'unknown'))
 </script>
 

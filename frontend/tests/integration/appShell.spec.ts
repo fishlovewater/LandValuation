@@ -138,7 +138,7 @@ describe('shared application shell', () => {
     })
 
     const wrapper = mount(AppHeader, { global: { plugins: [router] } })
-    expect(wrapper.get('[data-testid="demo-mode-badge"]').text()).toBe('DEMO')
+    expect(wrapper.get('[data-testid="demo-mode-badge"]').text()).toBe('示範')
     await wrapper.get('.app-header__user-trigger').trigger('click')
 
     expect(wrapper.get('[data-testid="demo-switch-appraiser"]').attributes('disabled')).toBeDefined()

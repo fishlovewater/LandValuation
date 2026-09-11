@@ -74,6 +74,24 @@ class ValuationService:
         )
         return await self.repository.create_case(record)
 
+    async def bootstrap_case(
+        self, payload: CaseCreate, user: User
+    ) -> tuple[CaseRecord, FormInstanceRecord]:
+        """Create a case and its initial F03 in the current DB transaction."""
+        case = await self.create_case(payload, user)
+        initial_form = await self.create_form(
+            case.case_id,
+            FormCreate(
+                form_code=FormCode.F03,
+                prepared_date=payload.valuation_base_date,
+            ),
+            user,
+        )
+        # create_form transitions a new case from DRAFT to PROCESSING. Return
+        # the current ORM state so the caller never sees a stale DRAFT status.
+        case = await self.get_case(case.case_id, user)
+        return case, initial_form
+
     async def list_cases(
         self,
         user: User,

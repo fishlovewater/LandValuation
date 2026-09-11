@@ -32,5 +32,5 @@ class ResourceNotFoundError(AppError):
 
 
 class StorageError(AppError):
-    def __init__(self, message: str = "物件儲存操作失敗") -> None:
+    def __init__(self, message: str = "文件服務目前無法完成操作，請稍後再試。") -> None:
         super().__init__("STORAGE_ERROR", message, 503)

@@ -12,11 +12,13 @@ from pydantic import ValidationError
 from app.valuation.automation.schemas import AutomatedIntakeManifest
 from app.valuation.automation.service import (
     AUTO_EXTRACT_MIME_TYPES,
+    F04_AUTO_APPLY_FIELDS,
     AutomatedWorkflowService,
     classify_document,
 )
 import app.valuation.automation.service as automation_service
 from app.valuation.documents.schemas import DocumentCategory
+from app.valuation.extraction.field_catalog import F04_FIELD_ANALYSIS_FIELDS
 from app.valuation.requirements import FORM_REQUIREMENTS
 from app.main import app
 
@@ -240,3 +242,112 @@ def test_guidance_requirements_match_f01_calculation_inputs() -> None:
         "main_road_width_m",
         "survey_date",
     )
+
+
+def test_f04_ai_catalog_only_auto_applies_safe_non_calculated_fields() -> None:
+    assert "valuation_base_date" in F04_FIELD_ANALYSIS_FIELDS
+    assert "price_zone_no" in F04_FIELD_ANALYSIS_FIELDS
+    assert "case_note" in F04_FIELD_ANALYSIS_FIELDS
+
+    assert "valuation_base_date" in F04_AUTO_APPLY_FIELDS
+    assert "price_zone_no" in F04_AUTO_APPLY_FIELDS
+    assert "case_note" in F04_AUTO_APPLY_FIELDS
+
+    for protected in (
+        "benchmark_valuation_id",
+        "benchmark_land_price",
+        "rule_version_id",
+        "parcel_rows",
+        "parcel_adjustment_rate",
+        "parcel_unit_price",
+        "parcel_total_value",
+        "parcel_market_price",
+        "trial_price_raw",
+        "total_adjustment_rate_raw",
+    ):
+        assert protected not in F04_AUTO_APPLY_FIELDS
+
+
+@pytest.mark.asyncio
+async def test_confirmed_f04_evidence_creates_draft_and_defers_calculated_fields(
+    monkeypatch,
+) -> None:
+    case_id = uuid4()
+    form_id = uuid4()
+    user = SimpleNamespace(user_id=uuid4())
+    candidates = [
+        SimpleNamespace(field_name="valuation_base_date", confirmed_value="115/09/01"),
+        SimpleNamespace(field_name="price_zone_no", confirmed_value="Z-001"),
+        SimpleNamespace(field_name="case_note", confirmed_value="人工確認備註"),
+        SimpleNamespace(field_name="parcel_market_price", confirmed_value="999999"),
+    ]
+
+    class ScalarResult:
+        def all(self):
+            return candidates
+
+    class FakeSession:
+        async def scalars(self, _statement):
+            return ScalarResult()
+
+    class FakeValuation:
+        def __init__(self):
+            self.created_payload = None
+
+        async def list_forms(self, _case_id, _user):
+            return []
+
+        async def get_case(self, _case_id, _user):
+            return SimpleNamespace(valuation_base_date=date(2026, 9, 1))
+
+        async def create_form(self, _case_id, payload, _user):
+            self.created_payload = payload
+            return SimpleNamespace(
+                form_instance_id=form_id,
+                form_code="F04",
+                version_no=1,
+            )
+
+    class FakeExtractionRepository:
+        def __init__(self):
+            self.applied = []
+
+        async def apply_candidate(self, candidate, applied_form_id):
+            self.applied.append((candidate.field_name, applied_form_id))
+
+    updates: list[dict] = []
+
+    class FakeF01F04Service:
+        def __init__(self, _session):
+            pass
+
+        async def update(self, _case_id, _form_id, code, payload, _user):
+            assert code == "F04"
+            updates.append(payload.model_dump(exclude_unset=True))
+
+    monkeypatch.setattr(automation_service, "F01F04Service", FakeF01F04Service)
+    service = object.__new__(AutomatedWorkflowService)
+    service.session = FakeSession()
+    service.valuation = FakeValuation()
+    service.extraction_repository = FakeExtractionRepository()
+    warnings: list[str] = []
+
+    result = await service._apply_confirmed_f04_candidates(case_id, user, warnings)
+
+    assert result == form_id
+    assert service.valuation.created_payload.form_code.value == "F04"
+    assert service.valuation.created_payload.prepared_date == date(2026, 9, 1)
+    assert {next(iter(item)) for item in updates} == {
+        "valuation_base_date",
+        "price_zone_no",
+        "notes",
+    }
+    assert {item["valuation_base_date"] for item in updates if "valuation_base_date" in item} == {
+        date(2026, 9, 1)
+    }
+    assert service.extraction_repository.applied == [
+        ("valuation_base_date", form_id),
+        ("price_zone_no", form_id),
+        ("case_note", form_id),
+    ]
+    assert "F04_CONFIRMED_CANDIDATES_AWAIT_FORMAL_DEPENDENCIES" in warnings

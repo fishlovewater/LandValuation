@@ -138,7 +138,7 @@ function logout(): void {
         <span class="app-header__brand-copy">
           <span class="app-header__brand-title">
             <strong>估價審查中台</strong>
-            <span v-if="demoQuickLoginEnabled" class="app-header__demo-badge" data-testid="demo-mode-badge">DEMO</span>
+            <span v-if="demoQuickLoginEnabled" class="app-header__demo-badge" data-testid="demo-mode-badge">示範</span>
             <span v-if="demoQuickLoginEnabled && currentDemoRoleItem" class="app-header__demo-stage" data-testid="demo-role-stage">
               {{ currentDemoRoleItem.stage }} · {{ currentDemoRoleItem.label }}
             </span>

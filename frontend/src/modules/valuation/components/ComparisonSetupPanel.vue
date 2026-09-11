@@ -66,6 +66,15 @@ const createReady = computed(() => Boolean(
   )) && new Set(targets.map((target) => target.transactionNo.trim())).size === targets.length,
 ))
 
+function analysisStatusLabel(status: string): string {
+  const labels: Readonly<Record<string, string>> = {
+    DRAFT: '草稿',
+    READY: '可使用',
+    VOID: '已停用',
+  }
+  return labels[status] ?? '狀態待確認'
+}
+
 async function loadContext(): Promise<void> {
   if (!props.caseId || !props.reportId) return
   loading.value = true
@@ -178,7 +187,7 @@ watch(targetCount, syncTargetCount)
       <template v-else>
         <section class="comparison-setup__existing" aria-labelledby="existing-comparison-title">
           <div><strong id="existing-comparison-title">套用既有分析</strong><span>{{ currentAnalysisId ? '目前正式頁面已連結一組比較分析。' : '若此案件已有可用分析，可直接套用到目前報告版本。' }}</span></div>
-          <select v-model="existingAnalysisId" data-testid="comparison-existing-analysis"><option value="">請選擇既有分析</option><option v-for="analysis in context.analyses" :key="analysis.comparison_analysis_id" :value="analysis.comparison_analysis_id">{{ analysis.label }} · {{ analysis.analysis_status }}</option></select>
+          <select v-model="existingAnalysisId" data-testid="comparison-existing-analysis"><option value="">請選擇既有分析</option><option v-for="analysis in context.analyses" :key="analysis.comparison_analysis_id" :value="analysis.comparison_analysis_id">{{ analysis.label }} · {{ analysisStatusLabel(analysis.analysis_status) }}</option></select>
           <button type="button" data-testid="apply-comparison-setup" :disabled="busy || !existingAnalysisId || page.form_status !== 'DRAFT'" @click="applyExisting">套用既有分析</button>
         </section>
 

@@ -305,8 +305,8 @@ const workflowIssues = computed(() => {
   if (!flow.benchmarks.length) items.push({ id: 'benchmark', title: '尚未建立比準地', detail: '至少需要一筆比準地資料供後續估價流程使用。', target: 'land', severity: 'pending' })
   const missingCount = unresolvedF03RequiredFields.value.length
   if (missingCount) items.push({ id: 'required-fields', title: '必要欄位尚未補齊', detail: `${missingCount} 個必要欄位仍缺值，可直接前往人工補充。`, target: manualFieldEntries.value.length ? 'manual' : 'f03', severity: 'warning' })
-  if (dirty.value) items.push({ id: 'unsaved-f03', title: 'F03 有尚未儲存的修改', detail: '先保存目前修改，避免後續計算仍使用前一版資料。', target: 'f03', severity: 'warning' })
-  if ((flow.validation?.failedCount ?? 0) > 0) items.push({ id: 'validation-errors', title: '正式檢核仍有阻擋錯誤', detail: `${flow.validation?.failedCount ?? 0} 個 ERROR 必須修正後才能產出查估書。`, target: 'validation', severity: 'error' })
+  if (dirty.value) items.push({ id: 'unsaved-f03', title: 'F03 有尚未儲存的修改', detail: '先儲存目前修改，避免後續計算仍使用前一版資料。', target: 'f03', severity: 'warning' })
+  if ((flow.validation?.failedCount ?? 0) > 0) items.push({ id: 'validation-errors', title: '正式檢核仍有阻擋錯誤', detail: `有 ${flow.validation?.failedCount ?? 0} 個阻擋錯誤必須修正後才能產出查估書。`, target: 'validation', severity: 'error' })
   return items
 })
 const wizardAvailableSteps = computed<number[]>(() => [1, 2, 3, ...(canRunValuation.value ? [4] : []), ...(canProceedToSubmit.value ? [5] : [])])
@@ -513,7 +513,7 @@ function documentCategoryLabel(category: string): string {
     'map-zoning': '使用分區圖',
     'map-land-value-section': '地價區段圖',
     'generated-report': '系統產生報告',
-    'complete-valuation-report': '完整查估書',
+    'complete-valuation-report': '完整送審 PDF',
   } as Record<string, string>)[category] ?? category
 }
 
@@ -915,7 +915,7 @@ function findingFieldCodes(finding: ValidationFindingModel): string[] {
 function findingLocationLabel(finding: ValidationFindingModel): string {
   const codes = findingFieldCodes(finding)
   if (!codes.length) return 'F03 檢核資料'
-  return codes.map((code) => FIELD_LABELS[code] ?? `F03 → ${code}`).join('、')
+  return codes.map((code) => FIELD_LABELS[code] ?? 'F03 相關欄位').join('、')
 }
 
 function findingCorrectionHint(finding: ValidationFindingModel): string {
@@ -1310,7 +1310,7 @@ async function submitCandidateDecisions(): Promise<void> {
       }
     }
     notice.value = response.pending_candidate_count
-      ? `已保存本次判定；尚有 ${response.pending_candidate_count} 筆辨識結果需要人工確認。`
+      ? `已儲存本次判定；尚有 ${response.pending_candidate_count} 筆辨識結果需要人工確認。`
       : '辨識結果已全部完成人工判定；可繼續確認正式採用值。'
   } catch (caught: unknown) {
     if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
@@ -1356,8 +1356,8 @@ async function saveManualFields(): Promise<void> {
     }
     const failures = Object.entries(response.manual_field_errors ?? {})
     notice.value = failures.length
-      ? `已保存可套用欄位；另有 ${failures.length} 項無法寫入正式表單，請依下方錯誤修正。`
-      : `已保存 ${response.manual_fields_saved?.length ?? 0} 個人工補充欄位，並重新產生確認資料。`
+      ? `已儲存可套用欄位；另有 ${failures.length} 項無法寫入正式表單，請依下方錯誤修正。`
+      : `已儲存 ${response.manual_fields_saved?.length ?? 0} 個人工補充欄位，並重新產生確認資料。`
   } catch (caught: unknown) {
     if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
   } finally {
@@ -1667,7 +1667,7 @@ async function runValuation(): Promise<void> {
       item.formInstanceId === submittedForm.formInstanceId ? submittedForm : item,
     )
     if (submittedForm.status !== 'READY') {
-      notice.value = 'F03 尚未完成可正式輸出的條件，請確認檢核結果。'
+      notice.value = 'F03 尚未完成可產生單表輸出的條件，請確認檢核結果。'
       return
     }
     currentForm = f03Form.value
@@ -1679,7 +1679,7 @@ async function runValuation(): Promise<void> {
     if (!isCurrentCase(token, requestedCaseId)) return
     flow.report = mapReportResponse(report)
     await loadWorkflowGuidance(token, requestedCaseId)
-    notice.value = '已完成計算、檢核、F03 確認與正式輸出。'
+    notice.value = '已完成計算、檢核、F03 確認與單表輸出。'
   } catch (caught: unknown) {
     if (!isCurrentCase(token, requestedCaseId)) return
     error.value = safeValuationErrorMessage(caught)
@@ -1814,7 +1814,7 @@ onBeforeUnmount(clearPreviewUrl)
           </div>
           <span class="value-kind">{{ formalSupplementMissingItems.length }} 項待補</span>
         </div>
-        <p class="supplement-panel__intro">審查端已完成完整性檢查並提出補件要求。請逐項補齊後，再依正常送審流程建立新版正式輸出。</p>
+        <p class="supplement-panel__intro">審查端已完成完整性檢查並提出補件要求。請逐項補齊後，再依正常送審流程建立新版送審文件。</p>
         <ul class="supplement-panel__list">
           <li v-for="item in formalSupplementMissingItems" :key="item.item_code">
             <div>
@@ -1877,6 +1877,29 @@ onBeforeUnmount(clearPreviewUrl)
             <small>{{ form.source.label }}</small>
           </div>
         </div>
+        <section
+          v-if="activeWizardStep === 2"
+          class="document-ai-process"
+          data-testid="document-ai-process-guide"
+          aria-label="文件辨識處理順序"
+        >
+          <article>
+            <span class="document-ai-process__step">1</span>
+            <div>
+              <strong>先確認來源文件並執行辨識</strong>
+              <small>目前有 {{ flow.documents.length }} 份來源文件；可先預覽，再選擇目標表單執行 AI／OCR 辨識。</small>
+            </div>
+          </article>
+          <span class="document-ai-process__arrow" aria-hidden="true">→</span>
+          <article :data-state="pendingCandidates.length ? 'attention' : 'ready'">
+            <span class="document-ai-process__step">2</span>
+            <div>
+              <strong>再人工確認辨識結果</strong>
+              <small>{{ pendingCandidates.length ? `還有 ${pendingCandidates.length} 筆待確認；確認後才會寫入正式資料。` : '目前沒有待確認的辨識結果。' }}</small>
+            </div>
+          </article>
+        </section>
+
         <ValuationDocumentWorkspace
           v-if="activeWizardStep === 2"
           :documents="flow.documents"
@@ -2036,7 +2059,7 @@ onBeforeUnmount(clearPreviewUrl)
           </template>
         </div>
         <div class="candidate-submit">
-          <span>人工輸入會覆蓋先前同欄位的人工值，並使相關正式輸出需要重新計算／檢核。</span>
+          <span>人工輸入會覆蓋先前同欄位的人工值，並使相關 F03 單表與送審文件需要重新計算／檢核。</span>
           <button
             v-if="manualEditableEntries.length"
             class="solid-button solid-button--primary"
@@ -2352,6 +2375,45 @@ onBeforeUnmount(clearPreviewUrl)
 .wizard-status .workflow-guide__stats { flex: 1 1 auto; }
 .wizard-status > .finding-action { flex: 0 0 auto; margin: 0; }
 
+.document-ai-process {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: stretch;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d9e4ef;
+  border-radius: 12px;
+  background: #f8fbfe;
+}
+.document-ai-process article {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid #e1e8ef;
+  border-radius: 10px;
+  background: #fff;
+}
+.document-ai-process article[data-state="attention"] { border-color: #ead7b0; background: #fffaf0; }
+.document-ai-process article[data-state="ready"] { border-color: #cfe0d6; background: #f5faf7; }
+.document-ai-process article > div { display: grid; gap: 4px; min-width: 0; }
+.document-ai-process strong { color: var(--app-ink); font-size: 12px; }
+.document-ai-process small { color: var(--app-muted); font-size: 10px; line-height: 1.55; }
+.document-ai-process__step {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  place-items: center;
+  border-radius: 999px;
+  color: #fff;
+  background: #2e5984;
+  font-size: 11px;
+  font-weight: 900;
+}
+.document-ai-process__arrow { align-self: center; color: #708399; font-size: 17px; font-weight: 900; }
+
 .document-ai-grid {
   display: grid;
   grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
@@ -2439,6 +2501,8 @@ onBeforeUnmount(clearPreviewUrl)
   .revision-panel__heading, .revision-panel__items li, .revision-panel__actions { align-items: stretch; flex-direction: column; }
   .workflow-guide__copy { flex-direction: column; }
   .workflow-guide > .solid-button { width: 100%; justify-self: stretch; }
+  .document-ai-process { grid-template-columns: 1fr; }
+  .document-ai-process__arrow { justify-self: center; transform: rotate(90deg); }
   .summary-grid, .field-grid { grid-template-columns: 1fr; }
   .upload-form { grid-template-columns: 1fr; }
   .document-list li, .supplement-panel__list li, .candidate-card__heading, .candidate-submit, .candidate-history li { align-items: stretch; flex-direction: column; }

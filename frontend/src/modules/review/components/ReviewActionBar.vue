@@ -15,6 +15,7 @@ const props = withDefaults(
     correctionStatus?: string | null
     correctionActionReason?: string
     reviewStatusCode?: string
+    totalFindingCount?: number
     unresolvedFindingCount?: number
     latestRunId?: string | null
     reportDocument?: GeneratedReportDto | null
@@ -33,6 +34,7 @@ const props = withDefaults(
     correctionStatus: null,
     correctionActionReason: '請先完成所有疑點判定；至少一項確認為需修正後，才能送出修正通知。',
     reviewStatusCode: '',
+    totalFindingCount: 0,
     unresolvedFindingCount: 0,
     latestRunId: null,
     reportDocument: null,
@@ -52,6 +54,12 @@ const emit = defineEmits<{
 }>()
 
 const finalState = computed(() => ['APPROVED', 'REVIEW_COMPLETED'].includes(props.reviewStatusCode))
+const correctionActionIsPrimary = computed(() => ['DRAFT', 'RESUBMITTED'].includes(props.correctionStatus ?? ''))
+const finalizeIsPrimary = computed(() => !finalState.value && !correctionActionIsPrimary.value)
+const resolvedFindingCount = computed(() => Math.max(0, props.totalFindingCount - props.unresolvedFindingCount))
+const findingProgress = computed(() => props.totalFindingCount > 0
+  ? Math.round((resolvedFindingCount.value / props.totalFindingCount) * 100)
+  : 100)
 </script>
 
 <template>
@@ -59,7 +67,21 @@ const finalState = computed(() => ['APPROVED', 'REVIEW_COMPLETED'].includes(prop
     <div class="review-action-bar__status">
       <span>目前狀態</span>
       <strong>{{ finalState ? '已完成審查' : '可接續處理' }}</strong>
-      <small v-if="unresolvedFindingCount > 0">尚有 {{ unresolvedFindingCount }} 個未處理疑點</small>
+      <div v-if="totalFindingCount > 0" class="review-action-bar__progress-copy">
+        <small>疑點已處理 {{ resolvedFindingCount }} / {{ totalFindingCount }}</small>
+        <small v-if="unresolvedFindingCount > 0">尚有 {{ unresolvedFindingCount }} 個未處理</small>
+      </div>
+      <div
+        v-if="totalFindingCount > 0"
+        class="review-action-bar__progress"
+        role="progressbar"
+        aria-label="疑點處理進度"
+        :aria-valuenow="resolvedFindingCount"
+        aria-valuemin="0"
+        :aria-valuemax="totalFindingCount"
+      >
+        <span :style="{ width: `${findingProgress}%` }" />
+      </div>
     </div>
     <div class="review-action-bar__actions">
       <GlassButton
@@ -73,6 +95,7 @@ const finalState = computed(() => ['APPROVED', 'REVIEW_COMPLETED'].includes(prop
       </GlassButton>
       <GlassButton
         v-else-if="correctionStatus === 'DRAFT'"
+        variant="accent"
         data-testid="send-correction"
         :disabled="!canSendCorrection || busy"
         :title="correctionActionReason"
@@ -90,6 +113,7 @@ const finalState = computed(() => ['APPROVED', 'REVIEW_COMPLETED'].includes(prop
       </GlassButton>
       <GlassButton
         v-else-if="correctionStatus === 'RESUBMITTED'"
+        variant="accent"
         data-testid="recheck-correction"
         :disabled="!canRecheckCorrection || busy"
         :title="correctionActionReason"
@@ -106,7 +130,7 @@ const finalState = computed(() => ['APPROVED', 'REVIEW_COMPLETED'].includes(prop
       </GlassButton>
       <GlassButton
         data-testid="finalize-review"
-        variant="accent"
+        :variant="finalizeIsPrimary ? 'accent' : 'default'"
         :disabled="!canFinalize || busy || finalState"
         :title="finalState ? '案件已完成審查。' : finalizeActionReason"
         @click="emit('finalize-request')"
@@ -152,6 +176,10 @@ const finalState = computed(() => ['APPROVED', 'REVIEW_COMPLETED'].includes(prop
 .review-action-bar__status { display: grid; gap: 3px; color: var(--app-muted); font-size: 11px; }
 .review-action-bar__status strong { color: var(--app-ink); font-size: 14px; }
 .review-action-bar__status small { color: #9b3f35; font-size: 11px; }
+.review-action-bar__progress-copy { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.review-action-bar__progress-copy small:first-child { color: var(--app-ink-soft); font-weight: 800; }
+.review-action-bar__progress { width: min(220px, 38vw); height: 5px; overflow: hidden; border-radius: 999px; background: #e9edf2; }
+.review-action-bar__progress > span { display: block; height: 100%; border-radius: inherit; background: var(--app-green); transition: width 160ms ease; }
 .review-action-bar__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .review-action-bar__hint { align-self: center; max-width: 250px; color: var(--app-muted); font-size: 11px; line-height: 1.5; }
 .review-action-bar :deep(.lg-btn) { min-height: 42px; padding-inline: 13px; font-size: 12px; }

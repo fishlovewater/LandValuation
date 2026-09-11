@@ -16,7 +16,7 @@ import type {
   WorkbenchCaseListItemDto,
   WorkbenchSummaryDto,
 } from './review.types'
-import { decisionLabel as sharedDecisionLabel } from '../../utils/enumLabels'
+import { decisionLabel as sharedDecisionLabel, statusLabel as sharedStatusLabel } from '../../utils/enumLabels'
 
 const STATUS_LABELS: Readonly<Record<string, string>> = {
   RECEIVED: '已收件',
@@ -97,8 +97,8 @@ const DOCUMENT_TYPE_LABELS: Readonly<Record<string, string>> = {
   'MAP-SECTION-SKETCH': '地段圖',
   'MAP-ZONING': '使用分區圖',
   'MAP-LAND-VALUE-SECTION': '公告土地現值圖',
-  'COMPLETE-VALUATION-REPORT': '完整估價報告',
-  'REVIEW-REPORT': '審查風險報告',
+  'COMPLETE-VALUATION-REPORT': '完整送審 PDF',
+  'REVIEW-REPORT': '審查報告',
   'CORRECTION-REQUEST': '修正通知',
 }
 
@@ -128,6 +128,41 @@ const FIELD_PATH_LABELS: Readonly<Record<string, string>> = {
   'COMPARISON.UNIT_PRICE': '比較單價',
 }
 
+const FIELD_PATH_SUFFIX_LABELS: Readonly<Record<string, string>> = {
+  ADJUSTMENT_RATE: '調整率',
+  GRADE: '比較等級',
+  UNIT_PRICE: '比較單價',
+  COMPARISON_PRICE: '比較法價格',
+  VALUATION_BASE_DATE: '估價基準日',
+  BENCHMARK_LAND_ID: '比準地',
+}
+
+const MISSING_ITEM_STATUS_LABELS: Readonly<Record<string, string>> = {
+  OPEN: '待補',
+  RECEIVED: '已收到',
+  VERIFIED: '已確認',
+  CLOSED: '已結案',
+}
+
+const CORRECTION_STATUS_LABELS: Readonly<Record<string, string>> = {
+  DRAFT: '草稿',
+  SENT: '已送出',
+  ACKNOWLEDGED: '估價端已收到',
+  RESUBMITTED: '已重新送審',
+  RECHECKING: '重新檢核中',
+  RECHECKED: '已重新檢核',
+  CLOSED: '已結案',
+}
+
+const VERIFICATION_STATUS_LABELS: Readonly<Record<string, string>> = {
+  EXTRACTED: '已辨識，待確認',
+  NEEDS_CONFIRMATION: '待人工確認',
+  CONFIRMED: '已人工確認',
+  APPLIED: '已確認並套用',
+  VERIFIED: '已確認',
+  REJECTED: '未採用',
+}
+
 function normalized(value: string | null | undefined): string {
   return value?.trim().toUpperCase() ?? ''
 }
@@ -141,7 +176,7 @@ function label(
 }
 
 export function reviewStatusLabel(value: string | null | undefined): string {
-  return label(value, STATUS_LABELS, '未知狀態')
+  return STATUS_LABELS[normalized(value)] ?? sharedStatusLabel(value)
 }
 
 export function reviewTypeLabel(value: string | null | undefined): string {
@@ -187,7 +222,25 @@ export function findingTypeLabel(value: string | null | undefined): string {
 }
 
 export function fieldPathLabel(value: string | null | undefined): string {
-  return FIELD_PATH_LABELS[normalized(value)] ?? '其他檢核欄位'
+  const normalizedPath = normalized(value)
+  const direct = FIELD_PATH_LABELS[normalizedPath]
+  if (direct) return direct
+  for (const [suffix, display] of Object.entries(FIELD_PATH_SUFFIX_LABELS)) {
+    if (normalizedPath === suffix || normalizedPath.endsWith(`.${suffix}`)) return display
+  }
+  return '相關必要欄位'
+}
+
+export function missingItemStatusLabel(value: string | null | undefined): string {
+  return label(value, MISSING_ITEM_STATUS_LABELS, '待確認')
+}
+
+export function correctionStatusLabel(value: string | null | undefined): string {
+  return label(value, CORRECTION_STATUS_LABELS, '狀態待確認')
+}
+
+export function verificationStatusLabel(value: string | null | undefined): string {
+  return label(value, VERIFICATION_STATUS_LABELS, '來源狀態待確認')
 }
 
 export function severityLabel(value: string | null | undefined): string {
@@ -316,7 +369,13 @@ function mapSourceEvidence(values: unknown[]): ReviewReferenceModel[] {
     if (!record) return []
     const documentId = textValue(record.document_id, record.documentId)
     const pageNumber = numericValue(record.page ?? record.page_number)
-    const field = textValue(record.field_code, record.field_path, record.extracted_field_id)
+    const fieldCode = textValue(record.field_code)
+    const fieldPath = textValue(record.field_path)
+    const field = fieldCode
+      ? findingCodeLabel(fieldCode)
+      : fieldPath
+        ? fieldPathLabel(fieldPath)
+        : null
     const excerpt = textValue(record.excerpt, record.raw_text)
     const verification = textValue(record.verification_status)
     return [{
@@ -414,8 +473,8 @@ export function mapVersionDiff(
   dto: WorkbenchCaseDetailDto['version_diffs'][number],
 ): ReviewVersionDiffModel {
   const mappedFieldPath = dto.field_path ?? dto.current.field_path ?? dto.previous.field_path
-  const pathLabel = mappedFieldPath ? fieldPathLabel(mappedFieldPath) : '其他檢核欄位'
-  const fieldLabel = pathLabel === '其他檢核欄位'
+  const pathLabel = mappedFieldPath ? fieldPathLabel(mappedFieldPath) : '相關必要欄位'
+  const fieldLabel = pathLabel === '相關必要欄位'
     ? findingCodeLabel(dto.field_code)
     : pathLabel
   return {

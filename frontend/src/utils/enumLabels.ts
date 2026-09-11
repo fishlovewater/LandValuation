@@ -26,6 +26,7 @@ const STATUS_LABELS: Readonly<Record<string, string>> = {
   RUNNING: '執行中',
   FAILED: '執行失敗',
   READY: '可執行',
+  BLOCKED: '受阻',
   CHECKED: '已檢核',
   FINAL: '已完成',
 }

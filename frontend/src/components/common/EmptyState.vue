@@ -21,13 +21,16 @@ const emit = defineEmits<{
     <div class="page-state__icon" aria-hidden="true">○</div>
     <h2>{{ title }}</h2>
     <p v-if="description">{{ description }}</p>
+    <div v-if="$slots.action" class="page-state__slot-action">
+      <slot name="action" />
+    </div>
     <button
-      v-if="actionLabel || $slots.action"
+      v-else-if="actionLabel"
       class="page-state__action"
       type="button"
       @click="emit('action')"
     >
-      <slot name="action">{{ actionLabel }}</slot>
+      {{ actionLabel }}
     </button>
   </section>
 </template>
@@ -85,4 +88,31 @@ const emit = defineEmits<{
 }
 
 .page-state__action:hover { background: var(--app-accent-deep); }
+
+.page-state__slot-action {
+  display: flex;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+.page-state__slot-action :deep(a),
+.page-state__slot-action :deep(button) {
+  display: inline-flex;
+  min-width: 112px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 18px;
+  border: 1px solid var(--app-accent);
+  border-radius: var(--app-radius-pill);
+  color: #fff8f2;
+  background: var(--app-accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.page-state__slot-action :deep(a:hover),
+.page-state__slot-action :deep(button:hover) { background: var(--app-accent-deep); }
 </style>

@@ -74,6 +74,22 @@ const drafts = reactive<Record<string, string>>({})
 const error = ref('')
 const dirty = ref(false)
 const fields = computed(() => fieldDefinitions[props.page.page_code])
+const pageLabel = computed(() => ({
+  S01: '勘查資料',
+  'F02-RF': '影響因素',
+  F02: '比較法資料',
+} as const)[props.page.page_code])
+
+function formStatusLabel(status: string): string {
+  const labels: Readonly<Record<string, string>> = {
+    DRAFT: '草稿',
+    READY: '已就緒',
+    CHECKED: '已檢核',
+    FINAL: '已完成',
+    VOID: '已作廢',
+  }
+  return labels[status] ?? '狀態待確認'
+}
 
 function stringifyValue(value: unknown, kind: FieldKind): string {
   if (kind === 'json') return JSON.stringify(value ?? [], null, 2)
@@ -148,9 +164,9 @@ watch(() => [props.page.page_code, props.page.version_no, props.page.data] as co
   <section class="report-page-editor" :data-page-code="page.page_code" :aria-labelledby="`report-editor-${page.page_code}`">
     <header class="report-page-editor__header">
       <div>
-        <p>{{ page.page_code }} 資料編輯</p>
-        <h3 :id="`report-editor-${page.page_code}`">{{ page.page_code }} 可修改資料</h3>
-        <span>第 {{ page.version_no }} 版｜{{ page.form_status }}</span>
+        <p>{{ pageLabel }}編輯</p>
+        <h3 :id="`report-editor-${page.page_code}`">{{ pageLabel }}可修改資料</h3>
+        <span>{{ page.page_code }}｜第 {{ page.version_no }} 版｜{{ formStatusLabel(page.form_status) }}</span>
       </div>
       <button type="button" :disabled="saving || !dirty" @click="resetDraft">還原本頁</button>
     </header>
@@ -186,7 +202,7 @@ watch(() => [props.page.page_code, props.page.version_no, props.page.data] as co
     <footer class="report-page-editor__actions">
       <span>{{ dirty ? '有尚未儲存的修改' : '目前內容已儲存' }}</span>
       <button type="button" data-testid="save-report-page-editor" :disabled="saving || !dirty" @click="save">
-        {{ saving ? '儲存中…' : `儲存 ${page.page_code} 修改` }}
+        {{ saving ? '儲存中…' : '儲存本頁修改' }}
       </button>
     </footer>
   </section>

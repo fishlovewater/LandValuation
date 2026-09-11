@@ -122,7 +122,7 @@ describe('history demo flow', () => {
       limit: 20,
     })
     expect(wrapper.get('[data-testid="history-case-row-71000000-0000-4000-8000-000000000001"]').text()).toContain('有結構化資料')
-    expect(wrapper.get('[data-testid="history-case-row-71000000-0000-4000-8000-000000000001"]').text()).toContain('尚無文件 metadata')
+    expect(wrapper.get('[data-testid="history-case-row-71000000-0000-4000-8000-000000000001"]').text()).toContain('尚無文件資料')
 
     await wrapper.get('[data-testid="history-keyword"]').setValue('HIST-REV-001')
     expect((wrapper.get('[data-testid="history-keyword"]').element as HTMLInputElement).value).toBe('HIST-REV-001')
@@ -285,6 +285,7 @@ describe('history demo flow', () => {
     await vi.waitFor(() => expect(wrapper.text()).toContain('HIST-REV-001'))
 
     expect(wrapper.text()).toContain('審查資料')
+    expect(wrapper.get('[data-testid="history-tab-review"]').text()).toContain('11')
     expect(wrapper.text()).not.toContain('估價資料')
     expect(wrapper.text()).not.toContain('object_key')
     expect(wrapper.text()).not.toContain('cases/')
@@ -309,18 +310,15 @@ describe('history demo flow', () => {
     expect(reviewSection.text()).toContain('未知狀態')
     expect(reviewSection.text()).toContain('未標示風險')
 
-    const reviewWithoutTechnicalDetails = reviewSection.element.cloneNode(true) as HTMLElement
-    reviewWithoutTechnicalDetails.querySelectorAll('details').forEach((details) => details.remove())
-    expect(reviewWithoutTechnicalDetails.textContent).not.toContain('FUTURE_REVIEW_KIND')
-    expect(reviewWithoutTechnicalDetails.textContent).not.toContain('FUTURE_REVIEW_STATUS')
-    expect(reviewWithoutTechnicalDetails.textContent).not.toContain('FUTURE_FINDING_CODE')
-    expect(reviewWithoutTechnicalDetails.textContent).not.toContain('FUTURE_FINDING_TYPE')
-    expect(reviewWithoutTechnicalDetails.textContent).not.toContain('FUTURE_SEVERITY')
-    expect(reviewWithoutTechnicalDetails.textContent).not.toContain('FUTURE_FINDING_STATUS')
-    expect(reviewWithoutTechnicalDetails.textContent).not.toContain('FUTURE_RISK_LEVEL')
-    expect(reviewWithoutTechnicalDetails.textContent).not.toContain('FUTURE_DECISION')
-    expect(reviewSection.findAll('details').every((details) => !(details.element as HTMLDetailsElement).open)).toBe(true)
-    expect(reviewSection.findAll('details').some((details) => details.text().includes('FUTURE_DECISION'))).toBe(true)
+    expect(reviewSection.text()).not.toContain('FUTURE_REVIEW_KIND')
+    expect(reviewSection.text()).not.toContain('FUTURE_REVIEW_STATUS')
+    expect(reviewSection.text()).not.toContain('FUTURE_FINDING_CODE')
+    expect(reviewSection.text()).not.toContain('FUTURE_FINDING_TYPE')
+    expect(reviewSection.text()).not.toContain('FUTURE_SEVERITY')
+    expect(reviewSection.text()).not.toContain('FUTURE_FINDING_STATUS')
+    expect(reviewSection.text()).not.toContain('FUTURE_RISK_LEVEL')
+    expect(reviewSection.text()).not.toContain('FUTURE_DECISION')
+    expect(reviewSection.findAll('details')).toHaveLength(0)
 
     await wrapper.get('[data-testid="history-tab-overview"]').trigger('click')
     await wrapper.get(`[data-testid="history-preview-${ids.missingDocument}"]`).trigger('click')
@@ -340,10 +338,10 @@ describe('history demo flow', () => {
       source_module: 'valuation' as const,
       download_available: false,
     }
-    expect(mapHistoryDocument({ ...base, document_id: ids.candidateExport, document_type: 'candidate-confirmation-export' }).documentTypeLabel).toBe('候選確認匯出')
+    expect(mapHistoryDocument({ ...base, document_id: ids.candidateExport, document_type: 'candidate-confirmation-export' }).documentTypeLabel).toBe('辨識結果確認匯出')
     expect(mapHistoryDocument({ ...base, document_id: ids.draftReport, document_type: 'generated-draft-report' }).documentTypeLabel).toBe('草稿報告')
     expect(mapHistoryDocument({ ...base, document_id: ids.generatedReport, document_type: 'generated-report' }).documentTypeLabel).toBe('正式報告')
-    expect(mapHistoryDocument({ ...base, document_id: ids.unknownDocument, document_type: 'future-document-kind' }).documentTypeLabel).toBe('其他文件（future-document-kind）')
+    expect(mapHistoryDocument({ ...base, document_id: ids.unknownDocument, document_type: 'future-document-kind' }).documentTypeLabel).toBe('其他文件')
   })
 })
 

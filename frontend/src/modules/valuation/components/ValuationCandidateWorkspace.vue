@@ -91,9 +91,9 @@ const emit = defineEmits<{
         </div>
       </article>
       <div class="candidate-submit">
-        <span>已選擇 {{ selectedCandidateCount }} / {{ candidates.length }} 筆判定。按右側按鈕後才會正式保存並套用。</span>
+        <span>已選擇 {{ selectedCandidateCount }} / {{ candidates.length }} 筆判定。按右側按鈕後才會正式儲存並套用。</span>
         <button class="solid-button solid-button--primary" type="button" data-testid="submit-candidate-decisions" :disabled="!selectedCandidateCount || confirmingCandidates" @click="emit('submit')">
-          {{ confirmingCandidates ? '保存判定中…' : '保存已選判定並套用' }}
+          {{ confirmingCandidates ? '儲存判定中…' : '儲存已選判定並套用' }}
         </button>
       </div>
     </div>

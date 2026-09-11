@@ -266,3 +266,8 @@ class FormResponse(BaseModel):
     updated_by_user_id: UUID | None
     created_at: datetime
     updated_at: datetime
+
+
+class CaseBootstrapResponse(BaseModel):
+    case: CaseResponse
+    initial_form: FormResponse

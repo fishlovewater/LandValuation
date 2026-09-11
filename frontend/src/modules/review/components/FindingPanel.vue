@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue'
 import EmptyState from '../../../components/common/EmptyState.vue'
 import GlassField from '../../../components/glass/GlassField.vue'
+import { verificationStatusLabel } from '../review.mappers'
 import type { FindingTriageDecision, ReviewDecisionModel, ReviewFindingModel } from '../review.types'
 
 const props = withDefaults(
@@ -99,15 +100,6 @@ function save(): void {
           <strong>{{ finding.fieldPathLabel }}</strong>
         </div>
       </div>
-      <details class="finding-panel__technical">
-        <summary>查看技術細節</summary>
-        <dl>
-          <div><dt>疑點代碼</dt><dd>{{ finding.findingCode }}</dd></div>
-          <div><dt>檢核類型</dt><dd>{{ finding.findingTypeLabel }}</dd></div>
-          <div><dt>欄位路徑</dt><dd>{{ display(finding.fieldPath) }}</dd></div>
-        </dl>
-      </details>
-
       <section class="finding-panel__section" aria-labelledby="finding-values-title">
         <h3 id="finding-values-title">資料對照</h3>
         <div class="finding-panel__comparison">
@@ -149,14 +141,14 @@ function save(): void {
             <strong v-if="reference.detail">{{ reference.detail }}</strong>
             <small>
               <template v-if="reference.pageNumber">第 {{ reference.pageNumber }} 頁</template>
-              <template v-if="reference.documentVersion"> · 文件 v{{ reference.documentVersion }}</template>
-              <template v-if="reference.verificationStatus"> · {{ reference.verificationStatus }}</template>
+              <template v-if="reference.documentVersion"> · 文件第 {{ reference.documentVersion }} 版</template>
+              <template v-if="reference.verificationStatus"> · {{ verificationStatusLabel(reference.verificationStatus) }}</template>
             </small>
           </article>
           <article v-for="reference in finding.legalBasis" :key="reference.key" class="finding-panel__reference finding-panel__reference--legal">
             <span>{{ reference.title }}</span>
             <strong v-if="reference.detail">{{ reference.detail }}</strong>
-            <small v-if="reference.documentVersion">規則來源文件 v{{ reference.documentVersion }}</small>
+            <small v-if="reference.documentVersion">規則來源文件第 {{ reference.documentVersion }} 版</small>
           </article>
         </div>
       </section>
@@ -164,7 +156,7 @@ function save(): void {
       <section class="finding-panel__section" aria-labelledby="finding-decision-title">
         <h3 id="finding-decision-title">審查結論</h3>
         <p v-if="decision" class="finding-panel__saved">
-          已保存：{{ decision.decisionLabel }}<span v-if="decision.reason">，{{ decision.reason }}</span>
+          已儲存：{{ decision.decisionLabel }}<span v-if="decision.reason">，{{ decision.reason }}</span>
         </p>
         <div class="finding-panel__decision-form">
           <label class="finding-panel__select-label" for="finding-decision">選擇結論</label>
@@ -177,7 +169,7 @@ function save(): void {
             id="finding-reason"
             v-model="reason"
             label="審查理由（必填）"
-            hint="理由會完整保存於本次審查紀錄。"
+            hint="理由會完整儲存於本次審查紀錄。"
             as="textarea"
             :rows="4"
             surface="solid"
@@ -194,7 +186,7 @@ function save(): void {
             :disabled="!canTriage || saving"
             @click="save"
           >
-            {{ saving ? '保存中…' : '保存審查結論' }}
+            {{ saving ? '儲存中…' : '儲存審查結論' }}
           </button>
         </div>
       </section>

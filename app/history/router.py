@@ -103,7 +103,7 @@ async def download_history_document(
     except StorageError as exc:
         raise AppError(
             "DOCUMENT_OBJECT_MISSING",
-            "文件資料存在，但目前無法從物件儲存取得檔案",
+            "文件目前無法下載，請稍後再試。",
             404,
         ) from exc
 
@@ -147,7 +147,7 @@ async def preview_history_spreadsheet(
     except SpreadsheetPreviewTooLargeError as exc:
         raise AppError("PREVIEW_TOO_LARGE", "Excel 檔案過大，請下載後查看完整內容", 413) from exc
     except StorageError as exc:
-        raise AppError("DOCUMENT_OBJECT_MISSING", "文件資料存在，但目前無法從物件儲存取得檔案", 404) from exc
+        raise AppError("DOCUMENT_OBJECT_MISSING", "文件目前無法讀取，請稍後再試。", 404) from exc
 
 
 @router.get(
@@ -171,4 +171,4 @@ async def preview_history_text_document(
     except DocumentTextPreviewTooLargeError as exc:
         raise AppError("PREVIEW_TOO_LARGE", "DOCX 檔案過大，請下載後查看完整內容", 413) from exc
     except StorageError as exc:
-        raise AppError("DOCUMENT_OBJECT_MISSING", "文件資料存在，但目前無法從物件儲存取得檔案", 404) from exc
+        raise AppError("DOCUMENT_OBJECT_MISSING", "文件目前無法讀取，請稍後再試。", 404) from exc

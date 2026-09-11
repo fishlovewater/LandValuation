@@ -327,9 +327,15 @@ onBeforeUnmount(() => {
 
       <nav class="history-case__tabs" aria-label="案件歷程資料區段">
         <button type="button" :class="{ 'is-active': activeTab === 'overview' }" data-testid="history-tab-overview" @click="activeTab = 'overview'">案件總覽</button>
-        <button v-if="detail.permissions.canViewValuation" type="button" :class="{ 'is-active': activeTab === 'valuation' }" data-testid="history-tab-valuation" @click="activeTab = 'valuation'">估價資料</button>
-        <button v-if="detail.permissions.canViewReview" type="button" :class="{ 'is-active': activeTab === 'review' }" data-testid="history-tab-review" @click="activeTab = 'review'">審查資料</button>
-        <button v-if="hasVersionHistory" type="button" :class="{ 'is-active': activeTab === 'versions' }" data-testid="history-tab-versions" @click="activeTab = 'versions'">版本比較</button>
+        <button v-if="detail.permissions.canViewValuation" type="button" :class="{ 'is-active': activeTab === 'valuation' }" data-testid="history-tab-valuation" @click="activeTab = 'valuation'">
+          <span>估價資料</span><small class="history-case__tab-count">{{ valuationItems.length }}</small>
+        </button>
+        <button v-if="detail.permissions.canViewReview" type="button" :class="{ 'is-active': activeTab === 'review' }" data-testid="history-tab-review" @click="activeTab = 'review'">
+          <span>審查資料</span><small class="history-case__tab-count">{{ reviewItems.length }}</small>
+        </button>
+        <button v-if="hasVersionHistory" type="button" :class="{ 'is-active': activeTab === 'versions' }" data-testid="history-tab-versions" @click="activeTab = 'versions'">
+          <span>版本比較</span><small class="history-case__tab-count">{{ detail.versionDiffs.length || detail.versions.length }}</small>
+        </button>
       </nav>
 
       <template v-if="activeTab === 'overview'">
@@ -407,10 +413,6 @@ onBeforeUnmount(() => {
           <article v-for="item in valuationItems" :key="item.key" class="history-case__record">
             <h3>{{ item.title }}</h3>
             <dl><div v-for="field in item.fields" :key="`${item.key}-${field.label}`"><dt>{{ field.label }}</dt><dd>{{ field.value }}</dd></div></dl>
-            <details v-if="item.technicalFields.length" class="history-case__technical">
-              <summary>技術資訊</summary>
-              <dl><div v-for="field in item.technicalFields" :key="`${item.key}-technical-${field.label}`"><dt>{{ field.label }}</dt><dd><code>{{ field.code }}</code></dd></div></dl>
-            </details>
           </article>
         </div>
       </section>
@@ -425,10 +427,6 @@ onBeforeUnmount(() => {
           <article v-for="item in reviewItems" :key="item.key" class="history-case__record">
             <h3>{{ item.title }}</h3>
             <dl><div v-for="field in item.fields" :key="`${item.key}-${field.label}`"><dt>{{ field.label }}</dt><dd>{{ field.value }}</dd></div></dl>
-            <details v-if="item.technicalFields.length" class="history-case__technical">
-              <summary>技術資訊</summary>
-              <dl><div v-for="field in item.technicalFields" :key="`${item.key}-technical-${field.label}`"><dt>{{ field.label }}</dt><dd><code>{{ field.code }}</code></dd></div></dl>
-            </details>
           </article>
         </div>
       </section>
@@ -499,9 +497,11 @@ onBeforeUnmount(() => {
 .history-case__identity-meta { margin: 8px 0 0; color: var(--app-ink-soft); font-size: 12px; }
 .history-case__identity-status { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .history-case__tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 15px; border-bottom: 1px solid var(--app-line); }
-.history-case__tabs button { min-height: 44px; margin-bottom: -1px; padding: 8px 14px; border: 1px solid transparent; border-bottom: 2px solid transparent; border-radius: 8px 8px 0 0; color: var(--app-ink-soft); background: transparent; cursor: pointer; font-size: 13px; font-weight: 800; }
+.history-case__tabs button { display: inline-flex; min-height: 44px; align-items: center; gap: 7px; margin-bottom: -1px; padding: 8px 14px; border: 1px solid transparent; border-bottom: 2px solid transparent; border-radius: 8px 8px 0 0; color: var(--app-ink-soft); background: transparent; cursor: pointer; font-size: 13px; font-weight: 800; }
 .history-case__tabs button:hover,
 .history-case__tabs button.is-active { border-color: var(--app-line); border-bottom-color: var(--app-accent); color: var(--app-accent-deep); background: var(--app-paper-strong); }
+.history-case__tab-count { display: grid; min-width: 22px; height: 22px; place-items: center; padding: 0 6px; border-radius: 999px; color: #607286; background: #edf1f5; font-size: 9px; font-weight: 900; line-height: 1; }
+.history-case__tabs button.is-active .history-case__tab-count { color: #244d73; background: #e6eff8; }
 .history-case__overview-grid { display: grid; grid-template-columns: minmax(230px, .7fr) minmax(0, 1.3fr); gap: 15px; margin-top: 15px; }
 .history-case__document-preview { display:grid; gap:12px; margin-top:15px; padding:18px; border:1px solid var(--app-line); border-radius:var(--app-radius-sm); background:var(--app-paper-strong); }
 .history-case__document-preview > header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
