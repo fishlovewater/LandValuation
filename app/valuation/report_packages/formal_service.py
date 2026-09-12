@@ -156,6 +156,39 @@ class FormalReportService:
         )
         self.documents = documents or DocumentRepository(session)
 
+    async def _use_selected_location_benchmark(
+        self,
+        case_id: UUID,
+        regional: F02RFDraftData,
+        comparison: F02DraftData,
+    ) -> bool:
+        """Use the benchmark selected in the multi-location intake flow.
+
+        Multi-location cases choose their benchmark location before the report
+        pages are opened.  They do not need a legacy BenchmarkLandRecord or a
+        separately-created comparison analysis just to pass the formal
+        calculation gate.  Treat the location selection as authoritative and
+        keep the report pages available for the second review system to fill.
+        """
+        selected_location_id = await self.session.scalar(
+            select(ValuationLocationRecord.location_id).where(
+                ValuationLocationRecord.case_id == case_id,
+                ValuationLocationRecord.is_active.is_(True),
+                ValuationLocationRecord.is_benchmark_location.is_(True),
+            )
+        )
+        if selected_location_id is None or not comparison.comparison_workflow_enabled:
+            return False
+
+        comparison.comparison_workflow_enabled = False
+        comparison.benchmark_land_id = None
+        comparison.comparison_analysis_id = None
+        comparison.comparison_targets = []
+        comparison.benchmark_comparison_price = None
+        regional.benchmark_land_id = None
+        regional.comparison_analysis_id = None
+        return True
+
     async def calculate(
         self,
         case_id: UUID,
@@ -165,6 +198,7 @@ class FormalReportService:
         case, records = await self.pages._editable_records(case_id, report_id, user)
         regional = self.pages._read_data(records["F02-RF"], F02RFDraftData)
         comparison = self.pages._read_data(records["F02"], F02DraftData)
+        await self._use_selected_location_benchmark(case_id, regional, comparison)
         if not comparison.comparison_workflow_enabled:
             return await self._calculate_without_comparison(
                 case_id=case_id,
