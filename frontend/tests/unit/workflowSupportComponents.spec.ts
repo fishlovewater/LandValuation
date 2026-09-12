@@ -126,8 +126,8 @@ describe('ValuationSubmitReadiness', () => {
       },
     })
 
-    expect(wrapper.get('[data-testid="submit-next-action"]').text()).toContain('完成正式檢核')
-    expect(wrapper.get('[data-testid="submit-readiness-steps"]').text()).toContain('完成 1 / 4')
+    expect(wrapper.get('[data-testid="submit-next-action"]').text()).toContain('完成送審文件檢核')
+    expect(wrapper.get('[data-testid="submit-readiness-steps"]').text()).toContain('1 / 4 已完成')
     await wrapper.get('[data-testid="submit-next-action"] button').trigger('click')
 
     expect(wrapper.emitted('select')?.[0]).toEqual(['formal-validation'])

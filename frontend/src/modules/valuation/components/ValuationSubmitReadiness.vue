@@ -34,6 +34,12 @@ function stateLabel(state: SubmitReadinessState): string {
     blocked: '需修正',
   } as Record<SubmitReadinessState, string>)[state]
 }
+
+function displayTitle(item: SubmitReadinessItem): string {
+  if (item.key === 'formal-validation') return '完成送審文件檢核'
+  if (item.key === 'formal-pdf') return '產生正式送審 PDF'
+  return item.title
+}
 </script>
 
 <template>
@@ -50,7 +56,7 @@ function stateLabel(state: SubmitReadinessState): string {
     </div>
     <div class="submit-next-action__copy">
       <span>{{ props.currentStep.state === 'blocked' ? '目前需要先修正' : '目前下一步' }}</span>
-      <strong id="submit-next-action-title">{{ props.currentStep.title }}</strong>
+      <strong id="submit-next-action-title">{{ displayTitle(props.currentStep) }}</strong>
       <small>{{ props.currentStep.detail }}</small>
     </div>
     <button type="button" @click="emit('select', props.currentStep.target)">
@@ -66,8 +72,8 @@ function stateLabel(state: SubmitReadinessState): string {
   >
     <div class="submit-readiness__heading">
       <div>
-        <p>送審進度</p>
-        <h2 id="submit-readiness-title">完成 {{ props.completedStepCount }} / 4</h2>
+        <p>送審準備</p>
+        <h2 id="submit-readiness-title">{{ props.completedStepCount }} / 4 已完成</h2>
       </div>
       <strong>{{ props.submitted ? '案件已送審' : props.readinessMessage }}</strong>
     </div>
@@ -84,7 +90,7 @@ function stateLabel(state: SubmitReadinessState): string {
         </div>
         <div class="submit-readiness__copy">
           <span>{{ stateLabel(item.state) }}</span>
-          <strong>{{ item.title }}</strong>
+          <strong>{{ displayTitle(item) }}</strong>
           <small>{{ item.detail }}</small>
         </div>
         <button

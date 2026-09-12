@@ -37,8 +37,8 @@ const emit = defineEmits<{
       <span>{{ submission ? '送審完成' : canSubmit ? '已符合送審條件' : '送審條件尚未完成' }}</span>
       <strong>{{ submission ? '案件已送出審查' : readinessMessage }}</strong>
       <p v-if="submission">送審時間：{{ formatDateZhTw(submission.submittedAt) }}</p>
-      <p v-else-if="canSubmit">完整送審 PDF 與正式檢核皆已完成，可以送出本次審查。</p>
-      <p v-else>完成前述查估書確認、正式檢核與完整送審 PDF 後即可送出審查。</p>
+      <p v-else-if="canSubmit">正式送審 PDF 與送審文件檢核皆已完成，可以送出本次審查。</p>
+      <p v-else>完成查估書確認、送審文件檢核與正式送審 PDF 後即可送出審查。</p>
     </div>
 
     <button

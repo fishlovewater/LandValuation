@@ -58,9 +58,9 @@ function isAcknowledged(code: string): boolean {
           <ShieldCheck :size="22" weight="duotone" />
         </span>
         <div>
-          <p>正式檢核</p>
-          <h2 id="formal-validation-title">完整報告正式檢核</h2>
-          <span>檢查正式送審條件、阻擋錯誤與需人工確認的警示，再產生完整送審 PDF。</span>
+          <p>送審文件檢核</p>
+          <h2 id="formal-validation-title">確認送審文件是否完整</h2>
+          <span>檢查送審文件的必要條件、阻擋錯誤與需人工確認的警示，通過後即可產生正式送審 PDF。</span>
         </div>
       </div>
       <span
@@ -68,7 +68,7 @@ function isAcknowledged(code: string): boolean {
         class="formal-validation-panel__status"
         :data-validation-state="props.validation.canGenerateFormalReport ? 'ready' : 'blocked'"
       >
-        {{ props.validation.canGenerateFormalReport ? '可產生正式報告' : '仍有待修正項目' }}
+        {{ props.validation.canGenerateFormalReport ? '送審文件檢核已通過' : '仍有待修正項目' }}
       </span>
       <span v-else class="formal-validation-panel__status" data-validation-state="pending">尚未執行</span>
     </div>
@@ -151,7 +151,7 @@ function isAcknowledged(code: string): boolean {
           </div>
         </li>
       </ul>
-      <p v-else class="formal-validation-panel__empty">正式檢核沒有回傳其他訊息。</p>
+      <p v-else class="formal-validation-panel__empty">送審文件檢核沒有其他需要處理的項目。</p>
 
       <p
         v-if="props.validation.canGenerateFormalReport && props.formalWarningCodes.length && !props.warningsAcknowledged"
@@ -163,12 +163,12 @@ function isAcknowledged(code: string): boolean {
     </div>
     <div v-else class="formal-validation-panel__empty">
       <Info :size="18" weight="duotone" aria-hidden="true" />
-      <span>正式 PDF 產出前，必須先完成正式檢核。</span>
+      <span>正式送審 PDF 產出前，必須先完成送審文件檢核。</span>
     </div>
 
     <div v-if="!props.reportPackageReady" class="formal-validation-panel__prerequisite">
       <WarningCircle :size="16" weight="duotone" aria-hidden="true" />
-      <span>請先完成查估書三頁確認與正式計算，才能執行本階段正式檢核。</span>
+      <span>請先完成查估書內容確認與正式計算，才能執行送審文件檢核。</span>
     </div>
 
     <div class="formal-validation-panel__actions">
@@ -179,7 +179,7 @@ function isAcknowledged(code: string): boolean {
         @click="emit('runValidation')"
       >
         <ShieldCheck v-if="!props.formalValidating" :size="16" weight="bold" aria-hidden="true" />
-        <span>{{ props.formalValidating ? '正式檢核中…' : '執行正式檢核' }}</span>
+        <span>{{ props.formalValidating ? '送審文件檢核中…' : '執行送審文件檢核' }}</span>
       </button>
       <button
         v-if="props.validation"
@@ -190,7 +190,7 @@ function isAcknowledged(code: string): boolean {
         @click="emit('generatePdf')"
       >
         <FilePdf v-if="!props.formalPdfGenerating" :size="16" weight="bold" aria-hidden="true" />
-        <span>{{ props.formalPdfGenerating ? '正式 PDF 產生中…' : '產生完整送審 PDF' }}</span>
+        <span>{{ props.formalPdfGenerating ? '正式 PDF 產生中…' : '產生正式送審 PDF' }}</span>
       </button>
     </div>
   </section>

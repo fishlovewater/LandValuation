@@ -43,14 +43,14 @@ function isDownloading(documentId: string): boolean {
           <FilePdf :size="21" weight="duotone" />
         </span>
         <div>
-          <p>正式文件</p>
-          <h2 id="formal-pdf-title">完整送審 PDF</h2>
-          <span>本案送審時使用的主要正式文件。</span>
+          <p>正式送審文件</p>
+          <h2 id="formal-pdf-title">正式送審 PDF</h2>
+          <span>送出審查時會以這份 PDF 與資料快照作為主要依據。</span>
         </div>
       </div>
       <span class="report-artifact__marker report-artifact__marker--ready">
         <CheckCircle :size="14" weight="fill" aria-hidden="true" />
-        正式版本
+        已產生
       </span>
     </div>
 
@@ -73,7 +73,7 @@ function isDownloading(documentId: string): boolean {
         @click="emit('download', props.formalReport.documentId, props.formalReport.filename)"
       >
         <DownloadSimple v-if="!isDownloading(props.formalReport.documentId)" :size="16" weight="bold" aria-hidden="true" />
-        <span>{{ isDownloading(props.formalReport.documentId) ? '下載中…' : '下載完整送審 PDF' }}</span>
+        <span>{{ isDownloading(props.formalReport.documentId) ? '下載中…' : '下載正式送審 PDF' }}</span>
       </button>
       <div class="report-artifact__secondary-export">
         <small>Excel 為正式查估資料的結構化匯出，方便核對與後續作業；正式送審主要文件仍為完整送審 PDF。</small>
