@@ -13,6 +13,13 @@ import type {
   ExtractedFieldResponseDto,
   ExtractionResponseDto,
 } from '../../valuation/valuation.types'
+import {
+  analysisProviderLabel,
+  extractedFieldStatusLabel,
+  extractionStatusLabel,
+  valuationFieldLabel,
+} from '../../valuation/valuation.labels'
+import { userStructuredValue } from '../../../utils/fieldLabels'
 import { reviewApi, safeReviewErrorMessage } from '../review.api'
 import type { CorrectionRequestDto, ReviewDocumentModel } from '../review.types'
 
@@ -112,16 +119,16 @@ const correctionExtractionReady = computed(() => Boolean(
 const generalOriginalUploadBlocked = computed(() => correctionAwaitingReturn.value && documentCategory.value === 'original')
 
 function categoryLabel(value: string): string {
-  return categoryOptions.find((option) => option.value === value)?.label ?? value
+  return categoryOptions.find((option) => option.value === value)?.label ?? '其他附件'
 }
 
 function candidateStatusLabel(value: string): string {
-  return ({
-    NEEDS_CONFIRMATION: '待確認',
-    CONFIRMED: '已確認',
-    APPLIED: '已納入審查',
-    REJECTED: '已排除',
-  } as Record<string, string>)[value] ?? value
+  if (value === 'APPLIED') return '已納入審查'
+  return extractedFieldStatusLabel(value)
+}
+
+function candidateFieldLabel(candidate: ExtractedFieldResponseDto): string {
+  return candidate.field_label?.trim() || valuationFieldLabel(candidate.field_name)
 }
 
 function confidenceLabel(value: string): string {
@@ -133,7 +140,7 @@ function valueText(value: unknown): string {
   if (value === null || value === undefined) return ''
   if (typeof value === 'string') return value
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  try { return JSON.stringify(value) } catch { return String(value) }
+  return userStructuredValue(value)
 }
 
 function editValue(candidate: ExtractedFieldResponseDto): string {
@@ -270,7 +277,7 @@ async function startExtraction(): Promise<void> {
     candidateEdits.value = {}
     notice.value = extraction.value.extraction_status === 'COMPLETED'
       ? `文字擷取完成，共取得 ${extraction.value.candidates.length} 個候選欄位。`
-      : extraction.value.error_message || '文件擷取未完成，請確認文件內容。'
+      : '文件擷取未完成，請確認文件內容後再試。'
   } catch (caught: unknown) {
     error.value = safeReviewErrorMessage(caught)
   } finally {
@@ -492,11 +499,11 @@ watch(selectedDocumentId, (documentId) => {
         <div v-if="loadingExtraction" class="external-intake__loading">正在讀取既有擷取結果…</div>
         <template v-else-if="extraction">
           <div class="external-intake__extraction-summary">
-            <div><span>擷取方式</span><strong>{{ extraction.provider }}</strong></div>
-            <div><span>處理狀態</span><strong>{{ extraction.extraction_status === 'COMPLETED' ? '擷取完成' : extraction.extraction_status }}</strong></div>
+            <div><span>擷取方式</span><strong>{{ analysisProviderLabel(extraction.provider) }}</strong></div>
+            <div><span>處理狀態</span><strong>{{ extractionStatusLabel(extraction.extraction_status) }}</strong></div>
             <div><span>頁數</span><strong>{{ extraction.page_count ?? '—' }}</strong></div>
           </div>
-          <div v-if="extraction.error_message" class="external-intake__extraction-error">{{ extraction.error_message }}</div>
+          <div v-if="extraction.error_message" class="external-intake__extraction-error">文件辨識未完成，請確認檔案內容後重試。</div>
 
           <template v-if="extraction.extraction_status === 'COMPLETED'">
             <div class="external-intake__candidate-toolbar">
@@ -514,12 +521,12 @@ watch(selectedDocumentId, (documentId) => {
                 <thead><tr><th>欄位</th><th>擷取結果</th><th>來源</th><th>狀態</th><th>操作</th></tr></thead>
                 <tbody>
                   <tr v-for="candidate in filteredCandidates" :key="candidate.extracted_field_id">
-                    <td><strong>{{ candidate.field_label || candidate.field_name }}</strong><small>{{ candidate.form_code }} · 信心 {{ confidenceLabel(candidate.confidence) }}</small></td>
+                    <td><strong>{{ candidateFieldLabel(candidate) }}</strong><small>{{ candidate.form_code }} · 信心 {{ confidenceLabel(candidate.confidence) }}</small></td>
                     <td>
                       <input
                         :value="editValue(candidate)"
                         :disabled="!canMutate || candidate.field_status === 'REJECTED' || confirmingId === candidate.extracted_field_id"
-                        :aria-label="`${candidate.field_label || candidate.field_name}確認值`"
+                        :aria-label="`${candidateFieldLabel(candidate)}確認值`"
                         @input="updateEdit(candidate.extracted_field_id, ($event.target as HTMLInputElement).value)"
                       >
                     </td>

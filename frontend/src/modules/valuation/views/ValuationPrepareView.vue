@@ -12,6 +12,11 @@ import { safeValuationErrorMessage, valuationApi } from '../valuation.api'
 import { valuationStageFromRouteName, valuationStageRoute } from '../valuation.navigation'
 import { newTaipeiDistrictName } from '../newTaipei'
 import {
+  analysisProviderLabel,
+  extractedFieldStatusLabel,
+  valuationFieldLabel,
+} from '../valuation.labels'
+import {
   mapBenchmarkLandResponse,
   mapCalculationResponse,
   mapCaseResponse,
@@ -490,9 +495,12 @@ const MANUAL_FIELD_METADATA: Readonly<Record<string, ManualFieldMetadata>> = {
 }
 
 function manualFieldMetadata(formCode: string, fieldName: string): ManualFieldMetadata {
-  return MANUAL_FIELD_METADATA[`${formCode}.${fieldName}`] ?? {
-    label: fieldName,
-    guidance: `請依原始文件或正式表單規則確認欄位 ${fieldName} 的值。`,
+  const explicit = MANUAL_FIELD_METADATA[`${formCode}.${fieldName}`]
+  if (explicit) return explicit
+  const label = valuationFieldLabel(fieldName)
+  return {
+    label,
+    guidance: `請依原始文件或正式表單規則確認「${label}」的值。`,
   }
 }
 
@@ -554,24 +562,17 @@ function fieldDisplayLabel(formCode: string, fieldName: string): string {
   if (manualLabel) return manualLabel
   const known = FIELD_LABELS[fieldName]?.replace(/^比準地地價估計表 → /, '')
   if (known) return known
-  const common: Readonly<Record<string, string>> = {
-    land_no: '地號', area_sqm: '土地面積', land_use_zone: '使用分區', designated_use: '編定使用',
-    transaction_date: '交易日期', transaction_total_price: '交易總價', normal_land_unit_price: '正常土地單價',
-    section_name: '段名', subsection_name: '小段', price_zone_no: '地價區段', prepared_date: '製表日期',
-  }
-  if (common[fieldName]) return common[fieldName]
-  return '其他估價欄位'
+  return valuationFieldLabel(fieldName)
 }
 
 function candidateStatusLabel(status: string): string {
-  return ({ NEEDS_CONFIRMATION: '待確認', APPLIED: '已採用', CONFIRMED: '已確認', REJECTED: '已略過', EXTRACTED: '已辨識' } as Record<string, string>)[status] ?? '已處理'
+  if (status === 'APPLIED') return '已採用'
+  if (status === 'REJECTED') return '已略過'
+  return extractedFieldStatusLabel(status)
 }
 
 function candidateProviderLabel(provider: string): string {
-  const normalized = provider.trim().toUpperCase()
-  if (normalized === 'RULE') return '規則比對'
-  if (normalized.includes('OCR')) return '文件文字辨識'
-  return '智能欄位分析'
+  return analysisProviderLabel(provider)
 }
 
 function initializeManualFieldInputs(response: AutomatedWorkflowResponseDto): void {

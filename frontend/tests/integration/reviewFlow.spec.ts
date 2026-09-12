@@ -992,7 +992,6 @@ describe('review demo flow', () => {
       document_id: revisedDocumentId,
       form_code: 'F01',
       field_name: 'parcel_area',
-      field_label: '宗地面積',
       field_guidance: '請核對來源文件所載面積。',
       extracted_value: '126.00',
       confidence: '0.94',
@@ -1107,6 +1106,10 @@ describe('review demo flow', () => {
 
     await wrapper.get('[data-testid="start-external-extraction"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.text()).toContain('宗地面積'))
+    expect(wrapper.text()).toContain('文件文字辨識')
+    expect(wrapper.text()).toContain('辨識完成')
+    expect(wrapper.text()).not.toContain('parcel_area')
+    expect(wrapper.text()).not.toContain('local_pdf')
     expect(wrapper.get('[data-testid="register-external-resubmission"]').attributes('disabled')).toBeDefined()
 
     await wrapper.get(`[data-testid="confirm-external-field-${fieldId}"]`).trigger('click')
