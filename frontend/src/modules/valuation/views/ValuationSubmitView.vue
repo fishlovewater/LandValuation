@@ -1,14 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
-import {
-  PhArrowLeft as ArrowLeft,
-  PhPaperPlaneTilt as PaperPlaneTilt,
-} from '@phosphor-icons/vue'
+import { PhArrowLeft as ArrowLeft } from '@phosphor-icons/vue'
 import ErrorState from '../../../components/common/ErrorState.vue'
 import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
 import { statusLabel } from '../../../utils/enumLabels'
-import { formatDateZhTw } from '../../../utils/formatters'
 import { newTaipeiDistrictName } from '../newTaipei'
 import { valuationStageRoute } from '../valuation.navigation'
 import {
@@ -35,13 +31,16 @@ import {
 } from '../valuation.types'
 import ValuationCaseWorkspaceHeader, { type ValuationWorkspaceStage } from '../components/ValuationCaseWorkspaceHeader.vue'
 import ValuationFormalValidationPanel from '../components/ValuationFormalValidationPanel.vue'
+import ValuationGeneralValidationPanel from '../components/ValuationGeneralValidationPanel.vue'
 import ValuationIssueDrawer from '../components/ValuationIssueDrawer.vue'
 import ValuationReportArtifacts from '../components/ValuationReportArtifacts.vue'
 import ValuationReportPackageWorkspace from '../components/ValuationReportPackageWorkspace.vue'
+import ValuationSubmissionBar from '../components/ValuationSubmissionBar.vue'
 import ValuationSubmitReadiness, {
   type SubmitReadinessItem,
   type SubmitReadinessState,
 } from '../components/ValuationSubmitReadiness.vue'
+import ValuationSubmitSummary from '../components/ValuationSubmitSummary.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -71,9 +70,6 @@ const downloadingDocumentId = ref<string | null>(null)
 let activeCaseToken = 0
 
 const caseId = computed(() => String(route.params.caseId ?? ''))
-const blockers = computed(
-  () => flow.validation?.findings.filter((finding) => finding.severity === 'ERROR') ?? [],
-)
 const displayedCaseStatus = computed(() =>
   statusLabel(flow.submission?.caseStatus ?? flow.case?.status),
 )
@@ -1005,22 +1001,16 @@ watch(caseId, () => {
         @select="focusSubmitTarget"
       />
 
-      <section class="valuation-surface" aria-labelledby="submit-summary-title">
-        <div class="surface-heading">
-          <div>
-            <p class="valuation-eyebrow">案件與輸出</p>
-            <h2 id="submit-summary-title">{{ flow.case.caseNo }}｜{{ flow.case.name }}</h2>
-          </div>
-          <span class="source-marker" :data-status="flow.submission?.caseStatus ?? flow.case.status">案件狀態：{{ displayedCaseStatus }}</span>
-        </div>
-        <div class="summary-grid">
-          <div><span>案件資料</span><strong>已載入目前案件</strong></div>
-          <div><span>F02 正式版本</span><strong>{{ flow.authoritativeF02 ? `第 ${flow.authoritativeF02.versionNo} 版` : '尚未取得' }}</strong></div>
-          <div><span>完整送審 PDF</span><strong>{{ flow.formalReport?.filename || flow.completeReport?.filename || '尚未找到啟用文件' }}</strong></div>
-          <div><span>檢核狀態</span><strong>{{ flow.validation ? '已執行' : '尚未執行' }}</strong></div>
-          <div><span>送審準備</span><strong>{{ readinessMessage }}</strong></div>
-        </div>
-      </section>
+      <ValuationSubmitSummary
+        :case-model="flow.case"
+        :authoritative-f02="flow.authoritativeF02"
+        :formal-report="flow.formalReport"
+        :complete-report="flow.completeReport"
+        :validation="flow.validation"
+        :readiness-message="readinessMessage"
+        :displayed-case-status="displayedCaseStatus"
+        :status-value="flow.submission?.caseStatus ?? flow.case.status"
+      />
 
       <ValuationSubmitReadiness
         :steps="submitReadinessSteps"
@@ -1058,33 +1048,11 @@ watch(caseId, () => {
         @validate="validateReportPages"
       />
 
-      <section v-if="flow.validation" class="valuation-surface" data-testid="submit-validation" aria-labelledby="submit-validation-title">
-        <div class="surface-heading">
-          <div>
-            <p class="valuation-eyebrow">檢核結果</p>
-            <h2 id="submit-validation-title">檢核與未解決項目</h2>
-          </div>
-          <span class="value-kind" :data-validation-state="flow.validation.canGenerateReport ? 'ready' : 'blocked'">
-            {{ flow.validation.canGenerateReport ? '可以產出' : '仍有待修正項目' }}
-          </span>
-        </div>
-        <div class="validation-counts">
-          <span>通過 {{ flow.validation.passedCount }}</span>
-          <span>警示 {{ flow.validation.warningCount }}</span>
-          <span>錯誤 {{ flow.validation.failedCount }}</span>
-        </div>
-        <ul v-if="flow.validation.findings.length" class="finding-list">
-          <li v-for="finding in flow.validation.findings" :key="finding.findingId" :data-severity="finding.severity">
-            <strong>{{ finding.severity === 'ERROR' ? '需要修正' : '請確認' }}</strong>
-            <span>{{ finding.message }}</span>
-            <small>實際值：{{ finding.actualValue ?? '—' }}</small>
-            <small>預期值：{{ finding.expectedValue ?? '—' }}</small>
-            <button class="finding-action" type="button" @click="goBackToGeneralFinding(finding.fieldPath)">返回資料確認修正</button>
-          </li>
-        </ul>
-        <p v-else class="empty-copy">目前沒有其他需要處理的檢核項目。</p>
-        <p v-if="blockers.length" class="blocker-note">仍有 {{ blockers.length }} 項待修正內容，請回到資料確認頁處理。</p>
-      </section>
+      <ValuationGeneralValidationPanel
+        v-if="flow.validation"
+        :validation="flow.validation"
+        @fix="goBackToGeneralFinding"
+      />
 
       <ValuationFormalValidationPanel
         :validation="flow.formalValidation"
@@ -1112,28 +1080,13 @@ watch(caseId, () => {
       <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
       <p v-if="refreshWarning" class="inline-notice" role="status">{{ refreshWarning }}</p>
 
-      <section class="submit-bar" aria-label="送審操作">
-        <div>
-          <strong>{{ flow.submission ? '案件已送出審查' : readinessMessage }}</strong>
-          <p v-if="flow.submission">送審時間：{{ formatDateZhTw(flow.submission.submittedAt) }}</p>
-          <p v-else>完成必要檢核與完整送審 PDF 後即可送出審查。</p>
-        </div>
-        <button
-          v-if="!flow.submission"
-          class="solid-button solid-button--primary"
-          type="button"
-          data-testid="submit-for-review"
-          :disabled="!canSubmit || submitting"
-          @click="submitForReview"
-        >
-          <PaperPlaneTilt v-if="!submitting" :size="16" weight="bold" aria-hidden="true" />
-          <span>{{ submitting ? '送審中…' : '送出審查' }}</span>
-        </button>
-        <div v-else class="submission-complete" data-testid="submission-result" :data-status="flow.submission.caseStatus">
-          <strong>第 {{ flow.submission.submissionNo }} 次送審</strong>
-          <span>案件狀態：{{ statusLabel(flow.submission.caseStatus) }}</span>
-        </div>
-      </section>
+      <ValuationSubmissionBar
+        :submission="flow.submission"
+        :readiness-message="readinessMessage"
+        :can-submit="canSubmit"
+        :submitting="submitting"
+        @submit="submitForReview"
+      />
 
       <RouterLink class="back-link" :to="valuationStageRoute(caseId, 'data')">
         <ArrowLeft :size="15" weight="bold" aria-hidden="true" />
@@ -1146,34 +1099,6 @@ watch(caseId, () => {
 <style scoped>
 .valuation-view { display: grid; gap: 18px; padding: 0 28px 34px; }
 .valuation-view :deep(.case-workspace-header) { margin-inline: -28px; }
-.valuation-surface { padding: 22px; border: 1px solid var(--app-line); border-radius: var(--app-radius-md); background: #fff; }
-.surface-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
-.surface-heading h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 24px; font-weight: 600; letter-spacing: -0.04em; }
-.valuation-eyebrow { margin: 0 0 6px; color: var(--app-accent-deep); font-size: 11px; font-weight: 800; letter-spacing: 0.12em; }
-.source-marker, .value-kind { display: inline-flex; min-height: 30px; align-items: center; padding: 5px 10px; border: 1px solid var(--app-line); border-radius: var(--app-radius-pill); color: var(--app-ink-soft); background: #f7f8fb; font-size: 11px; font-weight: 800; white-space: nowrap; }
-.source-marker[data-source-kind="calculated"] { border-color: rgba(46, 89, 132, 0.22); color: #2e5984; background: #edf4fb; }
-.source-marker:first-letter { color: inherit; }
-.summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.summary-grid div { display: grid; gap: 5px; padding: 13px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #fbfcfe; }
-.summary-grid span { color: var(--app-muted); font-size: 11px; font-weight: 800; }
-.summary-grid strong { color: var(--app-ink); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
-.validation-counts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
-.validation-counts span { padding: 8px 11px; border-radius: 8px; color: var(--app-ink-soft); background: #f5f7fb; font-size: 12px; font-weight: 800; }
-.finding-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.finding-list li { display: grid; gap: 4px; padding: 12px 14px; border-left: 4px solid #d6a63e; background: #fffaf0; color: var(--app-ink-soft); font-size: 13px; }
-.finding-list li[data-severity="ERROR"] { border-left-color: #c85b43; background: #fff3f0; }
-.finding-list strong { color: var(--app-ink); font-size: 12px; }
-.finding-action { justify-self: start; min-height: 36px; margin-top: 5px; padding: 6px 11px; border: 1px solid rgba(200,91,67,.26); border-radius: 8px; color: var(--app-accent-deep); background: #fff; cursor: pointer; font-size: 11px; font-weight: 900; }
-.empty-copy { margin: 0; color: var(--app-muted); font-size: 13px; }
-.blocker-note { margin: 14px 0 0; color: #a44334; font-size: 13px; font-weight: 700; }
-.submit-bar { position: sticky; z-index: 12; bottom: 14px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px 20px; border: 1px solid #d9e2ec; border-radius: var(--app-radius-md); background: #fff; box-shadow: 0 10px 28px rgba(30,52,78,.12); }
-.submit-bar strong { color: var(--app-ink); font-size: 15px; }
-.submit-bar p { margin: 5px 0 0; color: var(--app-ink-soft); font-size: 12px; }
-.solid-button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 7px; padding: 10px 18px; border: 1px solid var(--app-line); border-radius: 9px; color: var(--app-ink-soft); background: var(--app-paper-strong); cursor: pointer; font-size: 13px; font-weight: 800; }
-.solid-button--primary { border-color: var(--app-accent); color: #fff; background: var(--app-accent); }
-.solid-button:disabled { cursor: not-allowed; opacity: 0.55; }
-.submission-complete { display: grid; gap: 4px; padding: 10px 14px; border: 1px solid rgba(59, 129, 102, 0.24); border-radius: 9px; color: var(--app-green); background: rgba(59, 129, 102, 0.08); }
-.submission-complete span { font-size: 12px; }
 .inline-error, .inline-notice { margin: 0; padding: 12px 14px; border-radius: var(--app-radius-sm); font-size: 13px; }
 .inline-error { color: #a44334; background: #fff0ed; }
 .inline-notice { color: var(--app-green); background: rgba(59, 129, 102, 0.08); }
@@ -1182,10 +1107,5 @@ watch(caseId, () => {
 @media (max-width: 760px) {
   .valuation-view { padding: 18px 16px 28px; }
   .valuation-view :deep(.case-workspace-header) { margin: -18px -16px 0; }
-  .valuation-surface { padding: 16px; }
-  .surface-heading, .submit-bar { align-items: flex-start; flex-direction: column; }
-  .submit-bar { position: static; box-shadow: 0 8px 22px rgba(30,52,78,.10); }
-  .summary-grid { grid-template-columns: 1fr; }
-  .solid-button { width: 100%; }
 }
 </style>

@@ -3,11 +3,14 @@ import { describe, expect, it } from 'vitest'
 import DocumentTextPreview from '../../src/components/common/DocumentTextPreview.vue'
 import SpreadsheetPreview from '../../src/components/common/SpreadsheetPreview.vue'
 import ValuationFormalValidationPanel from '../../src/modules/valuation/components/ValuationFormalValidationPanel.vue'
+import ValuationGeneralValidationPanel from '../../src/modules/valuation/components/ValuationGeneralValidationPanel.vue'
 import ValuationIssueDrawer from '../../src/modules/valuation/components/ValuationIssueDrawer.vue'
 import ValuationReportArtifacts from '../../src/modules/valuation/components/ValuationReportArtifacts.vue'
 import ValuationReportPackageWorkspace from '../../src/modules/valuation/components/ValuationReportPackageWorkspace.vue'
 import ValuationStepNavigator from '../../src/modules/valuation/components/ValuationStepNavigator.vue'
+import ValuationSubmissionBar from '../../src/modules/valuation/components/ValuationSubmissionBar.vue'
 import ValuationSubmitReadiness from '../../src/modules/valuation/components/ValuationSubmitReadiness.vue'
+import ValuationSubmitSummary from '../../src/modules/valuation/components/ValuationSubmitSummary.vue'
 import ReviewActionBar from '../../src/modules/review/components/ReviewActionBar.vue'
 
 describe('SpreadsheetPreview', () => {
@@ -132,6 +135,98 @@ describe('ValuationReportPackageWorkspace', () => {
 
     await wrapper.get('[data-testid="report-page-s01-confirm"]').setValue(true)
     expect(wrapper.emitted('updateConfirmation')?.[0]).toEqual(['s01', true])
+  })
+})
+
+describe('ValuationSubmitSummary', () => {
+  it('keeps the case, formal version, output, and readiness status visible together', () => {
+    const wrapper = mount(ValuationSubmitSummary, {
+      props: {
+        caseModel: {
+          caseId: 'case-1',
+          caseNo: 'NEWTP-2026-001',
+          name: '測試估價案件',
+          status: 'DRAFT',
+        } as any,
+        authoritativeF02: {
+          formInstanceId: 'form-1',
+          caseId: 'case-1',
+          formCode: 'F02',
+          versionNo: 3,
+          status: 'FINAL',
+        } as any,
+        formalReport: {
+          filename: '完整送審.pdf',
+        } as any,
+        completeReport: null,
+        validation: null,
+        readinessMessage: '完整送審 PDF 已準備完成，可以送審。',
+        displayedCaseStatus: '估價作業中',
+        statusValue: 'DRAFT',
+      },
+    })
+
+    const summary = wrapper.get('[data-testid="submit-summary"]')
+    expect(summary.text()).toContain('NEWTP-2026-001｜測試估價案件')
+    expect(summary.text()).toContain('第 3 版')
+    expect(summary.text()).toContain('完整送審.pdf')
+    expect(summary.text()).toContain('完整送審 PDF 已準備完成，可以送審。')
+  })
+})
+
+describe('ValuationGeneralValidationPanel', () => {
+  it('preserves blocking findings and routes the user back to the exact correction target', async () => {
+    const wrapper = mount(ValuationGeneralValidationPanel, {
+      props: {
+        validation: {
+          validationRunId: 'validation-1',
+          caseId: 'case-1',
+          formInstanceId: 'form-1',
+          runStatus: 'COMPLETED',
+          passedCount: 5,
+          warningCount: 0,
+          failedCount: 1,
+          canGenerateReport: false,
+          rulesetVersion: '2026-01',
+          correctionHints: [],
+          findings: [{
+            findingId: 'finding-1',
+            ruleCode: 'AREA_REQUIRED',
+            ruleVersion: '1',
+            fieldPath: 'area_sqm',
+            severity: 'ERROR',
+            actualValue: null,
+            expectedValue: '必填',
+            message: '宗地面積尚未填寫。',
+            createdAt: '2026-09-12T10:00:00+08:00',
+          }],
+          startedAt: '2026-09-12T10:00:00+08:00',
+          completedAt: '2026-09-12T10:00:01+08:00',
+        },
+      },
+    })
+
+    expect(wrapper.get('[data-testid="submit-validation"]').text()).toContain('仍有 1 項待修正內容')
+    await wrapper.get('.general-validation__fix').trigger('click')
+    expect(wrapper.emitted('fix')?.[0]).toEqual(['area_sqm'])
+  })
+})
+
+describe('ValuationSubmissionBar', () => {
+  it('keeps submission disabled until ready and emits only an explicit submit action', async () => {
+    const wrapper = mount(ValuationSubmissionBar, {
+      props: {
+        submission: null,
+        readinessMessage: '請先產生完整送審 PDF。',
+        canSubmit: false,
+        submitting: false,
+      },
+    })
+
+    expect(wrapper.get('[data-testid="submit-for-review"]').attributes('disabled')).toBeDefined()
+    await wrapper.setProps({ canSubmit: true })
+    await wrapper.get('[data-testid="submit-for-review"]').trigger('click')
+    expect(wrapper.emitted('submit')).toHaveLength(1)
   })
 })
 
