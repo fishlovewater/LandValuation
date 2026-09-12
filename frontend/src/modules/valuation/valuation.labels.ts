@@ -185,6 +185,7 @@ export function extractedFieldStatusLabel(value: string | null | undefined): str
     NEEDS_CONFIRMATION: '待確認',
     CONFIRMED: '已確認',
     APPLIED: '已納入',
+    AUTO_APPLIED: '自動已填表',
     REJECTED: '已排除',
     EXTRACTED: '已辨識',
   } as Readonly<Record<string, string>>)[normalized] ?? '已處理'

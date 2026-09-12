@@ -14,7 +14,7 @@ from app.review.corrections import (
 from app.review.correction_repository import CorrectionRepository
 from app.review.repository import ReviewRepository
 from app.review.schemas import CorrectionResubmissionCreate
-from app.review.service import ensure_transition
+from app.review.service import ensure_transition, ReviewService
 from app.review.status_policy import (
     REVIEW_COMPLETION_STATUSES,
     REVIEW_CORRECTION_RECHECK_STATUSES,
@@ -460,6 +460,9 @@ class CorrectionService:
         missing = await self.review_repository.list_missing_items(
             review.review_id, open_only=True
         )
+        from app.review.demo_policy import ADVISORY_ITEM_CODES
+        if await ReviewService(self.review_repository)._demo_advisory(review):
+            missing = [item for item in missing if item.item_code not in ADVISORY_ITEM_CODES]
         open_count = sum(1 for f in findings if f.status in _OPEN_STATUSES)
         confirmed = sum(1 for f in findings if f.status == _CONFIRMED_STATUS)
         expert = sum(1 for f in findings if f.status in _EXPERT_STATUSES)
@@ -522,6 +525,8 @@ class CorrectionService:
             )
         summary = await self._completion_summary(review)
         validate_review_completion(reason, summary)
+        if await ReviewService(self.review_repository)._demo_advisory(review):
+            reason = "Demo 展示完成（缺件及未執行規則仍保留，不代表正式審查通過）。" + reason
         before_status = review.review_status
         decision = await self.review_repository.create_decision(
             review_id=review.review_id,

@@ -623,6 +623,7 @@ describe('review demo flow', () => {
 
     http.defaults.adapter = vi.fn(async (config) => {
       requests.push(`${config.method} ${config.url}`)
+      if (config.method === 'get' && config.url?.endsWith('/forms')) return response([], config)
       if (config.method === 'get' && config.url === `/review/workbench/cases/${idsWithDetail.review}`) {
         return response(externalDetail, config)
       }
@@ -676,7 +677,7 @@ describe('review demo flow', () => {
     await router.push(`/app/review/workbench/${idsWithDetail.review}`)
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
 
-    await vi.waitFor(() => expect(wrapper.get('[data-testid="external-review-intake"]').text()).toContain('已納入審查'))
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="external-review-intake"]').text()).toContain('人工確認已填表'))
     expect(requests).toContain(
       `get /review/workbench/cases/${idsWithDetail.review}/external-documents/${idsWithDetail.document}/extraction`,
     )

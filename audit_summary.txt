@@ -1,0 +1,210 @@
+
+==================================================
+FORM CODE: S01 (地價區段勘查表.xlsx)
+==================================================
+Excel File Field Count: 131
+System Catalog Field Count: 77
+
+[!] Fields in Excel file but MISSING in System Catalog (54):
+  - apartment/high_rise/townhouse/other: ['70', '房屋建築現況', '區段現況', '建築型態', 'dominant_building_type', '區段內多數建物的主要型態', '列舉＋其他', '每地價區段一筆', '必填', '實地勘查', '人工選擇', '單選主要型態；其他須補充', 'townhouse', '建築型態', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - building_restriction_status=true時必填: ['12', '土地使用管制', '行政條件', '限制建築內容', 'building_restriction_details', '記錄整體開發、面積限制、高度限制等具體規定', '長文字/多選', '整體開發、面積限制、高度限制、其他', '每地價區段一筆', '條件必填', '主管法規/計畫資料', '引用後確認', '高度限制…', '有無限制建築內容', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條', 'building_restriction_status']
+  - building_site_improvements: ['建築基地改良', '每個已完成項目一筆', 'type, other_description', '複選資料']
+  - building_site_improvements／每項一筆: ['41', '土地改良', '建築基地改良', '改良項目', 'building_site_improvement_type', '區段內已完成的建築基地改良項目', '列舉', '整平或填挖基地/開挖水溝/水土保持/舖築道路/埋設管道/修築駁嵌/其他', '選填', '實地勘查', '複選', '只記錄已完成項目', '舖築道路', '建築基地改良各勾選項', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - bus_stops: ['站牌', '採接近模式時每代表站牌一筆', 'name, location_scope, distance_m', '密集模式改用zone層級density_level']
+  - bus_stops／每站一筆: ['23', '交通運輸', '站牌', '站牌名稱', 'bus_stop_name', '採接近程度時的代表站牌名稱', '文字', '無', '條件必填', '實勘/GIS', '人工輸入或引用', 'comparison_mode=proximity時必填', '金山區公所站', '站牌－名稱', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條', 'bus_stop_comparison_mode']
+  - commercial/residential/industrial/residential_commercial/residential_industrial/agricultural/fishery_pastoral/vacant/public_facility/other: ['71', '土地利用現況', '區段現況', '主要土地利用', 'current_land_use_type', '區段內一般土地利用現況', '列舉＋其他', '每地價區段一筆', '必填', '實地勘查', '人工選擇', '依原表單單選；若系統允許複選須另與主管機關確認', 'residential_commercial', '土地利用現況', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - commercial_facilities: ['工商設施', '每處或每類設施一筆', 'type, name, count, location_scope, distance_m', '數量須保留']
+  - commercial_facilities／每設施一筆: ['60', '工商活動', '商業設施明細', '商業設施類型', 'commercial_facility_type', '工商活動設施固定類型', '列舉', 'department_store/financial_institution/entertainment/exhibition_hotel', '選填', '實勘/GIS', '選擇', '固定列舉', 'financial_institution', '百貨公司、金融機構、娛樂設施、大型展示中心或觀光飯店', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - comparison_mode=density時必填: ['26', '交通運輸', '站牌', '站牌密集程度', 'bus_stop_density_level', '採密集程度比較時記錄非常密集、密集或不密集', '列舉', 'very_dense/dense/not_dense', '每地價區段一筆', '條件必填', '實地勘查', '人工選擇', 'dense', '站牌－密集程度', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條', 'bus_stop_comparison_mode']
+  - comparison_mode=proximity時必填: ['23', '交通運輸', '站牌', '站牌名稱', 'bus_stop_name', '採接近程度時的代表站牌名稱', '文字', '無', 'bus_stops／每站一筆', '條件必填', '實勘/GIS', '人工輸入或引用', '金山區公所站', '站牌－名稱', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條', 'bus_stop_comparison_mode']
+  - current_land_use_type=other時必填: ['72', '土地利用現況', '區段現況', '其他土地利用說明', 'current_land_use_other', '選擇其他時補充利用內容', '文字', '無', '每地價區段一筆', '條件必填', '實地勘查', '人工輸入', '宗教使用', '土地利用現況－其他', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條', 'current_land_use_type']
+  - department_store/financial_institution/entertainment/exhibition_hotel: ['60', '工商活動', '商業設施明細', '商業設施類型', 'commercial_facility_type', '工商活動設施固定類型', '列舉', 'commercial_facilities／每設施一筆', '選填', '實勘/GIS', '選擇', '固定列舉', 'financial_institution', '百貨公司、金融機構、娛樂設施、大型展示中心或觀光飯店', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - elementary_school/junior_high/high_school/college/traditional_market/supermarket/shopping_center/neighborhood_park/general_park/plaza_pedestrian/tourism_recreation/parking/service_facility: ['45', '公共建設', '設施明細', '設施類型', 'public_facility_type', '公共建設固定類型', '列舉', 'public_facilities／每設施一筆', '選填', '實勘/GIS', '選擇', '固定列舉', 'traditional_market', '學校、市場、公園廣場徒步區、觀光遊憩、停車、服務設施', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - farmland_improvements: ['農地改良', '每個已完成項目一筆', 'type, other_description', '複選資料']
+  - farmland_improvements／每項一筆: ['43', '土地改良', '農地改良', '改良項目', 'farmland_improvement_type', '區段內已完成的農地改良項目', '列舉', '耕地整理/水土保持/土壤改良/修築農路/灌溉/排水/防風/防砂/堤防/其他', '選填', '實地勘查', '複選', '只記錄已完成項目', '排水', '農地改良各勾選項', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - financial_institution: ['60', '工商活動', '商業設施明細', '商業設施類型', 'commercial_facility_type', '工商活動設施固定類型', '列舉', 'department_store/financial_institution/entertainment/exhibition_hotel', 'commercial_facilities／每設施一筆', '選填', '實勘/GIS', '選擇', '固定列舉', '百貨公司、金融機構、娛樂設施、大型展示中心或觀光飯店', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - fishery_pastoral: ['current_land_use_type', '漁牧用']
+  - floor_area_ratio為空且尚未實施時必填: ['9', '土地使用管制', '行政條件', '容積率未實施原因', 'floor_area_ratio_note', '尚未實施容積率時記錄原因', '長文字', '無', '每地價區段一筆', '條件必填', '管制規定', '人工輸入', '尚未實施容積管制', '容積率備註', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條', 'floor_area_ratio']
+  - high_rise: ['dominant_building_type', '大樓']
+  - high_speed_rail/rail/bus/metro: ['18', '交通運輸', '大型車站', '車站類型', 'major_station_type', '高鐵、火車、客運或捷運站類型', '列舉', 'major_stations／每類型可一筆', '選填', '實地勘查/GIS', '選擇', '固定列舉', 'metro', '大型車站選項', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - internal_roads: ['區段內道路明細', '每條道路一筆', 'width_m, is_opened', '計算區段內已開闢道路平均寬度']
+  - internal_roads.width_m＋is_opened: ['15', '交通運輸', '道路', '區段內道路平均寬度', 'average_internal_road_width_m', '區段內已開闢道路寬度的算術平均', '小數', '公尺', '每地價區段一筆', '必填', '道路清單', '後端計算', "'＝已開闢道路總寬度÷已開闢道路條數；條數須大於0", '12', '區段內道路平均寬度', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - internal_roads／每條道路一筆: ['16', '交通運輸', '道路明細', '道路寬度', 'internal_road_width_m', '供平均寬度計算的各已開闢道路寬度', '小數', '公尺', '條件必填', '道路資料/實勘', '人工輸入或引用', '大於0', '12', '平均道路寬度計算明細（表面未逐列顯示）', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - location_scope: ['inside', '本區段內']
+  - location_scope=outside時大於等於0: ['21', '交通運輸', '大型車站', '距離', 'major_station_distance_m', '區段中心點至區段外車站距離', '小數', '公尺', 'major_stations／每站一筆', '條件必填', 'GIS', '後端計算或人工輸入', '300', '大型車站－距離', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條', 'zone_center_geometry＋station_geometry']
+  - location_scope=outside時必填: ['25', '交通運輸', '站牌', '站牌距離', 'bus_stop_distance_m', '區段中心點至區段外代表站牌距離', '小數', '公尺', 'bus_stops／每站一筆', '條件必填', 'GIS', '後端計算或人工輸入', '200', '站牌－距離', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條', 'bus_stop_location_scope']
+  - location_scope=outside時必填且>=0: ['48', '公共建設', '設施明細', '距離', 'public_facility_distance_m', '區段中心點至區段外公共建設距離', '小數', '公尺', 'public_facilities／每設施一筆', '條件必填', '實勘/GIS', '引用/計算後確認', '120', '距離', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條', 'public_facility_type']
+  - major_stations: ['大型車站', '每座車站一筆', 'type, name, location_scope, distance_m', '類型可為高鐵/火車/客運/捷運']
+  - major_stations／每站一筆: ['19', '交通運輸', '大型車站', '車站名稱', 'major_station_name', '鄰近大型車站名稱', '文字', '無', '條件必填', '實地勘查/GIS', '人工輸入或引用', '有車站類型時必填', '國光客運金山站', '大型車站－名稱', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - major_stations／每類型可一筆: ['18', '交通運輸', '大型車站', '車站類型', 'major_station_type', '高鐵、火車、客運或捷運站類型', '列舉', 'high_speed_rail/rail/bus/metro', '選填', '實地勘查/GIS', '選擇', '固定列舉', 'metro', '大型車站選項', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - not_dense: ['bus_stop_density_level', '不密集']
+  - other_zone_factors: ['其他影響因素', '每因素一筆', 'name, description', '不得取代規範既有固定欄位']
+  - other_zone_factors／每因素一筆: ['67', '其他影響因素', '補充因素', '因素名稱', 'other_factor_name', '表內未列但足以影響區段地價的因素名稱', '文字', '無', '選填', '實地勘查/專業判斷', '人工輸入', '不得重複既有固定因素', '海景第一排', '其他影響因素', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - outside時distance_m必填: ['20', '交通運輸', '大型車站', '位於區段內外', 'major_station_location_scope', '設施在本區段內或區段外', '列舉', 'inside/outside', 'major_stations／每站一筆', '條件必填', 'GIS/實勘', '後端判定後人工確認', 'outside', '大型車站－本區段內/外', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - pollution_sources: ['環境污染源', '每個污染源一筆', 'type, name, location_scope, distance_m', '無污染可不建資料列，輸出時顯示無']
+  - pollution_sources／每污染源一筆: ['56', '環境污染', '污染源明細', '污染類型', 'pollution_type', '固定污染種類', '列舉', 'water/noise/air/waste/other', '選填', '實地勘查/環保資料', '選擇', '固定列舉', 'noise', '水、噪音、廢氣、廢棄物、其他污染', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - public_facilities: ['公共建設', '每處設施一筆', 'type, name, location_scope, distance_m', '固定槽位轉正規化子表']
+  - public_facilities／每設施一筆: ['45', '公共建設', '設施明細', '設施類型', 'public_facility_type', '公共建設固定類型', '列舉', 'elementary_school/junior_high/high_school/college/traditional_market/supermarket/shopping_center/neighborhood_park/general_park/plaza_pedestrian/tourism_recreation/parking/service_facility', '選填', '實勘/GIS', '選擇', '固定列舉', 'traditional_market', '學校、市場、公園廣場徒步區、觀光遊憩、停車、服務設施', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - public_facility: ['current_land_use_type', '公共設施']
+  - repeat_group: ['中文名稱', '重複規則', '組內欄位', '設計備註']
+  - residential_commercial: ['71', '土地利用現況', '區段現況', '主要土地利用', 'current_land_use_type', '區段內一般土地利用現況', '列舉＋其他', 'commercial/residential/industrial/residential_commercial/residential_industrial/agricultural/fishery_pastoral/vacant/public_facility/other', '每地價區段一筆', '必填', '實地勘查', '人工選擇', '依原表單單選；若系統允許複選須另與主管機關確認', '土地利用現況', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - residential_industrial: ['current_land_use_type', '住工混合']
+  - special_facilities: ['特殊設施', '每處設施一筆', 'type, name, location_scope, distance_m', '嫌惡/特殊設施']
+  - special_facilities／每設施一筆: ['52', '特殊設施', '設施明細', '特殊設施類型', 'special_facility_type', '固定類型的嫌惡或特殊設施', '列舉', 'substation_high_voltage_tower/gas_oil_tank/cemetery/funeral_home/crematorium/columbarium/sewage_plant/landfill_incinerator', '選填', '實勘/GIS', '選擇', '固定列舉', 'columbarium', '電業氣體燃料、殯葬、廢棄物處理', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - substation_high_voltage_tower/gas_oil_tank/cemetery/funeral_home/crematorium/columbarium/sewage_plant/landfill_incinerator: ['52', '特殊設施', '設施明細', '特殊設施類型', 'special_facility_type', '固定類型的嫌惡或特殊設施', '列舉', 'special_facilities／每設施一筆', '選填', '實勘/GIS', '選擇', '固定列舉', 'columbarium', '電業氣體燃料、殯葬、廢棄物處理', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - traditional_market: ['45', '公共建設', '設施明細', '設施類型', 'public_facility_type', '公共建設固定類型', '列舉', 'elementary_school/junior_high/high_school/college/traditional_market/supermarket/shopping_center/neighborhood_park/general_park/plaza_pedestrian/tourism_recreation/parking/service_facility', 'public_facilities／每設施一筆', '選填', '實勘/GIS', '選擇', '固定列舉', '學校、市場、公園廣場徒步區、觀光遊憩、停車、服務設施', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - user_id＋顯示姓名: ['74', '簽核資料', '表尾', '承辦員', 'handler_name', '承辦填表人員', '人員參照', '每地價區段一筆', '依分層負責規定', '使用者/組織資料', '簽核流程產生', '應保存簽核時間與人員ID；估價師僅委託估價時必填', '王○○', '承辦員', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - very_dense: ['bus_stop_density_level', '非常密集']
+  - very_dense/dense/not_dense: ['26', '交通運輸', '站牌', '站牌密集程度', 'bus_stop_density_level', '採密集程度比較時記錄非常密集、密集或不密集', '列舉', '每地價區段一筆', '條件必填', '實地勘查', '人工選擇', 'comparison_mode=density時必填', 'dense', '站牌－密集程度', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條', 'bus_stop_comparison_mode']
+  - zone_center_geometry＋station_geometry: ['21', '交通運輸', '大型車站', '距離', 'major_station_distance_m', '區段中心點至區段外車站距離', '小數', '公尺', 'major_stations／每站一筆', '條件必填', 'GIS', '後端計算或人工輸入', 'location_scope=outside時大於等於0', '300', '大型車站－距離', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+  - 主表price_zones保存單值欄位；道路、設施、污染源及其他因素使用子表並以price_zone_id外鍵關聯。保留source_document_id、source_page、confirmed_by、confirmed_at及version欄位。: ['資料庫建議']
+  - 密集模式改用zone層級density_level: ['bus_stops', '站牌', '採接近模式時每代表站牌一筆', 'name, location_scope, distance_m']
+  - 須與urban_plan_scope相容: ['6', '土地使用管制', '行政條件', '使用分區或使用地類別', 'land_use_zone_category', '都市計畫使用分區或非都市土地編定使用地類別', '文字＋代碼', '主管機關分類代碼', '每地價區段一筆', '必填', '都市計畫/地籍資料', '引用後確認', '第二種商業區', '使用分區（使用地類別）', '土地徵收補償市價查估作業手冊／伍、二、地價區段勘查表（手冊頁27-33）；土地徵收補償市價查估辦法第9、10條']
+
+[OK] All fields in System Catalog are present in Excel file!
+
+==================================================
+FORM CODE: F02-RF (影響地價區域因素分析明細表_商業用地.xlsx)
+==================================================
+Excel File Field Count: 32
+System Catalog Field Count: 29
+
+[!] Fields in Excel file but MISSING in System Catalog (32):
+  - appraiser_id: ['17', '簽核', '不動產估價師', '是', '估價師/使用者資料', '簽核流程', '委託估價時簽章']
+  - benchmark/comparison_1/comparison_2/comparison_3: ['2', '標的識別', '標的角色', 'subject_role', '否', '系統結構', '系統產生']
+  - case_id: ['regional_factor_analyses', '所屬案件', 'UUID FK', '每表一筆', '案件資料', '輸出案號而非ID']
+  - case_no: ['1', '基本識別', '案號', '是', '案件/宗地個別因素清冊', '引用', '同一查估案件唯一']
+  - case_note: ['16', '備註', '全案備註', '是', '查估人員', '人工輸入', '全案一格']
+  - category_subtotal: ['13', '計算結果', '主要項目百分比小計', '是', '同主要項目各細項修正百分比', '後端計算', '每個比較標的、每個主要項目各一筆']
+  - correction_override_reason: ['12', '修正率', '特殊調整原因', '否', '查估人員專業判斷', '人工輸入', '偏離評價基準時必填，且不得超過最大影響範圍']
+  - correction_percentage: ['11', '修正率', '修正百分比', '比較標的才是', '比準地及比較標的等級＋評價基準', '查表後人工確認', '比準地欄無修正百分比；比較標的1～3必須依級距差異']
+  - factor_category_no: ['5', '因素評定', '主要項目編號', '否', '表5-2固定結構', '系統產生', '1～8']
+  - factor_item_code: ['6', '因素評定', '修正細項代碼', '否', '表5-2固定結構', '系統產生', '商業用地固定29項']
+  - factor_item_id: ['regional_factor_grades', '修正細項', 'UUID FK', '每標的×29項', '表5-2定義', '不直接輸出ID']
+  - grade_adjustment_rate: ['10', '修正率', '級距對應修正率', '否', '新北市當期評價基準明細表', '查表', '保存各級距對應值供稽核']
+  - grade_label: ['8', '因素評定', '優劣等級文字', '是', '由級數對照', '後端產生', '二級：優/劣；三級：優/普通/劣；五級：優/稍優/普通/稍劣/劣']
+  - grade_no: ['7', '因素評定', '優劣等級級數', '是', '地價區段勘查表＋新北市評價基準', '引用/人工確認', '須與各區段勘查表一致；只可使用該細項允許級數']
+  - instance_no: ['3', '標的識別', '實例編號', '比較標的才是', '買賣實例/收益實例資料', '引用', '比準地不填；比較標的1～3依原表輸出']
+  - is_overridden: ['regional_factor_adjustments', '是否人工調整', 'boolean', '每比較標的×29項', '系統比較', '不輸出']
+  - land_use_type: ['regional_factor_analyses', '用地類型', 'enum', '每表一筆', '固定commercial', '不輸出；決定採表5-2']
+  - override_reason: ['regional_factor_adjustments', '人工調整理由', 'text', '條件一筆', '查估人員', '備註/稽核用']
+  - price_zone_id: ['regional_factor_subjects', '地價區段', 'UUID FK', '每標的一筆', '地價區段資料', '輸出區段號']
+  - price_zone_no: ['4', '標的識別', '地價區段號', '是', '地價區段資料', '引用', '比準地及各比較標的均必填']
+  - regional_factor_adjustments: ['correction_percentage', '修正百分比', 'decimal', '每比較標的×29項', '評價基準級距差異', '輸出']
+  - regional_factor_analyses: ['id', '分析表主鍵', 'UUID', '每表一筆', '系統產生', '不輸出']
+  - regional_factor_grades: ['factor_item_id', '修正細項', 'UUID FK', '每標的×29項', '表5-2定義', '不直接輸出ID']
+  - regional_factor_standard_version: ['9', '修正率', '評價基準版本', '否', '新北市當期評價基準明細表', '引用', '必須保存適用版本，不能只存最後百分比']
+  - regional_factor_subjects: ['role', '標的角色', 'enum', '每表固定4筆', '系統產生', '決定輸出欄位置']
+  - regional_factor_subtotals: ['subtotal_percentage', '主要項目百分比小計', 'decimal', '每比較標的×8項', '後端計算', '輸出']
+  - standard_version_id: ['regional_factor_analyses', '區域因素評價基準版本', 'UUID FK', '每表一筆', '新北市評價基準', '不輸出但必須保存']
+  - subject_note: ['15', '備註', '標的備註', '是', '查估人員', '人工輸入', '比準地及比較標的1～3各一格']
+  - subject_role: ['2', '標的識別', '標的角色', '否', '系統結構', '系統產生', 'benchmark/comparison_1/comparison_2/comparison_3']
+  - subtotal_percentage: ['regional_factor_subtotals', '主要項目百分比小計', 'decimal', '每比較標的×8項', '後端計算', '輸出']
+  - total_correction_percentage: ['regional_factor_subjects', '區域因素總修正數', 'decimal', '每比較標的一筆', '後端計算', '輸出']
+  - total_regional_factor_correction: ['14', '計算結果', '影響地價區域因素總修正數', '是', '8項百分比小計', '後端計算', '每個比較標的一筆']
+
+[-] Fields in System Catalog but NOT in Excel file (29):
+  - average_road_width (區段內道路平均寬度)
+  - building_coverage_rate (建蔽率)
+  - department_store (百貨公司之有無、數量、接近程度)
+  - drainage (排水之良否)
+  - entertainment_facility (娛樂設施之有無、數量、接近程度)
+  - environmental_pollution (水、噪音、廢氣及廢棄物污染)
+  - exhibition_hotel (大型展示中心或觀光飯店之接近程度)
+  - financial_institution (金融機構之有無、數量、接近程度)
+  - floor_area_ratio (容積率)
+  - funeral_facility (殮葬設施之有無及接近程度)
+  - interchange_proximity (交流道之有無及接近交流道之程度)
+  - land_use_zone (使用分區)
+  - main_road_width (主要道路寬度)
+  - market_proximity (接近市場之程度)
+  - mass_transit_proximity (接近大型車站之程度)
+  - other (其他影響因素)
+  - park_proximity (接近公園之程度)
+  - parking_convenience (停車場地之便利程度)
+  - pedestrian_flow (顧客通行量之多寡)
+  - power_gas_facility (電業設施及公用氣體燃料設施)
+  - prohibited_building (有無禁止建築)
+  - restricted_building (有無限制建築)
+  - road_plan (區段內道路規劃及開闢程度)
+  - station_proximity (站牌之接近程度或密集程度)
+  - terrain (地勢)
+  - tourist_facility_proximity (接近觀光遊憩設施之程度)
+  - urban_plan_status (都市計畫)
+  - vacancy_rate (店舖之歇業狀態)
+  - waste_facility (廢棄物處理設施之有無及接近程度)
+
+==================================================
+FORM CODE: F04 (徵收土地宗地市價估計表.xlsx)
+==================================================
+Excel File Field Count: 22
+System Catalog Field Count: 17
+
+[!] Fields in Excel file but MISSING in System Catalog (6):
+  - comparison_status: ['parcel_market_factor_values', '比較狀態', 'enum', '每宗地×20項', '決定輸出差異率或－']
+  - difference_rate: ['parcel_market_factor_values', '差異率', 'decimal/null', '每宗地×20項', '輸出']
+  - parcel_market_factor_values: ['factor_code / condition_value', '因素與條件', 'FK/json', '每宗地×20項', '輸出']
+  - parcel_market_sources: ['source_type / source_id / version', '來源快照', 'text/UUID/integer', '每來源一筆', '不輸出']
+  - parcel_market_valuation_items: ['parcel_id / display_order', '宗地與輸出順序', 'UUID/integer', '每宗地一筆', '輸出']
+  - parcel_market_valuations: ['case_id / benchmark_land_id', '案件及比準地', 'UUID FK', '每評價單元一筆', '輸出關聯值']
+
+[-] Fields in System Catalog but NOT in Excel file (1):
+  - pagination (頁碼與總頁數)
+
+==================================================
+FORM CODE: F03 (比準地地價估計表.xlsx)
+==================================================
+Excel File Field Count: 30
+System Catalog Field Count: 24
+
+[!] Fields in Excel file but MISSING in System Catalog (6):
+  - benchmark_valuation_items: ['benchmark_land_id', '比準地關聯', 'UUID FK', '每比準地一筆', '關聯宗地與區段']
+  - benchmark_valuation_sources: ['method', '估價方法', 'enum', '每比準地×方法', '不輸出']
+  - benchmark_valuations: ['case_id', '案件關聯', 'UUID FK', '每表一筆', '案號、估價基準日由案件帶入']
+  - case_id: ['benchmark_valuations', '案件關聯', 'UUID FK', '每表一筆', '案號、估價基準日由案件帶入']
+  - source_document_id: ['benchmark_valuation_sources', '來源表版本', 'UUID FK', '每比準地×方法', '不輸出']
+  - source_value: ['benchmark_valuation_sources', '採用估值快照', 'decimal(18,6)', '每比準地×方法', '不輸出；避免上游改動無紀錄']
+
+[OK] All fields in System Catalog are present in Excel file!
+
+==================================================
+FORM CODE: F02 (比較法調查估價表.xlsx)
+==================================================
+Excel File Field Count: 37
+System Catalog Field Count: 26
+
+[!] Fields in Excel file but MISSING in System Catalog (11):
+  - case_id: ['comparison_valuations', '案件', 'UUID FK', '每表一筆', '輸出案號']
+  - comparison_factor_values: ['factor_code', '個別因素', 'text/FK', '每標的×20項', '不直接輸出']
+  - comparison_price: ['comparison_valuations', '比準地比較價格', 'integer', '每表一筆', '輸出']
+  - comparison_subjects: ['role', '標的角色', 'enum', '固定最多4筆', '不輸出']
+  - comparison_valuations: ['case_id', '案件', 'UUID FK', '每表一筆', '輸出案號']
+  - condition_value: ['comparison_factor_values', '因素條件', 'json/text', '每標的×20項', '輸出']
+  - difference_rate: ['comparison_factor_values', '差異率', 'decimal/null', '每比較標的×20項', '輸出；免修正需另存狀態']
+  - factor_code: ['comparison_factor_values', '個別因素', 'text/FK', '每標的×20項', '不直接輸出']
+  - normal_unit_price: ['comparison_subjects', '土地正常單價', 'decimal', '比較標的一筆', '輸出']
+  - parcel_or_instance_ref: ['comparison_subjects', '宗地/實例關聯', 'UUID FK', '每標的一筆', '輸出對應編號']
+  - price_zone_id: ['comparison_subjects', '地價區段', 'UUID FK', '每標的一筆', '輸出區段號']
+
+[OK] All fields in System Catalog are present in Excel file!
+
+==================================================
+FORM CODE: F01 (買賣實例調查估價表_建物全部層數_AI_Coding欄位規格.xlsx)
+==================================================
+Excel File Field Count: 37
+System Catalog Field Count: 26
+
+[!] Fields in Excel file but MISSING in System Catalog (11):
+  - building_transaction_type: ['sales_instances', '建物型態', 'enum', '每實例一筆', '本範本固定 whole_building']
+  - parking_area不輸出: ['sales_instance_properties', 'registered_area / parking_area / calculation_area', '建物面積組', 'decimal(18,4)', '每實例一組']
+  - sales_instance_adjustments: ['sequence / description / adjustment_value', '第7、8條修正', 'integer/text/decimal', '原表最多3列', '輸出']
+  - sales_instance_capital_items: ['source / rate / ratio / weighted_rate', '資金來源明細', 'enum/decimal', '固定3種來源', '輸出三列']
+  - sales_instance_cost_items: ['cost_code / rate / amount_raw', '成本項目', 'enum/decimal', '項目1至7', '費率及顯示金額輸出']
+  - sales_instance_costs: ['standard_unit_cost / adjustment_rate', '營造成本基準與調整', 'decimal', '每實例一組', '輸出']
+  - sales_instance_depreciation: ['completion_date / useful_life / residual_rate', '折舊基礎', 'date/decimal', '每實例一組', '輸出']
+  - sales_instance_properties: ['address / land_no / building_no', '門牌與土地建物標示', 'text', '每實例一筆主輸出', '多筆另建關聯表']
+  - sales_instance_results: ['normal_total_price_raw / building_cost_total_raw', '房地與建物精確總價', 'decimal(20,4)', '每實例一組', '顯示值輸出']
+  - sales_instance_sources: ['source_type / document_id / version', '來源快照', 'text/UUID/integer', '每資料來源一筆', '不輸出']
+  - sales_instances: ['case_id / period / zone_id / instance_no', '案件與實例識別', 'UUID/date/text', '每實例一筆', '輸出對應表頭']
+
+[OK] All fields in System Catalog are present in Excel file!

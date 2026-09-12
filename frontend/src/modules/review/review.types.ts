@@ -320,6 +320,7 @@ export interface FieldVersionDiffDto {
 }
 
 export interface WorkbenchCaseDetailDto {
+  demo_advisory?: boolean
   case: WorkbenchCaseSummaryDto
   review: ReviewDto
   case_source?: 'PLATFORM' | 'EXTERNAL' | string
@@ -517,6 +518,7 @@ export interface ReviewVersionDiffModel {
 }
 
 export interface ReviewDetailModel {
+  demoAdvisory?: boolean
   caseId: string
   caseNo: string
   caseTitle: string

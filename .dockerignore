@@ -7,6 +7,10 @@ __pycache__
 .pytest_cache
 .mypy_cache
 .ruff_cache
+tmp
+frontend/node_modules
+frontend/dist
+migrations/legacy_valuation
 需要放入MINIO的東西
 *.pdf
 *.pptx

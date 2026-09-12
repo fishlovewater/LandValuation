@@ -182,6 +182,7 @@ class FieldVersionDiffRead(BaseModel):
 
 
 class WorkbenchCaseDetailRead(BaseModel):
+    demo_advisory: bool = False
     case: WorkbenchCaseSummaryRead
     review: ReviewRead
     case_source: WorkbenchCaseSource

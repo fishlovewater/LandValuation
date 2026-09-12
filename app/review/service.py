@@ -6,6 +6,7 @@ from uuid import UUID
 from app.core.exceptions import AppError
 from app.core.exceptions import ResourceNotFoundError
 from app.review.repository import ReviewRepository
+from app.review.demo_policy import allow_missing_materials, advisory_completeness, ADVISORY_ITEM_CODES
 from app.review.correction_repository import CorrectionRepository
 from app.review.schemas import ReviewCreate, ReviewListQuery, ReviewUpdate
 from app.review.completeness import (
@@ -217,7 +218,10 @@ class ReviewService:
         else:
             snapshot = await self.repository.load_case_snapshot(review.case_id)
             result = evaluate_completeness(snapshot)
-        if result.ready:
+        demo_advisory = await self._demo_advisory(review)
+        if demo_advisory:
+            result = advisory_completeness(result)
+        if result.ready and not demo_advisory:
             trusted_items = await self._trusted_completeness_missing_items(
                 review, submitted_inputs
             )
@@ -237,6 +241,12 @@ class ReviewService:
         items = await self.repository.sync_missing_items(
             review_id, result.items, actor_id
         )
+        demo_prefix = "Demo：此缺件不阻擋智慧審查；相關檢核可能未執行。"
+        for item in items:
+            if hasattr(item, "reason"):
+                reason = (item.reason or "").removeprefix(demo_prefix)
+                advisory_item = item.item_code in {"DOC_LAND_REGISTER", "DOC_CADASTRAL_MAP", "FIELD_PARCEL_AREA"}
+                item.reason = (demo_prefix if demo_advisory and advisory_item else "") + reason
         review.missing_item_count = len(items)
         review.review_status = ensure_transition(
             "PREPROCESSING",
@@ -244,6 +254,12 @@ class ReviewService:
         )
         await self.repository.session.flush()
         return result, review, items
+
+    async def _demo_advisory(self, review):
+        if not allow_missing_materials("EXTERNAL_REVIEW", submitted=getattr(review, "latest_submission_id", None) is not None):
+            return False
+        case = await self.repository.get_case(review.case_id)
+        return allow_missing_materials(getattr(case, "case_type", None))
 
     @staticmethod
     def _trusted_field(row: dict) -> TrustedField:
@@ -1158,6 +1174,16 @@ class ReviewService:
             for field_code in contract.required_field_codes
         }
         problems = required_field_problems(required_codes, fields)
+        if await self._demo_advisory(review):
+            completeness = evaluate_completeness(
+                await self.repository.load_case_snapshot(review.case_id)
+            )
+            contracts = tuple(
+                contract for contract in contracts
+                if not required_field_problems(contract.required_field_codes, fields)
+                and contract.rule["rule_code"] not in completeness.blocked_rule_codes
+            )
+            problems = ()
         if problems:
             problem = problems[0]
             raise AppError(
@@ -1351,7 +1377,9 @@ class ReviewService:
                 if context.extraction_run is not None
                 else {
                     "trusted_input_source": {
-                        "field_status": "APPLIED",
+                        "field_status": ("APPLIED_OR_AUTO_APPLIED" if any(
+                            field.field_status == "AUTO_APPLIED" for field in context.official_fields
+                        ) else "APPLIED"),
                         "value_column": "confirmed_value",
                     }
                 }
@@ -1472,6 +1500,14 @@ class ReviewService:
             # the existing canonical live-data fallback.
             case = await self.repository.get_case_report_data(review.case_id)
         input_snapshot = self._input_snapshot(review, case, context)
+        demo_advisory = await self._demo_advisory(review)
+        if demo_advisory:
+            executed = {str(item.rule["validation_rule_id"]) for item in context.prepared_rules}
+            input_snapshot["demo_notice"] = "Demo：缺件不阻擋流程；資料不足的規則未執行，不代表通過。"
+            input_snapshot["skipped_rule_codes"] = [
+                rule["rule_code"] for rule in context.validation_rules
+                if str(rule["validation_rule_id"]) not in executed
+            ]
         external_snapshot = await self._freeze_external_review_input(
             review,
             actor_id,
@@ -1673,13 +1709,20 @@ class ReviewService:
             risk_score={"LOW": 20, "MEDIUM": 50, "HIGH": 80, "CRITICAL": 100}.get(
                 risk.level, 0
             ),
-            summary=f"本次檢核產生 {len(findings)} 筆未解決疑點。",
+            summary=(
+                (f"Demo：缺件不阻擋流程；{len(input_snapshot.get('skipped_rule_codes', []))} 項規則因資料不足未執行，不代表通過。"
+                 if demo_advisory else "")
+                + f"本次檢核產生 {len(findings)} 筆未解決疑點。"
+            ),
             category_scores={"deterministic_findings": len(findings)},
             high_count=risk.high_count,
             medium_count=risk.medium_count,
             low_count=risk.low_count,
             missing_item_count=review.missing_item_count,
-            risk_reasons=sorted({item.finding_type for item in findings}),
+            risk_reasons=sorted({item.finding_type for item in findings}) + (
+                [input_snapshot["demo_notice"], "未執行規則：" + ", ".join(input_snapshot["skipped_rule_codes"])]
+                if demo_advisory else []
+            ),
         )
         now = datetime.now(UTC)
         run.run_status = "COMPLETED"
@@ -1923,6 +1966,8 @@ class ReviewService:
         missing = await self.repository.list_missing_items(
             review.review_id, open_only=True
         )
+        if await self._demo_advisory(review):
+            missing = [item for item in missing if item.item_code not in ADVISORY_ITEM_CODES]
         findings = (
             await self.repository.list_findings(review.latest_validation_run_id)
             if run
@@ -2126,6 +2171,8 @@ class ReviewService:
                 )
         thresholds = await corrections.urgency_thresholds()
         urgency = classify_urgency(review.due_at, datetime.now(UTC), thresholds)
+        if (run.input_snapshot or {}).get("demo_notice"):
+            case_context = {**case_context, "case_title": "【Demo 展示，缺件不代表通過】" + case_context["case_title"]}
         data = ReviewReportInput(
             case=ReportCase(**case_context),
             run=ReportRun(

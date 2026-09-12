@@ -88,7 +88,7 @@ class TrustedField:
 
     @property
     def is_official(self) -> bool:
-        return self.field_status == "APPLIED"
+        return self.field_status in {"APPLIED", "AUTO_APPLIED"}
 
 
 @dataclass(frozen=True)
@@ -147,10 +147,10 @@ def trusted_fields_by_code(fields):
     applied_fields = {}
     for item in fields:
         if (
-            item.field_status == "APPLIED"
+            item.field_status in {"APPLIED", "AUTO_APPLIED"}
             and item.confirmed_value is not None
-            and item.confirmed_by_user_id is not None
-            and item.confirmed_at is not None
+            and (item.field_status == "AUTO_APPLIED"
+                 or (item.confirmed_by_user_id is not None and item.confirmed_at is not None))
         ):
             applied_counts[item.field_name] = applied_counts.get(item.field_name, 0) + 1
             applied_fields[item.field_name] = item

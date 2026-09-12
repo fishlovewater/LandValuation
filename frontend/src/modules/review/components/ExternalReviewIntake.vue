@@ -21,6 +21,7 @@ import {
 } from '../../valuation/valuation.labels'
 import { userStructuredValue } from '../../../utils/fieldLabels'
 import { reviewApi, safeReviewErrorMessage } from '../review.api'
+import type { ReviewFilledForm } from '../review.api'
 import type { CorrectionRequestDto, ReviewDocumentModel } from '../review.types'
 
 type ExternalDocumentCategory = Exclude<DocumentCategory, 'complete-valuation-report'>
@@ -55,6 +56,8 @@ const uploadFile = ref<File | null>(null)
 const correctionUploadFile = ref<File | null>(null)
 const selectedDocumentId = ref('')
 const extraction = ref<ExtractionResponseDto | null>(null)
+const filledForms = ref<ReviewFilledForm[]>([])
+let extractionLoadVersion = 0
 const candidateFilter = ref<CandidateFilter>('all')
 const candidateEdits = ref<Record<string, string>>({})
 const uploading = ref(false)
@@ -103,12 +106,18 @@ const filteredCandidates = computed(() => {
   const rows = extraction.value?.candidates ?? []
   if (candidateFilter.value === 'pending') return rows.filter((item) => item.field_status === 'NEEDS_CONFIRMATION')
   if (candidateFilter.value === 'low-confidence') return rows.filter((item) => Number(item.confidence) < 0.75)
-  if (candidateFilter.value === 'confirmed') return rows.filter((item) => ['APPLIED', 'CONFIRMED'].includes(item.field_status))
+  if (candidateFilter.value === 'confirmed') return rows.filter((item) => ['APPLIED', 'AUTO_APPLIED', 'CONFIRMED'].includes(item.field_status))
   return rows
 })
 
 const pendingCount = computed(() => extraction.value?.candidates.filter((item) => item.field_status === 'NEEDS_CONFIRMATION').length ?? 0)
 const confirmedCount = computed(() => extraction.value?.candidates.filter((item) => ['APPLIED', 'CONFIRMED'].includes(item.field_status)).length ?? 0)
+const autoCount = computed(() => extraction.value?.candidates.filter((item) => item.field_status === 'AUTO_APPLIED').length ?? 0)
+const busy = computed(() => extracting.value || Boolean(confirmingId.value))
+function doubts(candidate: ExtractedFieldResponseDto): string[] {
+  return candidate.field_status === 'NEEDS_CONFIRMATION'
+    ? extraction.value?.extraction_metadata?.review_intake?.uncertainties?.[candidate.extracted_field_id] ?? [] : []
+}
 const correctionExtractionReady = computed(() => Boolean(
   correctionAwaitingReturn.value
     && correctionCandidateDocument.value
@@ -123,7 +132,8 @@ function categoryLabel(value: string): string {
 }
 
 function candidateStatusLabel(value: string): string {
-  if (value === 'APPLIED') return '已納入審查'
+  if (value === 'APPLIED') return '人工確認已填表'
+  if (value === 'AUTO_APPLIED') return '自動已填表'
   return extractedFieldStatusLabel(value)
 }
 
@@ -250,34 +260,49 @@ async function registerCorrectionReturn(): Promise<void> {
 }
 
 async function loadExtraction(documentId = selectedDocumentId.value): Promise<void> {
-  if (!documentId || loadingExtraction.value) return
+  if (!documentId) return
+  const version = ++extractionLoadVersion
   loadingExtraction.value = true
   error.value = ''
   try {
-    extraction.value = await reviewApi.getExternalDocumentExtraction(props.reviewId, documentId)
+    const result = await reviewApi.getExternalDocumentExtraction(props.reviewId, documentId)
+    if (version !== extractionLoadVersion || selectedDocumentId.value !== documentId) return
+    extraction.value = result
     candidateEdits.value = {}
+    await loadForms(documentId)
   } catch (caught: unknown) {
+    if (version !== extractionLoadVersion || selectedDocumentId.value !== documentId) return
     if (isAxiosError(caught) && caught.response?.status === 404) {
       extraction.value = null
       return
     }
     error.value = safeReviewErrorMessage(caught)
   } finally {
-    loadingExtraction.value = false
+    if (version === extractionLoadVersion) loadingExtraction.value = false
   }
+}
+
+async function loadForms(documentId = selectedDocumentId.value): Promise<void> {
+  const version = extractionLoadVersion
+  const result = await reviewApi.getExternalDocumentForms(props.reviewId, documentId)
+  if (selectedDocumentId.value === documentId && extractionLoadVersion === version) filledForms.value = result
 }
 
 async function startExtraction(): Promise<void> {
   const document = selectedDocument.value
-  if (!props.canMutate || !document || !extractionSupported.value || extracting.value) return
+  if (!props.canMutate || !document || !extractionSupported.value || busy.value) return
+  ++extractionLoadVersion
+  loadingExtraction.value = false
   resetMessages()
   extracting.value = true
   try {
     extraction.value = await reviewApi.startExternalDocumentExtraction(props.reviewId, document.documentId)
     candidateEdits.value = {}
+    await loadForms(document.documentId)
     notice.value = extraction.value.extraction_status === 'COMPLETED'
-      ? `文字擷取完成，共取得 ${extraction.value.candidates.length} 個候選欄位。`
+      ? `辨識完成：${autoCount.value} 欄自動填表，${pendingCount.value} 欄待人工確認。`
       : '文件擷取未完成，請確認文件內容後再試。'
+    emit('changed')
   } catch (caught: unknown) {
     error.value = safeReviewErrorMessage(caught)
   } finally {
@@ -286,7 +311,7 @@ async function startExtraction(): Promise<void> {
 }
 
 async function decideCandidate(candidate: ExtractedFieldResponseDto, decision: 'CONFIRM' | 'REJECT'): Promise<void> {
-  if (!props.canMutate || !selectedDocumentId.value || confirmingId.value) return
+  if (!props.canMutate || !selectedDocumentId.value || busy.value) return
   resetMessages()
   confirmingId.value = candidate.extracted_field_id
   try {
@@ -301,8 +326,9 @@ async function decideCandidate(candidate: ExtractedFieldResponseDto, decision: '
         ...(decision === 'CONFIRM' && currentValue !== originalValue ? { corrected_value: currentValue } : {}),
       }],
     )
-    candidateEdits.value = {}
-    notice.value = decision === 'CONFIRM' ? '欄位已確認並納入審查資料。' : '候選欄位已排除。'
+    delete candidateEdits.value[candidate.extracted_field_id]
+    await loadForms()
+    notice.value = decision === 'CONFIRM' ? '欄位已確認並填入表單。' : '候選欄位已排除，對應填值已清除。'
     emit('changed')
   } catch (caught: unknown) {
     error.value = safeReviewErrorMessage(caught)
@@ -311,7 +337,28 @@ async function decideCandidate(candidate: ExtractedFieldResponseDto, decision: '
   }
 }
 
+async function confirmPending(): Promise<void> {
+  if (!props.canMutate || busy.value || !selectedDocumentId.value) return
+  const pending = extraction.value?.candidates.filter(item => item.field_status === 'NEEDS_CONFIRMATION').slice(0, 100) ?? []
+  if (!pending.length) return
+  confirmingId.value = '__batch__'
+  resetMessages()
+  try {
+    extraction.value = await reviewApi.confirmExternalDocumentExtraction(props.reviewId, selectedDocumentId.value,
+      pending.map(candidate => ({ extracted_field_id: candidate.extracted_field_id, decision: 'CONFIRM' as const,
+        ...(editValue(candidate) !== valueText(candidate.extracted_value) ? { corrected_value: editValue(candidate) } : {}),
+      })))
+    for (const candidate of pending) delete candidateEdits.value[candidate.extracted_field_id]
+    await loadForms()
+    notice.value = `${pending.length} 欄已確認並填入表單。`
+    emit('changed')
+  } catch (caught) { error.value = safeReviewErrorMessage(caught) }
+  finally { confirmingId.value = '' }
+}
+
 watch(selectedDocumentId, (documentId) => {
+  ++extractionLoadVersion
+  filledForms.value = []
   extraction.value = null
   candidateEdits.value = {}
   resetMessages()
@@ -337,12 +384,13 @@ watch(
       <div>
         <span>外部案件資料準備</span>
         <h2 id="external-intake-title">文件匯入與欄位確認</h2>
-        <p>先匯入外部廠商提供的文件。擷取出的候選欄位必須由審查人員核對來源後確認，才會成為正式審查依據。</p>
+        <p>匯入文件並執行 OCR：無疑慮欄位自動填表；疑慮欄位核對或修正後確認填表，即可繼續審查。</p>
       </div>
       <div class="external-intake__summary">
         <span><b>{{ documents.length }}</b> 份文件</span>
         <span v-if="extraction"><b>{{ pendingCount }}</b> 欄待確認</span>
         <span v-if="extraction"><b>{{ confirmedCount }}</b> 欄已確認</span>
+        <span v-if="extraction"><b>{{ autoCount }}</b> 欄自動填表</span>
       </div>
     </header>
     <p v-if="!canMutate" class="external-intake__readonly" data-testid="external-intake-readonly">
@@ -469,6 +517,7 @@ watch(
             type="button"
             :class="{ 'is-selected': document.documentId === selectedDocumentId }"
             :data-testid="`external-document-${document.documentId}`"
+            :disabled="busy"
             @click="selectedDocumentId = document.documentId"
           >
             <FileText :size="18" aria-hidden="true" />
@@ -489,7 +538,7 @@ watch(
             <strong>{{ selectedDocument.filename }}</strong>
             <small>{{ selectedDocument.mimeTypeLabel }} · 第 {{ selectedDocument.versionNo }} 版</small>
           </div>
-          <button v-if="extractionSupported" type="button" data-testid="start-external-extraction" :disabled="!canMutate || extracting || loadingExtraction" @click="startExtraction">
+          <button v-if="extractionSupported" type="button" data-testid="start-external-extraction" :disabled="!canMutate || busy || loadingExtraction" @click="startExtraction">
             <Scan :size="17" weight="bold" aria-hidden="true" />
             {{ extracting ? '辨識中…' : extraction ? '重新執行文字擷取' : '執行 OCR／文字擷取' }}
           </button>
@@ -512,9 +561,13 @@ watch(
                 <button type="button" :class="{ 'is-active': candidateFilter === 'all' }" @click="candidateFilter = 'all'">全部</button>
                 <button type="button" :class="{ 'is-active': candidateFilter === 'pending' }" @click="candidateFilter = 'pending'">待確認 {{ pendingCount }}</button>
                 <button type="button" :class="{ 'is-active': candidateFilter === 'low-confidence' }" @click="candidateFilter = 'low-confidence'">低信心</button>
-                <button type="button" :class="{ 'is-active': candidateFilter === 'confirmed' }" @click="candidateFilter = 'confirmed'">已確認 {{ confirmedCount }}</button>
+                <button type="button" :class="{ 'is-active': candidateFilter === 'confirmed' }" @click="candidateFilter = 'confirmed'">已處理 {{ confirmedCount + autoCount }}</button>
               </div>
             </div>
+
+            <button v-if="pendingCount && canMutate" type="button" class="external-intake__batch" data-testid="confirm-pending-fields" :disabled="busy" @click="confirmPending">
+              確認已核對的待確認欄位並填表（{{ Math.min(pendingCount, 100) }} 欄）
+            </button>
 
             <div v-if="filteredCandidates.length" class="external-intake__table-wrap">
               <table class="external-intake__table">
@@ -525,17 +578,17 @@ watch(
                     <td>
                       <input
                         :value="editValue(candidate)"
-                        :disabled="!canMutate || candidate.field_status === 'REJECTED' || confirmingId === candidate.extracted_field_id"
+                        :disabled="!canMutate || candidate.field_status === 'REJECTED' || busy"
                         :aria-label="`${candidateFieldLabel(candidate)}確認值`"
                         @input="updateEdit(candidate.extracted_field_id, ($event.target as HTMLInputElement).value)"
                       >
                     </td>
                     <td><span>{{ candidate.source_page ? `第 ${candidate.source_page} 頁` : '頁碼未辨識' }}</span><small :title="candidate.source_text || ''">{{ candidate.source_text || '沒有擷取到來源片段' }}</small></td>
-                    <td><span class="external-intake__status" :data-status="candidate.field_status">{{ candidateStatusLabel(candidate.field_status) }}</span></td>
+                    <td><span class="external-intake__status" :data-status="candidate.field_status">{{ candidateStatusLabel(candidate.field_status) }}</span><small v-for="reason in doubts(candidate)" :key="reason" class="external-intake__doubt">{{ reason }}</small></td>
                     <td>
                       <div class="external-intake__row-actions">
-                        <button type="button" :data-testid="`confirm-external-field-${candidate.extracted_field_id}`" :disabled="!canMutate || confirmingId === candidate.extracted_field_id" @click="decideCandidate(candidate, 'CONFIRM')"><CheckCircle :size="16" weight="bold" aria-hidden="true" />確認</button>
-                        <button type="button" class="is-reject" :data-testid="`reject-external-field-${candidate.extracted_field_id}`" :disabled="!canMutate || confirmingId === candidate.extracted_field_id" @click="decideCandidate(candidate, 'REJECT')"><XCircle :size="16" aria-hidden="true" />排除</button>
+                        <button type="button" :data-testid="`confirm-external-field-${candidate.extracted_field_id}`" :disabled="!canMutate || busy" @click="decideCandidate(candidate, 'CONFIRM')"><CheckCircle :size="16" weight="bold" aria-hidden="true" />確認並填表</button>
+                        <button type="button" class="is-reject" :data-testid="`reject-external-field-${candidate.extracted_field_id}`" :disabled="!canMutate || busy" @click="decideCandidate(candidate, 'REJECT')"><XCircle :size="16" aria-hidden="true" />排除</button>
                       </div>
                     </td>
                   </tr>
@@ -546,6 +599,16 @@ watch(
               <strong>{{ extraction.candidates.length ? '目前篩選條件沒有欄位' : '沒有找到可自動辨識的欄位' }}</strong>
               <p>文件仍會保留作為證據；開始審查時，完整性檢核會列出仍缺少的必要資料。</p>
             </div>
+            <section v-if="filledForms.length" class="external-intake__filled" data-testid="filled-review-forms">
+              <h3>已填入表單</h3>
+              <p>本輪辨識與確認結果；重新 OCR 會建立新一輪表單，不沿用舊填值。</p>
+              <article v-for="form in filledForms" :key="form.form_instance_id">
+                <h4>{{ form.form_code }} · {{ form.form_name }} · 第 {{ form.version_no }} 版</h4>
+                <table><thead><tr><th>欄位</th><th>填入內容</th><th>填入方式</th></tr></thead>
+                  <tbody><tr v-for="field in form.fields" :key="field.field_name"><td>{{ field.label }}</td><td>{{ valueText(field.value) }}</td><td>{{ field.origin === 'AUTO' ? '自動填表' : '人工確認' }}</td></tr></tbody>
+                </table>
+              </article>
+            </section>
           </template>
         </template>
 
@@ -559,6 +622,13 @@ watch(
 </template>
 
 <style scoped>
+.external-intake__doubt{display:block;color:#875b15;margin-top:5px;font-size:11px;max-width:180px}
+.external-intake__batch{padding:9px 14px;margin:8px 0;border:1px solid #b9d7c4;border-radius:8px;background:#f2faf5;color:#356148;cursor:pointer}
+.external-intake__batch:disabled{opacity:.5;cursor:wait}
+.external-intake__filled{margin-top:24px;padding-top:16px;border-top:1px solid var(--app-line)}
+.external-intake__filled p{color:var(--app-muted);font-size:12px}.external-intake__filled article{margin-top:18px}
+.external-intake__filled table{width:100%;border-collapse:collapse;font-size:12px}.external-intake__filled th,.external-intake__filled td{padding:10px;text-align:left;border-bottom:1px solid var(--app-line);overflow-wrap:anywhere}
+.external-intake__status[data-status="AUTO_APPLIED"]{background:#e8f2ff;color:#24538b}
 .external-intake{display:grid;gap:16px;margin-top:16px;padding:18px;border:1px solid var(--app-line);border-radius:12px;background:#fff}
 .external-intake__heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}.external-intake__heading>div:first-child{display:grid;max-width:760px;gap:4px}.external-intake__heading span{color:var(--app-muted);font-size:10px;font-weight:850}.external-intake__heading h2{margin:0;color:var(--app-ink);font-size:18px}.external-intake__heading p{margin:2px 0 0;color:var(--app-muted);font-size:11px;line-height:1.65}.external-intake__summary{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px}.external-intake__summary span{padding:6px 9px;border-radius:999px;color:var(--app-ink-soft);background:#f4f6f8}.external-intake__summary b{color:var(--app-ink)}
 .external-intake__readonly{margin:0;padding:9px 11px;border:1px solid var(--app-line);border-radius:8px;color:var(--app-muted);background:#f5f7f9;font-size:10px;line-height:1.55}

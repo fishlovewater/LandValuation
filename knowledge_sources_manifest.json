@@ -1,0 +1,77 @@
+{
+  "manifest_version": 1,
+  "sources": [
+    {
+      "filename": "土地徵收條例.pdf",
+      "category": "regulations",
+      "document_type": "REGULATION",
+      "version_no": 1
+    },
+    {
+      "filename": "土地徵收條例施行細則.pdf",
+      "category": "regulations",
+      "document_type": "REGULATION",
+      "version_no": 1
+    },
+    {
+      "filename": "土地徵收補償市價查估辦法.pdf",
+      "category": "regulations",
+      "document_type": "REGULATION",
+      "version_no": 1
+    },
+    {
+      "filename": "土地徵收補償市價查估作業手冊.pdf",
+      "category": "regulations",
+      "document_type": "REGULATION",
+      "version_no": 1
+    },
+    {
+      "filename": "土地市價查估表.pdf",
+      "category": "standards",
+      "document_type": "STANDARD",
+      "version_no": 1
+    },
+    {
+      "filename": "比準地查估.pdf",
+      "category": "standards",
+      "document_type": "STANDARD",
+      "version_no": 1
+    },
+    {
+      "filename": "比較法查估.pdf",
+      "category": "standards",
+      "document_type": "STANDARD",
+      "version_no": 1
+    },
+    {
+      "filename": "買賣實例.pdf",
+      "category": "standards",
+      "document_type": "STANDARD",
+      "version_no": 1
+    },
+    {
+      "filename": "評價基準明細表範例.pdf",
+      "category": "standards",
+      "document_type": "EXAMPLE_REFERENCE",
+      "version_no": 1
+    },
+    {
+      "filename": "查估書表範本.pdf",
+      "category": "standards",
+      "document_type": "STANDARD",
+      "version_no": 1
+    },
+    {
+      "filename": "新北市土地徵收補償市價查估書表製作手冊4-10章.pdf",
+      "category": "manuals",
+      "document_type": "MANUAL",
+      "version_no": 1
+    },
+    {
+      "filename": "新北市土地徵收補償市價查估書表製作手冊11章(提案表範例).pdf",
+      "category": "manuals",
+      "document_type": "MANUAL",
+      "version_no": 1
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+=== VERIFYING FIELD CHINESE LABELS COVERAGE ===
+
+Form Code: S01 (地價區段勘查表.xlsx)
+Mapped fields: 77 / 77
+[OK] 100% of fields have clean Chinese labels!
+Sample mappings:
+  - administrative_area -> 行政區
+  - agency_head_name -> 主任
+  - appraiser_name -> 不動產估價師
+  - average_internal_road_width_m -> 區段內道路平均寬度
+  - building_coverage_ratio -> 建蔽率
+
+Form Code: F02-RF (影響地價區域因素分析明細表_商業用地.xlsx)
+Mapped fields: 29 / 29
+[OK] 100% of fields have clean Chinese labels!
+Sample mappings:
+  - urban_plan_status -> 都市計畫
+  - land_use_zone -> 使用分區
+  - building_coverage_rate -> 建蔽率
+  - floor_area_ratio -> 容積率
+  - prohibited_building -> 有無禁止建築
+
+Form Code: F04 (徵收土地宗地市價估計表.xlsx)
+Mapped fields: 17 / 17
+[OK] 100% of fields have clean Chinese labels!
+Sample mappings:
+  - approval_fields -> 填寫日期與簽章
+  - benchmark_land_id -> 比準地關聯
+  - case_no -> 案號
+  - case_note -> 全案備註
+  - factor_condition_value -> 因素條件值
+
+Form Code: F03 (比準地地價估計表.xlsx)
+Mapped fields: 24 / 24
+[OK] 100% of fields have clean Chinese labels!
+Sample mappings:
+  - approval_fields -> 填寫日期及簽章
+  - benchmark_land_id -> 比準地編號
+  - benchmark_land_price -> 比準地地價（元／㎡）
+  - case_no -> 案號
+  - comparison_price -> 比較法價格（元／㎡）
+
+Form Code: F02 (比較法調查估價表.xlsx)
+Mapped fields: 26 / 26
+[OK] 100% of fields have clean Chinese labels!
+Sample mappings:
+  - absolute_adjustment_total -> 調整百分率絕對值加總
+  - adjusted_unit_price_display -> 調整至估價基準日單價
+  - adjusted_unit_price_raw -> 調整後正常單價精確值
+  - approval_fields -> 簽章與填寫日期
+  - basic_description -> 基本資料
+
+Form Code: F01 (買賣實例調查估價表_建物全部層數_AI_Coding欄位規格.xlsx)
+Mapped fields: 26 / 26
+[OK] 100% of fields have clean Chinese labels!
+Sample mappings:
+  - accumulated_depreciation_raw -> 累積折舊額精確值
+  - adoption_status_reason -> 案例是否採用及理由
+  - approval_fields -> 填寫日期及簽章
+  - building_cost_total_raw -> 建物成本價格總價精確值
+  - calculation_building_area -> 實例計算面積

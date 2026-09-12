@@ -284,7 +284,7 @@ class ExtractionService:
             )
             if candidate is None:
                 raise ResourceNotFoundError("候選欄位")
-            if candidate.field_status == "APPLIED":
+            if candidate.field_status in {"APPLIED", "AUTO_APPLIED"}:
                 # A user may reopen an applied candidate from the review
                 # workbench and submit a corrected value. The next apply
                 # operation will replace the previous value on the formal
