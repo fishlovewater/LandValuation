@@ -1828,6 +1828,9 @@ async function submitCandidateDecisions(): Promise<void> {
     }
     initializeCandidateInputs(response.candidates)
     initializeManualFieldInputs(response)
+    selectedCandidateId.value = response.candidates.find(
+      (candidate) => candidate.field_status === 'NEEDS_CONFIRMATION',
+    )?.extracted_field_id ?? null
     const form = f03Form.value
     if (form) {
       try {
@@ -1838,8 +1841,8 @@ async function submitCandidateDecisions(): Promise<void> {
       }
     }
     notice.value = response.pending_candidate_count
-      ? `已儲存本次判定；尚有 ${response.pending_candidate_count} 筆辨識結果需要人工確認。`
-      : '辨識結果已全部完成人工判定；可繼續確認正式採用值。'
+      ? `已儲存本次判定；已帶你到下一筆，尚有 ${response.pending_candidate_count} 筆待確認。`
+      : '辨識結果已全部完成人工判定；可直接進入估價資料。'
   } catch (caught: unknown) {
     if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
   } finally {
@@ -2453,6 +2456,8 @@ onBeforeUnmount(clearPreviewUrl)
         @reopen="reopenCandidate"
         @submit="submitCandidateDecisions"
         @download-export="downloadConfirmationExport"
+        @back-to-documents="navigateWorkspaceStage('documents')"
+        @continue-data="navigateWorkspaceStage('data')"
       />
 
       <ValuationDataStageNavigator

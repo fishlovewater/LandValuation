@@ -90,6 +90,7 @@ const emit = defineEmits<{
   preview: [documentId: string]
   prepareParcelImport: [documentId: string]
   extract: [documentId: string]
+  reviewCandidates: []
   reclassify: [documentId: string]
   remove: [documentId: string, filename: string]
   download: [document: DocumentArtifactModel]
@@ -112,10 +113,54 @@ const requiredDocumentCount = computed(() => startupDocuments.filter((item) => i
 const uploadedRequiredDocumentCount = computed(() => startupDocuments.filter(
   (item) => item.requirement === 'required' && hasActiveCategory(item.category),
 ).length)
+const missingRequiredDocuments = computed(() => startupDocuments.filter(
+  (item) => item.requirement === 'required' && !hasActiveCategory(item.category),
+))
 const pendingRecognitionCount = computed(() => props.documents.reduce(
   (total, document) => total + props.documentPendingCount(document.documentId),
   0,
 ))
+const documentsWaitingForRecognition = computed(() => props.documents.filter(
+  (document) => document.isActive
+    && props.canExtractDocument(document)
+    && props.documentAiStatus(document.documentId) === '尚未辨識',
+))
+const sourceReady = computed(() => (
+  missingRequiredDocuments.value.length === 0
+  && documentsWaitingForRecognition.value.length === 0
+  && pendingRecognitionCount.value === 0
+))
+
+function focusUpload(category?: DocumentCategory): void {
+  if (category) emit('updateUploadCategory', category)
+  requestAnimationFrame(() => {
+    const panel = document.getElementById('valuation-upload-panel')
+    panel?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+    panel?.querySelector<HTMLElement>('select, input, button')?.focus()
+  })
+}
+
+function runNextSourceAction(): void {
+  const missing = missingRequiredDocuments.value[0]
+  if (missing) {
+    focusUpload(missing.category)
+    return
+  }
+  const pendingDocument = documentsWaitingForRecognition.value[0]
+  if (pendingDocument) {
+    emit('extract', pendingDocument.documentId)
+    return
+  }
+  if (pendingRecognitionCount.value) emit('reviewCandidates')
+}
+
+function sourceNextActionLabel(): string {
+  const missing = missingRequiredDocuments.value[0]
+  if (missing) return `上傳${missing.label}`
+  if (documentsWaitingForRecognition.value.length) return `辨識下一份文件（${documentsWaitingForRecognition.value.length}）`
+  if (pendingRecognitionCount.value) return `確認辨識結果（${pendingRecognitionCount.value}）`
+  return '來源資料已完成'
+}
 
 function handleDrop(event: DragEvent): void {
   const file = event.dataTransfer?.files?.[0]
@@ -150,6 +195,52 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
       </div>
     </div>
 
+    <section class="source-flow" data-testid="source-data-flow" aria-labelledby="source-data-flow-title">
+      <div class="source-flow__heading">
+        <div>
+          <span>目前進度</span>
+          <strong id="source-data-flow-title">把來源資料整理到可以進入估價資料</strong>
+        </div>
+        <button
+          v-if="!sourceReady"
+          class="source-flow__next"
+          type="button"
+          data-testid="source-next-action"
+          :disabled="Boolean(extractionBusyDocumentId)"
+          @click="runNextSourceAction"
+        >
+          {{ sourceNextActionLabel() }}
+        </button>
+        <span v-else class="source-flow__ready">
+          <CheckCircle :size="15" weight="fill" aria-hidden="true" />
+          來源資料已完成
+        </span>
+      </div>
+      <div class="source-flow__steps">
+        <article :data-state="missingRequiredDocuments.length ? 'active' : 'done'">
+          <span class="source-flow__index">1</span>
+          <div>
+            <strong>補齊必要來源</strong>
+            <small>{{ missingRequiredDocuments.length ? `還缺 ${missingRequiredDocuments.length} 類必要資料` : '必要來源已齊' }}</small>
+          </div>
+        </article>
+        <article :data-state="missingRequiredDocuments.length ? 'pending' : documentsWaitingForRecognition.length ? 'active' : 'done'">
+          <span class="source-flow__index">2</span>
+          <div>
+            <strong>自動辨識文件</strong>
+            <small>{{ documentsWaitingForRecognition.length ? `${documentsWaitingForRecognition.length} 份可辨識文件尚未處理` : '目前文件已完成辨識' }}</small>
+          </div>
+        </article>
+        <article :data-state="missingRequiredDocuments.length || documentsWaitingForRecognition.length ? 'pending' : pendingRecognitionCount ? 'active' : 'done'">
+          <span class="source-flow__index">3</span>
+          <div>
+            <strong>人工確認結果</strong>
+            <small>{{ pendingRecognitionCount ? `${pendingRecognitionCount} 筆辨識結果待確認` : '沒有待確認結果' }}</small>
+          </div>
+        </article>
+      </div>
+    </section>
+
     <section class="startup-documents" aria-labelledby="startup-documents-title">
       <div class="startup-documents__heading">
         <div>
@@ -168,11 +259,18 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
             <strong>{{ item.label }}</strong>
             <span>{{ item.detail }}</span>
           </div>
-          <small
-            :data-state="hasActiveCategory(item.category) ? 'ready' : item.requirement"
-          >
-            {{ hasActiveCategory(item.category) ? '已上傳' : item.requirement === 'required' ? '尚未上傳' : '建議上傳' }}
-          </small>
+          <div class="startup-documents__state">
+            <small :data-state="hasActiveCategory(item.category) ? 'ready' : item.requirement">
+              {{ hasActiveCategory(item.category) ? '已上傳' : item.requirement === 'required' ? '尚未上傳' : '建議上傳' }}
+            </small>
+            <button
+              v-if="!hasActiveCategory(item.category) && canUpload"
+              type="button"
+              @click="focusUpload(item.category)"
+            >
+              上傳此類
+            </button>
+          </div>
         </article>
       </div>
     </section>
@@ -276,38 +374,41 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
                 <ArrowClockwise v-else :size="14" weight="bold" aria-hidden="true" />
                 <span>{{ extractionBusyDocumentId === document.documentId ? '辨識中…' : documentCandidateCount(document.documentId) ? '重新辨識' : '自動辨識' }}</span>
               </button>
-              <div v-if="canManageSourceDocument(document)" class="document-list__manage">
-                <label :for="`document-category-${document.documentId}`"><Tag :size="13" weight="bold" aria-hidden="true" />文件分類</label>
-                <select
-                  :id="`document-category-${document.documentId}`"
-                  :value="categoryValue(document.documentId)"
-                  :data-testid="`document-category-${document.documentId}`"
-                  :disabled="documentActionId === document.documentId"
-                  @change="emit('updateCategory', document.documentId, ($event.target as HTMLSelectElement).value as DocumentCategory)"
-                >
-                  <option v-for="category in sourceCategories" :key="category" :value="category">{{ documentCategoryLabel(category) }}</option>
-                </select>
-                <button
-                  class="document-action"
-                  type="button"
-                  :data-testid="`reclassify-document-${document.documentId}`"
-                  :disabled="documentActionId === document.documentId || categoryValue(document.documentId) === document.documentType"
-                  @click="emit('reclassify', document.documentId)"
-                >
-                  <Tag :size="14" weight="bold" aria-hidden="true" />
-                  <span>套用分類</span>
-                </button>
-                <button
-                  class="document-action document-action--danger"
-                  type="button"
-                  :data-testid="`remove-document-${document.documentId}`"
-                  :disabled="documentActionId === document.documentId"
-                  @click="emit('remove', document.documentId, document.filename)"
-                >
-                  <Trash :size="14" weight="bold" aria-hidden="true" />
-                  <span>移除</span>
-                </button>
-              </div>
+              <details v-if="canManageSourceDocument(document)" class="document-list__manage-details">
+                <summary>管理文件</summary>
+                <div class="document-list__manage">
+                  <label :for="`document-category-${document.documentId}`"><Tag :size="13" weight="bold" aria-hidden="true" />文件分類</label>
+                  <select
+                    :id="`document-category-${document.documentId}`"
+                    :value="categoryValue(document.documentId)"
+                    :data-testid="`document-category-${document.documentId}`"
+                    :disabled="documentActionId === document.documentId"
+                    @change="emit('updateCategory', document.documentId, ($event.target as HTMLSelectElement).value as DocumentCategory)"
+                  >
+                    <option v-for="category in sourceCategories" :key="category" :value="category">{{ documentCategoryLabel(category) }}</option>
+                  </select>
+                  <button
+                    class="document-action"
+                    type="button"
+                    :data-testid="`reclassify-document-${document.documentId}`"
+                    :disabled="documentActionId === document.documentId || categoryValue(document.documentId) === document.documentType"
+                    @click="emit('reclassify', document.documentId)"
+                  >
+                    <Tag :size="14" weight="bold" aria-hidden="true" />
+                    <span>套用分類</span>
+                  </button>
+                  <button
+                    class="document-action document-action--danger"
+                    type="button"
+                    :data-testid="`remove-document-${document.documentId}`"
+                    :disabled="documentActionId === document.documentId"
+                    @click="emit('remove', document.documentId, document.filename)"
+                  >
+                    <Trash :size="14" weight="bold" aria-hidden="true" />
+                    <span>移除</span>
+                  </button>
+                </div>
+              </details>
             </div>
           </li>
         </ul>
@@ -366,6 +467,26 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
 .document-workspace__stats [data-state="attention"] { color:#925421; background:#fff0df; }
 .document-workspace__stats [data-state="ready"] { color:#2f745b; background:#edf8f3; }
 
+.source-flow { display:grid; gap:12px; padding:14px 15px; border:1px solid #cfdce8; border-radius:10px; background:#f7fafd; }
+.source-flow__heading { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.source-flow__heading > div { display:grid; gap:3px; }
+.source-flow__heading > div > span { color:#63768a; font-size:9px; font-weight:900; letter-spacing:.08em; }
+.source-flow__heading strong { color:var(--app-ink); font-size:13px; }
+.source-flow__next { min-height:38px; padding:7px 12px; border:1px solid #2e5984; border-radius:8px; color:#fff; background:#2e5984; cursor:pointer; font-size:10px; font-weight:900; }
+.source-flow__next:disabled { cursor:not-allowed; opacity:.5; }
+.source-flow__ready { display:inline-flex; align-items:center; gap:6px; padding:7px 10px; border-radius:999px; color:#2f745b; background:#eaf7f0; font-size:10px; font-weight:900; }
+.source-flow__steps { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+.source-flow__steps article { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:start; gap:8px; padding:10px 11px; border:1px solid #e0e6ec; border-radius:8px; background:#fff; }
+.source-flow__steps article[data-state="active"] { border-color:#b7cce0; background:#f2f7fc; }
+.source-flow__steps article[data-state="done"] { border-color:#d3e5dc; background:#f7fbf9; }
+.source-flow__steps article[data-state="pending"] { opacity:.62; }
+.source-flow__index { display:grid; width:23px; height:23px; place-items:center; border-radius:999px; color:#fff; background:#7a8b9d; font-size:9px; font-weight:900; }
+.source-flow__steps article[data-state="active"] .source-flow__index { background:#2e5984; }
+.source-flow__steps article[data-state="done"] .source-flow__index { background:#3c8368; }
+.source-flow__steps article > div { display:grid; gap:3px; min-width:0; }
+.source-flow__steps strong { color:var(--app-ink); font-size:10px; }
+.source-flow__steps small { color:var(--app-muted); font-size:9px; line-height:1.45; }
+
 .startup-documents { display:grid; gap:10px; padding:13px 14px; border:1px solid #dce5ee; border-radius:10px; background:#f8fafc; }
 .startup-documents__heading { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; }
 .startup-documents__heading > div { display:grid; gap:3px; }
@@ -380,9 +501,11 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
 .startup-documents__copy { display:grid; gap:3px; min-width:0; }
 .startup-documents__copy strong { color:var(--app-ink); font-size:10px; }
 .startup-documents__copy span { color:var(--app-muted); font-size:9px; line-height:1.5; }
-.startup-documents__grid article > small { padding:4px 7px; border-radius:999px; color:#925421; background:#fff0df; font-size:8px; font-weight:850; white-space:nowrap; }
-.startup-documents__grid article > small[data-state="required"] { color:#a44334; background:#fff0ed; }
-.startup-documents__grid article > small[data-state="ready"] { color:#2f745b; background:#edf8f3; }
+.startup-documents__state { display:grid; justify-items:end; gap:5px; }
+.startup-documents__state small { padding:4px 7px; border-radius:999px; color:#925421; background:#fff0df; font-size:8px; font-weight:850; white-space:nowrap; }
+.startup-documents__state small[data-state="required"] { color:#a44334; background:#fff0ed; }
+.startup-documents__state small[data-state="ready"] { color:#2f745b; background:#edf8f3; }
+.startup-documents__state button { padding:0; border:0; color:#2e5984; background:transparent; cursor:pointer; font-size:8px; font-weight:900; text-decoration:underline; text-underline-offset:2px; }
 
 .upload-panel { display:grid; gap:12px; padding:14px; border:1px solid #d7e1eb; border-radius:10px; background:#fff; }
 .upload-panel__intro { display:flex; align-items:flex-start; gap:9px; }
@@ -426,6 +549,9 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
 .document-list__analysis-form > span { flex:0 0 auto; }
 .document-list__analysis-form select,
 .document-list__manage select { width:100%; min-width:0; min-height:34px; padding:5px 7px; border:1px solid #ced8e2; border-radius:7px; color:var(--app-ink); background:#fff; font-size:9px; }
+.document-list__manage-details { flex:1 1 100%; width:100%; padding-top:2px; }
+.document-list__manage-details > summary { width:fit-content; color:#63768a; cursor:pointer; font-size:9px; font-weight:850; }
+.document-list__manage-details[open] > summary { margin-bottom:4px; color:#2e5984; }
 .document-list__manage { display:grid !important; grid-template-columns:auto minmax(0,1fr) auto auto; flex:1 1 100%; width:100%; min-width:0; align-items:center; gap:6px !important; padding-top:7px; border-top:1px dashed #e2e7ec; }
 .document-list__manage label { display:inline-flex; align-items:center; gap:4px; color:var(--app-muted); font-size:9px; font-weight:800; }
 .document-action { display:inline-flex; min-height:34px; align-items:center; justify-content:center; gap:5px; padding:5px 9px; border:1px solid #cfd9e3; border-radius:7px; color:#52677d; background:#fff; cursor:pointer; font-size:9px; font-weight:900; white-space:nowrap; }
@@ -460,8 +586,10 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
   .document-preview__body iframe{min-height:520px}
 }
 @media (max-width:760px){
-  .document-workspace__heading,.startup-documents__heading{align-items:flex-start;flex-direction:column}
+  .document-workspace__heading,.source-flow__heading,.startup-documents__heading{align-items:flex-start;flex-direction:column}
   .document-workspace__stats{justify-content:flex-start}
+  .source-flow__steps{grid-template-columns:1fr}
+  .source-flow__next{width:100%}
   .startup-documents__grid{grid-template-columns:1fr}
   .upload-panel__controls{grid-template-columns:1fr}
   .document-list__identity{grid-template-columns:auto minmax(0,1fr)}

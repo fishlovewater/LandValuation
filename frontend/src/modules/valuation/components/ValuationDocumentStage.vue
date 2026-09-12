@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { PhArrowRight as ArrowRight } from '@phosphor-icons/vue'
 import type { DocumentTextPreviewDto } from '../../../types/documentPreview'
 import type { SpreadsheetPreviewDto } from '../../../types/spreadsheet'
 import type {
@@ -82,10 +81,6 @@ const emit = defineEmits<{
       </div>
       <div class="document-stage__heading-actions">
         <span class="document-stage__count">{{ props.documents.length }} 份來源文件</span>
-        <button v-if="props.pendingCandidateCount" class="document-stage__review" type="button" @click="emit('reviewCandidates')">
-          確認待處理資料（{{ props.pendingCandidateCount }}）
-          <ArrowRight :size="14" weight="bold" aria-hidden="true" />
-        </button>
       </div>
     </div>
 
@@ -125,6 +120,7 @@ const emit = defineEmits<{
       @preview="emit('preview', $event)"
       @prepare-parcel-import="emit('prepareParcelImport', $event)"
       @extract="emit('extract', $event)"
+      @review-candidates="emit('reviewCandidates')"
       @reclassify="emit('reclassify', $event)"
       @remove="(documentId, filename) => emit('remove', documentId, filename)"
       @download="emit('download', $event)"

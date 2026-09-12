@@ -59,6 +59,8 @@ const emit = defineEmits<{
   reopen: [candidate: ExtractedFieldResponseDto]
   submit: []
   downloadExport: []
+  backToDocuments: []
+  continueData: []
 }>()
 
 const activeCandidate = computed(() => (
@@ -66,6 +68,13 @@ const activeCandidate = computed(() => (
   ?? props.candidates[0]
   ?? null
 ))
+const activeCandidateIndex = computed(() => {
+  if (!activeCandidate.value) return 0
+  const index = props.candidates.findIndex(
+    (candidate) => candidate.extracted_field_id === activeCandidate.value?.extracted_field_id,
+  )
+  return index < 0 ? 0 : index + 1
+})
 </script>
 
 <template>
@@ -88,6 +97,7 @@ const activeCandidate = computed(() => (
         </div>
       </div>
       <div class="candidate-workspace__summary">
+        <button class="candidate-back" type="button" @click="emit('backToDocuments')">返回來源文件</button>
         <span class="value-kind">待確認 {{ pendingCount }} 筆</span>
         <button v-if="hasConfirmationExport" class="candidate-export" type="button" data-testid="download-confirmation-export" @click="emit('downloadExport')">
           <DownloadSimple :size="15" weight="bold" aria-hidden="true" />
@@ -103,7 +113,11 @@ const activeCandidate = computed(() => (
     <div v-if="!candidates.length" class="candidate-empty">
       <CheckCircle :size="30" weight="duotone" aria-hidden="true" />
       <strong>目前沒有待確認的辨識結果</strong>
-      <span>可回到「文件與辨識」繼續處理其他來源文件，或前往下一階段補齊資料。</span>
+      <span>目前辨識結果都已處理完成。你可以回去補充其他來源文件，或直接進入估價資料。</span>
+      <div class="candidate-empty__actions">
+        <button type="button" @click="emit('backToDocuments')">回到來源文件</button>
+        <button class="is-primary" type="button" data-testid="candidate-continue-data" @click="emit('continueData')">進入估價資料</button>
+      </div>
     </div>
     <div v-else class="candidate-review-layout">
       <aside class="candidate-queue" aria-label="待確認欄位">
@@ -140,7 +154,7 @@ const activeCandidate = computed(() => (
       >
         <header class="candidate-detail__heading">
           <div>
-            <span>{{ activeCandidate.form_code }} · {{ candidateProviderLabel(activeCandidate.analysis_provider) }}</span>
+            <span>目前第 {{ activeCandidateIndex }} / {{ candidates.length }} 筆 · {{ activeCandidate.form_code }} · {{ candidateProviderLabel(activeCandidate.analysis_provider) }}</span>
             <h3>{{ fieldDisplayLabel(activeCandidate.form_code, activeCandidate.field_name) }}</h3>
             <small>{{ candidateDocumentName(activeCandidate.document_id) }}{{ activeCandidate.source_page ? ` · 第 ${activeCandidate.source_page} 頁` : '' }}</small>
           </div>
@@ -217,21 +231,21 @@ const activeCandidate = computed(() => (
           <CheckCircle v-if="selectedCandidateCount" :size="17" weight="duotone" aria-hidden="true" />
           <Info v-else :size="17" weight="duotone" aria-hidden="true" />
           <span>
-            <strong>已選擇 {{ selectedCandidateCount }} / {{ candidates.length }} 筆判定</strong>
-            <small>只有按下「儲存已選判定並套用」後，這些人工判定才會正式寫入案件。</small>
+            <strong>{{ selectedCandidateCount ? `已完成 ${selectedCandidateCount} 筆待儲存判定` : '先確認目前這筆資料' }}</strong>
+            <small>{{ selectedCandidateCount ? '儲存後系統會直接帶你到下一筆待確認資料。' : '核對原文件後選擇「確認採用」或「不採用」。' }}</small>
           </span>
         </div>
         <button class="candidate-submit__button" type="button" data-testid="submit-candidate-decisions" :disabled="!selectedCandidateCount || confirmingCandidates" @click="emit('submit')">
           <FloppyDisk v-if="!confirmingCandidates" :size="16" weight="bold" aria-hidden="true" />
-          <span>{{ confirmingCandidates ? '儲存判定中…' : '儲存已選判定並套用' }}</span>
+          <span>{{ confirmingCandidates ? '儲存判定中…' : selectedCandidateCount === 1 ? '儲存判定並下一筆' : `儲存 ${selectedCandidateCount} 筆判定` }}</span>
         </button>
       </div>
     </div>
 
-    <div v-if="processedCandidates.length" class="candidate-history" data-testid="processed-candidates">
+    <details v-if="processedCandidates.length" class="candidate-history" data-testid="processed-candidates">
+      <summary>已處理的辨識結果（{{ processedCandidates.length }}）</summary>
       <div class="candidate-history__heading">
-        <strong>已處理的辨識結果</strong>
-        <span>已採用或已略過的資料都可以重新判定；若不想變更，使用「取消修改／還原」即可回到原本已儲存狀態。</span>
+        <span>只有需要更正時才展開修改，避免已完成資料干擾目前待辦。</span>
       </div>
       <ul>
         <li v-for="candidate in processedCandidates" :key="`processed-${candidate.extracted_field_id}`">
@@ -245,7 +259,7 @@ const activeCandidate = computed(() => (
           </button>
         </li>
       </ul>
-    </div>
+    </details>
   </section>
 </template>
 
@@ -256,9 +270,11 @@ const activeCandidate = computed(() => (
 .surface-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}.surface-heading h2{margin:0;color:var(--app-ink);font-family:var(--app-font-display);font-size:24px;font-weight:600;letter-spacing:-.04em}.valuation-eyebrow{margin:0 0 6px;color:var(--app-accent-deep);font-size:11px;font-weight:800;letter-spacing:.12em}.value-kind{display:inline-flex;min-height:30px;align-items:center;padding:5px 10px;border:1px solid var(--app-line);border-radius:var(--app-radius-pill);color:var(--app-ink-soft);background:#f7f8fb;font-size:11px;font-weight:800;white-space:nowrap}
 .candidate-workspace{border-color:rgba(46,89,132,.18)}
 .candidate-workspace__summary{display:flex;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:8px}
+.candidate-back{min-height:36px;padding:6px 10px;border:1px solid #d3dee8;border-radius:8px;color:#405d78;background:#fff;cursor:pointer;font-size:10px;font-weight:900}
 .candidate-export{display:inline-flex;min-height:36px;align-items:center;justify-content:center;gap:6px;padding:6px 11px;border:1px solid #cbd9e6;border-radius:8px;color:#2e5984;background:#fff;cursor:pointer;font-size:10px;font-weight:900}
 .candidate-empty{display:grid;min-height:260px;place-items:center;align-content:center;gap:7px;padding:28px;border:1px dashed #d3dee8;border-radius:10px;color:#4b8a70;background:#fbfefd;text-align:center}
 .candidate-empty strong{color:var(--app-ink);font-size:13px}.candidate-empty span{max-width:480px;color:var(--app-muted);font-size:11px;line-height:1.6}
+.candidate-empty__actions{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:6px}.candidate-empty__actions button{min-height:38px;padding:7px 12px;border:1px solid #cbd7e3;border-radius:8px;color:#405d78;background:#fff;cursor:pointer;font-size:10px;font-weight:900}.candidate-empty__actions button.is-primary{border-color:#2e5984;color:#fff;background:#2e5984}
 .candidate-review-layout{display:grid;grid-template-columns:minmax(240px,.72fr) minmax(0,1.65fr);gap:12px}
 .candidate-queue{min-width:0;overflow:hidden;border:1px solid #dbe4ec;border-radius:10px;background:#fff}
 .candidate-queue__heading{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 12px;border-bottom:1px solid #e7ecf1;background:#fafbfd}
@@ -276,8 +292,8 @@ const activeCandidate = computed(() => (
 .candidate-detail__decision{padding-top:2px}.candidate-detail__value{display:grid;gap:6px;color:var(--app-ink-soft);font-size:10px;font-weight:850}.candidate-detail__value input{width:100%;min-height:44px;padding:9px 10px;border:1px solid #cad6e1;border-radius:8px;color:var(--app-ink);background:#fff;font:inherit}.candidate-detail__value input:focus{outline:3px solid rgba(46,89,132,.1);border-color:#2e5984}.candidate-detail__guidance{color:var(--app-muted);font-size:9px;font-weight:500;line-height:1.55}
 .candidate-detail__actions{display:flex;flex-wrap:wrap;gap:7px}.candidate-detail__actions button{display:inline-flex;min-height:38px;align-items:center;justify-content:center;gap:5px;padding:7px 11px;border:1px solid #d2dce5;border-radius:8px;background:#fff;cursor:pointer;font-size:10px;font-weight:900}.candidate-detail__confirm{color:#35775f}.candidate-detail__confirm.is-selected{border-color:#9bc8b4;background:#edf8f3}.candidate-detail__reject{color:#9a4638}.candidate-detail__reject.is-selected{border-color:#e4b9b1;background:#fff0ed}.candidate-detail__restore{margin-left:auto;color:#607286;border-style:dashed!important;background:#f8fafc!important}
 .candidate-submit{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border:1px solid #e1e7ee;border-radius:9px;background:#fafbfd}.candidate-submit[data-state="ready"]{border-color:#bfd0e2;background:#f3f7fb}.candidate-submit>div{display:flex;align-items:center;gap:8px;color:#6c7e90}.candidate-submit[data-state="ready"]>div{color:#2e5984}.candidate-submit>div>span{display:grid;gap:2px}.candidate-submit strong{color:var(--app-ink);font-size:10px}.candidate-submit small{color:var(--app-muted);font-size:9px;line-height:1.45}.candidate-submit__button{display:inline-flex;min-height:42px;flex:0 0 auto;align-items:center;justify-content:center;gap:6px;padding:8px 13px;border:1px solid var(--app-accent);border-radius:8px;color:#fff;background:var(--app-accent);cursor:pointer;font-size:11px;font-weight:900}.candidate-submit__button:disabled{cursor:not-allowed;opacity:.5}
-.candidate-history{display:grid;gap:9px;margin-top:16px;padding-top:14px;border-top:1px solid var(--app-line)}.candidate-history__heading{display:grid;gap:3px}.candidate-history__heading strong{color:var(--app-ink);font-size:12px}.candidate-history__heading span{color:var(--app-muted);font-size:11px}.candidate-history ul{display:grid;gap:7px;margin:0;padding:0;list-style:none}.candidate-history li{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 11px;border:1px solid #edf1f4;border-radius:9px;background:#fafbfd}.candidate-history li>div{display:grid;gap:3px;min-width:0}.candidate-history li strong{color:var(--app-ink);font-size:11px}.candidate-history li span{overflow-wrap:anywhere;color:var(--app-muted);font-size:10px}.candidate-history__reopen{display:inline-flex;min-height:34px;flex:0 0 auto;align-items:center;justify-content:center;gap:5px;padding:6px 10px;border:1px solid #d3dee8;border-radius:8px;color:#405d78;background:#fff;cursor:pointer;font-size:10px;font-weight:900}
+.candidate-history{display:grid;gap:9px;margin-top:16px;padding-top:14px;border-top:1px solid var(--app-line)}.candidate-history>summary{width:fit-content;color:#405d78;cursor:pointer;font-size:11px;font-weight:900}.candidate-history[open]>summary{color:#2e5984}.candidate-history__heading{display:grid;gap:3px}.candidate-history__heading strong{color:var(--app-ink);font-size:12px}.candidate-history__heading span{color:var(--app-muted);font-size:11px}.candidate-history ul{display:grid;gap:7px;margin:0;padding:0;list-style:none}.candidate-history li{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 11px;border:1px solid #edf1f4;border-radius:9px;background:#fafbfd}.candidate-history li>div{display:grid;gap:3px;min-width:0}.candidate-history li strong{color:var(--app-ink);font-size:11px}.candidate-history li span{overflow-wrap:anywhere;color:var(--app-muted);font-size:10px}.candidate-history__reopen{display:inline-flex;min-height:34px;flex:0 0 auto;align-items:center;justify-content:center;gap:5px;padding:6px 10px;border:1px solid #d3dee8;border-radius:8px;color:#405d78;background:#fff;cursor:pointer;font-size:10px;font-weight:900}
 @media(max-width:1200px){.candidate-detail{grid-template-columns:1fr}.candidate-detail__heading{grid-column:auto}}
 @media(max-width:900px){.candidate-review-layout{grid-template-columns:1fr}.candidate-queue__list{max-height:260px}.candidate-submit{grid-column:auto}}
-@media(max-width:760px){.valuation-surface{padding:16px}.surface-heading,.candidate-submit,.candidate-history li,.candidate-detail__heading{align-items:stretch;flex-direction:column}.candidate-workspace__summary{justify-content:flex-start}.candidate-detail__confidence{width:fit-content}.candidate-detail__restore{margin-left:0}.candidate-submit__button,.candidate-export,.candidate-history__reopen{width:100%}}
+@media(max-width:760px){.valuation-surface{padding:16px}.surface-heading,.candidate-submit,.candidate-history li,.candidate-detail__heading{align-items:stretch;flex-direction:column}.candidate-workspace__summary{justify-content:flex-start}.candidate-detail__confidence{width:fit-content}.candidate-detail__restore{margin-left:0}.candidate-submit__button,.candidate-export,.candidate-back,.candidate-history__reopen{width:100%}.candidate-empty__actions{width:100%;flex-direction:column}.candidate-empty__actions button{width:100%}}
 </style>
