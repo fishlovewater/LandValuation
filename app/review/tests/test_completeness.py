@@ -21,7 +21,7 @@ def complete_snapshot():
     )
 
 
-def test_missing_land_register_blocks_core_recalculation():
+def test_missing_land_register_keeps_review_ready_but_marks_affected_rules_unavailable():
     snapshot = complete_snapshot()
     snapshot = CaseInputSnapshot(
         documents=tuple(
@@ -32,7 +32,7 @@ def test_missing_land_register_blocks_core_recalculation():
 
     result = evaluate_completeness(snapshot)
 
-    assert result.ready is False
+    assert result.ready is True
     assert result.blocked_rule_codes == {
         "PARCEL_AREA_MATCH",
         "PRICE_RECALCULATION",
@@ -57,4 +57,20 @@ def test_inactive_document_and_blank_field_do_not_satisfy_requirements():
 
     result = evaluate_completeness(snapshot)
 
+    assert result.ready is True
     assert {item.item_code for item in result.items} == {"FIELD_PARCEL_AREA"}
+
+
+def test_missing_original_report_still_blocks_review():
+    snapshot = complete_snapshot()
+    snapshot = CaseInputSnapshot(
+        documents=tuple(
+            item for item in snapshot.documents if item.category != "original"
+        ),
+        normalized_fields=snapshot.normalized_fields,
+    )
+
+    result = evaluate_completeness(snapshot)
+
+    assert result.ready is False
+    assert {item.item_code for item in result.items} == {"DOC_ORIGINAL"}

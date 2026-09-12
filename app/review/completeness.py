@@ -25,6 +25,7 @@ class Requirement:
     kind: Literal["document", "field"]
     target: str
     blocked_rule_codes: frozenset[str]
+    blocks_review: bool = True
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,7 @@ MVP_REQUIREMENTS: tuple[Requirement, ...] = (
         "document",
         "land-register",
         frozenset({"PARCEL_AREA_MATCH", "PRICE_RECALCULATION"}),
+        False,
     ),
     Requirement(
         "DOC_CADASTRAL_MAP",
@@ -64,6 +66,7 @@ MVP_REQUIREMENTS: tuple[Requirement, ...] = (
         "document",
         "cadastral-map",
         frozenset({"PARCEL_LOCATION_MATCH"}),
+        False,
     ),
     Requirement(
         "FIELD_CASE_NO",
@@ -92,6 +95,7 @@ MVP_REQUIREMENTS: tuple[Requirement, ...] = (
         "field",
         "parcel_area",
         frozenset({"PARCEL_AREA_MATCH", "PRICE_RECALCULATION"}),
+        False,
     ),
 )
 
@@ -133,10 +137,12 @@ def evaluate_completeness(
             )
         )
 
-    blocked = frozenset(
-        code for item in missing for code in item.blocked_rule_codes
-    )
-    return CompletenessResult(not missing, tuple(missing), blocked)
+    blocked = frozenset(code for item in missing for code in item.blocked_rule_codes)
+    blocking_codes = {
+        requirement.code for requirement in requirements if requirement.blocks_review
+    }
+    has_blocking_missing = any(item.item_code in blocking_codes for item in missing)
+    return CompletenessResult(not has_blocking_missing, tuple(missing), blocked)
 
 
 def trusted_problem_to_missing(
