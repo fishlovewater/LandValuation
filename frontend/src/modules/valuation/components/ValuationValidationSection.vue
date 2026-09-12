@@ -47,26 +47,26 @@ const emit = defineEmits<{
           <Calculator :size="22" weight="duotone" />
         </span>
         <div>
-          <p>正式計算</p>
+          <p>估價計算</p>
           <h2 id="calculation-launch-title">計算與檢核</h2>
         </div>
       </div>
       <span class="calculation-stage__engine">
         <ShieldCheck :size="16" weight="fill" aria-hidden="true" />
-        系統規則引擎
+        正式規則計算
       </span>
     </div>
 
     <p class="calculation-stage__description">
-      系統會使用已確認的比準地地價估計表資料執行公式計算，再依檢核規則檢查缺漏與一致性；若有問題會直接指出修正位置。AI 僅協助說明，不參與正式數值計算。
+      使用已確認的估價資料執行正式公式，並檢查必要資料與計算結果是否一致；若有問題會直接帶你回到需要修正的位置。
     </p>
 
     <div class="calculation-stage__readiness" aria-label="計算前置條件">
       <article :data-state="hasF03 ? 'ready' : 'blocked'">
         <Database :size="18" weight="duotone" aria-hidden="true" />
         <div>
-          <span>比準地地價估計表</span>
-          <strong>{{ hasF03 ? '已建立' : '尚未建立' }}</strong>
+          <span>估價參數</span>
+          <strong>{{ hasF03 ? '估價草稿已建立' : '尚未建立估價草稿' }}</strong>
         </div>
       </article>
       <article :data-state="preCalculationIssueCount ? 'blocked' : 'ready'">
@@ -90,11 +90,11 @@ const emit = defineEmits<{
     <div class="calculation-stage__action-row">
       <p v-if="!canRunValuation">
         <WarningCircle :size="16" weight="fill" aria-hidden="true" />
-        請先完成待處理前置資料，再執行正式計算。
+        請先完成待處理資料，再執行計算。
       </p>
       <p v-else>
         <CheckCircle :size="16" weight="fill" aria-hidden="true" />
-        前置條件已符合，可以執行正式計算與檢核。
+        估價資料已準備完成，可以執行計算與檢核。
       </p>
       <button
         class="calculation-stage__run"
@@ -123,7 +123,7 @@ const emit = defineEmits<{
         </span>
         <div>
           <p>檢核結果</p>
-          <h2 id="validation-title">計算與資料檢核</h2>
+          <h2 id="validation-title">估價資料檢核</h2>
         </div>
       </div>
       <span
@@ -132,8 +132,27 @@ const emit = defineEmits<{
       >
         <CheckCircle v-if="validation.canGenerateReport" :size="16" weight="fill" aria-hidden="true" />
         <WarningCircle v-else :size="16" weight="fill" aria-hidden="true" />
-        {{ validation.canGenerateReport ? '可產生比準地地價估計表單表' : '仍有待修正項目' }}
+        {{ validation.canGenerateReport ? '估價資料檢核已通過' : '仍有待修正項目' }}
       </span>
+    </div>
+
+    <div class="validation-results__outputs validation-results__outputs--primary">
+      <article v-if="calculation" class="validation-results__output validation-results__output--result" data-testid="calculation-result" data-source-kind="calculated">
+        <Calculator :size="20" weight="duotone" aria-hidden="true" />
+        <div>
+          <span>比準地估價結果</span>
+          <strong>{{ calculation.result }} {{ calculation.currencyCode }}</strong>
+          <small>依目前已確認資料計算 · 公式版本 {{ calculation.formulaVersion }}</small>
+        </div>
+      </article>
+      <article v-if="report" class="validation-results__output" data-testid="report-result">
+        <FileText :size="20" weight="duotone" aria-hidden="true" />
+        <div>
+          <span>估價單表輸出</span>
+          <strong>{{ report.filename }}</strong>
+          <small>第 {{ report.versionNo }} 版｜檔案大小 {{ Math.max(1, Math.round(report.fileSizeBytes / 1024)) }} KB</small>
+        </div>
+      </article>
     </div>
 
     <div class="validation-results__counts" aria-label="檢核統計">
@@ -180,25 +199,6 @@ const emit = defineEmits<{
       <ul><li v-for="hint in validation.correctionHints" :key="hint">{{ hint }}</li></ul>
     </div>
 
-    <div class="validation-results__outputs">
-      <article v-if="calculation" class="validation-results__output" data-testid="calculation-result" data-source-kind="calculated">
-        <Calculator :size="20" weight="duotone" aria-hidden="true" />
-        <div>
-          <span>正式計算結果</span>
-          <strong>{{ calculation.result }} {{ calculation.currencyCode }}</strong>
-          <small>公式版本：{{ calculation.formulaVersion }}</small>
-        </div>
-      </article>
-      <article v-if="report" class="validation-results__output" data-testid="report-result">
-        <FileText :size="20" weight="duotone" aria-hidden="true" />
-        <div>
-          <span>比準地地價估計表單表輸出</span>
-          <strong>{{ report.filename }}</strong>
-          <small>第 {{ report.versionNo }} 版｜檔案大小 {{ Math.max(1, Math.round(report.fileSizeBytes / 1024)) }} KB</small>
-        </div>
-      </article>
-    </div>
-
     <div class="validation-results__next">
       <p>
         {{ canProceedToSubmit ? '檢核已達送審條件，可進入查估書確認。' : '必須先修正阻擋項目並重新執行檢核。' }}
@@ -208,10 +208,10 @@ const emit = defineEmits<{
         type="button"
         data-testid="go-to-submit"
         :disabled="!canProceedToSubmit"
-        :title="canProceedToSubmit ? '前往輸出預覽與送審' : '必須先修正阻擋項目並通過檢核'"
+        :title="canProceedToSubmit ? '進入查估書確認' : '必須先修正阻擋項目並通過檢核'"
         @click="emit('go-submit')"
       >
-        <span>{{ canProceedToSubmit ? '前往輸出預覽與送審' : '請先完成阻擋項目' }}</span>
+        <span>{{ canProceedToSubmit ? '進入查估書確認' : '請先完成阻擋項目' }}</span>
         <ArrowRight v-if="canProceedToSubmit" :size="16" weight="bold" aria-hidden="true" />
       </button>
     </div>
@@ -309,7 +309,7 @@ const emit = defineEmits<{
 .validation-results__heading { align-items: flex-start; margin-bottom: 14px; }
 .validation-results__state { border-color: rgba(57, 123, 92, .22); color: #2f7456; background: #edf8f2; }
 .validation-results__state[data-validation-state="blocked"] { border-color: rgba(193, 92, 65, .22); color: #a44334; background: #fff3f0; }
-.validation-results__counts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.validation-results__counts { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
 .validation-results__counts span { gap: 6px; padding: 8px 11px; border-radius: 8px; font-size: 12px; font-weight: 800; }
 .validation-results__counts [data-state="passed"] { color: #2f7456; background: #edf8f2; }
 .validation-results__counts [data-state="warning"] { color: #946d16; background: #fff8e8; }
@@ -328,7 +328,9 @@ const emit = defineEmits<{
 .validation-results__correction-hints strong { gap: 6px; color: var(--app-ink); font-size: 12px; }
 .validation-results__correction-hints ul { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: var(--app-ink-soft); font-size: 12px; }
 .validation-results__outputs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 15px; }
+.validation-results__outputs--primary { margin-top: 0; }
 .validation-results__output { min-width: 0; gap: 10px; padding: 13px; border: 1px solid var(--app-line); border-radius: 9px; color: var(--app-accent-deep); background: #fbfcfe; }
+.validation-results__output--result { border-color:#bfd5e8; background:#f3f8fd; }
 .validation-results__output > div { display: grid; min-width: 0; gap: 3px; }
 .validation-results__output span { color: var(--app-muted); font-size: 10px; font-weight: 800; }
 .validation-results__output strong { color: var(--app-ink); font-size: 14px; overflow-wrap: anywhere; }

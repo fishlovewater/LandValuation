@@ -718,7 +718,7 @@ describe('valuation demo flow', () => {
     expect(patchBodies).toHaveLength(2)
     expect(patchBodies[0]).toEqual(expect.objectContaining({ comparison_price: '125001.00' }))
     expect(patchBodies[1]).toEqual(expect.objectContaining({ comparison_price: '125002.00' }))
-    expect(wrapper.get('[data-testid="validation-results"]').text()).toContain('可產生比準地地價估計表單表')
+    expect(wrapper.get('[data-testid="validation-results"]').text()).toContain('估價資料檢核已通過')
     expect(wrapper.get('[data-testid="validation-results"]').text()).toContain('警示')
     expect(wrapper.get('[data-testid="calculation-result"]').text()).toContain('123456.00')
     expect(wrapper.text()).not.toContain('internal-bucket-must-not-render')
