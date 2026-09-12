@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
+  PhArrowLeft as ArrowLeft,
   PhDownloadSimple as DownloadSimple,
   PhFileDoc as FileDoc,
   PhFilePdf as FilePdf,
@@ -152,7 +153,12 @@ onMounted(load)
       title="審查結果"
       :description="detail ? `${detail.caseNo} · ${detail.caseTitle}` : '查看授權的審查報告與輸出。'"
     >
-      <template #actions><button type="button" class="review-result__back" data-testid="result-back-to-workbench" @click="backToWorkbench">返回案件審查</button></template>
+      <template #actions>
+        <button type="button" class="review-result__back" data-testid="result-back-to-workbench" @click="backToWorkbench">
+          <ArrowLeft :size="16" weight="bold" aria-hidden="true" />
+          <span>返回案件審查</span>
+        </button>
+      </template>
     </PageHeader>
 
     <LoadingSkeleton v-if="loading" :rows="6" label="審查結果載入中" />
@@ -249,7 +255,7 @@ onMounted(load)
 
 <style scoped>
 .review-result { padding: 0 28px 34px; }
-.review-result__back { min-height: 42px; padding: 8px 15px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: var(--app-paper-strong); cursor: pointer; font-size: 12px; font-weight: 800; }
+.review-result__back { display: inline-flex; min-height: 42px; align-items: center; gap: 7px; padding: 8px 15px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: var(--app-paper-strong); cursor: pointer; font-size: 12px; font-weight: 800; }
 .review-result__toolbar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .review-result__toolbar > div { display: grid; gap: 4px; min-height: 78px; padding: 14px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: var(--app-paper-strong); }
 .review-result__toolbar span,

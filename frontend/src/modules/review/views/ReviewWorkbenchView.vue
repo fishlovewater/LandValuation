@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { PhX as X } from '@phosphor-icons/vue'
+import {
+  PhArrowLeft as ArrowLeft,
+  PhInfo as Info,
+  PhPlay as Play,
+  PhWarningCircle as WarningCircle,
+  PhX as X,
+} from '@phosphor-icons/vue'
 import ConfirmDialog from '../../../components/common/ConfirmDialog.vue'
 import EmptyState from '../../../components/common/EmptyState.vue'
 import ErrorState from '../../../components/common/ErrorState.vue'
@@ -718,7 +724,8 @@ onBeforeUnmount(() => {
     >
       <template #actions>
         <button type="button" class="review-workbench__back" data-testid="review-back-to-queue" @click="backToQueue">
-          返回案件佇列
+          <ArrowLeft :size="16" weight="bold" aria-hidden="true" />
+          <span>返回案件佇列</span>
         </button>
       </template>
     </PageHeader>
@@ -762,7 +769,8 @@ onBeforeUnmount(() => {
               :aria-expanded="drawer === 'left'"
               @click="openDrawer('left', $event)"
             >
-              案件資料
+              <Info :size="16" weight="bold" aria-hidden="true" />
+              <span>案件資料</span>
             </button>
             <button
               type="button"
@@ -772,7 +780,8 @@ onBeforeUnmount(() => {
               :disabled="!detail.findings.length"
               @click="openDrawer('right', $event)"
             >
-              疑點內容<span v-if="detail.findings.length">（{{ unresolvedCount }} 待處理）</span>
+              <WarningCircle :size="16" weight="bold" aria-hidden="true" />
+              <span>疑點內容<span v-if="detail.findings.length">（{{ unresolvedCount }} 待處理）</span></span>
             </button>
           </div>
         </section>
@@ -808,7 +817,8 @@ onBeforeUnmount(() => {
             :disabled="!canStartReview"
             @click="startReview"
           >
-            {{ mutating ? '審查啟動中…' : '開始審查' }}
+            <Play :size="16" weight="fill" aria-hidden="true" />
+            <span>{{ mutating ? '審查啟動中…' : '開始審查' }}</span>
           </button>
         </div>
         <ReviewActionBar
@@ -1161,9 +1171,9 @@ onBeforeUnmount(() => {
 .review-workbench__start-panel { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 16px; padding: 16px 18px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #fff9f3; }
 .review-workbench__start-panel strong { color: var(--app-ink); font-size: 14px; }
 .review-workbench__start-panel p { margin: 5px 0 0; color: var(--app-muted); font-size: 12px; line-height: 1.6; }
-.review-workbench__start-panel button { min-height: 44px; padding: 8px 16px; border: 1px solid var(--app-accent); border-radius: 8px; color: #fff8f2; background: var(--app-accent); cursor: pointer; font-weight: 800; white-space: nowrap; }
+.review-workbench__start-panel button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 7px; padding: 8px 16px; border: 1px solid var(--app-accent); border-radius: 8px; color: #fff8f2; background: var(--app-accent); cursor: pointer; font-weight: 800; white-space: nowrap; }
 .review-workbench__start-panel button:disabled { cursor: not-allowed; opacity: .55; }
-.review-workbench__back { min-height: 42px; padding: 8px 15px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: var(--app-paper-strong); cursor: pointer; font-size: 12px; font-weight: 800; }
+.review-workbench__back { display: inline-flex; min-height: 42px; align-items: center; gap: 7px; padding: 8px 15px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: var(--app-paper-strong); cursor: pointer; font-size: 12px; font-weight: 800; }
 .review-workbench__source-strip { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 18px; margin-top: 12px; padding: 14px 16px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #f8fafc; }
 .review-workbench__source-main { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
 .review-workbench__source-main > div { display: grid; gap: 3px; min-width: 0; }
@@ -1174,7 +1184,7 @@ onBeforeUnmount(() => {
 .review-workbench__source-stats { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 12px; color: var(--app-muted); font-size: 10px; white-space: nowrap; }
 .review-workbench__source-stats b { color: var(--app-ink); font-size: 12px; }
 .review-workbench__source-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
-.review-workbench__source-actions button { min-height: 40px; padding: 7px 12px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: #fff; cursor: pointer; font-size: 11px; font-weight: 900; white-space: nowrap; }
+.review-workbench__source-actions button { display: inline-flex; min-height: 40px; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: #fff; cursor: pointer; font-size: 11px; font-weight: 900; white-space: nowrap; }
 .review-workbench__source-actions button:hover:not(:disabled) { border-color: rgba(200, 91, 67, .35); color: var(--app-accent-deep); }
 .review-workbench__source-actions button:disabled { cursor: not-allowed; opacity: .5; }
 .review-workbench__readonly-banner { display: grid; gap: 4px; margin-top: 12px; padding: 12px 14px; border: 1px solid #d8c48d; border-radius: var(--app-radius-sm); background: #fff9e8; }
