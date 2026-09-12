@@ -85,6 +85,21 @@ describe('router guards', () => {
     expect(router.currentRoute.value.path).toBe('/app/unauthorized')
   })
 
+  it('keeps the Review workspace reviewer-only even if an appraiser is granted review.execute', async () => {
+    authenticatedUser({
+      ...appraiser,
+      permissions: [...appraiser.permissions, 'review.execute'],
+    })
+    const appraiserRouter = createAppRouter()
+    await appraiserRouter.push('/app/review/dashboard')
+    expect(appraiserRouter.currentRoute.value.path).toBe('/app/unauthorized')
+
+    authenticatedUser(reviewer)
+    const reviewerRouter = createAppRouter()
+    await reviewerRouter.push('/app/review/dashboard')
+    expect(reviewerRouter.currentRoute.value.path).toBe('/app/review/dashboard')
+  })
+
   it('uses assistant.use, not a role name or valuation.update, for Assistant route entry', async () => {
     authenticatedUser({
       ...appraiser,

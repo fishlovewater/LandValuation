@@ -1,4 +1,5 @@
 import type { RouteRecordRaw } from 'vue-router'
+import { REVIEW_ROLES } from '../../router/roleAccess'
 
 const lazyDashboard = () => import('./views/ReviewDashboardView.vue')
 const lazyWorkbench = () => import('./views/ReviewWorkbenchView.vue')
@@ -11,6 +12,7 @@ export const reviewRoutes: readonly RouteRecordRaw[] = [
     component: lazyDashboard,
     meta: {
       requiresAuth: true,
+      roles: [...REVIEW_ROLES],
       permission: 'review.execute',
       title: '審查工作台',
       subsystem: '審查工作台',
@@ -23,6 +25,7 @@ export const reviewRoutes: readonly RouteRecordRaw[] = [
     component: lazyWorkbench,
     meta: {
       requiresAuth: true,
+      roles: [...REVIEW_ROLES],
       permission: 'review.execute',
       title: '案件審查',
       subsystem: '審查工作台',
@@ -35,6 +38,7 @@ export const reviewRoutes: readonly RouteRecordRaw[] = [
     component: lazyResult,
     meta: {
       requiresAuth: true,
+      roles: [...REVIEW_ROLES],
       permission: 'review.execute',
       title: '審查結果',
       subsystem: '審查工作台',

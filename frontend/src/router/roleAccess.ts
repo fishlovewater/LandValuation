@@ -22,6 +22,13 @@ export const VALUATION_ROLES = [
   'SUPERADMIN',
 ] as const
 
+export const REVIEW_ROLES = [
+  'REVIEWER',
+  'ADMIN',
+  'SYSTEM_ADMIN',
+  'SUPERADMIN',
+] as const
+
 export interface HistoryRoleScope {
   valuation: boolean
   review: boolean
