@@ -6,6 +6,7 @@ import CaseTable from '../../../components/common/CaseTable.vue'
 import GlassModal from '../../../components/glass/GlassModal.vue'
 import { useAuthStore } from '../../../stores/auth.store'
 import { safeValuationErrorMessage, valuationApi } from '../valuation.api'
+import { LAND_USE_OPTIONS } from '../valuation.labels'
 import { mapCaseResponse } from '../valuation.mappers'
 import { valuationStageRoute } from '../valuation.navigation'
 import { NEW_TAIPEI_CITY_CODE, NEW_TAIPEI_DISTRICTS } from '../newTaipei'
@@ -34,13 +35,6 @@ const createDraft = reactive({
   landUseType: '',
 })
 const casesWithDeadlineCount = computed(() => cases.value.filter((item) => Boolean(item.valuationDueDate)).length)
-const landUseOptions = [
-  { value: 'RESIDENTIAL', label: '住宅用地' },
-  { value: 'COMMERCIAL', label: '商業用地' },
-  { value: 'INDUSTRIAL', label: '工業用地' },
-  { value: 'AGRICULTURAL', label: '農業用地' },
-  { value: 'OTHER', label: '其他用途' },
-] as const
 const sortedCases = computed(() => {
   const direction = sortDirection.value === 'asc' ? 1 : -1
   const key = sortBy.value
@@ -219,7 +213,7 @@ onMounted(() => {
             <span>土地用途 *</span>
             <select v-model="createDraft.landUseType" required data-testid="case-land-use-type">
               <option disabled value="">請選擇土地用途</option>
-              <option v-for="option in landUseOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+              <option v-for="option in LAND_USE_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
             </select>
             <small>請從清單選擇，系統會自動儲存對應的正式規則代碼。</small>
           </label>

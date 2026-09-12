@@ -6,6 +6,7 @@ import {
   PhInfo as Info,
   PhX as X,
 } from '@phosphor-icons/vue'
+import { valuationCaseTypeLabel, valuationLandUseLabel } from '../valuation.labels'
 import type { ValuationCaseModel, ValuationWorkspaceStage } from '../valuation.types'
 
 export type { ValuationWorkspaceStage } from '../valuation.types'
@@ -106,12 +107,12 @@ function navigate(stage: ValuationWorkspaceStage): void {
           </div>
           <dl>
             <div><dt>案件名稱</dt><dd>{{ caseModel.name }}</dd></div>
-            <div><dt>案件類型</dt><dd>{{ caseModel.caseType || '未提供' }}</dd></div>
+            <div><dt>案件類型</dt><dd>{{ valuationCaseTypeLabel(caseModel.caseType) }}</dd></div>
             <div><dt>申請機關</dt><dd>{{ caseModel.requestingAgency || '未提供' }}</dd></div>
             <div><dt>行政區</dt><dd>{{ districtLabel }}</dd></div>
             <div><dt>估價基準日</dt><dd>{{ caseModel.valuationBaseDate }}</dd></div>
             <div><dt>估價作業期限</dt><dd>{{ caseModel.valuationDueDate || '未設定' }}</dd></div>
-            <div><dt>土地用途</dt><dd>{{ caseModel.landUseType || '未提供' }}</dd></div>
+            <div><dt>土地用途</dt><dd>{{ valuationLandUseLabel(caseModel.landUseType) }}</dd></div>
             <div><dt>案件狀態</dt><dd>{{ statusLabel }}</dd></div>
           </dl>
         </div>

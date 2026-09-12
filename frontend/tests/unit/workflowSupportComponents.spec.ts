@@ -2,6 +2,7 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import DocumentTextPreview from '../../src/components/common/DocumentTextPreview.vue'
 import SpreadsheetPreview from '../../src/components/common/SpreadsheetPreview.vue'
+import ValuationCaseWorkspaceHeader from '../../src/modules/valuation/components/ValuationCaseWorkspaceHeader.vue'
 import ValuationFormalValidationPanel from '../../src/modules/valuation/components/ValuationFormalValidationPanel.vue'
 import ValuationGeneralValidationPanel from '../../src/modules/valuation/components/ValuationGeneralValidationPanel.vue'
 import ValuationIssueDrawer from '../../src/modules/valuation/components/ValuationIssueDrawer.vue'
@@ -49,6 +50,37 @@ describe('SpreadsheetPreview', () => {
     expect(wrapper.text()).toContain('地籍圖')
     expect(wrapper.text()).toContain('是')
     expect(wrapper.text()).not.toContain('僅顯示前段資料')
+  })
+})
+
+describe('ValuationCaseWorkspaceHeader', () => {
+  it('shows readable case metadata instead of stored engineering codes', async () => {
+    const wrapper = mount(ValuationCaseWorkspaceHeader, {
+      props: {
+        caseModel: {
+          caseId: 'case-1',
+          caseNo: 'NEWTP-2026-001',
+          name: '測試估價案件',
+          caseType: 'LAND',
+          landUseType: 'COMMERCIAL',
+          valuationBaseDate: '2026-09-12',
+          valuationDueDate: '2026-10-01',
+          requestingAgency: '新北市政府',
+        } as any,
+        districtLabel: '板橋區',
+        statusLabel: '估價作業中',
+        currentStage: 'data',
+        reportAvailable: true,
+      },
+    })
+
+    await wrapper.get('button[aria-label="查看案件基本資料"]').trigger('click')
+    const details = wrapper.get('#valuation-case-details')
+
+    expect(details.text()).toContain('土地徵收補償市價查估')
+    expect(details.text()).toContain('商業用地')
+    expect(details.text()).not.toMatch(/\bLAND\b/)
+    expect(details.text()).not.toContain('COMMERCIAL')
   })
 })
 

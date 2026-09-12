@@ -10,6 +10,7 @@ import {
   PhTag as Tag,
 } from '@phosphor-icons/vue'
 import { statusLabel } from '../../../utils/enumLabels'
+import { valuationCaseTypeLabel } from '../valuation.labels'
 import type { ValuationCaseModel, ValuationFormModel } from '../valuation.types'
 
 const props = defineProps<{
@@ -31,18 +32,6 @@ function formDisplayName(code: string): string {
   return formNames[code] ?? '查估書表'
 }
 
-function caseTypeDisplayLabel(value: string): string {
-  const normalized = value.trim().toUpperCase()
-  const labels: Readonly<Record<string, string>> = {
-    LAND: '土地徵收補償市價查估',
-    LAND_ACQUISITION: '土地徵收補償市價查估',
-    VALUATION: '土地估價案件',
-    EXTERNAL_REVIEW: '外部送審案件',
-  }
-  if (labels[normalized]) return labels[normalized]
-  if (/[^\x00-\x7F]/.test(value)) return value
-  return '其他估價案件'
-}
 </script>
 
 <template>
@@ -68,7 +57,7 @@ function caseTypeDisplayLabel(value: string): string {
       <div>
         <span class="case-overview__summary-icon" aria-hidden="true"><Tag :size="16" weight="duotone" /></span>
         <span>案件類型</span>
-        <strong>{{ caseTypeDisplayLabel(props.caseModel.caseType) }}</strong>
+        <strong>{{ valuationCaseTypeLabel(props.caseModel.caseType) }}</strong>
       </div>
       <div>
         <span class="case-overview__summary-icon" aria-hidden="true"><Buildings :size="16" weight="duotone" /></span>
