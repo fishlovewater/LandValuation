@@ -311,6 +311,13 @@ async function decideCandidate(candidate: ExtractedFieldResponseDto, decision: '
   }
 }
 
+watch(selectedDocumentId, (documentId) => {
+  extraction.value = null
+  candidateEdits.value = {}
+  resetMessages()
+  if (documentId && extractionSupported.value) void loadExtraction(documentId)
+})
+
 watch(
   () => props.documents.map((document) => `${document.documentId}:${document.versionNo}`).join('|'),
   () => {
@@ -322,13 +329,6 @@ watch(
   },
   { immediate: true },
 )
-
-watch(selectedDocumentId, (documentId) => {
-  extraction.value = null
-  candidateEdits.value = {}
-  resetMessages()
-  if (documentId && extractionSupported.value) void loadExtraction(documentId)
-})
 </script>
 
 <template>

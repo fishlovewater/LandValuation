@@ -611,6 +611,78 @@ describe('review demo flow', () => {
     wrapper.unmount()
   })
 
+  it('loads an existing extraction for the initially selected external document', async () => {
+    const requests: string[] = []
+    const externalDetail: any = structuredClone(detailBase)
+    externalDetail.case_source = 'EXTERNAL'
+    externalDetail.review.review_status = 'RECEIVED'
+    externalDetail.review.latest_validation_run_id = null
+    externalDetail.runs = []
+    externalDetail.findings = []
+    externalDetail.risk_summary = null
+
+    http.defaults.adapter = vi.fn(async (config) => {
+      requests.push(`${config.method} ${config.url}`)
+      if (config.method === 'get' && config.url === `/review/workbench/cases/${idsWithDetail.review}`) {
+        return response(externalDetail, config)
+      }
+      if (config.method === 'get' && config.url === '/review/workbench/summary') return response(summaryDto, config)
+      if (config.method === 'get' && config.url === '/review/workbench/cases') {
+        return response({ items: [{ ...queueItemDto, case_source: 'EXTERNAL' }], total: 1, limit: 20, offset: 0 }, config)
+      }
+      if (
+        config.method === 'get'
+        && config.url === `/review/workbench/cases/${idsWithDetail.review}/external-documents/${idsWithDetail.document}/extraction`
+      ) {
+        return response({
+          extraction_id: '78787878-7878-4787-8787-787878787878',
+          case_id: idsWithDetail.case,
+          document_id: idsWithDetail.document,
+          provider: 'local_pdf',
+          extraction_status: 'COMPLETED',
+          page_count: 6,
+          extracted_text: '調整率 -12%',
+          error_message: null,
+          started_at: '2026-09-12T07:16:00Z',
+          completed_at: '2026-09-12T07:16:02Z',
+          candidates: [{
+            extracted_field_id: '67676767-6767-4676-8676-676767676767',
+            extraction_id: '78787878-7878-4787-8787-787878787878',
+            case_id: idsWithDetail.case,
+            document_id: idsWithDetail.document,
+            form_code: 'F01',
+            field_name: 'adjustment_rate',
+            field_label: '調整率',
+            extracted_value: '-12',
+            confidence: '0.96',
+            source_page: 3,
+            source_text: '調整率 -12%',
+            analysis_provider: 'LOCAL_OCR',
+            model_id: null,
+            prompt_version: null,
+            field_status: 'APPLIED',
+            confirmed_value: '-12',
+            confirmed_by_user_id: reviewer.id,
+            confirmed_at: '2026-09-12T07:17:00Z',
+            applied_form_instance_id: '69696969-6969-4696-8696-696969696969',
+            applied_at: '2026-09-12T07:17:00Z',
+          }],
+        }, config)
+      }
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/review/workbench/${idsWithDetail.review}`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="external-review-intake"]').text()).toContain('已納入審查'))
+    expect(requests).toContain(
+      `get /review/workbench/cases/${idsWithDetail.review}/external-documents/${idsWithDetail.document}/extraction`,
+    )
+    wrapper.unmount()
+  })
+
   it('turns completeness gaps into a formal supplement request and renders backend version diffs', async () => {
     const missingItemId = '19191919-1919-4191-8191-191919191919'
     const documentGroupId = '20202020-2020-4202-8202-202020202020'

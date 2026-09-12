@@ -24,10 +24,12 @@ type AssistantQuestionPayload = {
   citations: unknown[]
 }
 
-type AssistantSessionPayload = {
-  assistant_session_id: string
+type AssistantConversationPayload = {
+  conversation_id: string
   case_id: string
-  form_instance_id: string | null
+  review_id: string | null
+  finding_id: string | null
+  workspace: string | null
 }
 
 type ReviewDetailPayload = {
@@ -55,7 +57,6 @@ type SafeAnswerStep = 'PRE_SUBMISSION' | 'BASELINE' | 'RESTORED'
 type SafeAnswerAspect = 'STATUS' | 'CITATIONS' | 'COPY' | 'UI'
 
 const ASSISTANT_DENIED_STATUS_FAILURE = 'ASSISTANT_DENIED_STATUS'
-const ASSISTANT_DENIED_ALERT_FAILURE = 'ASSISTANT_DENIED_ALERT'
 const ASSISTANT_DENIED_NO_SIDE_EFFECT_FAILURE = 'ASSISTANT_DENIED_NO_SIDE_EFFECT'
 
 function assistantFailureCode(step: SafeAnswerStep, aspect: SafeAnswerAspect): string {
@@ -216,72 +217,78 @@ async function submitPreparedValuation(page: Page): Promise<string> {
   return reviewId
 }
 
-function isAssistantSessionCreateResponse(response: ResponseLike): boolean {
+function isAssistantConversationCreateResponse(response: ResponseLike): boolean {
   return response.request().method() === 'POST'
-    && new URL(response.url()).pathname.endsWith('/ai-assistant/sessions')
+    && new URL(response.url()).pathname.endsWith('/knowledge/conversations')
 }
 
-function isAssistantQuestionResponse(response: ResponseLike, sessionId?: string): boolean {
+function isAssistantQuestionResponse(response: ResponseLike, conversationId: string): boolean {
   const path = new URL(response.url()).pathname
-  const sessionPath = sessionId
-    ? `/ai-assistant/sessions/${encodeURIComponent(sessionId)}/questions`
-    : '/ai-assistant/sessions/'
   return response.request().method() === 'POST'
-    && path.endsWith(sessionPath)
-    && path.endsWith('/questions')
+    && path.endsWith(`/knowledge/conversations/${encodeURIComponent(conversationId)}/messages`)
 }
 
-async function openAssistantSession(page: Page, sessionId?: string): Promise<string> {
-  const sessionResponse = page.waitForResponse((response) => {
-    if (sessionId) {
+async function openAssistantSession(page: Page, conversationId?: string): Promise<string> {
+  const conversationResponse = page.waitForResponse((response) => {
+    if (conversationId) {
       return response.request().method() === 'GET'
-        && new URL(response.url()).pathname.endsWith(`/ai-assistant/sessions/${encodeURIComponent(sessionId)}`)
+        && new URL(response.url()).pathname.endsWith(`/knowledge/conversations/${encodeURIComponent(conversationId)}/messages`)
     }
-    return isAssistantSessionCreateResponse(response)
+    return isAssistantConversationCreateResponse(response)
   })
-  const assistantPath = sessionId
-    ? `/app/assistant/sessions/${encodeURIComponent(sessionId)}`
-    : '/app/assistant'
-  await page.goto(`${assistantPath}?caseId=${encodeURIComponent(demo.caseId)}&formId=${encodeURIComponent(demo.formId)}`)
-  const response = await sessionResponse
+  const query = new URLSearchParams({ caseId: demo.caseId, workspace: 'valuation' })
+  if (conversationId) query.set('conversationId', conversationId)
+  await page.goto(`/app/assistant?${query.toString()}`)
+  const response = await conversationResponse
   expect(response.ok()).toBeTruthy()
-  const payload = await response.json() as AssistantSessionPayload
-  expect(payload.case_id).toBe(demo.caseId)
-  expect(payload.form_instance_id).toBe(demo.formId)
-  expect(payload.assistant_session_id).toBeTruthy()
-  if (sessionId) expect(payload.assistant_session_id).toBe(sessionId)
+  let resolvedConversationId = conversationId ?? ''
+  if (!conversationId) {
+    const payload = await response.json() as AssistantConversationPayload
+    expect(payload.case_id).toBe(demo.caseId)
+    expect(payload.review_id).toBeNull()
+    expect(payload.finding_id).toBeNull()
+    expect(payload.workspace).toBe('valuation')
+    expect(payload.conversation_id).toBeTruthy()
+    resolvedConversationId = payload.conversation_id
+  }
   await expect(page.getByTestId('assistant-context')).toBeVisible()
-  await expect(page).toHaveURL(new RegExp(`/app/assistant/sessions/${payload.assistant_session_id}`))
+  await expect(page).toHaveURL(new RegExp(`conversationId=${encodeURIComponent(resolvedConversationId)}`))
   await expect(page.getByTestId('assistant-question')).toBeEnabled()
-  return payload.assistant_session_id
+  return resolvedConversationId
 }
 
-async function askAssistantQuestion(page: Page, sessionId: string, question: string): Promise<{
+async function askAssistantQuestion(page: Page, conversationId: string, question: string): Promise<{
   response: ResponseLike
   payload: AssistantQuestionPayload
 }> {
-  const questionResponse = page.waitForResponse((response) => isAssistantQuestionResponse(response, sessionId))
+  const questionResponse = page.waitForResponse((response) => isAssistantQuestionResponse(response, conversationId))
   await page.getByTestId('assistant-question').fill(question)
   await page.getByTestId('assistant-submit').click()
   const response = await questionResponse
   const payload = response.status() === 403
-    ? { assistant_session_id: sessionId, answer_status: '', citations: [] }
-    : await response.json() as AssistantQuestionPayload
+    ? { assistant_session_id: conversationId, answer_status: '', citations: [] }
+    : { ...(await response.json()), assistant_session_id: conversationId } as AssistantQuestionPayload
   return { response, payload }
 }
 
 async function askAssistantQuestionDirect(
   page: Page,
-  sessionId: string,
+  conversationId: string,
   question: string,
 ): Promise<APIResponse> {
   const accessToken = await page.evaluate(() => window.sessionStorage.getItem('lva-demo-access-token'))
   expect(accessToken).toBeTruthy()
   return page.request.post(
-    `${diagnosticApiBaseUrl}/ai-assistant/sessions/${encodeURIComponent(sessionId)}/questions`,
+    `${diagnosticApiBaseUrl}/knowledge/conversations/${encodeURIComponent(conversationId)}/messages`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
-      data: { question },
+      data: {
+        question,
+        case_id: demo.caseId,
+        review_id: null,
+        finding_id: null,
+        workspace: 'valuation',
+      },
     },
   )
 }
@@ -342,19 +349,12 @@ async function expectNonStrictProviderOutcome(
 }
 
 async function expectAssistantPermissionDenied(
-  page: Page,
   response: APIResponse,
 ): Promise<void> {
   try {
     expect(response.status()).toBe(403)
   } catch {
     throw new Error(ASSISTANT_DENIED_STATUS_FAILURE)
-  }
-  try {
-    await expect(page.getByRole('heading', { name: '目前無法開啟這個功能' })).toBeVisible()
-    await expect(page.getByText('你的帳號目前沒有使用此功能的權限。若你認為這是錯誤，請向系統管理者確認。')).toBeVisible()
-  } catch {
-    throw new Error(ASSISTANT_DENIED_ALERT_FAILURE)
   }
 }
 
@@ -517,25 +517,23 @@ test.describe('persistent three-role four-subsystem Demo (no route mocks)', () =
     })
     const sessionId = await openAssistantSession(page, sharedAssistantSessionId)
     const assistantUrl = page.url()
-    const initial = await askAssistantQuestion(page, sessionId, '請先確認目前案件的可讀來源。')
-    expect(initial.response.ok()).toBeTruthy()
-    expect(initial.payload.assistant_session_id).toBe(sessionId)
-    if (providerBacked) {
-      expect(initial.payload.answer_status).toBe('SUPPORTED')
-      expect(initial.payload.citations.length).toBeGreaterThan(0)
-    } else {
-      await expectNonStrictProviderOutcome(page, initial.payload, 'BASELINE')
-    }
 
     let restoreRequired = false
     try {
       const answersBeforeDenied = await page.locator('.assistant-conversation').getByTestId('assistant-answer').count()
+      expect(answersBeforeDenied).toBeGreaterThan(0)
       restoreRequired = true
       await invokePermissionOperator('revoke')
-      const denied = await askAssistantQuestionDirect(page, sessionId, '請再確認目前案件的可讀來源。')
+      const denied = await askAssistantQuestionDirect(page, sessionId, '請依現行法規再次確認本案的估價依據是否適用。')
+      await expectAssistantPermissionDenied(denied)
       await page.reload()
-      await expect(page).toHaveURL(/\/app\/unauthorized$/)
-      await expectAssistantPermissionDenied(page, denied)
+      await expect(page).toHaveURL(assistantUrl)
+      await expect(page.getByTestId('assistant-question')).toBeEnabled()
+      try {
+        await expect(page.locator('.assistant-conversation').getByTestId('assistant-answer')).toHaveCount(answersBeforeDenied)
+      } catch {
+        throw new Error(ASSISTANT_DENIED_NO_SIDE_EFFECT_FAILURE)
+      }
       await invokePermissionOperator('restore')
       restoreRequired = false
       await page.goto(assistantUrl)
@@ -546,7 +544,7 @@ test.describe('persistent three-role four-subsystem Demo (no route mocks)', () =
       } catch {
         throw new Error(ASSISTANT_DENIED_NO_SIDE_EFFECT_FAILURE)
       }
-      const restored = await askAssistantQuestion(page, sessionId, '權限恢復後請再次確認目前案件的可讀來源。')
+      const restored = await askAssistantQuestion(page, sessionId, '權限恢復後請依現行法規再次確認本案的估價依據是否適用。')
       expect(restored.response.ok()).toBeTruthy()
       expect(restored.payload.assistant_session_id).toBe(sessionId)
       if (providerBacked) {

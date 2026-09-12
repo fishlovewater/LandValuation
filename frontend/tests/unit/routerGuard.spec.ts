@@ -105,6 +105,21 @@ describe('router guards', () => {
     expect(deniedRouter.currentRoute.value.path).toBe('/app/unauthorized')
   })
 
+  it('allows a custom role onto a permission-authorized route while keeping its default home fail-closed', async () => {
+    authenticatedUser({
+      ...appraiser,
+      roles: ['CUSTOM_APPRAISER'],
+      permissions: ['assistant.use'],
+    })
+    const featureRouter = createAppRouter()
+    await featureRouter.push('/app/assistant')
+    expect(featureRouter.currentRoute.value.path).toBe('/app/assistant')
+
+    const homeRouter = createAppRouter()
+    await homeRouter.push('/app')
+    expect(homeRouter.currentRoute.value.path).toBe('/app/unauthorized')
+  })
+
   it('does not grant Assistant entry to a role that lacks assistant.use', async () => {
     authenticatedUser({
       ...appraiser,

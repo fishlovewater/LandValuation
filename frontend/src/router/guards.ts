@@ -82,9 +82,6 @@ export function createAuthGuard(): NavigationGuard {
       }
 
       const roleHome = homeFor(authStore.user)
-      if (roleHome === '/app/unauthorized' && to.path !== '/app/unauthorized') {
-        return homeRedirect('/app/unauthorized')
-      }
       if (to.path === '/app' && roleHome !== '/app') return homeRedirect(roleHome)
       return true
     }
