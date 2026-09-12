@@ -138,9 +138,14 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
 <template>
   <div id="valuation-document-workspace" class="document-workspace" tabindex="-1">
     <div class="document-workspace__heading">
-      <div>
-        <strong>來源文件</strong>
-        <span>先整理案件來源文件，再執行文字擷取與欄位辨識。辨識結果不會直接寫入正式資料，仍需人工確認。</span>
+      <div class="document-workspace__title">
+        <span class="document-workspace__title-icon" aria-hidden="true">
+          <FileSearch :size="21" weight="duotone" />
+        </span>
+        <div>
+          <strong>來源文件</strong>
+          <span>先整理案件來源文件，再執行文字擷取與欄位辨識。辨識結果不會直接寫入正式資料，仍需人工確認。</span>
+        </div>
       </div>
       <div class="document-workspace__stats" aria-label="文件處理摘要">
         <span><b>{{ documents.length }}</b> 份文件</span>
@@ -248,19 +253,23 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
               </small>
             </div>
             <div class="document-list__actions">
-              <button class="finding-action" type="button" @click="emit('preview', document.documentId)">
-                <Eye :size="14" weight="bold" aria-hidden="true" />預覽
+              <button class="document-action" type="button" @click="emit('preview', document.documentId)">
+                <Eye :size="14" weight="bold" aria-hidden="true" />
+                <span>預覽</span>
               </button>
               <button
                 v-if="canPrepareParcelImport(document)"
-                class="finding-action finding-action--primary"
+                class="document-action document-action--primary"
                 type="button"
                 :data-testid="`parcel-import-preview-${document.documentId}`"
                 :disabled="Boolean(documentActionId)"
                 @click="emit('prepareParcelImport', document.documentId)"
-              ><MagicWand :size="14" weight="bold" aria-hidden="true" />解析宗地清冊</button>
+              >
+                <MagicWand :size="14" weight="bold" aria-hidden="true" />
+                <span>解析宗地清冊</span>
+              </button>
               <label v-if="canExtractDocument(document)" class="document-list__analysis-form">
-                <span>主要表單提示</span>
+                <span>優先辨識表單</span>
                 <select
                   :value="analysisFormValue(document.documentId)"
                   :data-testid="`document-analysis-form-${document.documentId}`"
@@ -274,7 +283,7 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
               </label>
               <button
                 v-if="canExtractDocument(document)"
-                class="finding-action finding-action--primary"
+                class="document-action document-action--primary"
                 type="button"
                 :data-testid="`extract-document-${document.documentId}`"
                 :disabled="Boolean(extractionBusyDocumentId)"
@@ -282,7 +291,7 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
               >
                 <MagicWand v-if="!documentCandidateCount(document.documentId)" :size="14" weight="bold" aria-hidden="true" />
                 <ArrowClockwise v-else :size="14" weight="bold" aria-hidden="true" />
-                {{ extractionBusyDocumentId === document.documentId ? '辨識中…' : documentCandidateCount(document.documentId) ? '重新辨識' : '開始辨識' }}
+                <span>{{ extractionBusyDocumentId === document.documentId ? '辨識中…' : documentCandidateCount(document.documentId) ? '重新辨識' : '開始辨識' }}</span>
               </button>
               <div v-if="canManageSourceDocument(document)" class="document-list__manage">
                 <label :for="`document-category-${document.documentId}`"><Tag :size="13" weight="bold" aria-hidden="true" />文件分類</label>
@@ -296,19 +305,25 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
                   <option v-for="category in sourceCategories" :key="category" :value="category">{{ documentCategoryLabel(category) }}</option>
                 </select>
                 <button
-                  class="finding-action"
+                  class="document-action"
                   type="button"
                   :data-testid="`reclassify-document-${document.documentId}`"
                   :disabled="documentActionId === document.documentId || categoryValue(document.documentId) === document.documentType"
                   @click="emit('reclassify', document.documentId)"
-                >套用分類</button>
+                >
+                  <Tag :size="14" weight="bold" aria-hidden="true" />
+                  <span>套用分類</span>
+                </button>
                 <button
-                  class="finding-action finding-action--danger"
+                  class="document-action document-action--danger"
                   type="button"
                   :data-testid="`remove-document-${document.documentId}`"
                   :disabled="documentActionId === document.documentId"
                   @click="emit('remove', document.documentId, document.filename)"
-                ><Trash :size="14" weight="bold" aria-hidden="true" />移除</button>
+                >
+                  <Trash :size="14" weight="bold" aria-hidden="true" />
+                  <span>移除</span>
+                </button>
               </div>
             </div>
           </li>
@@ -327,8 +342,9 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
             <span v-if="previewDocument">{{ previewDocument.filename }}{{ previewPage ? ` · 第 ${previewPage} 頁` : '' }}</span>
             <span v-else>從左側選擇一份文件查看內容</span>
           </div>
-          <button v-if="previewDocument" class="finding-action" type="button" @click="emit('download', previewDocument)">
-            <DownloadSimple :size="14" weight="bold" aria-hidden="true" />下載原檔
+          <button v-if="previewDocument" class="document-action" type="button" @click="emit('download', previewDocument)">
+            <DownloadSimple :size="14" weight="bold" aria-hidden="true" />
+            <span>下載原檔</span>
           </button>
         </div>
         <div class="document-preview__body">
@@ -356,9 +372,11 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
 <style scoped>
 .document-workspace { display:grid; gap:14px; margin-top:16px; }
 .document-workspace__heading { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; padding:2px 2px 0; }
-.document-workspace__heading > div:first-child { display:grid; gap:4px; min-width:0; }
-.document-workspace__heading > div:first-child strong { color:var(--app-ink); font-size:16px; }
-.document-workspace__heading > div:first-child span { max-width:760px; color:var(--app-muted); font-size:11px; line-height:1.65; }
+.document-workspace__title { display:flex; align-items:flex-start; gap:10px; min-width:0; }
+.document-workspace__title-icon { display:grid; width:38px; height:38px; flex:0 0 auto; place-items:center; border-radius:9px; color:#2e5984; background:#edf4fb; }
+.document-workspace__title > div { display:grid; gap:4px; min-width:0; }
+.document-workspace__title strong { color:var(--app-ink); font-size:16px; }
+.document-workspace__title span { max-width:760px; color:var(--app-muted); font-size:11px; line-height:1.65; }
 .document-workspace__stats { display:flex; flex:0 0 auto; flex-wrap:wrap; justify-content:flex-end; gap:6px; }
 .document-workspace__stats span { padding:6px 9px; border-radius:999px; color:#56697e; background:#f0f4f8; font-size:9px; font-weight:750; white-space:nowrap; }
 .document-workspace__stats b { color:#293f56; font-size:10px; }
@@ -427,10 +445,11 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
 .document-list__manage select { width:100%; min-width:0; min-height:34px; padding:5px 7px; border:1px solid #ced8e2; border-radius:7px; color:var(--app-ink); background:#fff; font-size:9px; }
 .document-list__manage { display:grid !important; grid-template-columns:auto minmax(0,1fr) auto auto; flex:1 1 100%; width:100%; min-width:0; align-items:center; gap:6px !important; padding-top:7px; border-top:1px dashed #e2e7ec; }
 .document-list__manage label { display:inline-flex; align-items:center; gap:4px; color:var(--app-muted); font-size:9px; font-weight:800; }
-.finding-action { display:inline-flex; min-height:34px; align-items:center; justify-content:center; gap:5px; padding:5px 9px; border:1px solid #cfd9e3; border-radius:7px; color:#52677d; background:#fff; cursor:pointer; font-size:9px; font-weight:900; white-space:nowrap; }
-.finding-action:hover { border-color:#aebfce; background:#f8fafc; }
-.finding-action--primary { border-color:#c8d8e8; color:#244d73; background:#edf4fb; }
-.finding-action--danger { border-color:#ead2cd; color:#9d4738; background:#fffafa; }
+.document-action { display:inline-flex; min-height:34px; align-items:center; justify-content:center; gap:5px; padding:5px 9px; border:1px solid #cfd9e3; border-radius:7px; color:#52677d; background:#fff; cursor:pointer; font-size:9px; font-weight:900; white-space:nowrap; }
+.document-action:hover { border-color:#aebfce; background:#f8fafc; }
+.document-action--primary { border-color:#c8d8e8; color:#244d73; background:#edf4fb; }
+.document-action--danger { border-color:#ead2cd; color:#9d4738; background:#fffafa; }
+.document-action:disabled { cursor:not-allowed; opacity:.5; }
 .document-list__empty { display:grid; min-height:270px; place-items:center; align-content:center; gap:6px; padding:24px; color:#8090a0; text-align:center; }
 .document-list__empty strong { color:#4c6075; font-size:11px; }
 .document-list__empty span { max-width:300px; font-size:9px; line-height:1.6; }
@@ -440,7 +459,7 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
 .document-preview__heading > div { display:grid; gap:2px; min-width:0; }
 .document-preview__heading strong { color:var(--app-ink); font-size:11px; }
 .document-preview__heading span { overflow:hidden; color:var(--app-muted); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
-.document-preview__heading .finding-action { flex:0 0 auto; }
+.document-preview__heading .document-action { flex:0 0 auto; }
 .document-preview__body { display:grid; min-height:390px; place-items:center; overflow:hidden; background:#eef1f4; }
 .document-preview__body iframe { width:100%; height:100%; min-height:500px; border:0; background:#fff; }
 .document-preview__body img { display:block; max-width:100%; max-height:560px; object-fit:contain; }
@@ -468,6 +487,6 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
   .document-list__analysis-form{min-width:0;align-items:stretch;flex-direction:column}
   .document-list__manage{grid-template-columns:1fr;align-items:stretch}
   .document-preview__heading{align-items:stretch;flex-direction:column}
-  .finding-action,.upload-panel__submit{width:100%}
+  .document-action,.upload-panel__submit{width:100%}
 }
 </style>
