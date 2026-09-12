@@ -212,6 +212,7 @@ const requestableMissingItems = computed(() =>
 )
 const canRequestSupplement = computed(() => Boolean(
   canExecute.value
+    && !detail.value?.demoAdvisory
     && requestableMissingItems.value.length
     && ['PENDING_MATERIALS', 'SUPPLEMENT_REQUIRED'].includes(detail.value?.reviewStatusCode ?? ''),
 ))
@@ -280,7 +281,8 @@ const completionBlockers = computed(() => {
   if (!detail.value) return ['尚未載入案件資料。']
   const blockers: string[] = []
   if (latestRun.value?.runStatusCode !== 'COMPLETED') blockers.push('最新一次智慧審查尚未完成。')
-  const incompleteMissingCount = detail.value.missingItems.filter((item) => item.status === 'OPEN').length
+  const incompleteMissingCount = detail.value.missingItems.filter((item) => item.status === 'OPEN'
+    && !(detail.value?.demoAdvisory && ['DOC_LAND_REGISTER', 'DOC_CADASTRAL_MAP', 'FIELD_PARCEL_AREA'].includes(item.item_code))).length
   if (incompleteMissingCount) blockers.push(`仍有 ${incompleteMissingCount} 項缺件尚未完成補齊。`)
   const confirmedCount = detail.value.findings.filter((finding) => finding.statusCode === 'CONFIRMED_ISSUE').length
   const openFindingCount = detail.value.findings.filter((finding) => ['OPEN', 'REQUIRES_SUPPLEMENT'].includes(finding.statusCode)).length
@@ -913,7 +915,7 @@ onBeforeRouteUpdate((to) => {
           <div class="review-workbench__supplement-heading">
             <div>
               <span>資料完整性</span>
-              <strong id="review-missing-items-title">缺件與補件要求</strong>
+              <strong id="review-missing-items-title">{{ detail.demoAdvisory ? 'Demo 缺件提示（不強制補件）' : '缺件與補件要求' }}</strong>
             </div>
             <button
               v-if="canRequestSupplement"
@@ -925,7 +927,8 @@ onBeforeRouteUpdate((to) => {
               {{ supplementActionLabel }}
             </button>
           </div>
-          <p v-if="requestableMissingItems.length" class="review-workbench__supplement-note">
+          <p v-if="detail.demoAdvisory" class="review-workbench__supplement-note">Demo：謄本、地籍圖與宗地面積缺少時仍可繼續審查與展示結案；資料不足的檢核會標示未執行，不代表正式通過。</p>
+          <p v-else-if="requestableMissingItems.length" class="review-workbench__supplement-note">
             有 {{ requestableMissingItems.length }} 項完整性缺件尚未通知{{ correctionRecipientLabel }}；設定期限後可一次正式提出補件要求。
           </p>
           <p v-else-if="requestedMissingItems.length" class="review-workbench__supplement-note">

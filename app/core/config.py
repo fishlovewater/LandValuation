@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     docs_enabled: bool = True
     log_level: str = "INFO"
     demo_quick_login_enabled: bool = False
+    demo_review_allow_missing_materials: bool = False
+    review_auto_fill_confidence: float = Field(default=0.95, ge=0.9, le=1.0)
     password_reset_token_minutes: int = Field(default=30, ge=5, le=1440)
     password_reset_debug_token_enabled: bool = False
     public_app_url: str = "http://127.0.0.1:5173"

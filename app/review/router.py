@@ -329,6 +329,14 @@ async def confirm_external_review_document_extraction(
     return workbench_extraction_response(record, candidates)
 
 
+@router.get("/workbench/cases/{review_id}/external-documents/{document_id}/forms")
+async def get_external_review_forms(
+    review_id: UUID, document_id: UUID, session: DbSession, storage: Storage,
+    user=Depends(require_permissions("review.execute")),
+):
+    return await workbench_service_for(session).external_document_forms(review_id, document_id, user, storage)
+
+
 @router.get(
     "/workbench/cases/{review_id}", response_model=WorkbenchCaseDetailRead
 )

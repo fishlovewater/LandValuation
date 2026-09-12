@@ -172,6 +172,7 @@ const VERIFICATION_STATUS_LABELS: Readonly<Record<string, string>> = {
   NEEDS_CONFIRMATION: '待人工確認',
   CONFIRMED: '已人工確認',
   APPLIED: '已確認並套用',
+  AUTO_APPLIED: '自動已填表（未經人工確認）',
   VERIFIED: '已確認',
   REJECTED: '未採用',
 }
@@ -571,6 +572,7 @@ export function mapWorkbenchDetail(dto: WorkbenchCaseDetailDto): ReviewDetailMod
     riskLevelLabel: riskLevelLabel(dto.review.current_risk_level),
     documents: dto.documents.map(mapDocument),
     missingItems: dto.missing_items,
+    demoAdvisory: dto.demo_advisory ?? false,
     runs: dto.runs.map(mapRun),
     findings,
     decisions: dto.decisions.map(mapDecision),

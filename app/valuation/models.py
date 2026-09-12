@@ -517,7 +517,7 @@ class ExtractedFieldRecord(Base):
     prompt_version: Mapped[str | None] = mapped_column(String(100))
     field_status: Mapped[str] = mapped_column(String(30), default="EXTRACTED")
     confirmed_value: Mapped[dict | list | str | int | bool | None] = mapped_column(
-        JSONB
+        JSONB(none_as_null=True)
     )
     confirmed_by_user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

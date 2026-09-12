@@ -22,6 +22,7 @@ class ExtractedFieldStatus(StrEnum):
     CONFIRMED = "CONFIRMED"
     REJECTED = "REJECTED"
     APPLIED = "APPLIED"
+    AUTO_APPLIED = "AUTO_APPLIED"
 
 
 class ExtractedFieldResponse(BaseModel):

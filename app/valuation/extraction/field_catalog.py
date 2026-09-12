@@ -53,6 +53,9 @@ F02_RF_SOURCE_ITEM_FIELD_MAP: dict[str, str] = {
 # vague form-level title simply because the field is not a formal-report field.
 _FIELD_LABEL_OVERRIDES: dict[tuple[str, str], str] = {
     ("F01", "case_and_instance_refs"): "年期、區段號及實例編號",
+    ("F01", "status"): "交易狀態",
+    ("F02", "status"): "比較標的狀態",
+    ("F02-RF", "status"): "都市計畫狀態",
     ("F01", "construction_unit_adjustment"): "建築單價調整率",
     ("F01", "normal_land_unit_price_raw"): "土地正常買賣單價精確值",
     ("F01", "normal_total_price_raw"): "正常買賣總價格精確值",
@@ -88,7 +91,7 @@ def field_label_zh(form_code: str, field_name: str) -> str:
     if guidance:
         # Catalog entries start with the canonical Chinese field meaning; later
         # clauses give evidence sources, calculation rules, and constraints.
-        return guidance.split("；", 1)[0].strip()
+        return guidance.replace("；", ";").split(";", 1)[0].strip()
 
     # Preserve an unknown key for diagnosis instead of concealing it with a
     # generic phrase such as "pending field".

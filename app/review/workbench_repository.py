@@ -436,7 +436,7 @@ class WorkbenchRepository:
                     ) AS de ON true
                     JOIN valuation.extracted_fields AS ef
                       ON ef.extraction_id = de.extraction_id
-                     AND ef.field_status = 'APPLIED'
+                     AND ef.field_status IN ('APPLIED', 'AUTO_APPLIED')
                     WHERE d.case_id = :case_id
                     ORDER BY d.document_group_id, ef.field_name, d.version_no;
                     """

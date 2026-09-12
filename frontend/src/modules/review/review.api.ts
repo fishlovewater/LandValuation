@@ -40,6 +40,14 @@ export interface ListReviewCasesParams {
   offset?: number
 }
 
+export interface ReviewFilledForm {
+  form_instance_id: string
+  form_code: string
+  form_name: string
+  version_no: number
+  fields: Array<{ field_name: string; label: string; value: unknown; origin: 'AUTO' | 'HUMAN'; source_page: number | null }>
+}
+
 export interface ExternalExtractionConfirmation {
   extracted_field_id: string
   decision: ExtractionCandidateDecision
@@ -122,6 +130,11 @@ export const reviewApi = {
     const response = await http.post<ExtractionResponseDto>(
       `/review/workbench/cases/${reviewId}/external-documents/${documentId}/extract`,
     )
+    return response.data
+  },
+
+  async getExternalDocumentForms(reviewId: string, documentId: string): Promise<ReviewFilledForm[]> {
+    const response = await http.get<ReviewFilledForm[]>(`/review/workbench/cases/${reviewId}/external-documents/${documentId}/forms`)
     return response.data
   },
 
@@ -282,7 +295,8 @@ export function safeReviewErrorMessage(error: unknown): string {
       EXTERNAL_RESUBMISSION_CONFIRMATION_REQUIRED: '外部修正版仍有待確認欄位，請先完成欄位確認。',
       REVIEW_DECISION_INVALID: '請補充審查理由或必要內容。',
       EXTERNAL_REVIEW_OPERATION_NOT_ALLOWED: '此操作只適用於外部審查案件。',
-      DATA_CONFLICT: '資料狀態已變更，請重新整理後再試。',
+      DATA_CONFLICT: '資料未能儲存，請重試；若仍失敗，請檢查後端資料限制。',
+      REVIEW_OCR_CONFIRMATION_REQUIRED: '請先確認或排除疑慮欄位，再開始審查。',
     }
     return knownMessages[code] ?? '案件狀態不允許此操作，請重新整理後確認。'
   }

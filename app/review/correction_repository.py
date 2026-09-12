@@ -150,7 +150,7 @@ class CorrectionRepository:
                            de.extraction_status,
                            count(ef.extracted_field_id) FILTER (
                              WHERE ef.field_status IS NULL
-                                OR ef.field_status NOT IN ('APPLIED', 'CONFIRMED', 'REJECTED')
+                                OR ef.field_status NOT IN ('APPLIED', 'AUTO_APPLIED', 'CONFIRMED', 'REJECTED')
                            ) AS pending_candidate_count
                     FROM (
                         SELECT extraction_id, extraction_status

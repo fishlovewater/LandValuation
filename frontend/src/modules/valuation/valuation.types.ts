@@ -399,6 +399,7 @@ export interface ExtractedFieldResponseDto {
 }
 
 export interface ExtractionResponseDto {
+  extraction_metadata?: { review_intake?: { uncertainties?: Record<string, string[]> } }
   extraction_id: string
   case_id: string
   document_id: string

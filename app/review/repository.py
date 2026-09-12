@@ -26,6 +26,19 @@ class ReviewRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
+    async def pending_external_fields(self, case_id):
+        return await self.session.scalar(text("""
+            SELECT count(*) FROM valuation.documents d
+            JOIN LATERAL (
+                SELECT extraction_id FROM valuation.document_extractions de
+                WHERE de.document_id = d.document_id AND de.case_id = d.case_id
+                ORDER BY de.created_at DESC, de.extraction_id DESC LIMIT 1
+            ) latest ON true
+            JOIN valuation.extracted_fields ef ON ef.extraction_id = latest.extraction_id
+            WHERE d.case_id = :case_id AND d.is_active = true
+              AND ef.field_status IN ('EXTRACTED', 'NEEDS_CONFIRMATION', 'CONFIRMED')
+        """), {"case_id": case_id})
+
     async def create(self, payload: ReviewCreate, started_by_user_id: UUID) -> Review:
         values = payload.model_dump(exclude_none=True)
         review = Review(
@@ -193,7 +206,7 @@ class ReviewRepository:
                       ON ef.extraction_id = latest_extraction.extraction_id
                     WHERE d.case_id = :case_id
                       AND d.is_active = true
-                      AND ef.field_status IN ('APPLIED', 'CONFIRMED', 'REJECTED')
+                      AND ef.field_status IN ('APPLIED', 'AUTO_APPLIED', 'CONFIRMED', 'REJECTED')
                     ORDER BY d.document_type, d.document_group_id,
                              d.version_no, ef.form_code, ef.field_name,
                              ef.extracted_field_id
@@ -452,7 +465,9 @@ class ReviewRepository:
                                    de.extraction_id DESC
                           LIMIT 1
                       )
-                      AND ef.field_status = 'APPLIED'
+                      AND (ef.field_status = 'APPLIED' OR (ef.field_status = 'AUTO_APPLIED'
+                           AND EXISTS (SELECT 1 FROM valuation.cases c
+                                       WHERE c.case_id = ef.case_id AND c.case_type = 'EXTERNAL_REVIEW')))
                       AND ef.confirmed_value IS NOT NULL
                     ORDER BY ef.form_code, ef.field_name, ef.extracted_field_id
                     """

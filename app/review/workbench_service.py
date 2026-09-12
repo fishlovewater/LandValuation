@@ -16,6 +16,7 @@ from app.review.status_policy import (
     ensure_review_status_allowed,
 )
 from app.review.urgency import UrgencyThresholds, classify_urgency
+from app.review.demo_policy import allow_missing_materials
 from app.review.workbench_repository import EXTERNAL_REVIEW_CASE_TYPE, WorkbenchRepository
 from app.review.workbench_schemas import (
     EligibleCaseRead,
@@ -179,14 +180,35 @@ class WorkbenchService:
         _review, case = await self._external_case_for_input_mutation(
             review_id, action="重新辨識外部審查來源文件"
         )
+        locked_review = await self.review_repository.get(review_id, for_update=True)
+        ensure_review_status_allowed(locked_review.review_status, REVIEW_EXTERNAL_INPUT_MUTATION_STATUSES,
+                                     action="重新辨識外部審查來源文件")
         from app.valuation.extraction.service import ExtractionService
 
-        return await ExtractionService(self.repository.session, storage).start(
+        extraction, candidates = await ExtractionService(self.repository.session, storage).start(
             case["case_id"],
             document_id,
             user,
             _skip_case_access=True,
         )
+        if extraction.extraction_status == "COMPLETED":
+            from app.review.auto_fill import apply_unambiguous_fields
+            await apply_unambiguous_fields(self.repository.session, extraction, candidates, user)
+        return extraction, candidates
+
+    async def external_document_forms(self, review_id, document_id, user, storage):
+        extraction, _ = await self.get_external_document_extraction(review_id, document_id, user, storage)
+        from app.valuation.repository import ValuationRepository
+        from app.valuation.official_forms import OFFICIAL_FORM_TEMPLATES
+        forms = await ValuationRepository(self.repository.session).list_forms(extraction.case_id)
+        return [
+            {"form_instance_id": form.form_instance_id, "form_code": form.form_code,
+             "form_name": OFFICIAL_FORM_TEMPLATES[form.form_code].form_name,
+             "version_no": form.version_no,
+             "fields": list(form.form_content.get("review_fields", {}).values())}
+            for form in forms if form.source_document_id == document_id
+            and form.form_content.get("review_extraction_id") == str(extraction.extraction_id)
+        ]
 
     async def get_external_document_extraction(
         self,
@@ -216,16 +238,32 @@ class WorkbenchService:
         _review, case = await self._external_case_for_input_mutation(
             review_id, action="確認外部審查文件辨識欄位"
         )
+        locked_review = await self.review_repository.get(review_id, for_update=True)
+        ensure_review_status_allowed(
+            locked_review.review_status, REVIEW_EXTERNAL_INPUT_MUTATION_STATUSES,
+            action="確認外部審查文件辨識欄位",
+        )
         from app.valuation.extraction.service import ExtractionService
 
-        return await ExtractionService(self.repository.session, storage).confirm(
+        extraction, candidates = await ExtractionService(self.repository.session, storage).confirm(
             case["case_id"],
             document_id,
             payload,
             user,
             _skip_case_access=True,
-            _apply_for_review=True,
+            _apply_for_review=False,
         )
+        from app.review.intake_forms import fill_review_form, clear_review_form_value
+
+        decisions = {item.extracted_field_id: item.decision for item in payload.confirmations}
+        for candidate in candidates:
+            decision = decisions.get(candidate.extracted_field_id)
+            if decision == "CONFIRM":
+                await fill_review_form(self.repository.session, candidate, user)
+            elif decision == "REJECT":
+                await clear_review_form_value(self.repository.session, candidate, user)
+        await self.repository.session.flush()
+        return extraction, candidates
 
     async def list_cases(
         self,
@@ -500,6 +538,8 @@ class WorkbenchService:
             for run in raw_runs
         ]
         return WorkbenchCaseDetailRead(
+            demo_advisory=allow_missing_materials(
+                case["case_type"], submitted=submission is not None),
             case=case,
             review=review,
             case_source=("EXTERNAL" if case["case_type"] == EXTERNAL_REVIEW_CASE_TYPE else "PLATFORM"),
@@ -584,6 +624,10 @@ class WorkbenchService:
             REVIEW_STARTABLE_STATUSES,
             action="執行智慧審查前置檢查",
         )
+        case = await self.review_repository.get_case(review.case_id)
+        if getattr(case, "case_type", None) == EXTERNAL_REVIEW_CASE_TYPE:
+            if await self.review_repository.pending_external_fields(review.case_id):
+                raise AppError("REVIEW_OCR_CONFIRMATION_REQUIRED", "請先確認或排除疑慮欄位，再開始審查", 409)
         if review.review_status == "READY_FOR_REVIEW":
             await review_service.update(
                 review_id, ReviewUpdate(review_status="PREPROCESSING")
