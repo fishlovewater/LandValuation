@@ -263,6 +263,12 @@ async def _delete_rows(session) -> None:
         {"ids": DOCUMENT_IDS},
     )
     await session.execute(
+        text("DELETE FROM valuation.valuation_locations WHERE case_id IN :ids").bindparams(
+            bindparam("ids", expanding=True)
+        ),
+        {"ids": CASE_IDS},
+    )
+    await session.execute(
         text("DELETE FROM valuation.cases WHERE case_id IN :ids").bindparams(bindparam("ids", expanding=True)),
         {"ids": CASE_IDS},
     )
@@ -278,6 +284,26 @@ async def _delete_rows(session) -> None:
         ),
         {"ids": USER_IDS},
     )
+
+
+async def _assign_locations(session) -> None:
+    for table_name, id_column, ids in (
+        ("parcels", "parcel_id", (PARCEL_ID,)),
+        ("form_instances", "form_instance_id", FORM_IDS),
+        ("documents", "document_id", DOCUMENT_IDS),
+        ("extracted_fields", "extracted_field_id", EXTRACTED_FIELD_IDS),
+    ):
+        await session.execute(
+            text(
+                f"""UPDATE valuation.{table_name} AS item
+                SET location_id = location.location_id
+                FROM valuation.valuation_locations AS location
+                WHERE location.case_id = item.case_id
+                  AND location.display_order = 1
+                  AND item.{id_column} IN :ids"""
+            ).bindparams(bindparam("ids", expanding=True)),
+            {"ids": ids},
+        )
 
 
 async def reset() -> None:
@@ -301,6 +327,23 @@ async def seed() -> None:
     bucket = _bucket()
     if not await asyncio.to_thread(client.bucket_exists, bucket):
         raise RuntimeError(f"MinIO bucket does not exist: {bucket}")
+
+    _, sessions = _database_runtime()
+    async with sessions() as session:
+        existing_count = await session.scalar(
+            text("SELECT count(*) FROM valuation.cases WHERE case_id IN :ids").bindparams(
+                bindparam("ids", expanding=True)
+            ),
+            {"ids": CASE_IDS},
+        )
+    if existing_count == len(CASE_IDS):
+        return
+    if existing_count:
+        raise RuntimeError(
+            "History demo data is only partially present; refusing automatic destructive reseed. "
+            "Run an explicit reset after inspecting the demo data."
+        )
+
     await reset()
     docx_bytes = _build_docx_bytes()
     xlsx_v1_bytes = _build_xlsx_bytes(1, 120000)
@@ -354,6 +397,14 @@ async def seed() -> None:
                     (:r,'HIST-REV-001','History 測試－Review metadata 但 MinIO 缺檔','LAND',DATE '2026-08-02','31','3102','RESIDENTIAL','REVIEWING'),
                     (:b,'HIST-BOTH-001','History 測試－雙子系統及可下載文件','LAND',DATE '2026-08-03','31','3104','COMMERCIAL','COMPLETED')"""),
                     {"v": VALUATION_CASE_ID, "r": REVIEW_CASE_ID, "b": BOTH_CASE_ID})
+                await session.execute(
+                    text("""INSERT INTO valuation.valuation_locations
+                        (location_id,case_id,display_order,label,is_benchmark_location,is_active)
+                        SELECT gen_random_uuid(),case_id,1,'地點 1',false,true
+                        FROM valuation.cases
+                        WHERE case_id IN :ids""").bindparams(bindparam("ids", expanding=True)),
+                    {"ids": CASE_IDS},
+                )
                 await session.execute(text("""INSERT INTO valuation.parcels
                     (parcel_id,case_id,district_code,section_name,subsection_name,land_no,area_sqm)
                     VALUES (:id,:case_id,'3101','測試段','','123-4',168.5)"""),
@@ -469,6 +520,7 @@ async def seed() -> None:
                     "user_id": APPRAISER_USER_ID,
                     "form_id": BOTH_FORM_ID,
                 })
+                await _assign_locations(session)
                 await session.execute(text("""INSERT INTO history.case_versions
                     (case_version_id,case_id,version_no,snapshot,change_summary,created_by_user_id,created_at)
                     VALUES

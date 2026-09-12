@@ -124,3 +124,23 @@ def test_demo_review_insert_uses_authoritative_deterministic_timestamps():
     )[0]
     assert review_insert.count("TIMESTAMPTZ") == 6
     assert review_insert.count("REVIEW_COMPLETED") == 2
+
+
+def test_demo_reset_removes_locations_before_cases():
+    source = inspect.getsource(demo._delete_rows)
+
+    location_delete = source.index("DELETE FROM valuation.valuation_locations")
+    case_delete = source.index("DELETE FROM valuation.cases")
+    assert location_delete < case_delete
+
+
+def test_demo_seed_recreates_and_assigns_location_scope():
+    seed_source = inspect.getsource(demo.seed)
+    assignment_source = inspect.getsource(demo._assign_locations)
+
+    assert "INSERT INTO valuation.valuation_locations" in seed_source
+    assert "await _assign_locations(session)" in seed_source
+    assert "parcels" in assignment_source
+    assert "form_instances" in assignment_source
+    assert "documents" in assignment_source
+    assert "extracted_fields" in assignment_source
