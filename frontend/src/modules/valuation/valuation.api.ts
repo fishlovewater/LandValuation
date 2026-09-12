@@ -457,7 +457,16 @@ export function safeValuationErrorMessage(error: unknown): string {
   if (error instanceof ForbiddenError) return error.message
   if (isAxiosError(error)) {
     const status = error.response?.status
-    const code = error.response?.data?.error?.code
+    const body = error.response?.data as {
+      error?: { code?: unknown; message?: unknown; details?: unknown }
+      detail?: unknown
+    } | undefined
+    const code = typeof body?.error?.code === 'string' ? body.error.code : undefined
+    const serverMessage = typeof body?.error?.message === 'string'
+      ? body.error.message.trim()
+      : typeof body?.detail === 'string'
+        ? body.detail.trim()
+        : ''
     if (status === 413 && code === 'PREVIEW_TOO_LARGE') {
       return '文件檔案過大，請下載原始文件查看完整內容。'
     }
@@ -465,6 +474,12 @@ export function safeValuationErrorMessage(error: unknown): string {
       return '此文件格式目前不支援內嵌預覽，請下載原始文件查看。'
     }
     if (status === 404) return '找不到目前案件或估價資料，請重新整理後再試。'
+    // API errors are business-rule feedback intended for the appraiser.  Do
+    // not conceal a 4xx/5xx response behind a generic retry message: include
+    // the stable code so the UI, support logs, and user can identify the exact
+    // missing prerequisite or invalid value.
+    if (serverMessage) return code ? `［${code}］${serverMessage}` : serverMessage
+    if (code) return `［${code}］估價服務無法完成此操作。`
   }
   return '估價服務目前無法完成此操作，請稍後再試。'
 }

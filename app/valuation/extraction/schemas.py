@@ -32,6 +32,8 @@ class ExtractedFieldResponse(BaseModel):
     document_id: UUID
     form_code: str
     field_name: str
+    field_label: str = ""
+    field_guidance: str = ""
     extracted_value: Any
     confidence: Decimal
     source_page: int | None

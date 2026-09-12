@@ -518,6 +518,27 @@ class AutomatedWorkflowService:
         for form in forms:
             forms_by_code.setdefault(str(form.form_code), form)
 
+        # The simplified intake always creates F03 and, when applicable, the
+        # three-page report package.  A user may nevertheless need to fill an
+        # F01 or F04 fact manually before AI/OCR has created that draft.  Create
+        # only those missing standalone drafts when a non-empty manual value is
+        # actually submitted; merely opening their selector remains read-only.
+        requested_codes = {
+            form_code
+            for form_code, fields in (payload.values or {}).items()
+            if any(value is not None and str(value).strip() for value in (fields or {}).values())
+        }
+        for code in (FormCode.F01.value, FormCode.F04.value):
+            if code not in requested_codes or code in forms_by_code:
+                continue
+            created = await self.valuation.create_form(
+                case_id,
+                FormCreate(form_code=FormCode(code)),
+                user,
+            )
+            forms.append(created)
+            forms_by_code[code] = created
+
         report_root = next(
             (
                 form for form in forms
@@ -1203,7 +1224,7 @@ class AutomatedWorkflowService:
         warnings: list[str],
     ) -> None:
         settings = get_settings()
-        if settings.ai_provider != "bedrock":
+        if settings.ai_provider not in {"bedrock", "ollama"}:
             warning = "AI_FIELD_ANALYSIS_NOT_CONFIGURED_ONLY_OCR_CANDIDATES_USED"
             if warning not in warnings:
                 warnings.append(warning)

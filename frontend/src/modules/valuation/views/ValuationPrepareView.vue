@@ -77,6 +77,7 @@ const manualFieldsSaving = ref(false)
 const documentActionId = ref<string | null>(null)
 const documentCategoryDraft = reactive<Record<string, DocumentCategory>>({})
 type FieldAnalysisFormCode = 'S01' | 'F01' | 'F02' | 'F02-RF' | 'F03' | 'F04'
+const activeManualForm = ref<FieldAnalysisFormCode>('F03')
 const documentAnalysisForm = reactive<Record<string, FieldAnalysisFormCode>>({})
 const landContextSaving = ref(false)
 const editingParcelId = ref<string | null>(null)
@@ -106,7 +107,14 @@ function formDisplayName(code: string): string {
   return FORM_DISPLAY_NAMES[code] ?? '查估書表'
 }
 
-const FIELD_ANALYSIS_FORM_CODES = Object.keys(FORM_DISPLAY_NAMES) as FieldAnalysisFormCode[]
+const FIELD_ANALYSIS_FORM_CODES: readonly FieldAnalysisFormCode[] = [
+  'F01',
+  'F02',
+  'F02-RF',
+  'F03',
+  'F04',
+  'S01',
+]
 
 function inferDocumentAnalysisForm(filename: string): FieldAnalysisFormCode {
   if (filename.includes('買賣實例')) return 'F01'
@@ -261,7 +269,7 @@ function f03DraftHasField(fieldName: string): boolean {
 const unresolvedF03RequiredFields = computed(() =>
   (f03Guidance.value?.missing_required_fields ?? []).filter((field) => !f03DraftHasField(field)),
 )
-const manualFieldEntries = computed(() => {
+const allManualFieldEntries = computed(() => {
   const keys = new Set<string>()
   for (const guidance of workflowGuidance.value?.form_guidance ?? []) {
     for (const field of guidance.missing_required_fields) {
@@ -272,17 +280,23 @@ const manualFieldEntries = computed(() => {
   for (const [formCode, fields] of Object.entries(workflowGuidance.value?.manual_field_values ?? {})) {
     for (const field of Object.keys(fields)) keys.add(`${formCode}.${field}`)
   }
+  // Show the approved manual fields for every form, rather than exposing only
+  // whichever form happens to have a current validation error.
+  for (const key of Object.keys(MANUAL_FIELD_METADATA)) keys.add(key)
   return [...keys].sort().map((key) => {
     const split = key.indexOf('.')
     return { key, formCode: key.slice(0, split), fieldName: key.slice(split + 1) }
   })
 })
+const manualFieldEntries = computed(() => allManualFieldEntries.value.filter(
+  (entry) => entry.formCode === activeManualForm.value,
+))
 const manualEditableEntries = computed(() => manualFieldEntries.value.filter(
   (entry) => !(entry.formCode === 'F03' && entry.fieldName === 'benchmark_land_id'),
 ))
 const dataIssueCounts = computed(() => ({
   overview: unresolvedF03RequiredFields.value.length + (!parcels.value.length ? 1 : 0) + (!flow.benchmarks.length ? 1 : 0),
-  manual: manualFieldEntries.value.length,
+  manual: allManualFieldEntries.value.length,
   land: (!parcels.value.length ? 1 : 0) + (!flow.benchmarks.length ? 1 : 0),
   f03: unresolvedF03RequiredFields.value.length,
 }))
@@ -383,6 +397,55 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   benchmark_land_price: 'F03 → 正式計算結果',
 }
 
+type ManualFieldMetadata = { label: string; guidance: string; inputType?: 'date' | 'text' }
+
+// This workspace contains the formal workflow's required fields, not only AI
+// candidates.  Keep their displayed names explicit: a generic "pending field"
+// gives the appraiser no usable instruction and was the source of the labels
+// shown in the screenshot.
+const MANUAL_FIELD_METADATA: Readonly<Record<string, ManualFieldMetadata>> = {
+  'F01.transaction_no': { label: '實例編號', guidance: '填寫買賣實例或交易案件編號。' },
+  'F01.transaction_date': { label: '交易日期', guidance: '填寫該筆買賣成交日期。格式：YYYY-MM-DD。', inputType: 'date' },
+  'F01.transaction_total_price': { label: '交易總價（元）', guidance: '填寫契約或實價登錄的成交總價；可輸入含千分位逗號的金額。' },
+  'F01.location': { label: '土地坐落', guidance: '填寫土地所在行政區、段／小段與地號等可辨識的坐落資訊。' },
+  'F01.land_area_sqm': { label: '土地面積（㎡）', guidance: '填寫交易標的土地面積，單位為平方公尺。' },
+
+  'S01.administrative_area': { label: '行政區', guidance: '填寫查估區段所在行政區，例如金山區。' },
+  'S01.valuation_base_date': { label: '估價基準日', guidance: '填寫本案估價基準日。格式：YYYY-MM-DD。', inputType: 'date' },
+  'S01.price_zone_no': { label: '地價區段號', guidance: '填寫地價區段勘查表使用的區段編號。' },
+  'S01.zone_boundary_description': { label: '區段範圍說明', guidance: '填寫地價區段的範圍、界線或主要道路描述。' },
+  'S01.urban_plan_scope': { label: '都市計畫內外', guidance: '填寫都市計畫內、都市計畫外或原文件記載的範圍。' },
+  'S01.land_use_zone_category': { label: '使用分區／使用地類別', guidance: '填寫法定使用分區或使用地類別。' },
+  'S01.main_road_name': { label: '區段內主要道路名稱', guidance: '填寫區段內主要道路名稱。' },
+  'S01.main_road_width_m': { label: '區段內主要道路寬度（公尺）', guidance: '填寫主要道路寬度，單位為公尺，例如 12.5。' },
+  'S01.survey_date': { label: '勘查日期', guidance: '填寫現地勘查日期。格式：YYYY-MM-DD。', inputType: 'date' },
+
+  'F02.parcel_id': { label: '宗地', guidance: '請先在「宗地與比準地」建立或選擇宗地，無須手動輸入系統 ID。' },
+  'F02.benchmark_land_no': { label: '比準地地號', guidance: '填寫或選擇比準地的段／小段與地號。' },
+  'F02.price_zone_no': { label: '地價區段號', guidance: '填寫比準地所在的地價區段號。' },
+  'F02.valuation_base_date': { label: '估價基準日', guidance: '填寫本案估價基準日。格式：YYYY-MM-DD。', inputType: 'date' },
+
+  'F02-RF.benchmark_land_id': { label: '比準地', guidance: '請在「宗地與比準地」建立或選擇比準地，無須手動輸入系統 ID。' },
+  'F02-RF.comparison_analysis_id': { label: '比較分析', guidance: '請先建立比較法分析，再回到此處套用。' },
+  'F02-RF.comparison_targets': { label: '比較標的（1 至 3）', guidance: '請先完成比較標的資料，再進行區域因素分析。' },
+  'F02-RF.confirmed_factor_levels': { label: '區域因素確認值', guidance: '確認每一項區域因素的文件證據或人工判定值。' },
+  'F02-RF.rule_version_id': { label: '發布法規版本', guidance: '由系統套用已發布的法規版本，無須手動輸入 ID。' },
+
+  'F03.valuation_base_date': { label: '估價基準日', guidance: '填寫本案估價基準日。格式：YYYY-MM-DD。', inputType: 'date' },
+  'F03.benchmark_land_id': { label: '比準地', guidance: '請在「宗地與比準地」建立或選擇比準地，無須手動輸入系統 ID。' },
+
+  'F04.benchmark_valuation_id': { label: '比準地估價結果', guidance: '完成 F03 比準地估價後由系統帶入，無須手動輸入 ID。' },
+  'F04.valuation_base_date': { label: '估價基準日', guidance: '填寫本案估價基準日。格式：YYYY-MM-DD。', inputType: 'date' },
+  'F04.price_zone_no': { label: '地價區段號', guidance: '填寫宗地所在的地價區段號。' },
+}
+
+function manualFieldMetadata(formCode: string, fieldName: string): ManualFieldMetadata {
+  return MANUAL_FIELD_METADATA[`${formCode}.${fieldName}`] ?? {
+    label: fieldName,
+    guidance: `請依原始文件或正式表單規則確認欄位 ${fieldName} 的值。`,
+  }
+}
+
 function emptyDraft(): F03EditableValues {
   return {
     benchmarkLandId: null,
@@ -441,6 +504,8 @@ function displayCandidateValue(value: unknown): string {
 }
 
 function fieldDisplayLabel(formCode: string, fieldName: string): string {
+  const manualLabel = MANUAL_FIELD_METADATA[`${formCode}.${fieldName}`]?.label
+  if (manualLabel) return manualLabel
   const known = FIELD_LABELS[fieldName]?.replace(/^F03 → /, '')
   if (known) return known
   const common: Readonly<Record<string, string>> = {
@@ -449,10 +514,7 @@ function fieldDisplayLabel(formCode: string, fieldName: string): string {
     section_name: '段名', subsection_name: '小段', price_zone_no: '地價區段', prepared_date: '製表日期',
   }
   if (common[fieldName]) return common[fieldName]
-  const forms: Readonly<Record<string, string>> = {
-    F01: '案例基本資料', F02: '比較法資料', 'F02-RF': '影響地價因素', F03: '比準地估價資料', F04: '宗地估價資料', S01: '區段資料',
-  }
-  return `${forms[formCode] ?? '估價資料'}待確認欄位`
+  return fieldName
 }
 
 function candidateStatusLabel(status: string): string {
@@ -655,6 +717,24 @@ function candidateEditorType(candidate: ExtractedFieldResponseDto): 'date' | 'nu
     return 'number'
   }
   return 'text'
+}
+
+function candidateInputType(candidate: ExtractedFieldResponseDto): 'date' | 'text' {
+  const editorType = candidateEditorType(candidate)
+  if (editorType === 'date') {
+    const value = displayCandidateValue(candidate.confirmed_value ?? candidate.extracted_value).trim()
+    // ROC dates, dates with units, and other raw OCR formats are deliberately
+    // kept as text so the browser does not hide a valid non-ISO value.
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) ? 'date' : 'text'
+  }
+  // Numeric OCR values may contain grouping commas, %, or source units. A
+  // text input preserves the actual candidate instead of rendering it blank
+  // because HTML type=number rejects formats such as "45,000,000".
+  return 'text'
+}
+
+function candidateInputMode(candidate: ExtractedFieldResponseDto): 'decimal' | undefined {
+  return candidateEditorType(candidate) === 'number' ? 'decimal' : undefined
 }
 
 function candidateUnit(candidate: ExtractedFieldResponseDto): string {
@@ -1204,20 +1284,19 @@ async function extractDocument(documentId: string): Promise<void> {
   try {
     let result = await valuationApi.startDocumentExtraction(requestedCaseId, documentId)
     if (!isCurrentCase(token, requestedCaseId)) return
-    const analysisForm = documentAnalysisForm[documentId] ?? 'F03'
+    const analysisFailures: string[] = []
+    let firstAnalysisError: unknown = null
     if (result.extraction_status === 'COMPLETED') {
-      try {
-        result = await valuationApi.analyzeDocumentFields(requestedCaseId, documentId, analysisForm)
-      } catch (analysisError: unknown) {
-        extractionCandidates.value = [
-          ...extractionCandidates.value.filter((candidate) => candidate.document_id !== documentId),
-          ...result.candidates,
-        ]
-        initializeCandidateInputs(result.candidates)
-        await loadWorkflowGuidance(token, requestedCaseId)
-        notice.value = `OCR 文字擷取已完成；${formDisplayName(analysisForm)}的 AI 欄位分析未完成。`
-        error.value = safeValuationErrorMessage(analysisError)
-        return
+      // One click always scans the complete official form set. The filename
+      // dropdown is only a display hint and must not narrow the evidence scan.
+      for (const formCode of FIELD_ANALYSIS_FORM_CODES) {
+        try {
+          result = await valuationApi.analyzeDocumentFields(requestedCaseId, documentId, formCode)
+        } catch (analysisError: unknown) {
+          analysisFailures.push(formCode)
+          firstAnalysisError ??= analysisError
+        }
+        if (!isCurrentCase(token, requestedCaseId)) return
       }
     }
     extractionCandidates.value = [
@@ -1231,9 +1310,11 @@ async function extractDocument(documentId: string): Promise<void> {
     selectedCandidateId.value = result.candidates.find((candidate) => candidate.field_status === 'NEEDS_CONFIRMATION')?.extracted_field_id
       ?? result.candidates[0]?.extracted_field_id
       ?? null
-    notice.value = pending
-      ? `${formDisplayName(analysisForm)} AI 辨識完成，找到 ${pending} 筆需要人工確認的欄位。`
-      : `${formDisplayName(analysisForm)} AI 辨識完成，目前沒有需要人工確認的欄位。`
+    const completedCount = FIELD_ANALYSIS_FORM_CODES.length - analysisFailures.length
+    notice.value = analysisFailures.length
+      ? `OCR 已完成；六表 AI 辨識完成 ${completedCount}/${FIELD_ANALYSIS_FORM_CODES.length}，未完成：${analysisFailures.join('、')}。`
+      : `六份正式表單 AI 辨識完成，找到 ${pending} 筆需要人工確認的欄位；沒有原文證據的欄位已保持空白。`
+    if (firstAnalysisError) error.value = safeValuationErrorMessage(firstAnalysisError)
     if (pending) void focusElementById('valuation-candidate-workspace')
   } catch (caught: unknown) {
     if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
@@ -1964,6 +2045,8 @@ onBeforeUnmount(clearPreviewUrl)
         :candidate-provider-label="candidateProviderLabel"
         :candidate-unit="candidateUnit"
         :candidate-editor-type="candidateEditorType"
+        :candidate-input-type="candidateInputType"
+        :candidate-input-mode="candidateInputMode"
         :candidate-status-label="candidateStatusLabel"
         :display-candidate-value="displayCandidateValue"
         @select="selectedCandidateId = $event"
@@ -2032,6 +2115,17 @@ onBeforeUnmount(clearPreviewUrl)
           <span class="value-kind">{{ manualFieldEntries.length }} 項</span>
         </div>
         <p class="manual-fields__intro">只會送出非空欄位。一般欄位可在這裡人工補值；像「比準地」這種關聯資料則必須從既有資料中選擇，不會要求你手動輸入系統 ID。</p>
+        <label class="manual-fields__selector">
+          <span>選擇要補填的表單</span>
+          <select v-model="activeManualForm" data-testid="manual-form-selector">
+            <option value="F01">F01－買賣實例調查估價表</option>
+            <option value="F02">F02－比較法調查估價表</option>
+            <option value="F02-RF">F02-RF－影響地價區域因素分析明細表</option>
+            <option value="F03">F03－比準地地價估計表</option>
+            <option value="F04">F04－徵收土地宗地市價估計表</option>
+            <option value="S01">S01－地價區段勘查表</option>
+          </select>
+        </label>
         <div class="manual-fields__grid">
           <template v-for="entry in manualFieldEntries" :key="entry.key">
             <div v-if="entry.formCode === 'F03' && entry.fieldName === 'benchmark_land_id'" class="manual-fields__relation" data-testid="manual-benchmark-helper">
@@ -2042,15 +2136,16 @@ onBeforeUnmount(clearPreviewUrl)
               <button class="finding-action" type="button" @click="jumpToDataSection('land')">前往宗地與比準地</button>
             </div>
             <label v-else>
-              <span>{{ fieldDisplayLabel(entry.formCode, entry.fieldName) }}</span>
+              <span>{{ manualFieldMetadata(entry.formCode, entry.fieldName).label }}</span>
               <input
                 v-model="manualFieldValue[entry.key]"
                 :data-testid="`manual-field-${entry.formCode}-${entry.fieldName}`"
-                :type="entry.formCode === 'F03' && entry.fieldName === 'valuation_base_date' ? 'date' : 'text'"
+                :type="manualFieldMetadata(entry.formCode, entry.fieldName).inputType ?? 'text'"
+                :placeholder="`請填寫：${manualFieldMetadata(entry.formCode, entry.fieldName).label}`"
                 autocomplete="off"
               >
-              <small v-if="entry.formCode === 'F03' && entry.fieldName === 'valuation_base_date'" class="manual-fields__hint">
-                通常應與案件估價基準日一致；仍請以本案正式資料為準。
+              <small class="manual-fields__hint">
+                主要填寫：{{ manualFieldMetadata(entry.formCode, entry.fieldName).guidance }}
               </small>
               <small v-if="workflowGuidance.manual_field_errors?.[entry.key]" class="manual-fields__error">
                 {{ workflowGuidance.manual_field_errors?.[entry.key] }}
@@ -2289,7 +2384,7 @@ onBeforeUnmount(clearPreviewUrl)
 .candidate-history li strong { color: var(--app-ink); font-size: 11px; }
 .candidate-history li span { overflow-wrap: anywhere; color: var(--app-muted); font-size: 10px; }
 .manual-fields { border-color: rgba(59,129,102,.2); }
-.manual-fields__intro { margin: -4px 0 14px; color: var(--app-ink-soft); font-size: 12px; line-height: 1.65; }
+.manual-fields__intro { margin: -4px 0 14px; color: var(--app-ink-soft); font-size: 12px; line-height: 1.65; }.manual-fields__selector { display:grid; gap:6px; max-width:390px; margin:0 0 14px; color:var(--app-ink-soft); font-size:11px; font-weight:800; }.manual-fields__selector select { min-height:42px; padding:8px 10px; border:1px solid var(--app-line); border-radius:8px; color:var(--app-ink); background:#fff; font:inherit; }
 .manual-fields__grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
 .manual-fields__grid label { display: grid; gap: 5px; color: var(--app-ink-soft); font-size: 11px; font-weight: 800; }
 .manual-fields__grid input { min-height: 42px; padding: 8px 10px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink); background: #fff; }

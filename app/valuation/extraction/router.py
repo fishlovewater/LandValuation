@@ -7,6 +7,7 @@ from app.auth.dependencies import DbSession, require_permissions
 from app.auth.models import User
 from app.storage.dependencies import Storage
 from app.valuation.extraction.field_analysis import FieldAnalysisService
+from app.valuation.extraction.field_catalog import field_input_guidance, field_label_zh
 from app.valuation.extraction.schemas import (
     CodexAnalysisPackageResponse,
     CodexCandidateImportRequest,
@@ -25,9 +26,15 @@ ExtractionEditor = Annotated[User, Depends(require_permissions("valuation.update
 
 def response_model(record, candidates) -> ExtractionResponse:
     result = ExtractionResponse.model_validate(record)
-    result.candidates = [
-        ExtractedFieldResponse.model_validate(candidate) for candidate in candidates
-    ]
+    result.candidates = []
+    for candidate in candidates:
+        response = ExtractedFieldResponse.model_validate(candidate)
+        response.field_label = field_label_zh(response.form_code, response.field_name)
+        response.field_guidance = field_input_guidance(
+            response.form_code,
+            response.field_name,
+        )
+        result.candidates.append(response)
     return result
 
 

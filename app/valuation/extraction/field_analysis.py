@@ -20,6 +20,7 @@ from app.valuation.extraction.field_catalog import (
     F01_FIELD_ANALYSIS_FIELDS,
     F02_FIELD_ANALYSIS_FIELDS,
     F02_RF_FIELD_ANALYSIS_FIELDS,
+    F02_RF_SOURCE_ITEM_FIELD_MAP,
     F03_FIELD_ANALYSIS_FIELDS,
     F04_FIELD_ANALYSIS_FIELDS,
     S01_FIELD_ANALYSIS_FIELDS,
@@ -96,10 +97,34 @@ FIELD_ANALYSIS_FIELDS["F03"] = F03_FIELD_ANALYSIS_FIELDS
 FIELD_ANALYSIS_FIELDS["F04"] = F04_FIELD_ANALYSIS_FIELDS
 FIELD_ANALYSIS_FIELDS["S01"] = S01_FIELD_ANALYSIS_FIELDS
 FIELD_ANALYSIS_FIELDS["F02-RF"] = F02_RF_FIELD_ANALYSIS_FIELDS
+FIELD_ANALYSIS_FORM_CODES: tuple[str, ...] = (
+    "F01",
+    "F02",
+    "F02-RF",
+    "F03",
+    "F04",
+    "S01",
+)
 _WORKSHEET_HEADER = re.compile("(?m)^\\[\u5de5\u4f5c\u8868\uff1a(?P<title>[^\\]]+)\\]$")
 _FORM_SECTION_HEADER = re.compile(
-    r"(?m)^(?P<title>.*(?:買賣實例調查估價表|比較法調查估價表|比準地地價估計表|徵收土地宗地市價估計表|地價區段勘查表).*)$"
+    r"(?m)^(?P<title>.*(?:買賣實例調查估價表|比較法調查估價表|影響地價區域因素分析明細表|比準地地價估計表|徵收土地宗地市價估計表|地價區段勘查表).*)$"
 )
+_FORM_SECTION_MARKERS: dict[str, tuple[str, ...]] = {
+    "F01": ("買賣實例調查估價表",),
+    "F02": ("比較法調查估價表",),
+    "F02-RF": ("影響地價區域因素分析明細表",),
+    "F03": ("比準地地價估計表",),
+    "F04": ("徵收土地宗地市價估計表",),
+    "S01": ("地價區段勘查表",),
+}
+_FORM_WORKSHEET_MARKERS: dict[str, tuple[str, ...]] = {
+    "F02": ("F02", "比較法"),
+    "F02-RF": ("F02-RF", "區域因素", "影響地價"),
+    "F03": ("F03", "比準地"),
+    "F04": ("F04", "徵收", "宗地市價"),
+    "S01": ("S01", "地價區段", "區段勘查"),
+}
+_F01_SOURCE_WORKSHEET_MARKERS = ("F01", "買賣實例", "比較標的", "比較實例")
 _F01_SOURCE_ROLE_MARKERS = (
     "買賣實例調查估價表",
     "比較標的",
@@ -144,15 +169,205 @@ def _field_rules_markdown_for_form(form_code: str) -> str:
     if section is None:
         raise RuntimeError(f"估價表單 AI 欄位規則文件缺少 {form_code} 章節")
 
+    section_text = section.group(0).strip()
+    _validate_field_rules_section(form_code, section_text)
+
     first_form = re.search(r"(?m)^##\s+F01\s*$", markdown)
     shared_rules = markdown[: first_form.start()] if first_form else markdown
-    return f"{shared_rules.rstrip()}\n\n{section.group(0).strip()}"
+    return f"{shared_rules.rstrip()}\n\n{section_text}"
+
+
+def _validate_field_rules_section(form_code: str, section: str) -> None:
+    """Fail closed when the human-maintained MD and runtime catalog diverge."""
+
+    if form_code == "F02-RF":
+        pairs = re.findall(
+            r"(?m)^\|\s*\d+\s*\|\s*`?(?P<source>C\d+_\d+)`?\s*\|\s*`(?P<field>[A-Za-z0-9_]+)`\s*\|",
+            section,
+        )
+        expected = list(F02_RF_SOURCE_ITEM_FIELD_MAP.items())
+        if pairs != expected:
+            raise RuntimeError(
+                "field_rules.md 的 F02-RF 來源項目與 canonical field_name 不一致"
+            )
+        return
+
+    names = set(
+        re.findall(r"(?m)^\|\s*`(?P<field>[A-Za-z0-9_]+)`\s*\|", section)
+    )
+    expected = set(FIELD_ANALYSIS_FIELDS[form_code])
+    if names != expected:
+        missing = sorted(expected - names)
+        extra = sorted(names - expected)
+        raise RuntimeError(
+            f"field_rules.md 的 {form_code} field_name 與欄位目錄不一致；"
+            f"missing={missing}, extra={extra}"
+        )
+
+
+@lru_cache(maxsize=1)
+def _cross_form_candidate_routes() -> dict[tuple[str, str], frozenset[str]]:
+    """Load the explicit source-role matrix from ``field_rules.md``.
+
+    A route does not authorize arbitrary form-to-form copying.  It names the
+    only target fields which may use an upstream form's direct document
+    evidence.  Keep this data in the MD so AI prompts and runtime validation
+    have one human-reviewable source of truth.
+    """
+
+    markdown = _read_field_rules_markdown()
+    section = re.search(
+        r"(?ms)^##\s+跨表單候選欄位路由\s*\n.*?(?=^##\s+|\Z)",
+        markdown,
+    )
+    if section is None:
+        raise RuntimeError("field_rules.md 缺少跨表單候選欄位路由章節")
+
+    routes: dict[tuple[str, str], frozenset[str]] = {}
+    for line in section.group(0).splitlines():
+        match = re.match(
+            r"^\|\s*`(?P<source>F\d+(?:-RF)?|S\d+)`\s*\|\s*"
+            r"`(?P<target>F\d+(?:-RF)?|S\d+)`\s*\|\s*(?P<fields>.*?)\s*\|",
+            line,
+        )
+        if match is None:
+            continue
+        source = match.group("source")
+        target = match.group("target")
+        if source not in FIELD_ANALYSIS_FIELDS or target not in FIELD_ANALYSIS_FIELDS:
+            raise RuntimeError(
+                f"field_rules.md 的跨表單路由包含未知表單：{source} -> {target}"
+            )
+        fields = frozenset(re.findall(r"`([A-Za-z0-9_]+)`", match.group("fields")))
+        if not fields:
+            raise RuntimeError(
+                f"field_rules.md 的跨表單路由未提供欄位：{source} -> {target}"
+            )
+        unknown_fields = fields - set(FIELD_ANALYSIS_FIELDS[target])
+        if unknown_fields:
+            raise RuntimeError(
+                f"field_rules.md 的跨表單路由欄位不屬於 {target}：{sorted(unknown_fields)}"
+            )
+        key = (source, target)
+        if key in routes:
+            raise RuntimeError(
+                f"field_rules.md 的跨表單路由重複定義：{source} -> {target}"
+            )
+        routes[key] = fields
+    return routes
+
+
+def _permitted_source_form_codes(target_form_code: str) -> tuple[str, ...]:
+    routes = _cross_form_candidate_routes()
+    upstream = tuple(
+        source
+        for source, target in routes
+        if target == target_form_code and source != target_form_code
+    )
+    return (target_form_code, *upstream)
+
+
+def _detected_source_form_codes(extracted_text: str) -> frozenset[str]:
+    """Classify formal source sections without relying on a file name."""
+
+    headers = list(_FORM_SECTION_HEADER.finditer(extracted_text))
+    if headers:
+        return frozenset(
+            form_code
+            for form_code, markers in _FORM_SECTION_MARKERS.items()
+            if any(
+                any(marker in header.group("title") for marker in markers)
+                for header in headers
+            )
+        )
+
+    worksheets = list(_WORKSHEET_HEADER.finditer(extracted_text))
+    if worksheets:
+        detected: set[str] = set()
+        if any(
+            any(marker in header.group("title") for marker in _F01_SOURCE_WORKSHEET_MARKERS)
+            for header in worksheets
+        ):
+            detected.add("F01")
+        for form_code, markers in _FORM_WORKSHEET_MARKERS.items():
+            if any(
+                any(marker in header.group("title") for marker in markers)
+                for header in worksheets
+            ):
+                detected.add(form_code)
+        return frozenset(detected)
+
+    if any(marker in extracted_text for marker in _F01_SOURCE_ROLE_MARKERS):
+        return frozenset({"F01"})
+    return frozenset()
+
+
+def _allowed_fields_for_detected_sources(
+    form_code: str,
+    fields: dict[str, str],
+    detected_source_forms: frozenset[str],
+) -> dict[str, str]:
+    """Restrict a target when its own form is absent from a classified file."""
+
+    if not detected_source_forms or form_code in detected_source_forms:
+        return fields
+    routes = _cross_form_candidate_routes()
+    allowed_names = set().union(
+        *(routes.get((source_form, form_code), frozenset())
+          for source_form in detected_source_forms)
+    )
+    return {name: description for name, description in fields.items() if name in allowed_names}
 
 
 def _analysis_source_text(extracted_text: str, form_code: str) -> str:
-    """Return only a reliably identified F01 comparison-source section."""
+    """Return the source section belonging to the requested form.
+
+    A single uploaded file may contain a complete packet of forms. When form
+    headings are present, only the target form and the explicit upstream roles
+    listed in ``field_rules.md`` are eligible. This prevents an F01 sale
+    example from leaking into F03 or S01 while still allowing F02 to cite its
+    permitted F01 comparison inputs. If a standalone source has no
+    recognizable heading, retain the full text for backward compatibility and
+    let the evidence checks decide.
+    """
     if form_code != "F01":
-        return extracted_text
+        form_headers = list(_FORM_SECTION_HEADER.finditer(extracted_text))
+        if not form_headers:
+            worksheet_headers = list(_WORKSHEET_HEADER.finditer(extracted_text))
+            if not worksheet_headers:
+                return extracted_text
+            sections: list[str] = []
+            for source_form_code in _permitted_source_form_codes(form_code):
+                worksheet_markers = (
+                    _F01_SOURCE_WORKSHEET_MARKERS
+                    if source_form_code == "F01"
+                    else _FORM_WORKSHEET_MARKERS.get(source_form_code, ())
+                )
+                sections.extend(
+                    extracted_text[header.start(): (
+                        worksheet_headers[index + 1].start()
+                        if index + 1 < len(worksheet_headers)
+                        else len(extracted_text)
+                    )].strip()
+                    for index, header in enumerate(worksheet_headers)
+                    if any(marker in header.group("title") for marker in worksheet_markers)
+                )
+            return "\n\n".join(section for section in sections if section)
+        source_form_codes = _permitted_source_form_codes(form_code)
+        sections: list[str] = []
+        for index, header in enumerate(form_headers):
+            if not any(
+                any(marker in header.group("title") for marker in _FORM_SECTION_MARKERS.get(source_form_code, ()))
+                for source_form_code in source_form_codes
+            ):
+                continue
+            end = (
+                form_headers[index + 1].start()
+                if index + 1 < len(form_headers)
+                else len(extracted_text)
+            )
+            sections.append(extracted_text[header.start():end].strip())
+        return "\n\n".join(section for section in sections if section)
     headers = list(_WORKSHEET_HEADER.finditer(extracted_text))
     for index, header in enumerate(headers):
         if "\u6bd4\u8f03\u6a19\u7684" not in header.group("title"):
@@ -186,13 +401,20 @@ def field_analysis_prompt(
     form_code: str,
     allowed_fields: dict[str, str],
 ) -> str:
+    cross_form_routes = {
+        source: sorted(fields)
+        for (source, target), fields in _cross_form_candidate_routes().items()
+        if target == form_code
+    }
     return json.dumps(
         {
             "task": "從各種格式的估價原始文件、對照表、登記謄本、勘查紀錄或試算表 OCR 中，精準泛化對應並識別目標表單欄位",
             "form_code": form_code,
             "allowed_fields": allowed_fields,
             "field_rules_markdown": _field_rules_markdown_for_form(form_code),
-            "field_rules_instruction": "以 field_rules_markdown 的通用規則及目前表單章節為辨識依據；不可使用其他表單章節的欄位或資料角色。",
+            "field_rules_instruction": "以 field_rules_markdown 的通用規則及目前表單章節為唯一辨識依據；不可使用其他表單章節的欄位或資料角色。field_name 必須逐字從 allowed_fields 的 key 選取，不得回傳中文標籤、來源項目代碼、舊欄位名或自行翻譯名稱。",
+            "cross_form_candidate_routes": cross_form_routes,
+            "source_scope_instruction": "同一份上傳文件可以同時包含六種表單；本次處理 form_code 對應區段，以及 field_rules.md 跨表單資料角色明確允許的上游來源區段。若沒有允許的來源區段或沒有可由原文直接證明的欄位，候選必須回傳空陣列，這是正常結果，不得從不相關表單搬值。",
             "instructions": [
                 "1. 語意泛化與同義詞識別：文件格式與標題可能與標準表單不同（例如欄位名稱為簡稱、同義字、非標準標頭、表格欄位或段落敘述），請依據 allowed_fields 的語意進行靈活對應與理解。",
                 "2. 證據出處 (source_text)：必須是 ocr_text 中真實存在的連續或近乎連續之原始文字段落（保留該行或該句的原始標點與換行），絕不可自創不存在的段落。",
@@ -201,7 +423,7 @@ def field_analysis_prompt(
                 "   - 區域因素欄位（F02-RF）：可回傳文件中的自然語言描述（如 '都市計畫內'、'第二種商業區'、'平坦'、'70%'、'無'）或標準等級代碼（'L1'~'L5'），系統會依據自動進行標準等級轉譯。",
                 "   - extracted_value 必須是 source_text 中可直接找到的連續原文片段，不可自行改寫，也不可合併不同儲存格或不連續位置的文字。若完整資訊分散在多個儲存格，請選擇最能代表該欄位且連續存在的單一原文片段。",
                 "4. 零虛構原則：若文件內容完全未提及該欄位（例如未包含任何廢棄物設施資訊），請勿回傳該欄位；絕不可自創資料、UUID 或非憑據數據。",
-                "5. 僅回傳 allowed_fields 白名單內定義的 field_name。",
+                "5. 僅回傳 allowed_fields 白名單內定義的 field_name，並再次對照 field_rules_markdown 的欄位代碼表。",
                 "5b. 同一次文件辨識中，每個 field_name 最多回傳一筆候選；若同欄位有多處文字，選擇證據最完整、最直接的一處，不得重複輸出同一 field_name。",
                 "5c. candidates 數量不得超過 allowed_fields 的欄位數，也不得超過輸出 schema 的 maxItems；若沒有可由 OCR 原文直接證明的欄位，回傳空陣列。",
                 "5a. F01 僅可使用明確屬於「買賣實例調查估價表」、「比較標的」或「比較實例」的來源段落；不可使用徵收宗地、比準地、區域因素或其他表單資料。",
@@ -870,7 +1092,13 @@ class FieldAnalysisService:
                 "擷取文字超過 AI 欄位辨識單次處理上限",
                 422,
             )
-        allowed_fields = _ai_extractable_fields(FIELD_ANALYSIS_FIELDS[form_code])
+        allowed_fields = _allowed_fields_for_detected_sources(
+            form_code,
+            _ai_extractable_fields(FIELD_ANALYSIS_FIELDS[form_code]),
+            _detected_source_form_codes(extracted_text),
+        )
+        if not analysis_text:
+            return extraction, "", {}
         existing_names = await self.repository.candidate_field_names(
             extraction.extraction_id, form_code
         )
