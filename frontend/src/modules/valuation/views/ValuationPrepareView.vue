@@ -122,6 +122,10 @@ const previewPage = ref<number | null>(null)
 const spreadsheetPreview = ref<SpreadsheetPreviewDto | null>(null)
 const textPreview = ref<DocumentTextPreviewDto | null>(null)
 const selectedCandidateId = ref<string | null>(null)
+const f03FocusTargetId = ref<string | null>(null)
+const f03FocusRequestVersion = ref(0)
+const remediationReturnPending = ref(false)
+const remediationReturnMessage = ref('')
 const parcelImportPreview = ref<ParcelImportPreviewDto | null>(null)
 const parcelImportLoading = ref(false)
 const parcelImporting = ref(false)
@@ -1285,18 +1289,37 @@ async function focusElementById(targetId: string, message?: string): Promise<voi
 function goToFinding(finding: ValidationFindingModel): void {
   const fieldCode = findingFieldCodes(finding)[0]
   const targetId = fieldCode ? FIELD_TARGET_IDS[fieldCode] : undefined
+  const message = `${findingLocationLabel(finding)}：${findingCorrectionHint(finding)}`
   if (!targetId) {
     notice.value = `請依檢核訊息處理：${finding.message}`
     return
   }
+  if (targetId === 'run-valuation') {
+    activeWizardStep.value = 4
+    remediationReturnPending.value = false
+    remediationReturnMessage.value = ''
+    void focusElementById(targetId, message)
+    return
+  }
+  remediationReturnPending.value = true
+  remediationReturnMessage.value = message
   if (fieldCode === 'documents' || fieldCode === 'object_key') {
     activeWizardStep.value = 2
     activeIntakeStage.value = 'documents'
   } else {
     activeWizardStep.value = 3
     activeDataSection.value = 'f03'
+    f03FocusTargetId.value = targetId
+    f03FocusRequestVersion.value += 1
   }
-  void focusElementById(targetId, `${findingLocationLabel(finding)}：${findingCorrectionHint(finding)}`)
+  void focusElementById(targetId, message)
+}
+
+function returnToCalculationAfterFix(): void {
+  activeWizardStep.value = 4
+  remediationReturnPending.value = false
+  remediationReturnMessage.value = ''
+  void focusElementById('calculation-launch-title', '已回到計算與檢核；修正完成後請重新執行。')
 }
 
 function goToWorkflowNextAction(): void {
@@ -1407,6 +1430,11 @@ function focusRequestedRouteTarget(): void {
   const normalized = field.split(',')[0]?.trim()
   const targetId = normalized ? FIELD_TARGET_IDS[normalized] : undefined
   if (targetId) {
+    if (targetId === 'run-valuation') {
+      activeWizardStep.value = 4
+      void focusElementById(targetId, `請重新執行計算與檢核。`)
+      return
+    }
     if (normalized === 'documents' || normalized === 'object_key') {
       activeWizardStep.value = 2
       activeIntakeStage.value = 'documents'
@@ -1414,6 +1442,8 @@ function focusRequestedRouteTarget(): void {
     else {
       activeWizardStep.value = 3
       activeDataSection.value = 'f03'
+      f03FocusTargetId.value = targetId
+      f03FocusRequestVersion.value += 1
     }
     void focusElementById(targetId, `請修正 ${FIELD_LABELS[normalized] ?? valuationFieldLabel(normalized)} 後重新執行檢核。`)
   }
@@ -1447,6 +1477,10 @@ async function loadData(): Promise<void> {
   previewPage.value = null
   previewError.value = ''
   selectedCandidateId.value = null
+  f03FocusTargetId.value = null
+  f03FocusRequestVersion.value = 0
+  remediationReturnPending.value = false
+  remediationReturnMessage.value = ''
   parcelImportPreview.value = null
   parcelImportLoading.value = false
   parcelImporting.value = false
@@ -2324,6 +2358,21 @@ onBeforeUnmount(clearPreviewUrl)
         @next-action="goToWorkflowNextAction"
       />
 
+      <section
+        v-if="remediationReturnPending && activeWizardStep !== 4"
+        class="remediation-return"
+        data-testid="valuation-remediation-return"
+        aria-label="檢核問題修正導引"
+      >
+        <div>
+          <strong>正在修正檢核問題</strong>
+          <span>{{ remediationReturnMessage }}</span>
+        </div>
+        <button type="button" @click="returnToCalculationAfterFix">
+          回到計算與檢核
+        </button>
+      </section>
+
       <ValuationCaseOverview
         v-if="activeWizardStep === 1"
         :case-model="flow.case"
@@ -2522,6 +2571,8 @@ onBeforeUnmount(clearPreviewUrl)
         :calculated-source="calculatedSource"
         :can-edit-f03="canEditF03"
         :saving="saving"
+        :focus-target-id="f03FocusTargetId"
+        :focus-request-version="f03FocusRequestVersion"
         @dirty="dirty = true"
         @save="handleSave"
       />
@@ -2577,8 +2628,37 @@ onBeforeUnmount(clearPreviewUrl)
 .inline-notice { color: var(--app-green); background: rgba(59, 129, 102, 0.08); }
 .inline-error { color: #a44334; background: #fff0ed; }
 
+.remediation-return {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid #e2c98d;
+  border-left: 4px solid #b98520;
+  border-radius: var(--app-radius-sm);
+  background: #fffaf0;
+}
+.remediation-return > div { display: grid; gap: 3px; min-width: 0; }
+.remediation-return strong { color: var(--app-ink); font-size: 12px; }
+.remediation-return span { color: var(--app-ink-soft); font-size: 10px; line-height: 1.5; }
+.remediation-return button {
+  min-height: 36px;
+  flex: 0 0 auto;
+  padding: 7px 11px;
+  border: 1px solid #b98520;
+  border-radius: 8px;
+  color: #795713;
+  background: #fff;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 900;
+}
+
 @media (max-width: 760px) {
   .valuation-view { padding: 18px 16px 28px; }
   .valuation-view :deep(.case-workspace-header) { margin: -18px -16px 0; }
+  .remediation-return { align-items: stretch; flex-direction: column; }
+  .remediation-return button { width: 100%; }
 }
 </style>

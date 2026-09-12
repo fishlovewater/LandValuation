@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import {
   PhArrowRight as ArrowRight,
   PhCalculator as Calculator,
@@ -29,6 +29,8 @@ const props = defineProps<{
   calculatedSource: SourceMarker
   canEditF03: boolean
   saving: boolean
+  focusTargetId?: string | null
+  focusRequestVersion?: number
 }>()
 
 const emit = defineEmits<{
@@ -37,6 +39,24 @@ const emit = defineEmits<{
 }>()
 
 const activeStep = ref<F03DetailStep>('basis')
+
+function stepForTarget(targetId: string | null | undefined): F03DetailStep | null {
+  if (!targetId) return null
+  if (['f03-benchmark-land', 'f03-valuation-base-date'].includes(targetId)) return 'basis'
+  if (['f03-comparison-price', 'f03-comparison-weight', 'f03-income-price', 'f03-income-weight'].includes(targetId)) return 'price'
+  if (['f03-market-period-start', 'f03-market-period-end', 'f03-market-condition'].includes(targetId)) return 'market'
+  if (['f03-selection-scope-reason', 'f03-decision-reason'].includes(targetId)) return 'reason'
+  return null
+}
+
+watch(
+  () => [props.focusTargetId, props.focusRequestVersion] as const,
+  ([targetId]) => {
+    const step = stepForTarget(targetId)
+    if (step) activeStep.value = step
+  },
+  { immediate: true },
+)
 
 function setActiveStep(step: F03DetailStep): void {
   activeStep.value = step

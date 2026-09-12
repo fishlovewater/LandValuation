@@ -4,6 +4,7 @@ import DocumentTextPreview from '../../src/components/common/DocumentTextPreview
 import SpreadsheetPreview from '../../src/components/common/SpreadsheetPreview.vue'
 import ValuationCaseWorkspaceHeader from '../../src/modules/valuation/components/ValuationCaseWorkspaceHeader.vue'
 import ValuationFormalValidationPanel from '../../src/modules/valuation/components/ValuationFormalValidationPanel.vue'
+import ValuationF03Section from '../../src/modules/valuation/components/ValuationF03Section.vue'
 import ValuationGeneralValidationPanel from '../../src/modules/valuation/components/ValuationGeneralValidationPanel.vue'
 import ValuationIssueDrawer from '../../src/modules/valuation/components/ValuationIssueDrawer.vue'
 import ValuationReportArtifacts from '../../src/modules/valuation/components/ValuationReportArtifacts.vue'
@@ -81,6 +82,47 @@ describe('ValuationCaseWorkspaceHeader', () => {
     expect(details.text()).toContain('商業用地')
     expect(details.text()).not.toMatch(/\bLAND\b/)
     expect(details.text()).not.toContain('COMMERCIAL')
+  })
+})
+
+describe('ValuationF03Section', () => {
+  it('opens the F03 detail step that contains the requested correction target', async () => {
+    const wrapper = mount(ValuationF03Section, {
+      props: {
+        f03: {
+          benchmarkLandPrice: null,
+          source: { label: '人工確認', kind: 'human-confirmed' },
+        } as any,
+        benchmarks: [{ benchmarkLandId: 'benchmark-1', benchmarkLandNo: '123-4', priceZoneNo: 'A01' }] as any,
+        draft: {
+          benchmarkLandId: 'benchmark-1',
+          comparisonAnalysisId: null,
+          valuationBaseDate: '2026-09-13',
+          comparisonPrice: '100000',
+          comparisonWeight: '1',
+          incomePrice: null,
+          incomeWeight: '0',
+          marketPeriodStart: null,
+          marketPeriodEnd: null,
+          marketCondition: null,
+          selectionScopeReason: null,
+          decisionReason: null,
+        },
+        calculatedSource: { label: '系統計算', kind: 'calculated' } as any,
+        canEditF03: true,
+        saving: false,
+        focusTargetId: null,
+        focusRequestVersion: 0,
+      },
+    })
+
+    expect(wrapper.get('[data-testid="f03-step-basis"]').classes()).toContain('is-active')
+
+    await wrapper.setProps({ focusTargetId: 'f03-comparison-weight', focusRequestVersion: 1 })
+    expect(wrapper.get('[data-testid="f03-step-price"]').classes()).toContain('is-active')
+
+    await wrapper.setProps({ focusTargetId: 'f03-decision-reason', focusRequestVersion: 2 })
+    expect(wrapper.get('[data-testid="f03-step-reason"]').classes()).toContain('is-active')
   })
 })
 
