@@ -624,18 +624,6 @@ class WorkbenchService:
             REVIEW_STARTABLE_STATUSES,
             action="執行智慧審查前置檢查",
         )
-        case = await self.review_repository.get_case(review.case_id)
-        if getattr(case, "case_type", None) == EXTERNAL_REVIEW_CASE_TYPE:
-            pending_external_fields = int(
-                await self.review_repository.pending_external_fields(review.case_id) or 0
-            )
-            if pending_external_fields:
-                raise AppError(
-                    "REVIEW_OCR_CONFIRMATION_REQUIRED",
-                    "案件仍有辨識欄位尚未完成確認並填表或排除，請處理完成後再開始審查",
-                    409,
-                    {"pending_external_field_count": pending_external_fields},
-                )
         if review.review_status == "READY_FOR_REVIEW":
             await review_service.update(
                 review_id, ReviewUpdate(review_status="PREPROCESSING")

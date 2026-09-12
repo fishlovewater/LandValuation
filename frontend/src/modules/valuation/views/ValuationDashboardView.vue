@@ -442,7 +442,7 @@ onMounted(() => {
 .case-status[data-tone="success"] { color:#2f745b; background:#edf8f3; }
 .case-card__next { display:flex; align-items:flex-start; gap:6px; margin:0; color:#66798d; font-size:11px; line-height:1.55; }
 .case-card__next > svg { flex:0 0 auto; margin-top:1px; }
-.case-card__progress { display:grid; gap:6px; width:min(100%,560px); }
+.case-card__progress { display:grid; gap:6px; width:100%; }
 .case-card__progress-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; color:#748598; font-size:10px; font-weight:800; }
 .case-card__progress-heading strong { color:#425970; font-size:10px; font-weight:900; }
 .case-card__progress-track { height:6px; overflow:hidden; border-radius:999px; background:#e9eef3; }

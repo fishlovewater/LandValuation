@@ -337,36 +337,45 @@ def test_workbench_preflight_rejects_returned_for_revision_bypass():
     assert exc_info.value.status_code == 409
 
 
-def test_external_preflight_blocks_any_field_not_fully_handled_and_returns_case_count():
+def test_external_preflight_does_not_require_every_ocr_candidate_to_be_manually_resolved(
+    monkeypatch,
+):
     review_id = uuid4()
     case_id = uuid4()
+    review = SimpleNamespace(
+        review_id=review_id,
+        case_id=case_id,
+        review_status="RECEIVED",
+        missing_item_count=0,
+    )
 
     class FakeReviewRepository:
         async def get(self, requested_review_id, **_kwargs):
             assert requested_review_id == review_id
-            return SimpleNamespace(
-                review_id=review_id,
-                case_id=case_id,
-                review_status="RECEIVED",
-            )
-
-        async def get_case(self, requested_case_id):
-            assert requested_case_id == case_id
-            return SimpleNamespace(case_type="EXTERNAL_REVIEW")
+            return review
 
         async def pending_external_fields(self, requested_case_id):
-            assert requested_case_id == case_id
-            return 3
+            raise AssertionError("preflight must not hard-gate unresolved OCR candidates")
+
+    async def fake_check_completeness(_service, requested_review_id, _actor_id):
+        assert requested_review_id == review_id
+        review.review_status = "READY_FOR_REVIEW"
+        return (
+            SimpleNamespace(ready=True, blocked_rule_codes=frozenset()),
+            review,
+            [],
+        )
+
+    monkeypatch.setattr(
+        "app.review.service.ReviewService.check_completeness",
+        fake_check_completeness,
+    )
 
     service = WorkbenchService(SimpleNamespace(), FakeReviewRepository())
+    result = asyncio.run(service.preflight(review_id, uuid4()))
 
-    with pytest.raises(AppError) as exc_info:
-        asyncio.run(service.preflight(review_id, uuid4()))
-
-    assert exc_info.value.code == "REVIEW_OCR_CONFIRMATION_REQUIRED"
-    assert exc_info.value.status_code == 409
-    assert exc_info.value.details == {"pending_external_field_count": 3}
-    assert "確認並填表或排除" in exc_info.value.message
+    assert result.outcome == "READY"
+    assert result.completeness.ready is True
 
 
 def test_pending_external_fields_uses_completed_status_allowlist():
