@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 
 from app.core.exceptions import AppError
+from app.valuation.rounding import round_up_land_unit_price
 
 
 MONEY = Decimal("0.01")
@@ -38,6 +39,7 @@ def calculate_f01(
 
 @dataclass(frozen=True)
 class F04Result:
+    trial_unit_price: Decimal
     parcel_unit_price: Decimal
     parcel_total_value: Decimal
 
@@ -58,9 +60,12 @@ def calculate_f04(
         if not ownership_numerator or not ownership_denominator:
             raise AppError("F04_OWNERSHIP_INVALID", "宗地權利分子與分母必須完整", 422)
         ratio = ownership_numerator / ownership_denominator
-    unit_price = benchmark_land_price * (Decimal("1") + parcel_adjustment_rate)
+    raw_unit_price = benchmark_land_price * (Decimal("1") + parcel_adjustment_rate)
+    trial_unit_price = raw_unit_price.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    unit_price = round_up_land_unit_price(trial_unit_price)
     total = unit_price * parcel_area_sqm * ratio
     return F04Result(
-        parcel_unit_price=unit_price.quantize(MONEY, rounding=ROUND_HALF_UP),
+        trial_unit_price=trial_unit_price,
+        parcel_unit_price=unit_price,
         parcel_total_value=total.quantize(Decimal("1"), rounding=ROUND_HALF_UP),
     )

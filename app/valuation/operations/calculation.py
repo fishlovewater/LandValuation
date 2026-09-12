@@ -1,15 +1,15 @@
 import hashlib
 import json
 from dataclasses import dataclass
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from typing import Any
 
 from app.core.exceptions import AppError
+from app.valuation.rounding import ARTICLE_21_ROUNDING_CODE, round_up_land_unit_price
 
-FORMULA_VERSION = "F03_WEIGHTED_PRICE_V1"
-ROUNDING_MODE = "ROUND_HALF_UP"
-RESULT_SCALE = 2
-RESULT_QUANTUM = Decimal("0.01")
+FORMULA_VERSION = "F03_WEIGHTED_PRICE_V2"
+ROUNDING_MODE = ARTICLE_21_ROUNDING_CODE
+RESULT_SCALE = "MAGNITUDE_DEPENDENT"
 WEIGHT_TOLERANCE = Decimal("0.000001")
 
 
@@ -61,7 +61,7 @@ def calculate_f03_price(
     comparison_component = (comparison_price or Decimal("0")) * comparison_weight
     income_component = (income_price or Decimal("0")) * income_weight
     raw_result = comparison_component + income_component
-    result = raw_result.quantize(RESULT_QUANTUM, rounding=ROUND_HALF_UP)
+    result = round_up_land_unit_price(raw_result)
     inputs = {
         "comparison_price": _decimal_text(comparison_price),
         "comparison_weight": _decimal_text(comparison_weight),
@@ -95,7 +95,7 @@ def calculate_f03_price(
             },
             {
                 "step": "rounding",
-                "expression": "ROUND_HALF_UP to 2 decimal places",
+                "expression": "Article 21 ROUNDUP by price magnitude",
                 "result": _decimal_text(result) or "0",
             },
         ],

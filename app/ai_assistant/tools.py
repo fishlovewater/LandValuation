@@ -90,7 +90,7 @@ BEDROCK_TOOL_CONFIG = [
     {
         "toolSpec": {
             "name": "run_calculation",
-            "description": "以後端固定 F03_WEIGHTED_PRICE_V1 規則執行計算並保存快照",
+            "description": "以後端固定 F03_WEIGHTED_PRICE_V2 與第21條尾數進位規則執行計算並保存快照",
             "inputSchema": {"json": {"type": "object", "properties": {}}},
         }
     },

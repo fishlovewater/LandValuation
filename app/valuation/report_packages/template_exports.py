@@ -8,28 +8,78 @@ from typing import Any
 
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
-from openpyxl.styles import Alignment, Font, PatternFill
-
 from app.valuation.report_packages.factor_catalog import TEMPLATE_FACTORS
 
 
 EXCEL_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 TEMPLATE_DIR = Path(__file__).with_name("templates") / "excel"
+OFFICIAL_AUXILIARY_WORKBOOK = "table5_residential_regional_factors.xlsx"
 
 
 class TemplateExportDefinition:
-    def __init__(self, code: str, filename: str, sheet_name: str, title: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        filename: str,
+        sheet_name: str,
+        title: str,
+        *,
+        output_filename: str | None = None,
+    ) -> None:
         self.code = code
         self.filename = filename
         self.sheet_name = sheet_name
         self.title = title
+        self.output_filename = output_filename or filename
 
 
 TEMPLATE_EXPORTS = (
     TemplateExportDefinition("S01", "table3_section_survey.xlsx", "表3區段勘查表", "表3 地價區段勘查表"),
     TemplateExportDefinition("F02", "table4_comparison_method.xlsx", "表4比較法調查估價表", "表4 比較法調查估價表"),
-    TemplateExportDefinition("F02-RF", "table5_residential_regional_factors.xlsx", "表5-1區域因素明細表(住)", "表5-1 影響地價區域因素分析明細表（住宅用地）"),
+    TemplateExportDefinition(
+        "F02-RF",
+        "table5_residential_regional_factors.xlsx",
+        "表5-1區域因素明細表(住)",
+        "表5-1 影響地價區域因素分析明細表（住宅用地）",
+    ),
+    TemplateExportDefinition(
+        "F03",
+        OFFICIAL_AUXILIARY_WORKBOOK,
+        "114表14比準地地價估計表",
+        "表14 比準地地價估計表",
+        output_filename="table14_benchmark_land_value.xlsx",
+    ),
+    TemplateExportDefinition(
+        "F04",
+        OFFICIAL_AUXILIARY_WORKBOOK,
+        "102表6宗地市價估計表格式",
+        "表6 徵收土地宗地市價估計表",
+        output_filename="table6_parcel_market_value.xlsx",
+    ),
 )
+
+F04_FACTOR_ROWS = {
+    "individual_area": 6,
+    "individual_width": 7,
+    "individual_depth": 8,
+    "individual_shape": 9,
+    "individual_street_frontage": 10,
+    "individual_terrain": 11,
+    "individual_road_type": 12,
+    "individual_front_road_width": 13,
+    "individual_school_proximity": 14,
+    "individual_market_proximity": 15,
+    "individual_park_proximity": 16,
+    "individual_station_proximity": 17,
+    "individual_commercial_district_proximity": 18,
+    "individual_undesirable_facility": 19,
+    "individual_parking_convenience": 20,
+    "individual_land_use": 21,
+    "individual_building_coverage_rate": 22,
+    "individual_floor_area_ratio": 23,
+    "individual_building_restriction": 24,
+    "individual_other": 25,
+}
 
 S01_DIRECT_FIELDS = {
     "district_name", "district_boundary", "survey_date", "urban_plan_status",
@@ -63,6 +113,19 @@ def _display(value: Any) -> Any:
     return value
 
 
+def _number(value: Any) -> Decimal | None:
+    """Convert a known numeric export field without coercing identifiers."""
+
+    if value in (None, ""):
+        return None
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
 def _set(ws, cell: str, value: Any, rows: list[dict[str, Any]], field: str, note: str = "") -> None:
     rendered = _display(value)
     if rendered not in (None, "", []):
@@ -77,27 +140,9 @@ def _set(ws, cell: str, value: Any, rows: list[dict[str, Any]], field: str, note
     rows.append({"field_rules_field": field, "template_cell": cell, "value": rendered, "note": note})
 
 def _append_audit_sheet(wb, rows: list[dict[str, Any]], title: str) -> None:
-    if "AI欄位對應" in wb.sheetnames:
-        del wb["AI欄位對應"]
-    ws = wb.create_sheet("AI欄位對應")
-    ws.append([title])
-    ws.append(["此頁由系統產生：已確認的 AI 擷取值與人工覆寫值會依地點寫入；未有值的欄位保留空白。"])
-    ws.append(["field_rules 欄位", "範本儲存格", "目前值", "備註"])
-    fill = PatternFill("solid", fgColor="1F4E78")
-    for cell in ws[3]:
-        cell.fill = fill
-        cell.font = Font(color="FFFFFF", bold=True)
-        cell.alignment = Alignment(horizontal="center")
-    for row in rows:
-        ws.append([row["field_rules_field"], row["template_cell"], row["value"], row["note"]])
-    ws.freeze_panes = "A4"
-    ws.column_dimensions["A"].width = 34
-    ws.column_dimensions["B"].width = 22
-    ws.column_dimensions["C"].width = 48
-    ws.column_dimensions["D"].width = 46
-    for row in ws.iter_rows(min_row=4):
-        for cell in row:
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    # 正式輸出必須維持官方 workbook 結構，不再額外新增系統自製工作表。
+    # 欄位來源與覆寫軌跡由既有結構化資料／快照保存，不寫回官方 Excel 版型。
+    del wb, rows, title
 
 
 def _target_items(f02: dict) -> list[dict]:
@@ -256,7 +301,27 @@ def _build_f02(wb, case: dict, f02: dict, f02rf: dict, locations: list[dict] | N
     _append_audit_sheet(wb, rows, "F02／表4 field_rules 對應（全部地點）")
 
 
+def _factor_target(factor: dict, fallback: dict, display_order: int) -> dict:
+    fallback_id = fallback.get("comparison_target_id")
+    return next(
+        (
+            item
+            for item in factor.get("targets") or []
+            if item.get("display_order") == display_order
+            or (
+                fallback_id is not None
+                and str(item.get("comparison_target_id")) == str(fallback_id)
+            )
+        ),
+        {},
+    )
+
+
 def _build_f02_rf(wb, case: dict, f02rf: dict, f02: dict, locations: list[dict] | None = None) -> None:
+    if str(case.get("land_use_type") or "").upper() != "RESIDENTIAL":
+        raise FileNotFoundError(
+            "目前只提供官方表5-1住宅用地範本；非住宅用地不得由住宅範本改造產生。"
+        )
     ws = wb["表5-1區域因素明細表(住)"]
     rows: list[dict[str, Any]] = []
     benchmark_location, location_targets = _location_roles(locations)
@@ -280,31 +345,173 @@ def _build_f02_rf(wb, case: dict, f02rf: dict, f02: dict, locations: list[dict] 
     rate_cols = ("G", "J", "M")
     for code, row in row_map.items():
         factor = factor_rows.get(code, {})
-        _set(ws, f"C{row}", _factor_value(benchmark_location, code, factor.get("benchmark_confirmed_level") or factor.get("benchmark_reported_level")), rows, code, "比準地")
+        benchmark_level = _factor_value(
+            benchmark_location,
+            code,
+            factor.get("benchmark_confirmed_level") or factor.get("benchmark_reported_level"),
+        )
+        _set(ws, f"C{row}", benchmark_level, rows, code, "比準地")
         for index in range(3):
             target = location_targets[index] if index < len(location_targets) else None
             fallback = fallback_targets[index] if index < len(fallback_targets) else {}
-            target_data = next((item for item in factor.get("targets") or [] if str(item.get("comparison_target_id")) == str(fallback.get("comparison_target_id"))), {})
-            _set(ws, f"{target_cols[index]}{row}", _factor_value(target, code, target_data.get("confirmed_level") or target_data.get("reported_level")), rows, code, f"比較標的 {index + 1}")
-            _set(ws, f"{rate_cols[index]}{row}", target_data.get("calculated_adjustment_rate"), rows, f"{code}.adjustment_rate", "正式計算結果")
+            target_data = _factor_target(factor, fallback, index + 1)
+            target_level = _factor_value(
+                target,
+                code,
+                target_data.get("confirmed_level") or target_data.get("reported_level"),
+            )
+            _set(ws, f"{target_cols[index]}{row}", target_level, rows, code, f"比較標的 {index + 1}")
+            rate = _number(target_data.get("calculated_adjustment_rate"))
+            _set(ws, f"{rate_cols[index]}{row}", rate, rows, f"{code}.adjustment_rate", "正式計算結果")
     _set(ws, "C40", f02rf.get("other_influences"), rows, "other")
     _set(ws, "C44", f02rf.get("notes"), rows, "case_note")
     _append_location_audit(rows, locations)
     _append_audit_sheet(wb, rows, "F02-RF／表5 field_rules 對應（全部地點）")
 
 
+def _clear_value(ws, cell: str) -> None:
+    target = ws[cell]
+    if isinstance(target, MergedCell):
+        for merged_range in ws.merged_cells.ranges:
+            if target.coordinate in merged_range:
+                target = ws.cell(merged_range.min_row, merged_range.min_col)
+                break
+    if not isinstance(target, MergedCell):
+        target.value = None
+
+
+def _build_f03(wb, case: dict, f03: dict) -> None:
+    ws = wb["114表14比準地地價估計表"]
+    rows: list[dict[str, Any]] = []
+    for cell in ("B2", "I2", "A10", "J11"):
+        _clear_value(ws, cell)
+    for row in range(5, 10):
+        for col in "ABCDEFGHIJK":
+            _clear_value(ws, f"{col}{row}")
+
+    _set(ws, "B2", case.get("case_no"), rows, "case_no")
+    _set(ws, "I2", case.get("valuation_base_date"), rows, "valuation_base_date")
+    for index, item in enumerate((f03.get("rows") or [])[:5], start=5):
+        _set(ws, f"A{index}", item.get("price_zone_no"), rows, "price_zone_no")
+        _set(ws, f"B{index}", item.get("benchmark_land_no"), rows, "benchmark_land_no")
+        _set(ws, f"C{index}", item.get("district_name"), rows, "district_name")
+        _set(ws, f"D{index}", item.get("section_subsection_name"), rows, "section_subsection_name")
+        _set(ws, f"E{index}", item.get("land_no"), rows, "land_no")
+        _set(ws, f"F{index}", _number(item.get("comparison_price")), rows, "comparison_price")
+        _set(ws, f"G{index}", _number(item.get("comparison_weight")), rows, "comparison_weight")
+        _set(ws, f"H{index}", _number(item.get("income_price")) if item.get("income_price") is not None else "-", rows, "income_price")
+        _set(ws, f"I{index}", _number(item.get("income_weight")), rows, "income_weight")
+        _set(ws, f"J{index}", _number(item.get("benchmark_land_price")), rows, "benchmark_land_price")
+        _set(ws, f"K{index}", item.get("decision_reason"), rows, "decision_reason")
+
+    footer = f03.get("footer") or {}
+    footer_text = (
+        f"填寫日期：{_display(footer.get('filled_date')) or ''}    "
+        f"承辦員：{footer.get('handler_name') or ''}    "
+        f"課（股）長：{footer.get('section_head_name') or ''}    "
+        f"主任（局、處長）：{footer.get('director_name') or ''}"
+    )
+    _set(ws, "A10", footer_text, rows, "signatures")
+    _set(ws, "J11", footer.get("appraiser_name"), rows, "appraiser_name")
+    _append_audit_sheet(wb, rows, "F03／表14 field_rules 對應")
+
+
+def _build_f04(wb, case: dict, f04: dict) -> None:
+    ws = wb["102表6宗地市價估計表格式"]
+    rows: list[dict[str, Any]] = []
+    condition_cols = ("F", "J", "N", "R", "V")
+    rate_cols = ("I", "M", "Q", "U", "Y")
+    serial_cells = ("I2", "M2", "Q2", "U2", "Y2")
+
+    for cell in ("O1", "W1", "Y1", "E2", "C4", "C5", "C30", "A31", "M32"):
+        _clear_value(ws, cell)
+    for row in F04_FACTOR_ROWS.values():
+        _clear_value(ws, f"C{row}")
+        for condition_col, rate_col in zip(condition_cols, rate_cols):
+            _clear_value(ws, f"{condition_col}{row}")
+            _clear_value(ws, f"{rate_col}{row}")
+    for index in range(5):
+        for row in (26, 27, 28, 29):
+            _clear_value(ws, f"{condition_cols[index]}{row}")
+        _clear_value(ws, serial_cells[index])
+        _clear_value(ws, f"{condition_cols[index]}4")
+
+    _set(ws, "O1", case.get("case_no"), rows, "case_no")
+    benchmark = f04.get("benchmark") or {}
+    _set(ws, "E2", benchmark.get("benchmark_land_no"), rows, "benchmark_land_no")
+    _set(ws, "C4", benchmark.get("parcel_display"), rows, "benchmark_parcel")
+    _set(ws, "C5", _number(f04.get("benchmark_land_price")), rows, "benchmark_land_price")
+    benchmark_factors = {
+        str(item.get("factor_code")): item for item in f04.get("benchmark_factor_rows") or []
+    }
+    for code, row in F04_FACTOR_ROWS.items():
+        _set(ws, f"C{row}", (benchmark_factors.get(code) or {}).get("condition_value"), rows, f"benchmark.{code}")
+
+    snapshot_rows = {
+        str(item.get("parcel_id")): item
+        for item in ((f04.get("calculation_snapshot") or {}).get("rows") or [])
+    }
+    parcels = (f04.get("parcel_rows") or [])[:5]
+    if parcels:
+        _set(ws, "W1", parcels[0].get("parcel_serial"), rows, "parcel_serial_start")
+        _set(ws, "Y1", parcels[-1].get("parcel_serial"), rows, "parcel_serial_end")
+    for index, item in enumerate(parcels):
+        condition_col = condition_cols[index]
+        rate_col = rate_cols[index]
+        _set(ws, serial_cells[index], item.get("parcel_serial"), rows, "parcel_serial", f"宗地 {index + 1}")
+        _set(ws, f"{condition_col}4", item.get("parcel_display"), rows, "parcel_display", f"宗地 {index + 1}")
+        factor_rows = {str(row.get("factor_code")): row for row in item.get("factor_rows") or []}
+        for code, row_no in F04_FACTOR_ROWS.items():
+            factor = factor_rows.get(code) or {}
+            _set(ws, f"{condition_col}{row_no}", factor.get("condition_value"), rows, f"{code}.condition", f"宗地 {index + 1}")
+            _set(ws, f"{rate_col}{row_no}", _number(factor.get("difference_rate")), rows, f"{code}.difference_rate", f"宗地 {index + 1}")
+        snapshot = snapshot_rows.get(str(item.get("parcel_id"))) or {}
+        _set(ws, f"{condition_col}26", _number(item.get("parcel_adjustment_rate")), rows, "parcel_adjustment_rate", f"宗地 {index + 1}")
+        _set(ws, f"{condition_col}27", _number(snapshot.get("trial_unit_price")), rows, "trial_unit_price", f"宗地 {index + 1}")
+        _set(ws, f"{condition_col}28", _number(item.get("parcel_unit_price")), rows, "parcel_unit_price", f"宗地 {index + 1}")
+        _set(ws, f"{condition_col}29", item.get("notes"), rows, "parcel_note", f"宗地 {index + 1}")
+
+    _set(ws, "C30", f04.get("notes"), rows, "case_note")
+    footer = f04.get("footer") or {}
+    footer_text = (
+        f"填寫日期：{_display(footer.get('filled_date')) or ''}    "
+        f"承辦員：{footer.get('handler_name') or ''}    "
+        f"課（股）長：{footer.get('section_head_name') or ''}    "
+        f"主任（局、處長）：{footer.get('director_name') or ''}"
+    )
+    _set(ws, "A31", footer_text, rows, "signatures")
+    _set(ws, "M32", footer.get("appraiser_name"), rows, "appraiser_name")
+    _append_audit_sheet(wb, rows, "F04／表6 field_rules 對應")
+
+
 def build_template_export_xlsx(*, code: str, case: dict, pages: dict[str, dict], locations: list[dict] | None = None, location: dict | None = None) -> bytes:
     definition = next(item for item in TEMPLATE_EXPORTS if item.code == code)
+    land_use = str(case.get("land_use_type") or "").upper()
+    if code == "F02-RF" and land_use != "RESIDENTIAL":
+        raise FileNotFoundError(
+            f"缺少 {land_use or 'UNKNOWN'} 用地的官方表5範本；"
+            "系統不會再由住宅表5-1自行改造成其他用地範本。"
+        )
     path = TEMPLATE_DIR / definition.filename
     if not path.exists():
         raise FileNotFoundError(f"找不到 Excel 範本：{path}")
     wb = load_workbook(path)
+    if definition.sheet_name not in wb.sheetnames:
+        raise FileNotFoundError(
+            f"官方 Excel 範本缺少工作表：{definition.sheet_name}（{path.name}）"
+        )
     if code == "S01":
         _build_s01(wb, case, pages["S01"], location)
     elif code == "F02":
         _build_f02(wb, case, pages["F02"], pages["F02-RF"], locations)
-    else:
+    elif code == "F02-RF":
         _build_f02_rf(wb, case, pages["F02-RF"], pages["F02"], locations)
+    elif code == "F03":
+        _build_f03(wb, case, pages["F03"])
+    elif code == "F04":
+        _build_f04(wb, case, pages["F04"])
+    else:
+        raise ValueError(f"不支援的正式 Excel 表單：{code}")
     output = BytesIO()
     wb.save(output)
     return output.getvalue()

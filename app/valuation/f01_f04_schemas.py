@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.valuation.report_packages.factor_catalog import INDIVIDUAL_FACTOR_CODES
+
 
 class StrictDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -115,6 +117,29 @@ class F01DraftUpdate(StrictDraft):
         return self
 
 
+class F04FactorDraft(StrictDraft):
+    factor_code: str = Field(min_length=1, max_length=80)
+    condition_value: str | None = Field(default=None, max_length=1000)
+    difference_rate: Decimal | None = Field(
+        default=None,
+        gt=Decimal("-1"),
+        max_digits=9,
+        decimal_places=6,
+    )
+    source_notes: str | None = Field(default=None, max_length=1000)
+    confirmed_by_user: bool = False
+
+    @model_validator(mode="after")
+    def validate_factor(self):
+        if self.factor_code not in INDIVIDUAL_FACTOR_CODES:
+            raise ValueError("F04 個別因素代碼不屬於正式個別因素清單")
+        if self.difference_rate not in (None, Decimal("0")) and (
+            not self.confirmed_by_user or not self.source_notes
+        ):
+            raise ValueError("F04 非零差異率必須有人工確認與正式規則來源")
+        return self
+
+
 class F04ParcelDraft(StrictDraft):
     parcel_id: UUID
     parcel_adjustment_rate: Decimal = Field(
@@ -124,6 +149,7 @@ class F04ParcelDraft(StrictDraft):
     adjustment_source_notes: str | None = Field(default=None, max_length=1000)
     parcel_unit_price: Decimal | None = Field(default=None, ge=0, decimal_places=2)
     parcel_total_value: Decimal | None = Field(default=None, ge=0, decimal_places=2)
+    factor_rows: list[F04FactorDraft] = Field(default_factory=list, max_length=20)
     notes: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
@@ -132,6 +158,9 @@ class F04ParcelDraft(StrictDraft):
             not self.adjustment_confirmed_by_user or not self.adjustment_source_notes
         ):
             raise ValueError("非零宗地修正率必須由使用者確認並說明正式規則來源")
+        codes = [item.factor_code for item in self.factor_rows]
+        if len(codes) != len(set(codes)):
+            raise ValueError("F04 同一宗地的個別因素不可重複")
         return self
 
 
@@ -141,6 +170,7 @@ class F04DraftData(StrictDraft):
     price_zone_no: str | None = Field(default=None, max_length=80)
     rule_version_id: UUID | None = None
     benchmark_land_price: Decimal | None = Field(default=None, ge=0, decimal_places=2)
+    benchmark_factor_rows: list[F04FactorDraft] = Field(default_factory=list, max_length=20)
     parcel_rows: list[F04ParcelDraft] = Field(default_factory=list)
     notes: str | None = Field(default=None, max_length=3000)
     filled_date: date | None = None
@@ -159,6 +189,9 @@ class F04DraftData(StrictDraft):
         ids = [item.parcel_id for item in self.parcel_rows]
         if len(ids) != len(set(ids)):
             raise ValueError("F04 宗地不可重複")
+        benchmark_codes = [item.factor_code for item in self.benchmark_factor_rows]
+        if len(benchmark_codes) != len(set(benchmark_codes)):
+            raise ValueError("F04 比準地個別因素不可重複")
         return self
 
 
@@ -167,6 +200,7 @@ class F04DraftUpdate(StrictDraft):
     valuation_base_date: date | None = None
     price_zone_no: str | None = Field(default=None, max_length=80)
     rule_version_id: UUID | None = None
+    benchmark_factor_rows: list[F04FactorDraft] | None = Field(default=None, max_length=20)
     parcel_rows: list[F04ParcelDraft] | None = None
     notes: str | None = Field(default=None, max_length=3000)
     filled_date: date | None = None
@@ -181,6 +215,8 @@ class F04DraftUpdate(StrictDraft):
             raise ValueError("至少需要提供一個 F04 欄位")
         if "parcel_rows" in self.model_fields_set and self.parcel_rows is None:
             raise ValueError("F04 宗地清單不可設為 null")
+        if "benchmark_factor_rows" in self.model_fields_set and self.benchmark_factor_rows is None:
+            raise ValueError("F04 比準地個別因素不可設為 null")
         return self
 
 

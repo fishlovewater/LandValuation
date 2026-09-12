@@ -18,6 +18,8 @@ from app.storage.service import StorageService
 from app.valuation.documents.repository import DocumentRepository
 from app.valuation.documents.service import safe_filename
 from app.valuation.models import (
+    BenchmarkLandRecord,
+    BenchmarkValuationRecord,
     CaseEventRecord,
     ComparisonFactorValueRecord,
     DocumentRecord,
@@ -27,6 +29,7 @@ from app.valuation.models import (
     ValuationLocationRecord,
     ValidationRunRecord,
 )
+from app.valuation.f01_f04_schemas import F04DraftData
 from app.valuation.report_packages.complete_draft_pdf_builder import (
     build_six_page_formal_pdf,
 )
@@ -1078,6 +1081,236 @@ class FormalReportService:
             for item in locations
         ]
 
+    async def _template_f03_data(
+        self,
+        case_id: UUID,
+        s01: dict[str, object],
+        locations: list[dict[str, object]],
+    ) -> dict[str, object]:
+        """Build Table 14 rows from canonical F03/benchmark records.
+
+        Table 14 has room for five benchmark rows.  Do not silently truncate
+        additional benchmark valuations because that would make the official
+        export incomplete.
+        """
+
+        valuations = list((await self.session.scalars(
+            select(BenchmarkValuationRecord)
+            .where(BenchmarkValuationRecord.case_id == case_id)
+            .order_by(
+                BenchmarkValuationRecord.updated_at.desc(),
+                BenchmarkValuationRecord.version_no.desc(),
+                BenchmarkValuationRecord.benchmark_valuation_id,
+            )
+        )).all())
+        latest_by_benchmark: dict[UUID, BenchmarkValuationRecord] = {}
+        for valuation in valuations:
+            latest_by_benchmark.setdefault(valuation.benchmark_land_id, valuation)
+        latest = list(latest_by_benchmark.values())
+
+        benchmark_ids = {item.benchmark_land_id for item in latest}
+        benchmarks = list((await self.session.scalars(
+            select(BenchmarkLandRecord).where(
+                BenchmarkLandRecord.case_id == case_id,
+                BenchmarkLandRecord.benchmark_land_id.in_(benchmark_ids),
+                BenchmarkLandRecord.is_active.is_(True),
+            )
+        )).all()) if benchmark_ids else []
+        benchmark_by_id = {item.benchmark_land_id: item for item in benchmarks}
+        latest = [item for item in latest if item.benchmark_land_id in benchmark_by_id]
+        if len(latest) > 5:
+            raise AppError(
+                "F03_TEMPLATE_MAX_ROWS",
+                "表14正式範本最多可列5筆比準地；目前案件超過範本容量",
+                422,
+                {"benchmark_count": len(latest), "template_capacity": 5},
+            )
+
+        parcel_ids = {item.parcel_id for item in benchmarks}
+        parcels = list((await self.session.scalars(
+            select(ParcelRecord).where(
+                ParcelRecord.case_id == case_id,
+                ParcelRecord.parcel_id.in_(parcel_ids),
+            )
+        )).all()) if parcel_ids else []
+        parcel_by_id = {item.parcel_id: item for item in parcels}
+        location_by_id = {
+            str(item.get("location_id")): item for item in locations
+            if item.get("location_id") is not None
+        }
+
+        rows: list[dict[str, object]] = []
+        for valuation in sorted(
+            latest,
+            key=lambda item: (
+                benchmark_by_id.get(item.benchmark_land_id).benchmark_land_no
+                if benchmark_by_id.get(item.benchmark_land_id) is not None
+                else str(item.benchmark_land_id)
+            ),
+        ):
+            benchmark = benchmark_by_id.get(valuation.benchmark_land_id)
+            parcel = None if benchmark is None else parcel_by_id.get(benchmark.parcel_id)
+            location = (
+                None
+                if parcel is None or parcel.location_id is None
+                else location_by_id.get(str(parcel.location_id))
+            )
+            values = (
+                dict(location.get("values") or {})
+                if isinstance(location, dict)
+                else {}
+            )
+            section_subsection = ""
+            if parcel is not None:
+                section_subsection = "".join(
+                    part for part in (parcel.section_name, parcel.subsection_name or "") if part
+                )
+            rows.append({
+                "price_zone_no": None if benchmark is None else benchmark.price_zone_no,
+                "benchmark_land_no": (
+                    None
+                    if benchmark is None
+                    else benchmark.land_consolidation_serial or benchmark.benchmark_land_no
+                ),
+                "district_name": (
+                    values.get("district_name")
+                    if values.get("district_name") not in (None, "")
+                    else (None if parcel is None else parcel.district_code)
+                ),
+                "section_subsection_name": section_subsection or None,
+                "land_no": None if parcel is None else parcel.land_no,
+                "comparison_price": valuation.comparison_price,
+                "comparison_weight": valuation.comparison_weight,
+                "income_price": valuation.income_price,
+                "income_weight": valuation.income_weight,
+                "benchmark_land_price": valuation.benchmark_land_price,
+                "decision_reason": valuation.decision_reason,
+            })
+
+        return {
+            "rows": rows,
+            "footer": {
+                # F03 relational storage does not currently own these signature
+                # fields.  Reuse only explicit case-level S01 signatories; do
+                # not invent a filled date.
+                "filled_date": None,
+                "handler_name": s01.get("handler_name"),
+                "section_head_name": s01.get("section_head_name"),
+                "director_name": s01.get("director_name"),
+                "appraiser_name": s01.get("appraiser_name"),
+            },
+        }
+
+    async def _template_f04_data(
+        self,
+        case_id: UUID,
+        locations: list[dict[str, object]],
+    ) -> dict[str, object] | None:
+        """Build Table 6 data from the latest canonical F04 draft."""
+
+        form = await self.session.scalar(
+            select(FormInstanceRecord)
+            .where(
+                FormInstanceRecord.case_id == case_id,
+                FormInstanceRecord.form_code == "F04",
+            )
+            .order_by(
+                FormInstanceRecord.version_no.desc(),
+                FormInstanceRecord.updated_at.desc(),
+                FormInstanceRecord.form_instance_id,
+            )
+            .limit(1)
+        )
+        if form is None:
+            return None
+        content = form.form_content if isinstance(form.form_content, dict) else {}
+        try:
+            data = F04DraftData.model_validate(content.get("data") or {})
+        except ValueError as exc:
+            raise AppError(
+                "F04_FORM_CONTENT_INVALID",
+                "表6資料不符合目前正式Schema，請先修正F04資料",
+                409,
+            ) from exc
+        if len(data.parcel_rows) > 5:
+            raise AppError(
+                "F04_TEMPLATE_MAX_PARCELS",
+                "表6正式範本最多可列5筆宗地；目前案件超過範本容量",
+                422,
+                {"parcel_count": len(data.parcel_rows), "template_capacity": 5},
+            )
+
+        benchmark_valuation = None
+        benchmark = None
+        benchmark_parcel = None
+        if data.benchmark_valuation_id is not None:
+            benchmark_valuation = await self.session.scalar(
+                select(BenchmarkValuationRecord).where(
+                    BenchmarkValuationRecord.case_id == case_id,
+                    BenchmarkValuationRecord.benchmark_valuation_id
+                    == data.benchmark_valuation_id,
+                )
+            )
+        if benchmark_valuation is not None:
+            benchmark = await self.session.scalar(
+                select(BenchmarkLandRecord).where(
+                    BenchmarkLandRecord.case_id == case_id,
+                    BenchmarkLandRecord.benchmark_land_id
+                    == benchmark_valuation.benchmark_land_id,
+                )
+            )
+        if benchmark is not None:
+            benchmark_parcel = await self.session.scalar(
+                select(ParcelRecord).where(
+                    ParcelRecord.case_id == case_id,
+                    ParcelRecord.parcel_id == benchmark.parcel_id,
+                )
+            )
+
+        parcel_ids = {item.parcel_id for item in data.parcel_rows}
+        parcel_records = list((await self.session.scalars(
+            select(ParcelRecord).where(
+                ParcelRecord.case_id == case_id,
+                ParcelRecord.parcel_id.in_(parcel_ids),
+            )
+        )).all()) if parcel_ids else []
+        parcel_by_id = {item.parcel_id: item for item in parcel_records}
+
+        def parcel_display(parcel: ParcelRecord | None) -> str | None:
+            if parcel is None:
+                return None
+            section = "".join(
+                part for part in (parcel.section_name, parcel.subsection_name or "") if part
+            )
+            return f"{section} {parcel.land_no}地號".strip()
+
+        exported_rows: list[dict[str, object]] = []
+        for index, row in enumerate(data.parcel_rows, start=1):
+            payload = row.model_dump(mode="json")
+            payload["parcel_serial"] = index
+            payload["parcel_display"] = parcel_display(parcel_by_id.get(row.parcel_id))
+            exported_rows.append(payload)
+
+        return {
+            **data.model_dump(mode="json"),
+            "benchmark": {
+                "benchmark_land_no": (
+                    None
+                    if benchmark is None
+                    else benchmark.land_consolidation_serial or benchmark.benchmark_land_no
+                ),
+                "parcel_display": parcel_display(benchmark_parcel),
+            },
+            "parcel_rows": exported_rows,
+            "footer": {
+                "filled_date": data.filled_date,
+                "handler_name": data.handler_name,
+                "section_head_name": data.section_head_name,
+                "director_name": data.director_name,
+                "appraiser_name": data.appraiser_name,
+            },
+        }
+
     @staticmethod
     def _merge_location_data_into_pdf(
         data: dict, locations: list[dict[str, object]]
@@ -1241,12 +1474,43 @@ class FormalReportService:
                 ("F02", F02DraftData),
             )
         }
+        regional_data = self.pages._read_data(records["F02-RF"], F02RFDraftData)
+        if regional_data.rule_version_id is not None:
+            land_use = LAND_USE_ALIASES.get(
+                str(case.land_use_type or "").strip(),
+                str(case.land_use_type or "").strip().upper(),
+            )
+            level_rows = await self.repository.list_factor_levels(
+                regional_data.rule_version_id,
+                land_use,
+                set(TEMPLATE_FACTOR_CODES),
+            )
+            level_lookup: dict[str, dict[str, dict[str, object]]] = {}
+            for definition, level in level_rows:
+                payload = {
+                    "level_code": level.level_code,
+                    "level_name": level.level_name,
+                    "sort_order": level.sort_order,
+                }
+                factor_lookup = level_lookup.setdefault(definition.factor_code, {})
+                factor_lookup[str(level.level_code)] = payload
+                factor_lookup[str(level.level_name)] = payload
+            pages["F02-RF"]["level_lookup"] = level_lookup
+
+        locations = await self._template_location_data(case_id)
+        pages["F03"] = await self._template_f03_data(case_id, pages["S01"], locations)
+        f04 = await self._template_f04_data(case_id, locations)
+        if f04 is not None:
+            pages["F04"] = f04
         case_data = {
             "case_no": case.case_no,
             "case_title": case.case_title,
             "valuation_base_date": case.valuation_base_date,
+            "land_use_type": LAND_USE_ALIASES.get(
+                str(case.land_use_type or "").strip(),
+                str(case.land_use_type or "").strip().upper(),
+            ),
         }
-        locations = await self._template_location_data(case_id)
         jobs: list[tuple[object, dict[str, object] | None]] = []
         s01_definition = next(item for item in TEMPLATE_EXPORTS if item.code == "S01")
         if locations:
@@ -1256,7 +1520,7 @@ class FormalReportService:
         jobs.extend(
             (definition, None)
             for definition in TEMPLATE_EXPORTS
-            if definition.code != "S01"
+            if definition.code != "S01" and definition.code in pages
         )
 
         repository = DocumentRepository(self.session)
@@ -1265,14 +1529,25 @@ class FormalReportService:
             location_id = None if location is None else UUID(str(location["location_id"]))
             location_label = None if location is None else str(location["label"])
             scope_key = "combined" if location is None else str(location["location_id"])
-            content = await run_in_threadpool(
-                build_template_export_xlsx,
-                code=definition.code,
-                case=case_data,
-                pages=pages,
-                locations=locations if definition.code != "S01" else None,
-                location=location,
-            )
+            try:
+                content = await run_in_threadpool(
+                    build_template_export_xlsx,
+                    code=definition.code,
+                    case=case_data,
+                    pages=pages,
+                    locations=locations if definition.code != "S01" else None,
+                    location=location,
+                )
+            except FileNotFoundError as exc:
+                raise AppError(
+                    "OFFICIAL_EXCEL_TEMPLATE_MISSING",
+                    str(exc),
+                    409,
+                    {
+                        "form_code": definition.code,
+                        "land_use_type": case_data["land_use_type"],
+                    },
+                ) from exc
             group_id = uuid5(
                 NAMESPACE_URL,
                 f"land-valuation:{case_id}:report:{report_id}:template:{definition.code}:{scope_key}",
@@ -1280,8 +1555,10 @@ class FormalReportService:
             version_no = await repository.next_version(case_id, group_id)
             document_id = uuid4()
             suffix = "combined" if location is None else f"location-{location['display_order']}"
+            output_filename = definition.output_filename
+            output_title = definition.title
             filename = safe_filename(
-                f"{case.case_no}_{definition.code}_{suffix}_{definition.filename}"
+                f"{case.case_no}_{definition.code}_{suffix}_{output_filename}"
             )
             object_key = build_generated_report_object_key(
                 case_id, group_id, document_id, version_no, filename
@@ -1316,7 +1593,7 @@ class FormalReportService:
             except Exception:
                 await self.storage.delete(object_key)
                 raise
-            title = definition.title if location is None else f"{definition.title}（{location_label}）"
+            title = output_title if location is None else f"{output_title}（{location_label}）"
             results.append(
                 TemplateExportResponse(
                     form_code=definition.code,

@@ -13,7 +13,7 @@ from app.valuation.operations.calculation import (
 from app.valuation.operations.report_builder import build_f03_report_pdf
 
 
-def test_f03_calculation_is_deterministic_and_rounds_half_up() -> None:
+def test_f03_calculation_is_deterministic_and_applies_article_21_rounding() -> None:
     values = {
         "comparison_price": Decimal("100.005"),
         "comparison_weight": Decimal("1"),
@@ -24,10 +24,34 @@ def test_f03_calculation_is_deterministic_and_rounds_half_up() -> None:
     first = calculate_f03_price(**values)
     second = calculate_f03_price(**values)
 
-    assert first.result == Decimal("100.01")
+    assert first.result == Decimal("110")
     assert first.input_fingerprint == second.input_fingerprint
     assert first.steps == second.steps
-    assert FORMULA_VERSION == "F03_WEIGHTED_PRICE_V1"
+    assert FORMULA_VERSION == "F03_WEIGHTED_PRICE_V2"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("99.13", "100"),
+        ("100", "100"),
+        ("811", "820"),
+        ("1000", "1000"),
+        ("11111", "11200"),
+        ("100000", "100000"),
+        ("1111111", "1112000"),
+    ],
+)
+def test_f03_article_21_rounding_matches_official_workbook_examples(
+    value: str, expected: str
+) -> None:
+    result = calculate_f03_price(
+        comparison_price=Decimal(value),
+        comparison_weight=Decimal("1"),
+        income_price=None,
+        income_weight=Decimal("0"),
+    )
+    assert result.result == Decimal(expected)
 
 
 def test_f03_calculation_requires_price_for_positive_weight() -> None:

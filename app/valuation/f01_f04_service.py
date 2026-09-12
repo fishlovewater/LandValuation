@@ -90,6 +90,17 @@ class F01F04Service:
                 parcel = await self.repository.get_parcel(case_id, row.parcel_id)
                 if parcel is None:
                     raise AppError("F04_PARCEL_NOT_FOUND", "F04 宗地不存在或不屬於案件", 422)
+                if row.factor_rows:
+                    row.parcel_adjustment_rate = sum(
+                        (item.difference_rate or Decimal("0") for item in row.factor_rows),
+                        Decimal("0"),
+                    )
+                    row.adjustment_confirmed_by_user = all(
+                        item.difference_rate in (None, Decimal("0")) or item.confirmed_by_user
+                        for item in row.factor_rows
+                    )
+                    if not row.adjustment_source_notes:
+                        row.adjustment_source_notes = "依表6已確認個別因素差異率合計"
                 value = calculate_f04(
                     data.benchmark_land_price,
                     row.parcel_adjustment_rate,
@@ -102,11 +113,16 @@ class F01F04Service:
                 rows.append({
                     "parcel_id": str(row.parcel_id),
                     "parcel_adjustment_rate": str(row.parcel_adjustment_rate),
+                    "factor_rows": [
+                        item.model_dump(mode="json") for item in row.factor_rows
+                    ],
+                    "trial_unit_price": str(value.trial_unit_price),
                     "parcel_unit_price": str(value.parcel_unit_price),
                     "parcel_total_value": str(value.parcel_total_value),
                 })
             snapshot = {
-                "formula_code": "NTPC_F04_PARCEL_MARKET_VALUE_V1",
+                "formula_code": "NTPC_F04_PARCEL_MARKET_VALUE_V2",
+                "rounding_code": "ARTICLE_21_ROUND_UP_BY_MAGNITUDE",
                 "benchmark_valuation_id": str(data.benchmark_valuation_id),
                 "rule_version_id": str(data.rule_version_id),
                 "benchmark_land_price": str(data.benchmark_land_price),
