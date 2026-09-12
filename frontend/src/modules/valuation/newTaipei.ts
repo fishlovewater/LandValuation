@@ -33,5 +33,6 @@ export const NEW_TAIPEI_DISTRICTS = [
 ] as const
 
 export function newTaipeiDistrictName(code: string | null | undefined): string {
-  return NEW_TAIPEI_DISTRICTS.find((district) => district.code === code)?.name ?? code ?? ''
+  if (!code) return ''
+  return NEW_TAIPEI_DISTRICTS.find((district) => district.code === code)?.name ?? '行政區待確認'
 }

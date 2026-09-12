@@ -1353,7 +1353,7 @@ function focusRequestedRouteTarget(): void {
       activeWizardStep.value = 3
       activeDataSection.value = 'f03'
     }
-    void focusElementById(targetId, `請修正 ${FIELD_LABELS[normalized] ?? normalized} 後重新執行檢核。`)
+    void focusElementById(targetId, `請修正 ${FIELD_LABELS[normalized] ?? valuationFieldLabel(normalized)} 後重新執行檢核。`)
   }
 }
 
