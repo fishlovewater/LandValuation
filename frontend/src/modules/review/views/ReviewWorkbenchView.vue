@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { PhX as X } from '@phosphor-icons/vue'
 import ConfirmDialog from '../../../components/common/ConfirmDialog.vue'
 import EmptyState from '../../../components/common/EmptyState.vue'
 import ErrorState from '../../../components/common/ErrorState.vue'
 import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
 import PageHeader from '../../../components/common/PageHeader.vue'
-import GlassCard from '../../../components/glass/GlassCard.vue'
 import GlassModal from '../../../components/glass/GlassModal.vue'
 import { liquidGlass as vLiquidGlass } from '../../../directives/liquidGlass'
 import { useAuthStore } from '../../../stores/auth.store'
@@ -614,7 +614,7 @@ async function generateReport(): Promise<void> {
 
 function selectFinding(findingId: string): void {
   selectedFindingId.value = findingId
-  closeDrawer()
+  if (drawer.value === 'left') closeDrawer()
   void router.replace({ query: { ...route.query, finding: findingId } })
 }
 
@@ -755,15 +755,27 @@ onBeforeUnmount(() => {
               <b>{{ inputVersionLabel }}</b>
             </span>
           </div>
-          <button
-            type="button"
-            data-testid="open-review-context"
-            aria-controls="review-context-drawer"
-            :aria-expanded="drawer === 'left'"
-            @click="openDrawer('left', $event)"
-          >
-            案件資料
-          </button>
+          <div class="review-workbench__source-actions">
+            <button
+              type="button"
+              data-testid="open-review-context"
+              aria-controls="review-context-drawer"
+              :aria-expanded="drawer === 'left'"
+              @click="openDrawer('left', $event)"
+            >
+              案件資料
+            </button>
+            <button
+              type="button"
+              data-testid="open-review-finding"
+              aria-controls="review-finding-drawer"
+              :aria-expanded="drawer === 'right'"
+              :disabled="!detail.findings.length"
+              @click="openDrawer('right', $event)"
+            >
+              疑點內容<span v-if="detail.findings.length">（{{ unresolvedCount }} 待處理）</span>
+            </button>
+          </div>
         </section>
 
         <section
@@ -932,10 +944,6 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <div class="review-workbench__mobile-tools" aria-label="輔助面板">
-          <button type="button" data-testid="open-review-finding" aria-controls="review-finding-drawer" :aria-expanded="drawer === 'right'" @click="openDrawer('right', $event)">疑點內容</button>
-        </div>
-
         <button
           v-if="drawer"
           type="button"
@@ -959,7 +967,9 @@ onBeforeUnmount(() => {
           >
             <div class="review-workbench__panel-heading">
               <div><p>案件資料</p><h2 id="review-context-title">案件概況</h2></div>
-              <button v-if="drawer === 'left'" type="button" aria-label="關閉案件資料" @click="closeDrawer">×</button>
+              <button v-if="drawer === 'left'" type="button" aria-label="關閉案件資料" @click="closeDrawer">
+                <X :size="20" weight="bold" aria-hidden="true" />
+              </button>
             </div>
             <dl class="review-workbench__case-facts">
               <div><dt>案件編號</dt><dd>{{ detail.caseNo }}</dd></div>
@@ -1036,7 +1046,9 @@ onBeforeUnmount(() => {
             :aria-modal="drawer === 'right' ? 'true' : undefined"
             aria-label="疑點內容"
           >
-            <button v-if="drawer === 'right'" type="button" class="review-workbench__drawer-close" aria-label="關閉疑點內容" @click="closeDrawer">×</button>
+            <button v-if="drawer === 'right'" type="button" class="review-workbench__drawer-close" aria-label="關閉疑點內容" @click="closeDrawer">
+              <X :size="20" weight="bold" aria-hidden="true" />
+            </button>
             <section class="review-workbench__finding-queue" aria-labelledby="review-finding-queue-title">
               <div class="review-workbench__finding-queue-heading">
                 <div>
@@ -1060,7 +1072,7 @@ onBeforeUnmount(() => {
               </div>
               <p v-else class="review-workbench__muted">目前沒有需要人工判定的疑點。</p>
             </section>
-            <GlassCard class="review-workbench__finding-frame" data-testid="right-finding-frame">
+            <div class="review-workbench__finding-frame" data-testid="right-finding-frame">
               <FindingPanel
                 :finding="selectedFinding"
                 :decision="selectedDecision"
@@ -1070,7 +1082,7 @@ onBeforeUnmount(() => {
                 :saving="mutating"
                 @save="saveFindingDecision"
               />
-            </GlassCard>
+            </div>
           </aside>
         </div>
       </template>
@@ -1168,8 +1180,10 @@ onBeforeUnmount(() => {
 .review-workbench__source-badge[data-source="EXTERNAL"] { color: #765514; background: #fff2c9; }
 .review-workbench__source-stats { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 12px; color: var(--app-muted); font-size: 10px; white-space: nowrap; }
 .review-workbench__source-stats b { color: var(--app-ink); font-size: 12px; }
-.review-workbench__source-strip > button { min-height: 40px; padding: 7px 12px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: #fff; cursor: pointer; font-size: 11px; font-weight: 900; white-space: nowrap; }
-.review-workbench__source-strip > button:hover { border-color: rgba(200, 91, 67, .35); color: var(--app-accent-deep); }
+.review-workbench__source-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.review-workbench__source-actions button { min-height: 40px; padding: 7px 12px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: #fff; cursor: pointer; font-size: 11px; font-weight: 900; white-space: nowrap; }
+.review-workbench__source-actions button:hover:not(:disabled) { border-color: rgba(200, 91, 67, .35); color: var(--app-accent-deep); }
+.review-workbench__source-actions button:disabled { cursor: not-allowed; opacity: .5; }
 .review-workbench__readonly-banner { display: grid; gap: 4px; margin-top: 12px; padding: 12px 14px; border: 1px solid #d8c48d; border-radius: var(--app-radius-sm); background: #fff9e8; }
 .review-workbench__readonly-banner[data-mode="READ_ONLY"] { border-color: var(--app-line); background: #f5f7f9; }
 .review-workbench__readonly-banner strong { color: var(--app-ink); font-size: 12px; }
@@ -1240,12 +1254,13 @@ onBeforeUnmount(() => {
 .review-workbench__correction-actions button[type="submit"] { border-color: var(--app-accent); color: #fff; background: var(--app-accent); }
 .review-workbench__correction-actions button:disabled { cursor: not-allowed; opacity: .55; }
 .review-workbench :deep(.review-action-bar) { position: sticky; z-index: 18; top: 104px; margin-top: 12px; box-shadow: 0 12px 28px rgba(30, 52, 78, .12); }
-.review-workbench__layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 420px); align-items: start; gap: 16px; margin-top: 16px; }
-.review-workbench__left { display: none; }
+.review-workbench__layout { display: block; margin-top: 16px; }
+.review-workbench__left,
+.review-workbench__right { display: none; }
 .review-workbench__left--open { position: fixed; z-index: 50; inset: 16px auto 16px 16px; display: grid; width: min(360px, calc(100vw - 32px)); max-height: none; gap: 16px; overflow: auto; padding: 18px; border: 1px solid var(--app-line); border-radius: var(--app-radius-md); background: #f7f8fb; box-shadow: 0 18px 50px rgba(33, 48, 74, .22); }
-.review-workbench__center { min-width: 0; }
-.review-workbench__right { position: sticky; top: 190px; min-width: 0; max-height: calc(100vh - 210px); overflow: auto; }
-.review-workbench__finding-frame { padding: 0; overflow: hidden; background: rgba(255, 255, 255, .82); }
+.review-workbench__center { min-width: 0; width: 100%; }
+.review-workbench__right--open { position: fixed; z-index: 50; inset: 16px 16px 16px auto; display: grid; align-content: start; width: min(460px, calc(100vw - 32px)); max-height: none; gap: 10px; overflow: auto; padding: 18px; border: 1px solid var(--app-line); border-radius: var(--app-radius-md); background: #fff; box-shadow: 0 18px 50px rgba(33, 48, 74, .22); }
+.review-workbench__finding-frame { padding: 0; overflow: hidden; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #fff; }
 .review-workbench__finding-queue { display: grid; gap: 9px; margin-bottom: 10px; padding: 12px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #f8fafc; }
 .review-workbench__finding-queue-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .review-workbench__finding-queue-heading > div { display: grid; gap: 2px; }
@@ -1262,7 +1277,8 @@ onBeforeUnmount(() => {
 .review-workbench__panel-heading p { margin: 0 0 4px; color: var(--app-accent-deep); font-size: 9px; font-weight: 900; letter-spacing: .14em; }
 .review-workbench__panel-heading h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 21px; }
 .review-workbench__panel-heading button,
-.review-workbench__drawer-close { display: grid; width: 42px; height: 42px; place-items: center; border: 0; border-radius: 8px; color: var(--app-ink-soft); background: transparent; cursor: pointer; font-size: 25px; }
+.review-workbench__drawer-close { display: grid; width: 42px; height: 42px; place-items: center; border: 0; border-radius: 8px; color: var(--app-ink-soft); background: transparent; cursor: pointer; }
+.review-workbench__drawer-close { position: absolute; z-index: 1; top: 8px; right: 8px; }
 .review-workbench__case-facts { display: grid; gap: 10px; margin: 0; }
 .review-workbench__case-facts div { display: grid; gap: 3px; }
 .review-workbench__case-facts dt { color: var(--app-muted); font-size: 10px; font-weight: 800; }
@@ -1282,28 +1298,19 @@ onBeforeUnmount(() => {
 .review-workbench__finding-list small { color: var(--app-muted); font-size: 10px; }
 .review-workbench__context-summary p { margin: 0; color: var(--app-muted); font-size: 11px; line-height: 1.6; }
 .review-workbench__muted { margin: 0; color: var(--app-muted); font-size: 11px; line-height: 1.6; }
-.review-workbench__mobile-tools { display: none; }
 .review-workbench__drawer-backdrop { position: fixed; z-index: 49; inset: 0; width: 100%; height: 100%; border: 0; background: rgba(23, 34, 56, .24); cursor: default; }
 .review-workbench__empty { max-width: 720px; margin: 28px auto; }
 
 @media (max-width: 1180px) {
   .review-workbench { padding-inline: 18px; }
-  .review-workbench__layout { grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); }
   .review-workbench__source-strip { grid-template-columns: minmax(0, 1fr) auto; }
   .review-workbench__source-stats { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
+  .review-workbench__source-actions { grid-column: 2; grid-row: 1; }
 }
 
 @media (max-width: 980px) {
   .review-workbench :deep(.review-action-bar) { position: static; margin-top: 12px; box-shadow: none; }
   .review-workbench__diff-grid { grid-template-columns: 1fr; }
-  .review-workbench__mobile-tools { display: flex; gap: 8px; margin-top: 14px; }
-  .review-workbench__mobile-tools button { min-height: 44px; padding: 8px 14px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: var(--app-paper-strong); cursor: pointer; font-size: 12px; font-weight: 800; }
-  .review-workbench__layout { display: block; margin-top: 12px; }
-  .review-workbench__right { display: none; }
-  .review-workbench__right--open { position: fixed; z-index: 50; display: grid; max-height: none; box-shadow: 0 18px 50px rgba(33, 48, 74, .22); }
-  .review-workbench__right--open { inset: 16px 16px 16px auto; width: min(430px, calc(100vw - 32px)); overflow: auto; }
-  .review-workbench__center { width: 100%; }
-  .review-workbench__drawer-close { position: absolute; z-index: 1; top: 8px; right: 8px; }
 }
 
 @media (max-width: 640px) {
@@ -1311,7 +1318,8 @@ onBeforeUnmount(() => {
   .review-workbench__source-strip { grid-template-columns: 1fr; align-items: stretch; gap: 10px; }
   .review-workbench__source-main { align-items: flex-start; flex-direction: column; }
   .review-workbench__source-stats { grid-column: auto; grid-row: auto; justify-content: flex-start; white-space: normal; }
-  .review-workbench__source-strip > button { width: 100%; }
+  .review-workbench__source-actions { grid-column: auto; grid-row: auto; align-items: stretch; flex-direction: column; }
+  .review-workbench__source-actions button { width: 100%; }
   .review-workbench__start-panel { align-items: stretch; flex-direction: column; }
   .review-workbench__start-panel button { width: 100%; }
   .review-workbench__supplement-heading,
