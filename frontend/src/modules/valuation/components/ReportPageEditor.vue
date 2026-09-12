@@ -1,5 +1,14 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import {
+  PhArrowCounterClockwise as ArrowCounterClockwise,
+  PhBracketsCurly as BracketsCurly,
+  PhCheckCircle as CheckCircle,
+  PhFileText as FileText,
+  PhFloppyDisk as FloppyDisk,
+  PhInfo as Info,
+  PhWarningCircle as WarningCircle,
+} from '@phosphor-icons/vue'
 import { userStructuredValue } from '../../../utils/fieldLabels'
 import type { ReportPageCode, ReportPageResponseDto } from '../valuation.types'
 
@@ -172,22 +181,44 @@ watch(() => [props.page.page_code, props.page.version_no, props.page.data] as co
 <template>
   <section class="report-page-editor" :data-page-code="page.page_code" :aria-labelledby="`report-editor-${page.page_code}`">
     <header class="report-page-editor__header">
-      <div>
-        <p>{{ pageLabel }}編輯</p>
-        <h3 :id="`report-editor-${page.page_code}`">{{ pageLabel }}可修改資料</h3>
-        <span>第 {{ page.version_no }} 版｜{{ formStatusLabel(page.form_status) }}</span>
+      <div class="report-page-editor__title">
+        <span class="report-page-editor__title-icon" aria-hidden="true">
+          <FileText :size="20" weight="duotone" />
+        </span>
+        <div>
+          <p>{{ pageLabel }}編輯</p>
+          <h3 :id="`report-editor-${page.page_code}`">{{ pageLabel }}可修改資料</h3>
+          <span>只修改人工填寫內容；正式計算值仍由系統產生。</span>
+        </div>
       </div>
-      <button type="button" :disabled="saving || !dirty" @click="resetDraft">還原本頁</button>
+      <div class="report-page-editor__header-actions">
+        <span class="report-page-editor__version" :data-status="page.form_status">
+          第 {{ page.version_no }} 版 · {{ formStatusLabel(page.form_status) }}
+        </span>
+        <button type="button" :disabled="saving || !dirty" @click="resetDraft">
+          <ArrowCounterClockwise :size="15" weight="bold" aria-hidden="true" />
+          <span>還原本頁</span>
+        </button>
+      </div>
     </header>
 
-    <p class="report-page-editor__note">這裡可修改目前草稿中的人工填寫欄位；正式計算結果、調整率與價格仍由系統計算。</p>
+    <div class="report-page-editor__note">
+      <Info :size="16" weight="duotone" aria-hidden="true" />
+      <div>
+        <strong>人工欄位可修改</strong>
+        <span>正式計算結果、調整率與價格屬於系統計算結果，不會由這裡的人工輸入覆寫。</span>
+      </div>
+    </div>
 
     <div class="report-page-editor__grid">
       <label v-for="field in fields" :key="field.key" :class="{ 'is-wide': field.kind === 'textarea' || field.kind === 'json' }">
         <span>{{ field.label }}</span>
         <small v-if="field.help">{{ field.help }}</small>
         <div v-if="field.kind === 'json'" class="report-page-editor__structured">
-          <span class="report-page-editor__structured-summary">目前內容：{{ structuredDraftSummary(field.key) }}</span>
+          <div class="report-page-editor__structured-summary">
+            <BracketsCurly :size="16" weight="duotone" aria-hidden="true" />
+            <span><strong>結構化內容摘要</strong><small>{{ structuredDraftSummary(field.key) }}</small></span>
+          </div>
           <details>
             <summary>進階資料編輯</summary>
             <p>一般情況不需要直接修改資料結構；只有在確認內容來源與格式時才需要展開。</p>
@@ -221,27 +252,48 @@ watch(() => [props.page.page_code, props.page.version_no, props.page.data] as co
       </label>
     </div>
 
-    <p v-if="error" class="report-page-editor__error" role="alert">{{ error }}</p>
-    <footer class="report-page-editor__actions">
-      <span>{{ dirty ? '有尚未儲存的修改' : '目前內容已儲存' }}</span>
+    <div v-if="error" class="report-page-editor__error" role="alert">
+      <WarningCircle :size="16" weight="fill" aria-hidden="true" />
+      <span>{{ error }}</span>
+    </div>
+    <footer class="report-page-editor__actions" :data-state="dirty ? 'dirty' : 'saved'">
+      <div>
+        <WarningCircle v-if="dirty" :size="17" weight="fill" aria-hidden="true" />
+        <CheckCircle v-else :size="17" weight="fill" aria-hidden="true" />
+        <span>
+          <strong>{{ dirty ? '有尚未儲存的修改' : '目前內容已儲存' }}</strong>
+          <small>{{ dirty ? '儲存後才會成為目前查估書草稿的一部分。' : '可以繼續檢視其他頁面或進行後續確認。' }}</small>
+        </span>
+      </div>
       <button type="button" data-testid="save-report-page-editor" :disabled="saving || !dirty" @click="save">
-        {{ saving ? '儲存中…' : '儲存本頁修改' }}
+        <FloppyDisk v-if="!saving" :size="16" weight="bold" aria-hidden="true" />
+        <span>{{ saving ? '儲存中…' : '儲存本頁修改' }}</span>
       </button>
     </footer>
   </section>
 </template>
 
 <style scoped>
-.report-page-editor { display: grid; gap: 14px; padding: 16px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: rgba(255,255,255,.72); }
+.report-page-editor { display: grid; gap: 14px; padding: 16px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #fff; }
 .report-page-editor__header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.report-page-editor__title { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.report-page-editor__title-icon { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; border-radius: 9px; color: #2e5984; background: #edf4fb; }
 .report-page-editor__header p { margin: 0 0 4px; color: var(--app-accent-deep); font-size: 9px; font-weight: 900; letter-spacing: .13em; }
 .report-page-editor__header h3 { margin: 0; color: var(--app-ink); font-size: 17px; }
-.report-page-editor__header span { display: block; margin-top: 4px; color: var(--app-muted); font-size: 11px; }
+.report-page-editor__title > div > span { display: block; margin-top: 4px; color: var(--app-muted); font-size: 11px; line-height: 1.5; }
+.report-page-editor__header-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.report-page-editor__version { display: inline-flex; min-height: 30px; align-items: center; padding: 5px 9px; border: 1px solid #dbe3eb; border-radius: var(--app-radius-pill); color: var(--app-ink-soft); background: #f7f9fb; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.report-page-editor__version[data-status="CHECKED"],
+.report-page-editor__version[data-status="FINAL"] { border-color: #cfe4da; color: #2f7456; background: #f3f9f6; }
 .report-page-editor__header button,
-.report-page-editor__actions button { min-height: 38px; padding: 7px 12px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: #fff; cursor: pointer; font-weight: 800; }
+.report-page-editor__actions button { display: inline-flex; min-height: 38px; align-items: center; justify-content: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: #fff; cursor: pointer; font-weight: 800; }
 .report-page-editor__actions button { border-color: var(--app-accent); color: #fff; background: var(--app-accent); }
 .report-page-editor button:disabled { cursor: not-allowed; opacity: .5; }
-.report-page-editor__note { margin: 0; padding: 9px 11px; border-radius: 8px; color: #2e5984; background: #edf4fb; font-size: 11px; line-height: 1.6; }
+.report-page-editor__note { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 10px 12px; border-radius: 8px; color: #2e5984; background: #edf4fb; font-size: 11px; line-height: 1.6; }
+.report-page-editor__note > svg { flex: 0 0 auto; margin-top: 1px; }
+.report-page-editor__note > div { display: grid; gap: 2px; }
+.report-page-editor__note strong { color: #244d73; font-size: 11px; }
+.report-page-editor__note span { color: var(--app-ink-soft); }
 .report-page-editor__grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; }
 .report-page-editor__grid label { display: grid; gap: 5px; color: var(--app-ink-soft); font-size: 11px; font-weight: 800; }
 .report-page-editor__grid label.is-wide { grid-column: 1 / -1; }
@@ -251,19 +303,32 @@ watch(() => [props.page.page_code, props.page.version_no, props.page.data] as co
 .report-page-editor__grid textarea { resize: vertical; line-height: 1.5; }
 .report-page-editor__grid textarea[spellcheck="false"] { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
 .report-page-editor__structured { display:grid; gap:8px; }
-.report-page-editor__structured-summary { padding:9px 10px; border:1px solid #e0e7ef; border-radius:8px; color:var(--app-ink-soft); background:#f8fafc; font-size:11px; font-weight:600; line-height:1.55; }
+.report-page-editor__structured-summary { display:flex; align-items:flex-start; gap:8px; padding:9px 10px; border:1px solid #e0e7ef; border-radius:8px; color:#2e5984; background:#f8fafc; }
+.report-page-editor__structured-summary > svg { flex:0 0 auto; margin-top:1px; }
+.report-page-editor__structured-summary > span { display:grid; gap:2px; min-width:0; }
+.report-page-editor__structured-summary strong { color:var(--app-ink); font-size:10px; }
+.report-page-editor__structured-summary small { color:var(--app-ink-soft); font-size:10px; font-weight:600; line-height:1.55; }
 .report-page-editor__structured details { display:grid; gap:8px; }
 .report-page-editor__structured summary { width:fit-content; color:var(--app-primary-deep); cursor:pointer; font-size:11px; font-weight:800; }
 .report-page-editor__structured details p { margin:7px 0; color:var(--app-muted); font-size:10px; font-weight:500; line-height:1.55; }
 .report-page-editor__structured details textarea { width:100%; }
 .report-page-editor__grid input:focus,
 .report-page-editor__grid textarea:focus { outline: 3px solid rgba(200,91,67,.15); border-color: var(--app-accent); }
-.report-page-editor__error { margin: 0; color: #a44334; font-size: 12px; font-weight: 700; }
-.report-page-editor__actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 12px; border-top: 1px solid var(--app-line); }
-.report-page-editor__actions span { color: var(--app-muted); font-size: 11px; }
+.report-page-editor__error { display: flex; align-items: flex-start; gap: 7px; margin: 0; padding: 10px 12px; border: 1px solid #edc8c0; border-radius: 8px; color: #a44334; background: #fff5f3; font-size: 11px; font-weight: 700; line-height: 1.55; }
+.report-page-editor__error > svg { flex: 0 0 auto; margin-top: 1px; }
+.report-page-editor__actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid #e1e7ee; border-radius: 9px; background: #fafbfd; }
+.report-page-editor__actions[data-state="dirty"] { border-color: #ead9b2; background: #fffaf0; }
+.report-page-editor__actions[data-state="saved"] { border-color: #cfe4da; background: #f3f9f6; }
+.report-page-editor__actions > div { display: flex; align-items: center; gap: 8px; color: #2f7456; }
+.report-page-editor__actions[data-state="dirty"] > div { color: #8a6515; }
+.report-page-editor__actions > div > span { display: grid; gap: 2px; }
+.report-page-editor__actions strong { color: var(--app-ink); font-size: 11px; }
+.report-page-editor__actions small { color: var(--app-muted); font-size: 9px; line-height: 1.45; }
 @media (max-width: 760px) {
   .report-page-editor__header,
   .report-page-editor__actions { align-items: stretch; flex-direction: column; }
+  .report-page-editor__header-actions { width: 100%; align-items: stretch; flex-direction: column; }
+  .report-page-editor__version { width: fit-content; }
   .report-page-editor__grid { grid-template-columns: 1fr; }
   .report-page-editor__grid label.is-wide { grid-column: auto; }
   .report-page-editor__header button,
