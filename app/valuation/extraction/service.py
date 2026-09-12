@@ -13,6 +13,7 @@ from app.valuation.documents.repository import DocumentRepository
 from app.valuation.extraction.provider import (
     CandidateValue,
     DocumentExtractionProvider,
+    XlsExtractionProvider,
     XlsxExtractionProvider,
     build_document_extraction_provider,
 )
@@ -58,12 +59,14 @@ class ExtractionService:
         mime_type = document.mime_type.lower()
         if mime_type == "application/pdf":
             provider = self.provider or build_document_extraction_provider(get_settings())
+        elif mime_type == "application/vnd.ms-excel":
+            provider = self.provider or XlsExtractionProvider()
         elif mime_type == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
             provider = self.provider or XlsxExtractionProvider()
         else:
             raise AppError(
                 "DOCUMENT_EXTRACTION_FORMAT_UNSUPPORTED",
-                "目前只支援 PDF 或 XLSX 文件擷取",
+                "目前只支援 PDF、XLS 或 XLSX 文件擷取",
                 422,
             )
 
@@ -99,7 +102,7 @@ class ExtractionService:
                         if result.provider == "LOCAL_OCR"
                         else (
                             "Excel 沒有可擷取內容，需要人工輸入"
-                            if result.provider == "LOCAL_XLSX"
+                            if result.provider in {"LOCAL_XLS", "LOCAL_XLSX"}
                             else "PDF 沒有可擷取文字，需要 OCR 或人工輸入"
                         )
                     )
@@ -119,9 +122,17 @@ class ExtractionService:
                     confidence=item.confidence,
                     source_page=item.source_page,
                     source_text=item.source_text,
-                    analysis_provider="XLSX_RULE" if result.provider == "LOCAL_XLSX" else "RULE",
+                    analysis_provider=(
+                        "XLS_RULE"
+                        if result.provider == "LOCAL_XLS"
+                        else "XLSX_RULE"
+                        if result.provider == "LOCAL_XLSX"
+                        else "RULE"
+                    ),
                     prompt_version=(
-                        "xlsx-comparison-target-v1"
+                        "xls-comparison-target-v1"
+                        if result.provider == "LOCAL_XLS"
+                        else "xlsx-comparison-target-v1"
                         if result.provider == "LOCAL_XLSX"
                         else None
                     ),

@@ -11,6 +11,7 @@ import SpreadsheetPreview from '../../../components/common/SpreadsheetPreview.vu
 import StatusBadge from '../../../components/common/StatusBadge.vue'
 import { liquidGlass as vLiquidGlass } from '../../../directives/liquidGlass'
 import { statusLabel } from '../../../utils/enumLabels'
+import { isTechnicalOnlyField } from '../../../utils/fieldLabels'
 import { historyApi, safeHistoryDownloadError, safeHistoryErrorMessage } from '../history.api'
 import {
   mapHistoryDetail,
@@ -79,8 +80,7 @@ const hasVersionHistory = computed(() => Boolean(
 
 function safeRecordEntries(record: Record<string, unknown>): Array<[string, unknown]> {
   return Object.entries(record).filter(([key, value]) => {
-    if (key === 'object_key' || key === 'bucket_name' || key === 'checksum_sha256') return false
-    if (key.endsWith('_id') || key === 'id') return false
+    if (isTechnicalOnlyField(key)) return false
     return value !== null && value !== undefined && value !== ''
   })
 }
@@ -114,6 +114,23 @@ function displayFieldValue(key: string, value: unknown): DisplayValue {
   if (key === 'ai_status') return displayEnumValue(value, aiStatusLabel)
   if (key === 'document_type') return displayEnumValue(value, documentTypeLabel)
   if (key === 'mime_type' || key === 'content_type') return displayEnumValue(value, mimeTypeLabel)
+  if (key === 'source_module') {
+    const source = typeof value === 'string' ? value.trim().toLowerCase() : ''
+    return { value: source === 'valuation' ? '估價作業' : source === 'review' ? '智慧審查' : '系統資料' }
+  }
+  if (key === 'source_type') {
+    const source = typeof value === 'string' ? value.trim().toUpperCase() : ''
+    const labels: Readonly<Record<string, string>> = {
+      OCR: '文件辨識',
+      MANUAL: '人工填寫',
+      USER: '人工填寫',
+      SYSTEM: '系統產生',
+      IMPORTED: '文件匯入',
+      AI: '智能分析',
+      OLLAMA: '智能分析',
+    }
+    return { value: labels[source] ?? '系統資料' }
+  }
   return { value: readableValue(value) }
 }
 

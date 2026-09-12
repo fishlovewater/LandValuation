@@ -3,22 +3,15 @@ import { computed } from 'vue'
 import PageHeader from '../../../components/common/PageHeader.vue'
 import { liquidGlass as vLiquidGlass } from '../../../directives/liquidGlass'
 import { useAuthStore } from '../../../stores/auth.store'
+import { userRoleLabel } from '../../../utils/fieldLabels'
 
 const authStore = useAuthStore()
 
 const user = computed(() => authStore.user)
 
-const roleLabels: Readonly<Record<string, string>> = {
-  APPRAISER: '估價人員',
-  REVIEWER: '審查人員',
-  INSPECTOR: '案件查詢',
-  ADMIN: '系統管理員',
-  SYSTEM_ADMIN: '系統管理員',
-  SUPERADMIN: '系統管理員',
-}
-
 const permissionLabels: Readonly<Record<string, string>> = {
   'assistant.use': '使用智能助理',
+  'auth.manage': '管理帳號申請',
   'case.read': '查看案件',
   'case.create': '建立案件',
   'case.update': '修改案件',
@@ -30,10 +23,6 @@ const permissionLabels: Readonly<Record<string, string>> = {
   'review.execute': '執行審查',
   'review.decide': '做出審查決定',
   'knowledge.read': '查詢法規與知識文件',
-}
-
-function roleLabel(role: string): string {
-  return roleLabels[role] ?? role
 }
 
 function permissionLabel(permission: string): string {
@@ -64,7 +53,7 @@ function permissionLabel(permission: string): string {
         <span class="profile-view__eyebrow">角色</span>
         <h2 id="profile-role-title">目前角色</h2>
         <div v-if="authStore.roles.length" class="profile-view__chips">
-          <span v-for="role in authStore.roles" :key="role">{{ roleLabel(role) }}</span>
+          <span v-for="role in authStore.roles" :key="role">{{ userRoleLabel(role) }}</span>
         </div>
         <p v-else class="profile-view__empty">目前沒有角色資料。</p>
       </section>

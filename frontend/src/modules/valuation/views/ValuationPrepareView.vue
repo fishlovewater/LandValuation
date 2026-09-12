@@ -9,7 +9,9 @@ import { useAuthStore } from '../../../stores/auth.store'
 import type { DocumentTextPreviewDto } from '../../../types/documentPreview'
 import type { SpreadsheetPreviewDto } from '../../../types/spreadsheet'
 import { statusLabel } from '../../../utils/enumLabels'
+import { userStructuredValue } from '../../../utils/fieldLabels'
 import { safeValuationErrorMessage, valuationApi } from '../valuation.api'
+import { newTaipeiDistrictName } from '../newTaipei'
 import {
   mapBenchmarkLandResponse,
   mapCalculationResponse,
@@ -33,6 +35,8 @@ import {
   type DocumentArtifactModel,
   type ExtractedFieldResponseDto,
   type F03EditableValues,
+  type ParcelImportPreviewDto,
+  type ParcelImportRowDto,
   type ParcelCreateDto,
   type ParcelResponseDto,
   type ReportPageCode,
@@ -44,6 +48,7 @@ import {
 import ValuationStepNavigator from '../components/ValuationStepNavigator.vue'
 import ValuationIssueDrawer from '../components/ValuationIssueDrawer.vue'
 import ValuationDocumentWorkspace from '../components/ValuationDocumentWorkspace.vue'
+import ValuationParcelImportPanel from '../components/ValuationParcelImportPanel.vue'
 import ValuationCandidateWorkspace from '../components/ValuationCandidateWorkspace.vue'
 import ValuationLandContext from '../components/ValuationLandContext.vue'
 import ValuationF03Section from '../components/ValuationF03Section.vue'
@@ -93,6 +98,9 @@ const previewPage = ref<number | null>(null)
 const spreadsheetPreview = ref<SpreadsheetPreviewDto | null>(null)
 const textPreview = ref<DocumentTextPreviewDto | null>(null)
 const selectedCandidateId = ref<string | null>(null)
+const parcelImportPreview = ref<ParcelImportPreviewDto | null>(null)
+const parcelImportLoading = ref(false)
+const parcelImporting = ref(false)
 
 const FORM_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   S01: '地價區段勘查表',
@@ -117,6 +125,7 @@ const FIELD_ANALYSIS_FORM_CODES: readonly FieldAnalysisFormCode[] = [
 ]
 
 function inferDocumentAnalysisForm(filename: string): FieldAnalysisFormCode {
+  if (filename.includes('宗地個別因素') || filename.includes('宗地清冊') || filename.includes('徵收土地清冊')) return 'F04'
   if (filename.includes('買賣實例')) return 'F01'
   if (filename.includes('比較法')) return 'F02'
   if (filename.includes('比準地')) return 'F03'
@@ -313,20 +322,20 @@ const wizardIssueCounts = computed<Partial<Record<WizardStep, number>>>(() => ({
 }))
 const workflowIssues = computed(() => {
   const items: Array<{ id: string; title: string; detail: string; target: string; severity: 'error' | 'warning' | 'pending' }> = []
-  if (!flow.documents.length) items.push({ id: 'documents', title: '尚未上傳來源文件', detail: '先加入估價相關 PDF、圖片或 Excel，才能進行 AI / OCR 辨識。', target: 'documents', severity: 'pending' })
-  if (pendingCandidates.value.length) items.push({ id: 'candidates', title: 'AI 辨識結果待確認', detail: `還有 ${pendingCandidates.value.length} 筆辨識結果需要人工確認或修改。`, target: 'candidates', severity: 'warning' })
+  if (!flow.documents.length) items.push({ id: 'documents', title: '尚未上傳案件啟動資料', detail: '建議先上傳宗地個別因素清冊、預定徵收範圍地籍圖與土地登記資料；系統會保留來源並協助辨識可用欄位。', target: 'documents', severity: 'pending' })
+  if (pendingCandidates.value.length) items.push({ id: 'candidates', title: '智能辨識結果待確認', detail: `還有 ${pendingCandidates.value.length} 筆辨識結果需要人工確認或修改。`, target: 'candidates', severity: 'warning' })
   if (!parcels.value.length) items.push({ id: 'parcel', title: '尚未建立宗地資料', detail: '建立本案宗地後，才能完成正式估價資料。', target: 'land', severity: 'pending' })
   if (!flow.benchmarks.length) items.push({ id: 'benchmark', title: '尚未建立比準地', detail: '至少需要一筆比準地資料供後續估價流程使用。', target: 'land', severity: 'pending' })
   const missingCount = unresolvedF03RequiredFields.value.length
   if (missingCount) items.push({ id: 'required-fields', title: '必要欄位尚未補齊', detail: `${missingCount} 個必要欄位仍缺值，可直接前往人工補充。`, target: manualFieldEntries.value.length ? 'manual' : 'f03', severity: 'warning' })
-  if (dirty.value) items.push({ id: 'unsaved-f03', title: 'F03 有尚未儲存的修改', detail: '先儲存目前修改，避免後續計算仍使用前一版資料。', target: 'f03', severity: 'warning' })
+  if (dirty.value) items.push({ id: 'unsaved-f03', title: '比準地地價估計表有尚未儲存的修改', detail: '先儲存目前修改，避免後續計算仍使用前一版資料。', target: 'f03', severity: 'warning' })
   if ((flow.validation?.failedCount ?? 0) > 0) items.push({ id: 'validation-errors', title: '正式檢核仍有阻擋錯誤', detail: `有 ${flow.validation?.failedCount ?? 0} 個阻擋錯誤必須修正後才能產出查估書。`, target: 'validation', severity: 'error' })
   return items
 })
 const wizardAvailableSteps = computed<number[]>(() => [1, 2, 3, ...(canRunValuation.value ? [4] : []), ...(canProceedToSubmit.value ? [5] : [])])
 const wizardStepTitle = computed(() => ({
   1: '案件設定',
-  2: '文件上傳與 AI 辨識',
+  2: '文件上傳與智能辨識',
   3: '資料確認',
   4: '計算與檢核',
   5: '查估書確認',
@@ -334,20 +343,21 @@ const wizardStepTitle = computed(() => ({
 }[activeWizardStep.value]))
 const wizardStepDescription = computed(() => ({
   1: '先確認案件基本資料與目前查估表版本。',
-  2: '集中管理來源文件、預覽原文並執行 AI / OCR 辨識，再逐筆確認辨識結果。',
-  3: '依待處理狀態確認人工補充、宗地、比準地與 F03 正式採用值。',
+  2: '集中管理來源文件、預覽原文並執行文件文字辨識與智能欄位分析，再逐筆確認辨識結果。',
+  3: '依待處理狀態確認人工補充、宗地、比準地與比準地地價估計表正式採用值。',
   4: '執行公式計算與正式檢核；若有錯誤可直接跳回對應欄位修正。',
   5: '前往查估書三頁確認與正式 PDF。',
   6: '完成正式送審。',
 }[activeWizardStep.value]))
 const wizardNextLabel = computed(() => {
-  if (activeWizardStep.value === 1) return '下一步：文件與 AI 辨識'
+  if (activeWizardStep.value === 1) return '下一步：文件與智能辨識'
   if (activeWizardStep.value === 2) return pendingCandidates.value.length ? `先處理 ${pendingCandidates.value.length} 筆待確認` : '下一步：資料確認'
   if (activeWizardStep.value === 3) return dataIssueCounts.value.overview ? `尚有 ${dataIssueCounts.value.overview} 項資料待處理` : '下一步：計算與檢核'
   if (activeWizardStep.value === 4) return canProceedToSubmit.value ? '下一步：查估書確認' : '通過檢核後才能繼續'
   return '前往查估書確認'
 })
 const SOURCE_DOCUMENT_CATEGORIES: readonly DocumentCategory[] = [
+  'parcel-factor-list',
   'original',
   'land-register',
   'cadastral-map',
@@ -379,22 +389,22 @@ const FIELD_TARGET_IDS: Readonly<Record<string, string>> = {
 }
 
 const FIELD_LABELS: Readonly<Record<string, string>> = {
-  benchmark_land_id: 'F03 → 比準地',
-  valuation_base_date: 'F03 → 估價基準日',
-  comparison_price: 'F03 → 比較法價格',
-  comparison_weight: 'F03 → 比較法權重',
-  income_price: 'F03 → 收益法價格',
-  income_weight: 'F03 → 收益法權重',
-  market_period_start: 'F03 → 市場期間起日',
-  market_period_end: 'F03 → 市場期間迄日',
-  market_condition: 'F03 → 市場條件',
-  selection_scope_reason: 'F03 → 選擇範圍理由',
-  decision_reason: 'F03 → 採用決策理由',
+  benchmark_land_id: '比準地地價估計表 → 比準地',
+  valuation_base_date: '比準地地價估計表 → 估價基準日',
+  comparison_price: '比準地地價估計表 → 比準地比較價格',
+  comparison_weight: '比準地地價估計表 → 比較價格權重',
+  income_price: '比準地地價估計表 → 比準地收益價格',
+  income_weight: '比準地地價估計表 → 收益價格權重',
+  market_period_start: '比準地地價估計表 → 市場期間起日',
+  market_period_end: '比準地地價估計表 → 市場期間迄日',
+  market_condition: '比準地地價估計表 → 市場條件',
+  selection_scope_reason: '比準地地價估計表 → 選擇範圍理由',
+  decision_reason: '比準地地價估計表 → 決定理由',
   documents: '案件與文件 → 來源文件',
   object_key: '案件與文件 → 來源文件儲存狀態',
-  prices: 'F03 → 比較法／收益法價格',
-  'case/form/benchmark/date': 'F03 → 比準地與估價基準日',
-  benchmark_land_price: 'F03 → 正式計算結果',
+  prices: '比準地地價估計表 → 比準地比較／收益價格',
+  'case/form/benchmark/date': '比準地地價估計表 → 比準地與估價基準日',
+  benchmark_land_price: '比準地地價估計表 → 比準地地價',
 }
 
 type ManualFieldMetadata = { label: string; guidance: string; inputType?: 'date' | 'text' }
@@ -495,18 +505,14 @@ function resetBenchmarkDraft(): void {
 function displayCandidateValue(value: unknown): string {
   if (value === null || value === undefined) return ''
   if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value)
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return ''
-  }
+  if (typeof value === 'number' || typeof value === 'bigint') return String(value)
+  return userStructuredValue(value)
 }
 
 function fieldDisplayLabel(formCode: string, fieldName: string): string {
   const manualLabel = MANUAL_FIELD_METADATA[`${formCode}.${fieldName}`]?.label
   if (manualLabel) return manualLabel
-  const known = FIELD_LABELS[fieldName]?.replace(/^F03 → /, '')
+  const known = FIELD_LABELS[fieldName]?.replace(/^比準地地價估計表 → /, '')
   if (known) return known
   const common: Readonly<Record<string, string>> = {
     land_no: '地號', area_sqm: '土地面積', land_use_zone: '使用分區', designated_use: '編定使用',
@@ -514,7 +520,7 @@ function fieldDisplayLabel(formCode: string, fieldName: string): string {
     section_name: '段名', subsection_name: '小段', price_zone_no: '地價區段', prepared_date: '製表日期',
   }
   if (common[fieldName]) return common[fieldName]
-  return fieldName
+  return '其他估價欄位'
 }
 
 function candidateStatusLabel(status: string): string {
@@ -523,9 +529,9 @@ function candidateStatusLabel(status: string): string {
 
 function candidateProviderLabel(provider: string): string {
   const normalized = provider.trim().toUpperCase()
-  if (normalized === 'RULE') return '規則辨識'
-  if (normalized.includes('OCR')) return 'OCR 辨識'
-  return 'AI 辨識'
+  if (normalized === 'RULE') return '規則比對'
+  if (normalized.includes('OCR')) return '文件文字辨識'
+  return '智能欄位分析'
 }
 
 function initializeManualFieldInputs(response: AutomatedWorkflowResponseDto): void {
@@ -554,6 +560,7 @@ function canExtractDocument(document: { mimeType: string; isActive: boolean }): 
   const mime = document.mimeType.toLowerCase()
   return document.isActive && auth.permissions.includes('valuation.update') && (
     mime === 'application/pdf'
+    || mime === 'application/vnd.ms-excel'
     || mime === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
   )
 }
@@ -566,7 +573,8 @@ function canManageSourceDocument(document: { documentType: string; isActive: boo
 
 function documentCategoryLabel(category: string): string {
   return ({
-    original: '原始文件',
+    original: '其他原始查估文件',
+    'parcel-factor-list': '宗地個別因素清冊',
     'land-register': '土地登記資料',
     'cadastral-map': '地籍圖',
     photos: '照片',
@@ -576,12 +584,12 @@ function documentCategoryLabel(category: string): string {
     'map-land-value-section': '地價區段圖',
     'generated-report': '系統產生報告',
     'complete-valuation-report': '完整送審 PDF',
-  } as Record<string, string>)[category] ?? category
+  } as Record<string, string>)[category] ?? '其他文件'
 }
 
 function candidateConfidenceLabel(candidate: ExtractedFieldResponseDto): string {
   const confidence = Number(candidate.confidence)
-  if (!Number.isFinite(confidence)) return candidate.confidence || '未提供'
+  if (!Number.isFinite(confidence)) return '未提供'
   const percent = confidence <= 1 ? confidence * 100 : confidence
   return `${percent.toFixed(percent >= 10 ? 0 : 1)}%`
 }
@@ -604,7 +612,7 @@ function documentPendingCount(documentId: string): number {
 function documentAiStatus(documentId: string): string {
   const total = documentCandidateCount(documentId)
   const pending = documentPendingCount(documentId)
-  if (extractionBusyDocumentId.value === documentId) return 'AI 辨識中'
+  if (extractionBusyDocumentId.value === documentId) return '智能辨識中'
   if (!total) return '尚未辨識'
   if (pending) return `${total} 欄位 · ${pending} 待確認`
   return `${total} 欄位 · 已完成確認`
@@ -791,7 +799,7 @@ function wizardNext(): void {
   if (activeWizardStep.value === 2) {
     if (pendingCandidates.value.length) {
       selectedCandidateId.value = pendingCandidates.value[0]?.extracted_field_id ?? null
-      notice.value = `還有 ${pendingCandidates.value.length} 筆 AI 辨識結果待確認，先完成確認再進入正式資料。`
+      notice.value = `還有 ${pendingCandidates.value.length} 筆智能辨識結果待確認，先完成確認再進入正式資料。`
       void focusElementById('valuation-candidate-workspace')
       return
     }
@@ -966,14 +974,14 @@ async function ensureRevisionDrafts(): Promise<void> {
 
     await loadData()
     if (isCurrentCase(activeCaseToken, requestedCaseId)) {
-      notice.value = '補正版已建立：F03 與 S01／F02-RF／F02 已建立較新的 DRAFT 版本，可依修正通知逐項修改。'
+      notice.value = '補正版已建立：比準地地價估計表、地價區段勘查表、影響地價區域因素分析明細表（商業用地）與比較法調查估價表已建立較新的 DRAFT 版本，可依修正通知逐項修改。'
       activeWizardStep.value = 3
       activeDataSection.value = 'f03'
       void focusElementById('f03-data-section')
     }
   } catch (caught: unknown) {
     if (caught instanceof Error && caught.message === 'F03_SOURCE_VALUES_REQUIRED') {
-      error.value = '舊版 F03 缺少比準地或估價基準日，無法安全複製；請先確認來源資料。'
+      error.value = '舊版比準地地價估計表缺少比準地或估價基準日，無法安全複製；請先確認來源資料。'
     } else {
       error.value = safeValuationErrorMessage(caught)
     }
@@ -994,8 +1002,8 @@ function findingFieldCodes(finding: ValidationFindingModel): string[] {
 
 function findingLocationLabel(finding: ValidationFindingModel): string {
   const codes = findingFieldCodes(finding)
-  if (!codes.length) return 'F03 檢核資料'
-  return codes.map((code) => FIELD_LABELS[code] ?? 'F03 相關欄位').join('、')
+  if (!codes.length) return '比準地地價估計表檢核資料'
+  return codes.map((code) => FIELD_LABELS[code] ?? '比準地地價估計表相關欄位').join('、')
 }
 
 function findingCorrectionHint(finding: ValidationFindingModel): string {
@@ -1170,6 +1178,9 @@ async function loadData(): Promise<void> {
   previewPage.value = null
   previewError.value = ''
   selectedCandidateId.value = null
+  parcelImportPreview.value = null
+  parcelImportLoading.value = false
+  parcelImporting.value = false
   clearReactiveRecord(candidateDecision)
   clearReactiveRecord(candidateValue)
   clearReactiveRecord(manualFieldValue)
@@ -1223,11 +1234,11 @@ async function loadData(): Promise<void> {
         await loadF03(form, token, requestedCaseId)
       } catch {
         if (isCurrentCase(token, requestedCaseId)) {
-          notice.value = 'F03 表單已建立，但正式估價草稿尚未初始化；可先上傳來源文件並補齊宗地／比準地資料。'
+          notice.value = '比準地地價估計表已建立，但正式估價草稿尚未初始化；可先上傳來源文件並補齊宗地／比準地資料。'
         }
       }
     } else {
-      notice.value = '目前案件尚未建立 F03 估價表；可先補齊來源文件，再建立需要的估價表。'
+      notice.value = '目前案件尚未建立比準地地價估計表；可先補齊來源文件，再建立需要的估價表。'
     }
     await Promise.all([
       loadWorkflowGuidance(token, requestedCaseId),
@@ -1249,11 +1260,12 @@ function chooseUpload(event: Event): void {
 
 async function uploadSourceDocument(): Promise<void> {
   if (!flow.case || !uploadFile.value || !canUpload.value || uploading.value) return
+  const selectedCategory = uploadCategory.value
   uploading.value = true
   error.value = ''
   notice.value = ''
   try {
-    const uploaded = await valuationApi.uploadDocument(flow.case.caseId, uploadCategory.value, uploadFile.value)
+    const uploaded = await valuationApi.uploadDocument(flow.case.caseId, selectedCategory, uploadFile.value)
     flow.documents = [mapDocumentResponse(uploaded), ...flow.documents.filter((item) => item.documentId !== uploaded.document_id)]
     previewDocumentId.value = uploaded.document_id
     initializeDocumentCategories()
@@ -1262,10 +1274,89 @@ async function uploadSourceDocument(): Promise<void> {
     const input = document.querySelector<HTMLInputElement>('#valuation-source-file')
     if (input) input.value = ''
     await loadWorkflowGuidance()
+    if (
+      selectedCategory === 'parcel-factor-list'
+      && [
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      ].includes(uploaded.mime_type.toLowerCase())
+    ) {
+      await prepareParcelImport(uploaded.document_id)
+    }
   } catch (caught: unknown) {
     error.value = safeValuationErrorMessage(caught)
   } finally {
     uploading.value = false
+  }
+}
+
+async function prepareParcelImport(documentId: string): Promise<void> {
+  const requestedCaseId = caseId.value
+  const token = activeCaseToken
+  if (parcelImportLoading.value || !isCurrentCase(token, requestedCaseId)) return
+
+  parcelImportLoading.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    const parsed = await valuationApi.previewParcelImport(requestedCaseId, documentId)
+    if (!isCurrentCase(token, requestedCaseId)) return
+    parcelImportPreview.value = parsed
+    previewDocumentId.value = documentId
+    notice.value = parsed.candidates.length
+      ? `宗地清冊已解析 ${parsed.candidates.length} 筆；可匯入 ${parsed.ready_count} 筆、待確認 ${parsed.needs_confirmation_count} 筆、既有宗地 ${parsed.duplicate_count} 筆。`
+      : '宗地清冊已解析，但沒有找到可匯入宗地。'
+    await nextTick()
+    void focusElementById('parcel-import-panel')
+  } catch (caught: unknown) {
+    if (isCurrentCase(token, requestedCaseId)) {
+      parcelImportPreview.value = null
+      error.value = safeValuationErrorMessage(caught)
+    }
+  } finally {
+    if (isCurrentCase(token, requestedCaseId)) parcelImportLoading.value = false
+  }
+}
+
+async function importParcelRows(rows: ParcelImportRowDto[]): Promise<void> {
+  const requestedCaseId = caseId.value
+  const token = activeCaseToken
+  const source = parcelImportPreview.value
+  if (
+    !source
+    || !rows.length
+    || parcelImporting.value
+    || !canEditLandContext.value
+    || !isCurrentCase(token, requestedCaseId)
+  ) return
+
+  parcelImporting.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    const result = await valuationApi.importParcelsFromDocument(
+      requestedCaseId,
+      source.document_id,
+      { rows },
+    )
+    if (!isCurrentCase(token, requestedCaseId)) return
+    parcels.value = await valuationApi.listParcels(requestedCaseId)
+    if (!isCurrentCase(token, requestedCaseId)) return
+    resetParcelDraft()
+    resetBenchmarkDraft()
+    parcelImportPreview.value = await valuationApi.previewParcelImport(
+      requestedCaseId,
+      source.document_id,
+    )
+    if (!isCurrentCase(token, requestedCaseId)) return
+    await loadWorkflowGuidance(token, requestedCaseId)
+    notice.value = result.skipped_duplicate_count
+      ? `已建立 ${result.created.length} 筆宗地；另有 ${result.skipped_duplicate_count} 筆與既有宗地重複，未重複建立。`
+      : `已由宗地個別因素清冊建立 ${result.created.length} 筆宗地。`
+  } catch (caught: unknown) {
+    if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
+  } finally {
+    if (isCurrentCase(token, requestedCaseId)) parcelImporting.value = false
   }
 }
 
@@ -1287,8 +1378,7 @@ async function extractDocument(documentId: string): Promise<void> {
     const analysisFailures: string[] = []
     let firstAnalysisError: unknown = null
     if (result.extraction_status === 'COMPLETED') {
-      // One click always scans the complete official form set. The filename
-      // dropdown is only a display hint and must not narrow the evidence scan.
+      // One click scans all six official form types; the file-type hint never narrows evidence.
       for (const formCode of FIELD_ANALYSIS_FORM_CODES) {
         try {
           result = await valuationApi.analyzeDocumentFields(requestedCaseId, documentId, formCode)
@@ -1312,8 +1402,8 @@ async function extractDocument(documentId: string): Promise<void> {
       ?? null
     const completedCount = FIELD_ANALYSIS_FORM_CODES.length - analysisFailures.length
     notice.value = analysisFailures.length
-      ? `OCR 已完成；六表 AI 辨識完成 ${completedCount}/${FIELD_ANALYSIS_FORM_CODES.length}，未完成：${analysisFailures.join('、')}。`
-      : `六份正式表單 AI 辨識完成，找到 ${pending} 筆需要人工確認的欄位；沒有原文證據的欄位已保持空白。`
+      ? `文件文字擷取已完成；表單辨識完成 ${completedCount}/${FIELD_ANALYSIS_FORM_CODES.length}，未完成：${analysisFailures.map(formDisplayName).join('、')}。`
+      : `六份正式表單辨識完成，找到 ${pending} 筆需要人工確認的欄位；沒有原文證據的欄位已保持空白。`
     if (firstAnalysisError) error.value = safeValuationErrorMessage(firstAnalysisError)
     if (pending) void focusElementById('valuation-candidate-workspace')
   } catch (caught: unknown) {
@@ -1342,7 +1432,7 @@ function cancelCandidateReopen(candidate: ExtractedFieldResponseDto): void {
   candidateValue[candidate.extracted_field_id] = displayCandidateValue(
     candidate.confirmed_value ?? candidate.extracted_value,
   )
-  notice.value = '已取消這次重新判定，保留原本已儲存的 AI 辨識處理結果。'
+  notice.value = '已取消這次重新判定，保留原本已儲存的智能辨識處理結果。'
 }
 
 async function submitCandidateDecisions(): Promise<void> {
@@ -1466,6 +1556,9 @@ async function reclassifyDocument(documentId: string): Promise<void> {
   try {
     await valuationApi.reclassifyDocument(requestedCaseId, documentId, category)
     if (!isCurrentCase(token, requestedCaseId)) return
+    if (parcelImportPreview.value?.document_id === documentId && category !== 'parcel-factor-list') {
+      parcelImportPreview.value = null
+    }
     await refreshDocumentsAndWorkflow(token, requestedCaseId)
     notice.value = `文件分類已更新為「${documentCategoryLabel(category)}」。`
   } catch (caught: unknown) {
@@ -1491,6 +1584,9 @@ async function removeDocument(documentId: string, filename: string): Promise<voi
       previewDocumentId.value = null
       previewPage.value = null
       selectedCandidateId.value = null
+    }
+    if (parcelImportPreview.value?.document_id === documentId) {
+      parcelImportPreview.value = null
     }
     await refreshDocumentsAndWorkflow(token, requestedCaseId)
     if (!previewDocumentId.value) {
@@ -1632,10 +1728,10 @@ async function saveBenchmarkLand(): Promise<void> {
         valuation_base_date: flow.case?.valuationBaseDate ?? null,
       })
       await loadF03(form, token, requestedCaseId)
-      notice.value = '比準地已建立，並以案件基準日初始化 F03 草稿。'
+      notice.value = '比準地已建立，並以案件基準日初始化比準地地價估計表草稿。'
     } else {
       notice.value = flow.f03
-        ? '比準地已建立。既有 F03 草稿仍保留原比準地，以避免未確認地改寫正式估價來源。'
+        ? '比準地已建立。既有比準地地價估計表草稿仍保留原比準地，以避免未確認地改寫正式估價來源。'
         : '比準地已建立。'
     }
     await loadWorkflowGuidance(token, requestedCaseId)
@@ -1652,7 +1748,7 @@ function chooseBenchmarkForF03(benchmarkId: string): void {
   dirty.value = true
   activeWizardStep.value = 3
   activeDataSection.value = 'f03'
-  notice.value = '已切換 F03 預計採用的比準地；確認正式資料後請按「儲存確認欄位」。'
+  notice.value = '已切換比準地地價估計表預計採用的比準地；確認正式資料後請按「儲存確認欄位」。'
   void focusElementById('f03-benchmark-land')
 }
 
@@ -1714,7 +1810,7 @@ async function runValuation(): Promise<void> {
     if (!currentForm || !flow.f03) return
 
     if (currentForm.status !== 'DRAFT') {
-      notice.value = '目前 F03 已不是草稿狀態，請重新載入案件後再執行。'
+      notice.value = '目前比準地地價估計表已不是草稿狀態，請重新載入案件後再執行。'
       return
     }
 
@@ -1748,7 +1844,7 @@ async function runValuation(): Promise<void> {
       item.formInstanceId === submittedForm.formInstanceId ? submittedForm : item,
     )
     if (submittedForm.status !== 'READY') {
-      notice.value = 'F03 尚未完成可產生單表輸出的條件，請確認檢核結果。'
+      notice.value = '比準地地價估計表尚未完成可產生單表輸出的條件，請確認檢核結果。'
       return
     }
     currentForm = f03Form.value
@@ -1760,7 +1856,7 @@ async function runValuation(): Promise<void> {
     if (!isCurrentCase(token, requestedCaseId)) return
     flow.report = mapReportResponse(report)
     await loadWorkflowGuidance(token, requestedCaseId)
-    notice.value = '已完成計算、檢核、F03 確認與單表輸出。'
+    notice.value = '已完成計算、檢核、比準地地價估計表確認與單表輸出。'
   } catch (caught: unknown) {
     if (!isCurrentCase(token, requestedCaseId)) return
     error.value = safeValuationErrorMessage(caught)
@@ -1816,7 +1912,7 @@ onBeforeUnmount(clearPreviewUrl)
           <small>{{ flow.case.name }}</small>
         </div>
         <div class="case-context-strip__meta">
-          <span>{{ flow.case.districtCode }}</span>
+          <span>{{ newTaipeiDistrictName(flow.case.districtCode) }}</span>
           <span>估價基準日 {{ flow.case.valuationBaseDate }}</span>
           <span>{{ statusLabel(f03Form?.status ?? 'DRAFT') }}</span>
         </div>
@@ -1876,7 +1972,7 @@ onBeforeUnmount(clearPreviewUrl)
           >
             補正版已建立，開始修正
           </button>
-          <small>舊送審版本保持不可變；補正會建立較新的 F03 與正式報告版本。</small>
+          <small>舊送審版本保持不可變；補正會建立較新的比準地地價估計表與正式報告版本。</small>
         </div>
       </section>
 
@@ -1921,7 +2017,7 @@ onBeforeUnmount(clearPreviewUrl)
         <div class="workflow-guide__stats">
           <span>來源文件 {{ flow.documents.length }} 份</span>
           <span v-if="workflowGuidance">辨識結果待確認 {{ workflowGuidance.pending_candidate_count }} 筆</span>
-          <span v-if="f03Guidance">F03 缺欄位 {{ unresolvedF03RequiredFields.length }} 項</span>
+          <span v-if="f03Guidance">比準地地價估計表缺欄位 {{ unresolvedF03RequiredFields.length }} 項</span>
           <span v-if="flow.validation">檢核錯誤 {{ flow.validation.failedCount }} 項</span>
         </div>
         <button
@@ -1948,7 +2044,7 @@ onBeforeUnmount(clearPreviewUrl)
           <div><span>申請機關</span><strong>{{ flow.case.requestingAgency || '未提供' }}</strong></div>
           <div><span>估價基準日</span><strong>{{ flow.case.valuationBaseDate }}</strong></div>
           <div><span>估價作業期限</span><strong>{{ flow.case.valuationDueDate || '未設定' }}</strong></div>
-          <div><span>行政區</span><strong>{{ flow.case.districtCode }}</strong></div>
+          <div><span>行政區</span><strong>{{ newTaipeiDistrictName(flow.case.districtCode) }}</strong></div>
         </div>
         <div v-if="activeWizardStep === 1" class="form-list" aria-label="已發現估價表">
           <div v-for="form in flow.forms" :key="form.formInstanceId" class="form-list__item">
@@ -1968,7 +2064,7 @@ onBeforeUnmount(clearPreviewUrl)
             <span class="document-ai-process__step">1</span>
             <div>
               <strong>先確認來源文件並執行辨識</strong>
-              <small>目前有 {{ flow.documents.length }} 份來源文件；可先預覽，再選擇目標表單執行 AI／OCR 辨識。</small>
+              <small>目前有 {{ flow.documents.length }} 份來源文件；可先預覽，再選擇目標表單進行文件文字辨識與智能欄位分析。</small>
             </div>
           </article>
           <span class="document-ai-process__arrow" aria-hidden="true">→</span>
@@ -2016,6 +2112,7 @@ onBeforeUnmount(clearPreviewUrl)
           :can-extract-document="canExtractDocument"
           :can-manage-source-document="canManageSourceDocument"
           @preview="openDocumentPreview"
+          @prepare-parcel-import="prepareParcelImport"
           @extract="extractDocument"
           @reclassify="reclassifyDocument"
           @remove="removeDocument"
@@ -2025,6 +2122,15 @@ onBeforeUnmount(clearPreviewUrl)
           @update-upload-category="uploadCategory = $event"
           @choose-upload="chooseUpload"
           @upload="uploadSourceDocument"
+        />
+        <ValuationParcelImportPanel
+          v-if="activeWizardStep === 2 && (parcelImportLoading || parcelImportPreview)"
+          :preview="parcelImportPreview"
+          :case-district-code="flow.case.districtCode"
+          :loading="parcelImportLoading"
+          :importing="parcelImporting"
+          :can-import="canEditLandContext"
+          @import="importParcelRows"
         />
       </section>
 
@@ -2079,7 +2185,7 @@ onBeforeUnmount(clearPreviewUrl)
             <strong>宗地與比準地</strong><small>{{ dataIssueCounts.land ? `${dataIssueCounts.land} 待處理` : '已建立' }}</small>
           </button>
           <button type="button" :class="{ 'is-active': activeDataSection === 'f03' }" data-testid="data-section-f03" @click="activeDataSection = 'f03'">
-            <strong>F03 正式資料</strong><small>{{ dataIssueCounts.f03 ? `${dataIssueCounts.f03} 缺欄位` : flow.f03 ? '可編輯' : '尚未建立' }}</small>
+            <strong>比準地地價估計表</strong><small>{{ dataIssueCounts.f03 ? `${dataIssueCounts.f03} 缺欄位` : flow.f03 ? '可編輯' : '尚未建立' }}</small>
           </button>
         </nav>
 
@@ -2093,8 +2199,8 @@ onBeforeUnmount(clearPreviewUrl)
             <div><small>{{ parcels.length }} 宗地 · {{ flow.benchmarks.length }} 比準地</small><button type="button" @click="jumpToDataSection('land')">前往</button></div>
           </article>
           <article :data-state="dataIssueCounts.f03 ? 'attention' : flow.f03 ? 'ready' : 'attention'">
-            <div><strong>F03 正式資料</strong><span>確認最後會進入公式計算與正式檢核的採用值。</span></div>
-            <div><small>{{ flow.f03 ? dataIssueCounts.f03 ? `${dataIssueCounts.f03} 欄未完成` : '正式資料可編輯' : '尚未建立 F03' }}</small><button type="button" @click="jumpToDataSection('f03')">前往</button></div>
+            <div><strong>比準地地價估計表</strong><span>確認最後會進入公式計算與正式檢核的採用值。</span></div>
+            <div><small>{{ flow.f03 ? dataIssueCounts.f03 ? `${dataIssueCounts.f03} 欄未完成` : '正式資料可編輯' : '尚未建立比準地地價估計表' }}</small><button type="button" @click="jumpToDataSection('f03')">前往</button></div>
           </article>
         </div>
       </section>
@@ -2114,7 +2220,7 @@ onBeforeUnmount(clearPreviewUrl)
           </div>
           <span class="value-kind">{{ manualFieldEntries.length }} 項</span>
         </div>
-        <p class="manual-fields__intro">只會送出非空欄位。一般欄位可在這裡人工補值；像「比準地」這種關聯資料則必須從既有資料中選擇，不會要求你手動輸入系統 ID。</p>
+        <p class="manual-fields__intro">只會送出非空欄位。一般欄位可在這裡人工補值；像「比準地」這種關聯資料則必須從既有資料中選擇，不需要另外填寫系統識別資料。</p>
         <label class="manual-fields__selector">
           <span>選擇要補填的表單</span>
           <select v-model="activeManualForm" data-testid="manual-form-selector">
@@ -2130,8 +2236,8 @@ onBeforeUnmount(clearPreviewUrl)
           <template v-for="entry in manualFieldEntries" :key="entry.key">
             <div v-if="entry.formCode === 'F03' && entry.fieldName === 'benchmark_land_id'" class="manual-fields__relation" data-testid="manual-benchmark-helper">
               <div>
-                <strong>F03 → 比準地</strong>
-                <span>比準地是本案已建立資料的關聯，不是文字欄位。請先在「宗地與比準地」建立或選擇，再回到 F03 確認正式採用值。</span>
+                <strong>比準地地價估計表 → 比準地</strong>
+                <span>比準地是本案已建立資料的關聯，不是文字欄位。請先在「宗地與比準地」建立或選擇，再回到比準地地價估計表確認正式採用值。</span>
               </div>
               <button class="finding-action" type="button" @click="jumpToDataSection('land')">前往宗地與比準地</button>
             </div>
@@ -2154,7 +2260,7 @@ onBeforeUnmount(clearPreviewUrl)
           </template>
         </div>
         <div class="candidate-submit">
-          <span>人工輸入會覆蓋先前同欄位的人工值，並使相關 F03 單表與送審文件需要重新計算／檢核。</span>
+          <span>人工輸入會覆蓋先前同欄位的人工值，並使相關比準地地價估計表單表與送審文件需要重新計算／檢核。</span>
           <button
             v-if="manualEditableEntries.length"
             class="solid-button solid-button--primary"
@@ -2168,7 +2274,7 @@ onBeforeUnmount(clearPreviewUrl)
 
       <section v-if="activeWizardStep === 3 && activeDataSection === 'manual' && !manualFieldEntries.length" class="valuation-surface data-complete-state">
         <strong>目前沒有需要人工補充的欄位</strong>
-        <span>AI 辨識與既有資料已提供目前可確認的欄位；你可以直接前往宗地與比準地或 F03。</span>
+        <span>智能辨識與既有資料已提供目前可確認的欄位；你可以直接前往宗地與比準地或比準地地價估計表。</span>
       </section>
 
       <ValuationLandContext

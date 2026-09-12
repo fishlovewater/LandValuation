@@ -8,6 +8,7 @@ from app.knowledge.schemas import (
     KnowledgeSearchRequest,
 )
 from app.knowledge.ai_contract import AiAnswer, AiCitationEvidence
+from app.knowledge.answer_service import _contextual_question
 from app.knowledge.runtime_extraction import virtual_document_from_object
 from app.knowledge.service import KnowledgeSafetyService, RetrievedKnowledge
 
@@ -47,6 +48,28 @@ def source(
             article_no="第 6 節",
         ),
     )
+
+
+def test_standalone_question_does_not_inherit_unrelated_conversation_terms() -> None:
+    question = "請說明目前案件的估價依據。"
+    history = [
+        {"role": "assistant", "content": "前一步已確認文件、Excel 格式與檢核流程。"},
+        {"role": "user", "content": "剛才也談過廠商驗收證明。"},
+    ]
+
+    assert _contextual_question(question, history) == question
+
+
+def test_referential_follow_up_uses_recent_conversation_only_for_resolution() -> None:
+    question = "那一條對估價基準日怎麼規定？"
+    history = [
+        {"role": "assistant", "content": "前面提到土地徵收補償市價查估辦法第十七條。"},
+    ]
+
+    contextual = _contextual_question(question, history)
+
+    assert "第十七條" in contextual
+    assert f"目前問題：{question}" in contextual
 
 
 def test_returns_pending_source_when_effective() -> None:

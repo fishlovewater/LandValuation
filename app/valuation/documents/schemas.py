@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict
 
 class DocumentCategory(StrEnum):
     ORIGINAL = "original"
+    PARCEL_FACTOR_LIST = "parcel-factor-list"
     CADASTRAL_MAP = "cadastral-map"
     LAND_REGISTER = "land-register"
     PHOTOS = "photos"

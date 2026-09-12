@@ -14,7 +14,7 @@ describe('valuation API transport', () => {
     vi.restoreAllMocks()
   })
 
-  it('shows the backend rule code and reason instead of a generic valuation error', () => {
+  it('shows the backend business reason without exposing an internal rule code', () => {
     const error = {
       isAxiosError: true,
       response: {

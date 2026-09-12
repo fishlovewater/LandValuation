@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import { userStructuredValue } from '../../../utils/fieldLabels'
 import type { ReportPageCode, ReportPageResponseDto } from '../valuation.types'
 
 type FieldKind = 'text' | 'textarea' | 'date' | 'number' | 'json'
@@ -27,15 +28,15 @@ const fieldDefinitions: Readonly<Record<ReportPageCode, readonly FieldDefinition
     { key: 'district_name', label: '勘查地區名稱', kind: 'text' },
     { key: 'district_boundary', label: '勘查範圍／界線', kind: 'textarea' },
     { key: 'survey_date', label: '勘查日期', kind: 'date' },
-    { key: 'urban_plan_status', label: '都市計畫狀態', kind: 'text' },
-    { key: 'land_use_zone', label: '土地使用分區', kind: 'text' },
+    { key: 'urban_plan_status', label: '都市計畫（內、外）', kind: 'text' },
+    { key: 'land_use_zone', label: '使用分區（使用地類別）', kind: 'text' },
     { key: 'building_coverage_rate', label: '建蔽率', kind: 'number' },
     { key: 'floor_area_ratio', label: '容積率', kind: 'number' },
-    { key: 'prohibited_building', label: '禁建情形', kind: 'textarea' },
-    { key: 'restricted_building', label: '限建情形', kind: 'textarea' },
+    { key: 'prohibited_building', label: '有無禁止建築', kind: 'textarea' },
+    { key: 'restricted_building', label: '有無限制建築（整體開發、面積限制、高度限制……等）', kind: 'textarea' },
     { key: 'main_road_name', label: '主要道路名稱', kind: 'text' },
     { key: 'main_road_width_m', label: '主要道路寬度（m）', kind: 'number' },
-    { key: 'average_road_width_m', label: '平均道路寬度（m）', kind: 'number' },
+    { key: 'average_road_width_m', label: '區段內道路平均寬度（m）', kind: 'number' },
     {
       key: 'observations',
       label: '勘查觀察項目',
@@ -44,10 +45,10 @@ const fieldDefinitions: Readonly<Record<ReportPageCode, readonly FieldDefinition
     },
     { key: 'notes', label: '備註', kind: 'textarea' },
     { key: 'site_opinion', label: '現場意見', kind: 'textarea' },
-    { key: 'handler_name', label: '承辦人', kind: 'text' },
-    { key: 'section_head_name', label: '科長／主管', kind: 'text' },
-    { key: 'director_name', label: '局處長', kind: 'text' },
-    { key: 'appraiser_name', label: '估價人員', kind: 'text' },
+    { key: 'handler_name', label: '承辦員', kind: 'text' },
+    { key: 'section_head_name', label: '課（股）長', kind: 'text' },
+    { key: 'director_name', label: '主任（局、處長）', kind: 'text' },
+    { key: 'appraiser_name', label: '不動產估價師', kind: 'text' },
   ],
   'F02-RF': [
     {
@@ -58,15 +59,15 @@ const fieldDefinitions: Readonly<Record<ReportPageCode, readonly FieldDefinition
     },
     { key: 'other_influences', label: '其他影響因素', kind: 'textarea' },
     { key: 'notes', label: '備註', kind: 'textarea' },
-    { key: 'appraiser_name', label: '估價人員', kind: 'text' },
+    { key: 'appraiser_name', label: '不動產估價師', kind: 'text' },
   ],
   F02: [
     { key: 'benchmark_notes', label: '比準地說明', kind: 'textarea' },
     { key: 'notes', label: '備註', kind: 'textarea' },
-    { key: 'handler_name', label: '承辦人', kind: 'text' },
-    { key: 'section_head_name', label: '科長／主管', kind: 'text' },
-    { key: 'director_name', label: '局處長', kind: 'text' },
-    { key: 'appraiser_name', label: '估價人員', kind: 'text' },
+    { key: 'handler_name', label: '承辦員', kind: 'text' },
+    { key: 'section_head_name', label: '課（股）長', kind: 'text' },
+    { key: 'director_name', label: '主任（局、處長）', kind: 'text' },
+    { key: 'appraiser_name', label: '不動產估價師', kind: 'text' },
   ],
 }
 
@@ -75,9 +76,9 @@ const error = ref('')
 const dirty = ref(false)
 const fields = computed(() => fieldDefinitions[props.page.page_code])
 const pageLabel = computed(() => ({
-  S01: '勘查資料',
-  'F02-RF': '影響因素',
-  F02: '比較法資料',
+  S01: '地價區段勘查表',
+  'F02-RF': '影響地價區域因素分析明細表（商業用地）',
+  F02: '比較法調查估價表',
 } as const)[props.page.page_code])
 
 function formStatusLabel(status: string): string {
@@ -95,6 +96,14 @@ function stringifyValue(value: unknown, kind: FieldKind): string {
   if (kind === 'json') return JSON.stringify(value ?? [], null, 2)
   if (value === null || value === undefined) return ''
   return String(value)
+}
+
+function structuredDraftSummary(fieldKey: string): string {
+  try {
+    return userStructuredValue(JSON.parse(drafts[fieldKey] || '[]'))
+  } catch {
+    return '內容格式待確認'
+  }
 }
 
 function resetDraft(): void {
@@ -166,7 +175,7 @@ watch(() => [props.page.page_code, props.page.version_no, props.page.data] as co
       <div>
         <p>{{ pageLabel }}編輯</p>
         <h3 :id="`report-editor-${page.page_code}`">{{ pageLabel }}可修改資料</h3>
-        <span>{{ page.page_code }}｜第 {{ page.version_no }} 版｜{{ formStatusLabel(page.form_status) }}</span>
+        <span>第 {{ page.version_no }} 版｜{{ formStatusLabel(page.form_status) }}</span>
       </div>
       <button type="button" :disabled="saving || !dirty" @click="resetDraft">還原本頁</button>
     </header>
@@ -177,13 +186,27 @@ watch(() => [props.page.page_code, props.page.version_no, props.page.data] as co
       <label v-for="field in fields" :key="field.key" :class="{ 'is-wide': field.kind === 'textarea' || field.kind === 'json' }">
         <span>{{ field.label }}</span>
         <small v-if="field.help">{{ field.help }}</small>
+        <div v-if="field.kind === 'json'" class="report-page-editor__structured">
+          <span class="report-page-editor__structured-summary">目前內容：{{ structuredDraftSummary(field.key) }}</span>
+          <details>
+            <summary>進階資料編輯</summary>
+            <p>一般情況不需要直接修改資料結構；只有在確認內容來源與格式時才需要展開。</p>
+            <textarea
+              :id="`report-field-${page.page_code}-${field.key}`"
+              v-model="drafts[field.key]"
+              :data-report-field="field.key"
+              :rows="12"
+              :spellcheck="false"
+              @input="dirty = true"
+            />
+          </details>
+        </div>
         <textarea
-          v-if="field.kind === 'textarea' || field.kind === 'json'"
+          v-else-if="field.kind === 'textarea'"
           :id="`report-field-${page.page_code}-${field.key}`"
           v-model="drafts[field.key]"
           :data-report-field="field.key"
-          :rows="field.kind === 'json' ? 12 : 3"
-          :spellcheck="field.kind === 'json' ? false : undefined"
+          :rows="3"
           @input="dirty = true"
         />
         <input
@@ -227,6 +250,12 @@ watch(() => [props.page.page_code, props.page.version_no, props.page.data] as co
 .report-page-editor__grid textarea { width: 100%; min-height: 42px; padding: 9px 10px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink); background: #fff; font: inherit; font-weight: 500; }
 .report-page-editor__grid textarea { resize: vertical; line-height: 1.5; }
 .report-page-editor__grid textarea[spellcheck="false"] { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; }
+.report-page-editor__structured { display:grid; gap:8px; }
+.report-page-editor__structured-summary { padding:9px 10px; border:1px solid #e0e7ef; border-radius:8px; color:var(--app-ink-soft); background:#f8fafc; font-size:11px; font-weight:600; line-height:1.55; }
+.report-page-editor__structured details { display:grid; gap:8px; }
+.report-page-editor__structured summary { width:fit-content; color:var(--app-primary-deep); cursor:pointer; font-size:11px; font-weight:800; }
+.report-page-editor__structured details p { margin:7px 0; color:var(--app-muted); font-size:10px; font-weight:500; line-height:1.55; }
+.report-page-editor__structured details textarea { width:100%; }
 .report-page-editor__grid input:focus,
 .report-page-editor__grid textarea:focus { outline: 3px solid rgba(200,91,67,.15); border-color: var(--app-accent); }
 .report-page-editor__error { margin: 0; color: #a44334; font-size: 12px; font-weight: 700; }

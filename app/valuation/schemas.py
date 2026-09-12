@@ -203,6 +203,74 @@ class ParcelResponse(BaseModel):
     updated_at: datetime
 
 
+class ParcelImportCandidateResponse(BaseModel):
+    source_location: str
+    source_serial: str | None = None
+    source_owner_name: str | None = None
+    district_code: str | None = None
+    district_name: str | None = None
+    section_name: str | None = None
+    subsection_name: str = ""
+    land_no: str | None = None
+    area_sqm: Decimal | None = None
+    land_use_zone: str | None = None
+    designated_use: str | None = None
+    ownership_numerator: Decimal | None = None
+    ownership_denominator: Decimal | None = None
+    status: str
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    existing_parcel_id: UUID | None = None
+
+
+class ParcelImportPreviewResponse(BaseModel):
+    document_id: UUID
+    filename: str
+    layout: str
+    candidates: list[ParcelImportCandidateResponse]
+    ready_count: int
+    needs_confirmation_count: int
+    duplicate_count: int
+
+
+class ParcelImportRow(RequestModel):
+    source_location: str = Field(min_length=1, max_length=120)
+    source_serial: str | None = Field(default=None, max_length=80)
+    district_code: str = Field(min_length=1, max_length=20)
+    section_name: str = Field(min_length=1, max_length=100)
+    subsection_name: str = Field(default="", max_length=100)
+    land_no: str = Field(min_length=1, max_length=50)
+    area_sqm: Decimal = Field(gt=0, max_digits=18, decimal_places=4)
+    land_use_zone: str | None = Field(default=None, max_length=100)
+    designated_use: str | None = Field(default=None, max_length=100)
+    ownership_numerator: Decimal | None = Field(
+        default=None, gt=0, max_digits=18, decimal_places=6
+    )
+    ownership_denominator: Decimal | None = Field(
+        default=None, gt=0, max_digits=18, decimal_places=6
+    )
+
+    @model_validator(mode="after")
+    def validate_ownership(self):
+        numerator = self.ownership_numerator
+        denominator = self.ownership_denominator
+        if (numerator is None) != (denominator is None):
+            raise ValueError("權利分子與分母必須同時提供")
+        if numerator is not None and denominator is not None and numerator > denominator:
+            raise ValueError("權利分子不可大於分母")
+        return self
+
+
+class ParcelBatchImportRequest(RequestModel):
+    rows: list[ParcelImportRow] = Field(min_length=1, max_length=500)
+
+
+class ParcelBatchImportResponse(BaseModel):
+    created: list[ParcelResponse]
+    skipped_duplicate_count: int
+    skipped_duplicate_locations: list[str] = Field(default_factory=list)
+
+
 class FormRequirementResponse(BaseModel):
     form_type: FormCode
     form_name: str

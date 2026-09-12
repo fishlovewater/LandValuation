@@ -78,6 +78,62 @@ export interface ParcelCreateDto {
 
 export type ParcelUpdateDto = Partial<ParcelCreateDto>
 
+export type ParcelImportStatus = 'READY' | 'NEEDS_CONFIRMATION' | 'DUPLICATE'
+
+export interface ParcelImportCandidateDto {
+  source_location: string
+  source_serial: string | null
+  source_owner_name: string | null
+  district_code: string | null
+  district_name: string | null
+  section_name: string | null
+  subsection_name: string
+  land_no: string | null
+  area_sqm: string | null
+  land_use_zone: string | null
+  designated_use: string | null
+  ownership_numerator: string | null
+  ownership_denominator: string | null
+  status: ParcelImportStatus
+  errors: string[]
+  warnings: string[]
+  existing_parcel_id: string | null
+}
+
+export interface ParcelImportPreviewDto {
+  document_id: string
+  filename: string
+  layout: 'OFFICIAL_TRANSPOSED' | 'ROW_TABLE' | string
+  candidates: ParcelImportCandidateDto[]
+  ready_count: number
+  needs_confirmation_count: number
+  duplicate_count: number
+}
+
+export interface ParcelImportRowDto {
+  source_location: string
+  source_serial?: string | null
+  district_code: string
+  section_name: string
+  subsection_name?: string
+  land_no: string
+  area_sqm: string
+  land_use_zone?: string | null
+  designated_use?: string | null
+  ownership_numerator?: string | null
+  ownership_denominator?: string | null
+}
+
+export interface ParcelBatchImportRequestDto {
+  rows: ParcelImportRowDto[]
+}
+
+export interface ParcelBatchImportResponseDto {
+  created: ParcelResponseDto[]
+  skipped_duplicate_count: number
+  skipped_duplicate_locations: string[]
+}
+
 export interface FormRequirementResponseDto {
   form_type: FormCode
   form_name: string
@@ -117,6 +173,7 @@ export interface FormCreateDto {
 
 export type DocumentCategory =
   | 'original'
+  | 'parcel-factor-list'
   | 'cadastral-map'
   | 'land-register'
   | 'photos'

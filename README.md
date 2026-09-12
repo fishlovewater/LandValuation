@@ -119,6 +119,51 @@ Knowledge AI 對沒有既有 chunks 的 MinIO 文件採按請求擷取。可在 
 1 KiB–500 MiB、1,000–2,000,000。MinIO 列舉的物件大小會在下載前檢查，未知大小的
 來源仍以讀取上限防護，超過限制的來源會略過並列入 unreadable sources。
 
+### 官方空白查估書原版輸出
+
+正式六頁 PDF 預設仍使用目前已驗證的結構化重繪版型。等主管機關提供最終空白版
+前三頁 PDF 後，可啟用 `official-template-overlay-v1`：系統保留原 PDF 每一頁作為
+背景，只在已校準的座標疊加案件資料，不重新繪製官方框線、標題或固定文字；後三頁
+正式附圖仍沿用既有產出流程。Repository 內既有的
+`app/valuation/report_packages/templates/comparison_commercial/blank_pages_1_3.pdf`
+只作為開發 placeholder，不得直接視為主管機關最終模板。
+
+收到正式空白 PDF 後，先建立 manifest skeleton；此步驟只記錄 SHA-256、頁數、
+頁面尺寸及待校準欄位，不會從有資料的範例猜測座標：
+
+```powershell
+python scripts/official_template_manifest.py skeleton `
+  --pdf .\official-pages-1-3.pdf `
+  --output .\official-pages-1-3.manifest.json `
+  --template-name "主管機關正式查估書前三頁" `
+  --field-code case_no `
+  --field-code valuation_base_date
+```
+
+完成 manifest 的 `placements` 後，每筆欄位可用 `value_path` 指向正式報告資料，例如
+`context.case_no`、`s01.price_zone_no`；未設定 `value_path` 時使用 `field_code`。
+正式啟用前必須移除所有 `unmapped_fields`，並執行完整驗證：
+
+```powershell
+python scripts/official_template_manifest.py validate `
+  --pdf .\official-pages-1-3.pdf `
+  --manifest .\official-pages-1-3.manifest.json
+```
+
+驗證會 fail closed 檢查模板 SHA-256、manifest/schema 版本、頁數、頁面尺寸、座標範圍
+與未完成欄位；主管機關只要更換 PDF bytes，舊 manifest 就不能誤套。確認後將 PDF 與
+manifest 上傳到 `land-valuation` MinIO bucket，並同時設定：
+
+```env
+OFFICIAL_REPORT_BLANK_TEMPLATE_OBJECT_KEY=templates/official/ntpc-pages-1-3.pdf
+OFFICIAL_REPORT_BLANK_TEMPLATE_MANIFEST_OBJECT_KEY=templates/official/ntpc-pages-1-3.manifest.json
+```
+
+兩個設定必須同時存在，否則 API 會拒絕啟動。兩者都留空時完全維持目前重繪版正式
+PDF，不影響 Demo。使用官方 Overlay 成功產出後，`COMPLETE_REPORT_GENERATED` 稽核事件
+會保存 `OFFICIAL_BLANK_OVERLAY`、實際模板 SHA-256、manifest 版本與模板名稱，供之後
+追查每份正式報告使用的官方版型。
+
 若現有 PostgreSQL volume 已由舊版 `database/init` SQL 建好相同結構，不可再執行初始 migration；請先備份並核對 schema，然後執行：
 
 ```powershell

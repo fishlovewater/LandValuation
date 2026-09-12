@@ -75,7 +75,7 @@ function save(): void {
     <EmptyState
       v-if="!finding"
       title="尚未選取疑點"
-      description="從左側疑點清單選取一筆，查看報告值、系統值與 AI 說明。"
+      description="從左側疑點清單選取一筆，查看報告值、系統值與智能分析說明。"
     />
     <template v-else>
       <header class="finding-panel__header">
@@ -121,7 +121,7 @@ function save(): void {
       </section>
 
       <section class="finding-panel__section" aria-labelledby="finding-ai-title">
-        <h3 id="finding-ai-title">AI 說明</h3>
+        <h3 id="finding-ai-title">智能分析說明</h3>
         <div class="finding-panel__ai">
           <span class="finding-panel__ai-status">{{ finding.aiStatusLabel }}</span>
           <p data-testid="ai-explanation">{{ display(finding.aiReasoningSummary) }}</p>

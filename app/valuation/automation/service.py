@@ -75,6 +75,10 @@ from app.valuation.service import ValuationService
 
 
 _CATEGORY_KEYWORDS: tuple[tuple[DocumentCategory, tuple[str, ...]], ...] = (
+    (
+        DocumentCategory.PARCEL_FACTOR_LIST,
+        ("宗地個別因素清冊", "宗地因素清冊", "宗地清冊", "徵收土地清冊"),
+    ),
     (DocumentCategory.MAP_SECTION_SKETCH, ("地價區段略圖", "區段略圖")),
     (DocumentCategory.MAP_ZONING, ("地價使用分區圖", "使用分區圖")),
     (DocumentCategory.MAP_LAND_VALUE_SECTION, ("地價區段圖",)),
@@ -127,6 +131,7 @@ F04_AUTO_APPLY_FIELDS = frozenset(
 AUTO_EXTRACT_MIME_TYPES = frozenset(
     {
         "application/pdf",
+        "application/vnd.ms-excel",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }
 )
@@ -930,7 +935,9 @@ class AutomatedWorkflowService:
                     .where(
                         ExtractedFieldRecord.case_id == case_id,
                         ExtractedFieldRecord.form_code == "F01",
-                        ExtractedFieldRecord.analysis_provider.in_(("CODEX", "XLSX_RULE")),
+                        ExtractedFieldRecord.analysis_provider.in_(
+                            ("CODEX", "XLS_RULE", "XLSX_RULE")
+                        ),
                         ExtractedFieldRecord.field_status.in_(("CONFIRMED", "APPLIED")),
                     )
                     .order_by(ExtractedFieldRecord.confirmed_at.desc())

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { BenchmarkLandModel, DocumentArtifactModel, ParcelResponseDto } from '../valuation.types'
+import { newTaipeiDistrictName } from '../newTaipei'
 
 type ParcelDraft = {
   districtCode: string
@@ -68,7 +69,7 @@ const emit = defineEmits<{
           <li v-for="parcel in parcels" :key="parcel.parcel_id">
             <div>
               <strong>{{ parcel.section_name }} {{ parcel.land_no }}</strong>
-              <span>{{ parcel.area_sqm }} m² · {{ parcel.district_code }}</span>
+              <span>{{ parcel.area_sqm }} m² · {{ newTaipeiDistrictName(parcel.district_code) }}</span>
             </div>
             <button v-if="canEditLandContext" type="button" :data-testid="`edit-parcel-${parcel.parcel_id}`" @click="emit('editParcel', parcel)">修改</button>
           </li>
@@ -78,7 +79,11 @@ const emit = defineEmits<{
         <form id="parcel-editor" class="land-context__form" tabindex="-1" @submit.prevent="emit('saveParcel')">
           <h3>{{ editingParcelId ? '修改宗地' : '新增宗地' }}</h3>
           <div class="land-context__fields">
-            <label><span>行政區代碼 *</span><input v-model="props.parcelDraft.districtCode" data-testid="parcel-district-code" required></label>
+            <label>
+              <span>行政區 *</span>
+              <input :value="newTaipeiDistrictName(props.parcelDraft.districtCode)" data-testid="parcel-district-code" disabled>
+              <small>宗地行政區固定為目前案件行政區。</small>
+            </label>
             <label><span>段名 *</span><input v-model="props.parcelDraft.sectionName" data-testid="parcel-section-name" required></label>
             <label><span>小段</span><input v-model="props.parcelDraft.subsectionName"></label>
             <label><span>地號 *</span><input v-model="props.parcelDraft.landNo" data-testid="parcel-land-no" required></label>
@@ -102,7 +107,7 @@ const emit = defineEmits<{
       </section>
 
       <section class="land-context__panel">
-        <div class="land-context__panel-heading"><strong>比準地資料</strong><span>如需更換比準地資料，請新增一筆，再明確指定給 F03；既有紀錄不直接覆寫</span></div>
+        <div class="land-context__panel-heading"><strong>比準地資料</strong><span>如需更換比準地資料，請新增一筆，再明確指定給比準地地價估計表；既有紀錄不直接覆寫</span></div>
         <p class="land-context__help">比準地是後續查估所使用的比較基準。此系統建立時需指定來源宗地、比準地編號與地價區段；要改用另一筆時，新增後按「採用此比準地」。</p>
         <ul v-if="benchmarks.length" class="land-context__records">
           <li v-for="benchmark in benchmarks" :key="benchmark.benchmarkLandId">
@@ -111,12 +116,12 @@ const emit = defineEmits<{
               <span>地價區段 {{ benchmark.priceZoneNo }}</span>
             </div>
             <div class="land-context__record-actions">
-              <span v-if="selectedBenchmarkLandId === benchmark.benchmarkLandId" class="benchmark-current">目前 F03 採用</span>
+              <span v-if="selectedBenchmarkLandId === benchmark.benchmarkLandId" class="benchmark-current">目前比準地地價估計表採用</span>
               <button v-else-if="hasF03 && canEditF03" type="button" :data-testid="`choose-benchmark-${benchmark.benchmarkLandId}`" @click="emit('chooseBenchmark', benchmark.benchmarkLandId)">採用此比準地</button>
             </div>
           </li>
         </ul>
-        <p v-else class="empty-copy">尚未建立比準地；建立後才能初始化／選擇 F03 比準地。</p>
+        <p v-else class="empty-copy">尚未建立比準地；建立後才能初始化／選擇比準地地價估計表的比準地。</p>
 
         <form class="land-context__form" @submit.prevent="emit('saveBenchmark')">
           <h3>新增比準地</h3>
@@ -145,5 +150,5 @@ const emit = defineEmits<{
 </template>
 
 <style scoped>
-.valuation-surface{padding:22px;border:1px solid var(--app-line);border-radius:var(--app-radius-md);background:var(--app-paper-strong);box-shadow:var(--app-shadow-soft)}.surface-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}.surface-heading h2{margin:0;color:var(--app-ink);font-family:var(--app-font-display);font-size:24px;font-weight:600;letter-spacing:-.04em}.valuation-eyebrow{margin:0 0 6px;color:var(--app-accent-deep);font-size:11px;font-weight:800;letter-spacing:.12em}.value-kind{display:inline-flex;min-height:30px;align-items:center;padding:5px 10px;border:1px solid var(--app-line);border-radius:var(--app-radius-pill);color:var(--app-ink-soft);background:#f7f8fb;font-size:11px;font-weight:800;white-space:nowrap}.land-context__grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.land-context__panel{display:grid;align-content:start;gap:12px;padding:15px;border:1px solid var(--app-line);border-radius:11px;background:#fbfcfe}.land-context__panel-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.land-context__panel-heading strong{color:var(--app-ink);font-size:13px}.land-context__panel-heading span{color:var(--app-muted);font-size:10px;text-align:right}.land-context__help{margin:-4px 0 0;color:var(--app-ink-soft);font-size:10px;line-height:1.6}.land-context__records{display:grid;gap:7px;margin:0;padding:0;list-style:none}.land-context__records li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px;border-radius:8px;background:#fff}.land-context__records li>div{display:grid;gap:3px;min-width:0}.land-context__records strong{color:var(--app-ink);font-size:12px}.land-context__records span{color:var(--app-muted);font-size:10px}.land-context__records button{min-height:34px;padding:5px 9px;border:1px solid var(--app-line);border-radius:7px;color:var(--app-accent-deep);background:#fff;cursor:pointer;font-size:10px;font-weight:900}.land-context__record-actions{display:flex!important;flex:0 0 auto;align-items:center;gap:6px!important}.land-context__record-actions .benchmark-current{padding:5px 8px;border-radius:999px;color:var(--app-green);background:rgba(59,129,102,.09);font-size:9px;font-weight:900;white-space:nowrap}.land-context__form{display:grid;gap:10px;padding-top:11px;border-top:1px solid var(--app-line)}.land-context__form h3{margin:0;color:var(--app-ink);font-size:13px}.land-context__fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.land-context__fields label{display:grid;gap:5px;color:var(--app-ink-soft);font-size:10px;font-weight:800}.land-context__fields input,.land-context__fields select{width:100%;min-height:42px;padding:8px 9px;border:1px solid var(--app-line);border-radius:8px;color:var(--app-ink);background:#fff}.land-context__form-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}.solid-button{min-height:44px;padding:10px 16px;border:1px solid var(--app-line);border-radius:9px;color:var(--app-ink-soft);background:var(--app-paper-strong);cursor:pointer;font-size:13px;font-weight:800}.solid-button--primary{border-color:var(--app-accent);color:#fff;background:var(--app-accent)}.solid-button:disabled{cursor:not-allowed;opacity:.55}.empty-copy{margin:0;color:var(--app-muted);font-size:13px}@media(max-width:760px){.valuation-surface{padding:16px}.surface-heading{align-items:stretch;flex-direction:column}.land-context__grid,.land-context__fields{grid-template-columns:1fr}.solid-button{width:100%}}
+.valuation-surface{padding:22px;border:1px solid var(--app-line);border-radius:var(--app-radius-md);background:var(--app-paper-strong);box-shadow:var(--app-shadow-soft)}.surface-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}.surface-heading h2{margin:0;color:var(--app-ink);font-family:var(--app-font-display);font-size:24px;font-weight:600;letter-spacing:-.04em}.valuation-eyebrow{margin:0 0 6px;color:var(--app-accent-deep);font-size:11px;font-weight:800;letter-spacing:.12em}.value-kind{display:inline-flex;min-height:30px;align-items:center;padding:5px 10px;border:1px solid var(--app-line);border-radius:var(--app-radius-pill);color:var(--app-ink-soft);background:#f7f8fb;font-size:11px;font-weight:800;white-space:nowrap}.land-context__grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.land-context__panel{display:grid;align-content:start;gap:12px;padding:15px;border:1px solid var(--app-line);border-radius:11px;background:#fbfcfe}.land-context__panel-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.land-context__panel-heading strong{color:var(--app-ink);font-size:13px}.land-context__panel-heading span{color:var(--app-muted);font-size:10px;text-align:right}.land-context__help{margin:-4px 0 0;color:var(--app-ink-soft);font-size:10px;line-height:1.6}.land-context__records{display:grid;gap:7px;margin:0;padding:0;list-style:none}.land-context__records li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px;border-radius:8px;background:#fff}.land-context__records li>div{display:grid;gap:3px;min-width:0}.land-context__records strong{color:var(--app-ink);font-size:12px}.land-context__records span{color:var(--app-muted);font-size:10px}.land-context__records button{min-height:34px;padding:5px 9px;border:1px solid var(--app-line);border-radius:7px;color:var(--app-accent-deep);background:#fff;cursor:pointer;font-size:10px;font-weight:900}.land-context__record-actions{display:flex!important;flex:0 0 auto;align-items:center;gap:6px!important}.land-context__record-actions .benchmark-current{padding:5px 8px;border-radius:999px;color:var(--app-green);background:rgba(59,129,102,.09);font-size:9px;font-weight:900;white-space:nowrap}.land-context__form{display:grid;gap:10px;padding-top:11px;border-top:1px solid var(--app-line)}.land-context__form h3{margin:0;color:var(--app-ink);font-size:13px}.land-context__fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.land-context__fields label{display:grid;gap:5px;color:var(--app-ink-soft);font-size:10px;font-weight:800}.land-context__fields label small{color:var(--app-muted);font-size:9px;font-weight:500;line-height:1.45}.land-context__fields input,.land-context__fields select{width:100%;min-height:42px;padding:8px 9px;border:1px solid var(--app-line);border-radius:8px;color:var(--app-ink);background:#fff}.land-context__fields input:disabled{color:#52657a;background:#f1f4f7}.land-context__form-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}.solid-button{min-height:44px;padding:10px 16px;border:1px solid var(--app-line);border-radius:9px;color:var(--app-ink-soft);background:var(--app-paper-strong);cursor:pointer;font-size:13px;font-weight:800}.solid-button--primary{border-color:var(--app-accent);color:#fff;background:var(--app-accent)}.solid-button:disabled{cursor:not-allowed;opacity:.55}.empty-copy{margin:0;color:var(--app-muted);font-size:13px}@media(max-width:760px){.valuation-surface{padding:16px}.surface-heading{align-items:stretch;flex-direction:column}.land-context__grid,.land-context__fields{grid-template-columns:1fr}.solid-button{width:100%}}
 </style>

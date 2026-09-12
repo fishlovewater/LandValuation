@@ -46,8 +46,8 @@ EXPLICIT_FIELD_LABELS: dict[str, str] = {
     "service_facility_proximity": "接近服務性設施之程度",
     "customer_traffic_level": "顧客通行量之多寡",
     "pedestrian_flow": "顧客通行量之多寡",
-    "shop_contiguity_level": "店鋪之毗連狀態",
-    "vacancy_rate": "店鋪之歇業狀態",
+    "shop_contiguity_level": "店舖之毗連狀態",
+    "vacancy_rate": "店舖之毗連狀態",
 
     # 五、嫌惡設施（獨立細項）
     "individual_undesirable_facility": "嫌惡設施之有無及接近程度",
@@ -67,7 +67,7 @@ EXPLICIT_FIELD_LABELS: dict[str, str] = {
     "noise_pollution": "噪音污染",
     "air_pollution": "廢氣污染",
     "waste_pollution": "廢棄物污染",
-    "environmental_pollution": "水、噪音、廢氣及廢棄物污染",
+    "environmental_pollution": "水污染、噪音污染、廢氣污染、廢棄物污染等之有無及接近程度",
 
     # 七、估價計算與小計欄位
     "category_subtotal": "百分比小計",
@@ -82,7 +82,6 @@ EXPLICIT_FIELD_LABELS: dict[str, str] = {
 
     # 八、名稱修復（修正括號截斷）
     "drainage_level": "保（排）水之良否",
-    "drainage": "保（排）水之良否",
 }
 
 

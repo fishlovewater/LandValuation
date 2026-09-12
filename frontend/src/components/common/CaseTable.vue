@@ -5,6 +5,7 @@ import ErrorState from './ErrorState.vue'
 import LoadingSkeleton from './LoadingSkeleton.vue'
 import StatusBadge from './StatusBadge.vue'
 import type { CaseSummary } from '../../types/case'
+import { userFieldLabel } from '../../utils/fieldLabels'
 import { formatDateZhTw } from '../../utils/formatters'
 
 type SortDirection = 'asc' | 'desc'
@@ -125,7 +126,7 @@ function selectRow(row: CaseSummary): void {
   <div class="case-table">
     <div v-if="Object.keys(filterOptions).length" class="case-table__filters" aria-label="案件篩選">
       <label v-for="(options, name) in filterOptions" :key="name" class="case-table__filter">
-        <span>{{ name === 'status' ? '案件狀態' : name === 'riskLevel' ? '風險等級' : name === 'statusGroup' ? '工作群組' : name }}</span>
+        <span>{{ name === 'status' ? '案件狀態' : userFieldLabel(name) }}</span>
         <select
           :name="name"
           :value="filterValue(name)"

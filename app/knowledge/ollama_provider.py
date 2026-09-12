@@ -423,18 +423,23 @@ class OllamaKnowledgeProvider:
                     scored_blocks.sort(reverse=True)
                     return scored_blocks[0][2][:max_chars].strip()
 
-        segments = [
-            segment.strip()
-            for segment in re.split(r"(?<=[。！？；])|\n+", content)
-            if segment.strip()
-        ]
+        # Keep source offsets instead of re-joining split sentences.  The
+        # evidence contract requires supporting_quote to be a contiguous
+        # substring of the original chunk.  Reconstructing a multi-sentence
+        # window with synthetic newlines can preserve meaning while no longer
+        # being source-exact (for example ``甲。乙。`` became ``甲。\n乙。``).
+        # Tracking spans lets us score the same 1-3 adjacent segments while
+        # returning the exact bytes/characters that came from the source.
+        segments = OllamaKnowledgeProvider._segment_spans(content)
         scored: list[tuple[int, int, int, str]] = []
         for start in range(len(segments)):
             for width in (1, 2, 3):
                 window_segments = segments[start : start + width]
                 if len(window_segments) != width:
                     continue
-                window = "\n".join(window_segments).strip()
+                window_start = window_segments[0][0]
+                window_end = window_segments[-1][1]
+                window = content[window_start:window_end]
                 score = OllamaKnowledgeProvider._text_relevance_score(topic, window)
                 if width == 1 and OllamaKnowledgeProvider._is_heading_only(window):
                     score -= 120
@@ -447,6 +452,34 @@ class OllamaKnowledgeProvider:
         if len(quote) < 8:
             return None
         return quote[:max_chars].strip()
+
+    @staticmethod
+    def _segment_spans(content: str) -> list[tuple[int, int]]:
+        """Return non-empty sentence/line spans without rewriting source text."""
+
+        boundaries = list(re.finditer(r"(?<=[。！？；])|\n+", content))
+        spans: list[tuple[int, int]] = []
+        start = 0
+        for boundary in boundaries:
+            end = boundary.start()
+            OllamaKnowledgeProvider._append_trimmed_span(spans, content, start, end)
+            start = boundary.end()
+        OllamaKnowledgeProvider._append_trimmed_span(spans, content, start, len(content))
+        return spans
+
+    @staticmethod
+    def _append_trimmed_span(
+        spans: list[tuple[int, int]],
+        content: str,
+        start: int,
+        end: int,
+    ) -> None:
+        while start < end and content[start].isspace():
+            start += 1
+        while end > start and content[end - 1].isspace():
+            end -= 1
+        if start < end:
+            spans.append((start, end))
 
     @staticmethod
     def _focus_packet(question: str, packet: list[dict]) -> list[dict]:

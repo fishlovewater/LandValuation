@@ -150,7 +150,7 @@ const readinessMessage = computed(() => {
   if (!flow.reportPackageId) return '完整查估書尚未準備完成。'
   if (!flow.completeReport && !flow.formalReport) return '尚未找到可送審的完整 PDF，無法送審。'
   if (flow.validation && !flow.validation.canGenerateReport) return '目前仍有待修正的檢核項目，暫時無法送審。'
-  if (flow.validation && !flow.report) return '尚未產生 F03 單表輸出。'
+  if (flow.validation && !flow.report) return '尚未產生比準地地價估計表單表輸出。'
   if (expectedCaseVersion.value === null) return '尚未取得可送審的 F02 版本。'
   if (!flow.formalValidation) return '請先執行 F02 正式檢核。'
   if (!flow.formalValidation.canGenerateFormalReport) return 'F02 正式檢核仍有待修正項目，暫時無法送審。'
@@ -1232,14 +1232,14 @@ watch(caseId, () => {
         <div class="surface-heading">
           <div>
             <p class="valuation-eyebrow">流程附件</p>
-            <h2 id="artifact-title">F03 單表輸出（流程附件）</h2>
+            <h2 id="artifact-title">比準地地價估計表單表輸出（流程附件）</h2>
           </div>
           <span class="source-marker" data-source-kind="calculated">系統產生</span>
         </div>
         <div class="artifact-card">
           <strong>{{ flow.report.filename }}</strong>
           <span>第 {{ flow.report.versionNo }} 版｜檔案大小 {{ Math.max(1, Math.round(flow.report.fileSizeBytes / 1024)) }} KB</span>
-          <small>這是前段 F03 計算產生的單表輸出，保留作流程追溯；正式送審以「完整送審 PDF」為主。</small>
+          <small>這是前段比準地地價估計表計算產生的單表輸出，保留作流程追溯；正式送審以「完整送審 PDF」為主。</small>
           <button
             class="solid-button artifact-card__download"
             type="button"
@@ -1247,7 +1247,7 @@ watch(caseId, () => {
             :disabled="Boolean(downloadingDocumentId)"
             @click="downloadOutput(flow.report.documentId, flow.report.filename)"
           >
-            {{ downloadingDocumentId === flow.report.documentId ? '下載中…' : '下載 F03 單表' }}
+            {{ downloadingDocumentId === flow.report.documentId ? '下載中…' : '下載比準地地價估計表單表' }}
           </button>
         </div>
       </section>

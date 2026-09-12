@@ -1,11 +1,16 @@
 from datetime import UTC, date, datetime
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
 from app.core.exceptions import AppError
-from app.valuation.report_packages.formal_service import FormalReportService
+import app.valuation.report_packages.formal_service as formal_service_module
+from app.valuation.report_packages.formal_service import (
+    FormalReportService,
+    _optional_official_template_assets,
+)
 from app.valuation.rule_packs.coverage import NEW_TAIPEI_CITYWIDE_SCOPE
 
 
@@ -35,6 +40,102 @@ def _rule(**overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+class _StorageResponse:
+    def __init__(self, content: bytes):
+        self.content = content
+        self.closed = False
+        self.released = False
+
+    def read(self):
+        return self.content
+
+    def close(self):
+        self.closed = True
+
+    def release_conn(self):
+        self.released = True
+
+
+@pytest.mark.asyncio
+async def test_optional_official_template_assets_are_disabled_without_object_keys(monkeypatch):
+    monkeypatch.setattr(
+        formal_service_module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            official_report_blank_template_object_key=None,
+            official_report_blank_template_manifest_object_key=None,
+        ),
+    )
+
+    class _Storage:
+        async def download(self, _object_key):
+            raise AssertionError("disabled official template must not access MinIO")
+
+    assert await _optional_official_template_assets(_Storage()) == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_optional_official_template_assets_load_pdf_and_manifest_from_minio(monkeypatch):
+    template = b"%PDF-official-template"
+    manifest = {"manifest_version": "official-template-overlay-v1"}
+    responses = {
+        "templates/official/report.pdf": _StorageResponse(template),
+        "templates/official/report.manifest.json": _StorageResponse(
+            json.dumps(manifest).encode("utf-8")
+        ),
+    }
+    monkeypatch.setattr(
+        formal_service_module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            official_report_blank_template_object_key="templates/official/report.pdf",
+            official_report_blank_template_manifest_object_key=(
+                "templates/official/report.manifest.json"
+            ),
+        ),
+    )
+
+    class _Storage:
+        async def download(self, object_key):
+            return responses[object_key]
+
+    loaded_template, loaded_manifest = await _optional_official_template_assets(
+        _Storage()
+    )
+
+    assert loaded_template == template
+    assert loaded_manifest == manifest
+    assert all(response.closed for response in responses.values())
+    assert all(response.released for response in responses.values())
+
+
+@pytest.mark.asyncio
+async def test_optional_official_template_assets_reject_invalid_manifest_json(monkeypatch):
+    monkeypatch.setattr(
+        formal_service_module,
+        "get_settings",
+        lambda: SimpleNamespace(
+            official_report_blank_template_object_key="templates/official/report.pdf",
+            official_report_blank_template_manifest_object_key=(
+                "templates/official/report.manifest.json"
+            ),
+        ),
+    )
+    responses = {
+        "templates/official/report.pdf": _StorageResponse(b"%PDF-template"),
+        "templates/official/report.manifest.json": _StorageResponse(b"not-json"),
+    }
+
+    class _Storage:
+        async def download(self, object_key):
+            return responses[object_key]
+
+    with pytest.raises(AppError) as raised:
+        await _optional_official_template_assets(_Storage())
+
+    assert raised.value.code == "OFFICIAL_TEMPLATE_MANIFEST_INVALID"
 
 
 def test_formal_rule_guard_accepts_verified_citywide_commercial_rule():

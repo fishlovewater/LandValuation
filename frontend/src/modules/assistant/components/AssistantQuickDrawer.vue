@@ -51,8 +51,8 @@ const canAsk = computed(() => (
 const contextReady = computed(() => Boolean(contextCaseId.value && contextFormId.value))
 const currentContextLabel = computed(() => {
   if (!contextCaseId.value) return '目前可查詢法規與知識文件'
-  if (!contextFormId.value) return '已帶入目前案件，但尚無可用的 F03 估價資料'
-  return '已帶入目前案件與 F03 估價資料'
+  if (!contextFormId.value) return '已帶入目前案件，但尚無可用的比準地地價估計表資料'
+  return '已帶入目前案件與比準地地價估計表資料'
 })
 
 function routeString(value: unknown): string {
@@ -210,7 +210,7 @@ watch(
 
       <p v-if="loading" class="assistant-quick__notice" role="status">正在準備智能助理…</p>
       <p v-else-if="!canStart && !canAskGeneral" class="assistant-quick__notice" role="status">
-        此帳號沒有啟用 AI 助理或知識資料讀取權限。
+        此帳號沒有使用智能助理或讀取知識資料的權限。
       </p>
       <p v-else-if="!contextReady" class="assistant-quick__notice" role="status">
         可直接查詢法規、條文與知識文件；目前不會帶入案件資料。
@@ -260,7 +260,7 @@ watch(
         : { name: 'assistant', query: knowledgeConversationId ? { conversationId: knowledgeConversationId } : {} }" @click="emit('close')">
         開啟完整助理工作區
       </RouterLink>
-      <p class="assistant-quick__disclaimer">AI 建議僅供輔助；可查看的資料與可執行操作依目前帳號權限而定。</p>
+      <p class="assistant-quick__disclaimer">智能助理建議僅供輔助；可查看的資料與可執行操作依目前帳號權限而定。</p>
     </div>
   </GlassDrawer>
 </template>

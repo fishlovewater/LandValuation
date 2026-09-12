@@ -324,10 +324,12 @@ async function expectNonStrictProviderOutcome(
       expect(payload.citations.length).toBeGreaterThan(0)
     })
     await withAssistantFailureTag(step, 'UI', async () => {
-      const latestAnswer = page.getByTestId('assistant-answer').last()
+      const latestAnswer = page.locator('article[data-testid="assistant-answer"]:visible').last()
       await expect(latestAnswer).toBeVisible()
       await expect(latestAnswer.getByTestId('assistant-insufficient')).toHaveCount(0)
-      await expect(latestAnswer.locator('button[data-testid^="assistant-citation-"]')).not.toHaveCount(0)
+      await expect(
+        latestAnswer.locator('button[data-testid^="assistant-citation-"]'),
+      ).toHaveCount(payload.citations.length)
     })
     return
   }

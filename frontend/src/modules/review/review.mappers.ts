@@ -17,6 +17,7 @@ import type {
   WorkbenchSummaryDto,
 } from './review.types'
 import { decisionLabel as sharedDecisionLabel, statusLabel as sharedStatusLabel } from '../../utils/enumLabels'
+import { userStructuredValue } from '../../utils/fieldLabels'
 
 const STATUS_LABELS: Readonly<Record<string, string>> = {
   RECEIVED: '已收件',
@@ -322,7 +323,8 @@ export function mapRun(dto: WorkbenchCaseDetailDto['runs'][number]): ReviewRunMo
 function displayScalar(value: unknown): string | null {
   if (value === null || value === undefined) return null
   if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value)
+  if (typeof value === 'boolean') return value ? '是' : '否'
+  if (typeof value === 'number' || typeof value === 'bigint') return String(value)
   return null
 }
 
@@ -394,9 +396,10 @@ function mapLegalBasis(values: unknown[]): ReviewReferenceModel[] {
   return values.flatMap((value, index) => {
     const record = objectRecord(value)
     if (!record) return []
-    const ruleName = textValue(record.rule_name, record.rule_code, record.article)
-    const version = textValue(record.version_name, record.rule_set_code)
+    const ruleCode = textValue(record.rule_code)
     const article = textValue(record.article)
+    const ruleName = textValue(record.rule_name, article) ?? (ruleCode ? '正式檢核規則' : null)
+    const version = textValue(record.version_name)
     const detailParts = [version, article && article !== ruleName ? article : null].filter(Boolean)
     return [{
       key: textValue(record.rule_version_id, record.source_id, record.rule_code) ?? `legal-${index}`,
@@ -461,12 +464,7 @@ export function mapDecision(dto: DecisionDto): ReviewDecisionModel {
 function diffDisplayValue(value: unknown): string {
   const scalar = displayScalar(value)
   if (scalar !== null) return scalar
-  if (value === null || value === undefined) return '—'
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return '已提供結構化資料'
-  }
+  return userStructuredValue(value)
 }
 
 export function mapVersionDiff(

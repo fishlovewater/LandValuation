@@ -562,7 +562,7 @@ describe('valuation demo flow', () => {
     expect(patchBodies).toHaveLength(2)
     expect(patchBodies[0]).toEqual(expect.objectContaining({ comparison_price: '125001.00' }))
     expect(patchBodies[1]).toEqual(expect.objectContaining({ comparison_price: '125002.00' }))
-    expect(wrapper.get('[data-testid="validation-results"]').text()).toContain('可產生 F03 單表')
+    expect(wrapper.get('[data-testid="validation-results"]').text()).toContain('可產生比準地地價估計表單表')
     expect(wrapper.get('[data-testid="validation-results"]').text()).toContain('警示')
     expect(wrapper.get('[data-testid="calculation-result"]').text()).toContain('123456.00')
     expect(wrapper.text()).not.toContain('internal-bucket-must-not-render')
@@ -1693,7 +1693,7 @@ describe('valuation demo flow', () => {
     await wrapper.get('[data-testid="data-section-land"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.find('[data-testid="valuation-land-context"]').exists()).toBe(true))
 
-    expect((wrapper.get('[data-testid="parcel-district-code"]').element as HTMLInputElement).value).toBe('65000030')
+    expect((wrapper.get('[data-testid="parcel-district-code"]').element as HTMLInputElement).value).toBe('中和區')
     await wrapper.get('[data-testid="parcel-section-name"]').setValue('Test Section')
     await wrapper.get('[data-testid="parcel-land-no"]').setValue('100-1')
     await wrapper.get('[data-testid="parcel-area-sqm"]').setValue('300.50')

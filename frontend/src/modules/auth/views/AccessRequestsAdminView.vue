@@ -4,6 +4,7 @@ import PageHeader from '../../../components/common/PageHeader.vue'
 import EmptyState from '../../../components/common/EmptyState.vue'
 import ErrorState from '../../../components/common/ErrorState.vue'
 import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
+import { userRoleLabel } from '../../../utils/fieldLabels'
 import { formatDateZhTw } from '../../../utils/formatters'
 import { authApi } from '../auth.api'
 import type { AccountAccessRequestAdminDto, AccountAccessRequestStatus } from '../auth.types'
@@ -60,7 +61,7 @@ onMounted(load)
     <PageHeader
       eyebrow="帳號管理"
       title="工作帳號申請"
-      description="僅具 auth.manage 權限的管理者可核准或拒絕申請；核准後系統建立帳號並寄送一次性密碼設定連結。"
+      description="僅系統管理者可核准或拒絕申請；核准後系統會建立帳號並寄送一次性密碼設定連結。"
     />
 
     <div class="access-admin__toolbar">
@@ -88,7 +89,7 @@ onMounted(load)
       <article v-for="row in rows" :key="row.request_id" class="access-admin__card">
         <header>
           <div>
-            <small>{{ row.requested_role }}</small>
+            <small>{{ userRoleLabel(row.requested_role) }}</small>
             <h2>{{ row.display_name }}</h2>
             <p>{{ row.username }} · {{ row.email }}</p>
           </div>

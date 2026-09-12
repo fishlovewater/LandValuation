@@ -78,6 +78,7 @@ def test_intake_manifest_rejects_non_new_taipei_or_cross_district_parcel() -> No
 @pytest.mark.parametrize(
     ("filename", "expected"),
     [
+        ("宗地個別因素清冊.xls", DocumentCategory.PARCEL_FACTOR_LIST),
         ("土地登記謄本.pdf", DocumentCategory.LAND_REGISTER),
         ("地籍圖.pdf", DocumentCategory.CADASTRAL_MAP),
         ("地價區段略圖.png", DocumentCategory.MAP_SECTION_SKETCH),
@@ -122,8 +123,9 @@ def test_simplified_workflow_is_exposed_as_three_swagger_operations() -> None:
     assert files_schema["items"] == {"type": "string", "format": "binary"}
 
 
-def test_automated_intake_extracts_pdf_and_xlsx_sources() -> None:
+def test_automated_intake_extracts_pdf_xls_and_xlsx_sources() -> None:
     assert "application/pdf" in AUTO_EXTRACT_MIME_TYPES
+    assert "application/vnd.ms-excel" in AUTO_EXTRACT_MIME_TYPES
     assert (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         in AUTO_EXTRACT_MIME_TYPES

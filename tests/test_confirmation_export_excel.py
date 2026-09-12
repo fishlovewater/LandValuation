@@ -17,6 +17,9 @@ def test_get_field_label_zh_returns_chinese_names() -> None:
     assert get_field_label_zh("F02-RF", "building_coverage_rate") == "建蔽率"
     # Verify Item 8 fix for drainage_level
     assert get_field_label_zh("S01", "drainage_level") == "保（排）水之良否"
+    assert get_field_label_zh("F02-RF", "drainage") == "排水之良否"
+    assert get_field_label_zh("F02-RF", "vacancy_rate") == "店舖之毗連狀態"
+    assert get_field_label_zh("F02-RF", "funeral_facility") == "殯葬設施之有無及接近程度"
     # Verify Item 1 physical factors
     assert get_field_label_zh("F02", "individual_area") == "面積 (M²)"
     assert get_field_label_zh("F02", "individual_width") == "寬度 (M)"

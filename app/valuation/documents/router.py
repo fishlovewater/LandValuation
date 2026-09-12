@@ -29,11 +29,21 @@ from app.valuation.documents.schemas import (
     DocumentResponse,
 )
 from app.valuation.documents.service import DocumentService
+from app.valuation.parcel_import import ParcelImportService
+from app.valuation.schemas import (
+    ParcelBatchImportRequest,
+    ParcelBatchImportResponse,
+    ParcelImportPreviewResponse,
+)
 
 router = APIRouter()
 
 DocumentUploader = Annotated[User, Depends(require_permissions("document.upload"))]
 DocumentDownloader = Annotated[User, Depends(require_permissions("document.download"))]
+ParcelImporter = Annotated[
+    User,
+    Depends(require_permissions("case.update", "document.download")),
+]
 DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
@@ -165,6 +175,43 @@ async def preview_spreadsheet_document(
         raise AppError("PREVIEW_TOO_LARGE", "Excel 檔案過大，請下載後查看完整內容", 413) from exc
     except StorageError as exc:
         raise AppError("DOCUMENT_OBJECT_MISSING", "文件資料存在，但目前無法從物件儲存取得檔案", 404) from exc
+
+
+@router.get(
+    "/cases/{case_id}/documents/{document_id}/parcel-import-preview",
+    response_model=ParcelImportPreviewResponse,
+    summary="解析宗地個別因素清冊並產生待確認宗地",
+)
+async def preview_parcel_import(
+    case_id: UUID,
+    document_id: UUID,
+    session: DbSession,
+    storage: Storage,
+    user: DocumentDownloader,
+) -> ParcelImportPreviewResponse:
+    return await ParcelImportService(session, storage).preview(case_id, document_id, user)
+
+
+@router.post(
+    "/cases/{case_id}/documents/{document_id}/parcel-import",
+    response_model=ParcelBatchImportResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="確認並批次匯入宗地個別因素清冊的宗地基本資料",
+)
+async def import_parcels_from_document(
+    case_id: UUID,
+    document_id: UUID,
+    payload: ParcelBatchImportRequest,
+    session: DbSession,
+    storage: Storage,
+    user: ParcelImporter,
+) -> ParcelBatchImportResponse:
+    return await ParcelImportService(session, storage).import_rows(
+        case_id,
+        document_id,
+        payload,
+        user,
+    )
 
 
 @router.get(

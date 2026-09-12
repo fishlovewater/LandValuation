@@ -86,7 +86,7 @@ function submit(): void {
           {{ sending ? '送出中…' : '送出問題' }}
         </button>
       </form>
-      <p class="assistant-disclaimer">AI 建議僅供輔助，最終由專業人員判斷。</p>
+      <p class="assistant-disclaimer">智能助理建議僅供輔助，最終由專業人員判斷。</p>
     </div>
   </GlassModal>
 </template>

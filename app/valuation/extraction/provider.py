@@ -387,6 +387,141 @@ class XlsxExtractionProvider(DocumentExtractionProvider):
         )
 
 
+class XlsExtractionProvider(DocumentExtractionProvider):
+    """Extract text from the legacy binary Excel format used by official forms.
+
+    The land-acquisition appraisal handbook's parcel-factor workbook can arrive
+    as ``.xls``.  Preview already supports that format; this provider keeps the
+    extraction path consistent so the same file can proceed to grounded field
+    analysis instead of becoming preview-only evidence.
+    """
+
+    provider_name = "LOCAL_XLS"
+    max_sheets = XlsxExtractionProvider.max_sheets
+    max_rows_per_sheet = XlsxExtractionProvider.max_rows_per_sheet
+    max_columns_per_sheet = XlsxExtractionProvider.max_columns_per_sheet
+    max_nonempty_cells = XlsxExtractionProvider.max_nonempty_cells
+    max_text_chars = XlsxExtractionProvider.max_text_chars
+
+    async def extract(self, content: bytes) -> ExtractionResult:
+        return await run_in_threadpool(self._extract_sync, content)
+
+    @staticmethod
+    def _cell_text(xlrd_module: Any, workbook: Any, cell: Any) -> str:
+        if cell.ctype in (xlrd_module.XL_CELL_EMPTY, xlrd_module.XL_CELL_BLANK):
+            return ""
+        if cell.ctype == xlrd_module.XL_CELL_BOOLEAN:
+            return "true" if bool(cell.value) else "false"
+        if cell.ctype == xlrd_module.XL_CELL_DATE:
+            try:
+                return xlrd_module.xldate_as_datetime(
+                    cell.value, workbook.datemode
+                ).isoformat()
+            except Exception:
+                return str(cell.value).strip()
+        if cell.ctype == xlrd_module.XL_CELL_NUMBER:
+            number = float(cell.value)
+            return str(int(number)) if number.is_integer() else str(number)
+        return str(cell.value).replace("\r\n", " ").replace("\n", " ").strip()
+
+    def _extract_sync(self, content: bytes) -> ExtractionResult:
+        try:
+            import xlrd
+        except ImportError as exc:
+            raise AppError(
+                "XLS_DEPENDENCY_MISSING",
+                "舊版 Excel 擷取需要安裝 xlrd",
+                503,
+            ) from exc
+
+        try:
+            workbook = xlrd.open_workbook(file_contents=content, on_demand=True)
+        except Exception as exc:
+            raise AppError(
+                "XLS_SOURCE_INVALID",
+                "Excel 檔案已損壞、加密或格式無法讀取",
+                422,
+            ) from exc
+
+        try:
+            if workbook.nsheets > self.max_sheets:
+                raise AppError(
+                    "XLS_LIMIT_EXCEEDED",
+                    f"Excel 工作表數量不可超過 {self.max_sheets}",
+                    422,
+                )
+
+            sheets: list[str] = []
+            candidates: list[CandidateValue] = []
+            nonempty_cells = 0
+            total_chars = 0
+
+            for sheet_number in range(1, workbook.nsheets + 1):
+                worksheet = workbook.sheet_by_index(sheet_number - 1)
+                if worksheet.nrows > self.max_rows_per_sheet:
+                    raise AppError(
+                        "XLS_LIMIT_EXCEEDED",
+                        f"工作表 {worksheet.name} 超過 {self.max_rows_per_sheet} 列",
+                        422,
+                    )
+                if worksheet.ncols > self.max_columns_per_sheet:
+                    raise AppError(
+                        "XLS_LIMIT_EXCEEDED",
+                        f"工作表 {worksheet.name} 超過 {self.max_columns_per_sheet} 欄",
+                        422,
+                    )
+
+                lines = [f"[工作表：{worksheet.name}]"]
+                structured_rows: list[tuple[str, list[str]]] = []
+                for row_index in range(worksheet.nrows):
+                    row_values: list[str] = []
+                    rendered_values: list[str] = []
+                    for column_index in range(worksheet.ncols):
+                        cell = worksheet.cell(row_index, column_index)
+                        value = self._cell_text(xlrd, workbook, cell)
+                        if not value:
+                            continue
+                        nonempty_cells += 1
+                        if nonempty_cells > self.max_nonempty_cells:
+                            raise AppError(
+                                "XLS_LIMIT_EXCEEDED",
+                                "Excel 非空白儲存格數量超過系統上限",
+                                422,
+                            )
+                        row_values.append(value)
+                        rendered_values.append(
+                            f"[R{row_index + 1}C{column_index + 1}] {value}"
+                        )
+                    if rendered_values:
+                        line = " | ".join(rendered_values)
+                        total_chars += len(line)
+                        if total_chars > self.max_text_chars:
+                            raise AppError(
+                                "XLS_LIMIT_EXCEEDED",
+                                "Excel 可擷取文字量超過系統上限",
+                                422,
+                            )
+                        lines.append(line)
+                        structured_rows.append((line, row_values))
+
+                sheets.append("\n".join(lines))
+                if "比較標的" in worksheet.name:
+                    candidates.extend(
+                        XlsxExtractionProvider._comparison_target_candidates(
+                            structured_rows, sheet_number
+                        )
+                    )
+        finally:
+            workbook.release_resources()
+
+        return ExtractionResult(
+            text="\n\n".join(sheets),
+            page_count=len(sheets),
+            candidates=tuple(candidates),
+            provider=self.provider_name,
+        )
+
+
 def _default_command_runner(
     command: list[str], timeout: float
 ) -> subprocess.CompletedProcess[str]:

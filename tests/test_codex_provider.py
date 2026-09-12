@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.config import Settings
+from app.core.config import F03_PRODUCTION_RULE_SET_CODE, Settings
 from app.core.exceptions import AppError
 from app.knowledge.bedrock_provider import BedrockKnowledgeProvider
 from app.knowledge.codex_provider import CodexCliKnowledgeProvider
@@ -386,6 +386,7 @@ def test_provider_factory_rejects_codex_cli_outside_development_and_test(app_env
                 knowledge_answer_provider="codex_cli",
                 app_env=app_env,
                 minio_bucket="land-valuation",
+                f03_validation_rule_set_code=F03_PRODUCTION_RULE_SET_CODE,
                 jwt_secret_key="unit-test-production-secret",
                 smtp_host="smtp.example.test",
                 smtp_from_email="no-reply@example.test",
@@ -403,6 +404,7 @@ def test_provider_status_reports_safe_evidence_only_mode_in_production(monkeypat
         knowledge_answer_provider="evidence_only",
         app_env="production",
         minio_bucket="land-valuation",
+        f03_validation_rule_set_code=F03_PRODUCTION_RULE_SET_CODE,
         jwt_secret_key="unit-test-production-secret",
         smtp_host="smtp.example.test",
         smtp_from_email="no-reply@example.test",

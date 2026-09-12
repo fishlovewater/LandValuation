@@ -4,6 +4,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
+import xlrd
 from pypdf import PdfWriter
 from openpyxl import Workbook
 
@@ -15,6 +16,7 @@ from app.valuation.extraction.provider import (
     LocalOcrPdfExtractionProvider,
     LocalPdfExtractionProvider,
     TextractPdfExtractionProvider,
+    XlsExtractionProvider,
     XlsxExtractionProvider,
     _candidate_values,
     build_document_extraction_provider,
@@ -83,6 +85,60 @@ async def test_invalid_xlsx_has_clear_error() -> None:
     with pytest.raises(AppError) as captured:
         await XlsxExtractionProvider().extract(b"not-an-xlsx")
     assert captured.value.code == "XLSX_SOURCE_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_xls_extracts_legacy_official_workbook(monkeypatch) -> None:
+    class FakeCell:
+        def __init__(self, ctype: int, value) -> None:
+            self.ctype = ctype
+            self.value = value
+
+    class FakeSheet:
+        name = "宗地個別因素清冊"
+        nrows = 2
+        ncols = 3
+        _cells = [
+            [
+                FakeCell(xlrd.XL_CELL_TEXT, "行政區"),
+                FakeCell(xlrd.XL_CELL_TEXT, "段"),
+                FakeCell(xlrd.XL_CELL_TEXT, "地號"),
+            ],
+            [
+                FakeCell(xlrd.XL_CELL_TEXT, "板橋區"),
+                FakeCell(xlrd.XL_CELL_TEXT, "文化段"),
+                FakeCell(xlrd.XL_CELL_NUMBER, 123.0),
+            ],
+        ]
+
+        def cell(self, row_index: int, column_index: int):
+            return self._cells[row_index][column_index]
+
+    class FakeWorkbook:
+        nsheets = 1
+        datemode = 0
+
+        def __init__(self) -> None:
+            self.released = False
+
+        def sheet_by_index(self, _index: int):
+            return FakeSheet()
+
+        def release_resources(self) -> None:
+            self.released = True
+
+    workbook = FakeWorkbook()
+    monkeypatch.setattr(xlrd, "open_workbook", lambda **_kwargs: workbook)
+
+    result = await XlsExtractionProvider().extract(b"legacy-xls")
+
+    assert result.provider == "LOCAL_XLS"
+    assert result.page_count == 1
+    assert "[工作表：宗地個別因素清冊]" in result.text
+    assert "[R2C1] 板橋區" in result.text
+    assert "[R2C2] 文化段" in result.text
+    assert "[R2C3] 123" in result.text
+    assert workbook.released is True
 
 
 class StubProvider:

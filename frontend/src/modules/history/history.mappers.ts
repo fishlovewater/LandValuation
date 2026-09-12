@@ -1,4 +1,5 @@
 import { decisionLabel, riskLabel, statusLabel } from '../../utils/enumLabels'
+import { userFieldLabel, userStructuredValue } from '../../utils/fieldLabels'
 import { formatDateZhTw } from '../../utils/formatters'
 import type {
   HistoryCaseDetailDto,
@@ -404,10 +405,7 @@ export function mapHistoryDetail(dto: HistoryCaseDetailDto): HistoryCaseDetailMo
 export const mapHistoryCaseDetail = mapHistoryDetail
 
 export function readableValue(value: unknown): string {
-  if (value === null || value === undefined || value === '') return '—'
-  if (typeof value === 'string') return value
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  return '已提供'
+  return userStructuredValue(value)
 }
 
 export function readableDate(value: unknown): string {
@@ -415,45 +413,5 @@ export function readableDate(value: unknown): string {
 }
 
 export function readableFieldLabel(value: string): string {
-  const labels: Readonly<Record<string, string>> = {
-    form_code: '表單類型',
-    form_status: '表單狀態',
-    version_no: '版本',
-    valuation_type: '估價類型',
-    review_type: '審查類型',
-    finding_type: '疑點類型',
-    status: '狀態',
-    finding_status: '疑點狀態',
-    ai_status: 'AI 狀態',
-    unit_price: '單價',
-    total_value: '總價',
-    result_status: '結果狀態',
-    run_status: '執行狀態',
-    case_status: '案件狀態',
-    review_status: '審查狀態',
-    received_at: '收件時間',
-    started_at: '開始時間',
-    completed_at: '完成時間',
-    created_at: '建立時間',
-    generated_at: '產生時間',
-    decided_at: '決定時間',
-    overall_risk_level: '整體風險',
-    current_risk_level: '目前風險',
-    risk_level: '風險等級',
-    risk_score: '風險分數',
-    summary: '摘要',
-    finding_code: '疑點項目',
-    rule_code: '檢核項目',
-    field_path: '檢核欄位',
-    severity: '嚴重程度',
-    decision: '決定',
-    decision_reason: '決定理由',
-    document_type: '文件類型',
-    mime_type: '檔案格式',
-    content_type: '檔案格式',
-    section_name: '段名',
-    land_no: '地號',
-    area_sqm: '面積（平方公尺）',
-  }
-  return labels[value] ?? value.replaceAll('_', ' ')
+  return userFieldLabel(value)
 }

@@ -10,6 +10,7 @@ import { statusLabel } from '../../../utils/enumLabels'
 import { formatDateZhTw } from '../../../utils/formatters'
 import { safeValuationErrorMessage, valuationApi } from '../valuation.api'
 import { mapCaseResponse } from '../valuation.mappers'
+import { NEW_TAIPEI_CITY_CODE, NEW_TAIPEI_DISTRICTS } from '../newTaipei'
 import { resetValuationFlow } from '../valuation.types'
 import type { ValuationCaseModel } from '../valuation.types'
 import ValuationStepNavigator from '../components/ValuationStepNavigator.vue'
@@ -32,7 +33,6 @@ const createDraft = reactive({
   requestingAgency: '',
   valuationBaseDate: '',
   valuationDueDate: '',
-  cityCode: '',
   districtCode: '',
   landUseType: '',
 })
@@ -47,11 +47,11 @@ const priorityCase = computed(() => {
   })[0] ?? null
 })
 const landUseOptions = [
-  { value: 'RESIDENTIAL', label: '????' },
-  { value: 'COMMERCIAL', label: '????' },
-  { value: 'INDUSTRIAL', label: '????' },
-  { value: 'AGRICULTURAL', label: '????' },
-  { value: 'OTHER', label: '????' },
+  { value: 'RESIDENTIAL', label: '住宅用地' },
+  { value: 'COMMERCIAL', label: '商業用地' },
+  { value: 'INDUSTRIAL', label: '工業用地' },
+  { value: 'AGRICULTURAL', label: '農業用地' },
+  { value: 'OTHER', label: '其他用途' },
 ] as const
 const sortedCases = computed(() => {
   const direction = sortDirection.value === 'asc' ? 1 : -1
@@ -96,7 +96,7 @@ async function loadCases(): Promise<void> {
 function resetCreateDraft(): void {
   Object.assign(createDraft, {
     caseNo: '', title: '', caseType: '', requestingAgency: '', valuationBaseDate: '',
-    valuationDueDate: '', cityCode: '', districtCode: '', landUseType: '',
+    valuationDueDate: '', districtCode: '', landUseType: '',
   })
 }
 
@@ -118,7 +118,7 @@ async function createCase(): Promise<void> {
       requesting_agency: createDraft.requestingAgency || null,
       valuation_base_date: createDraft.valuationBaseDate,
       valuation_due_date: createDraft.valuationDueDate || null,
-      city_code: createDraft.cityCode,
+      city_code: NEW_TAIPEI_CITY_CODE,
       district_code: createDraft.districtCode,
       land_use_type: createDraft.landUseType || null,
     })
@@ -264,15 +264,23 @@ onMounted(() => {
           <label><span>估價基準日 *</span><input v-model="createDraft.valuationBaseDate" type="date" required /></label>
           <label><span>估價作業期限</span><input v-model="createDraft.valuationDueDate" type="date" /></label>
           <label><span>申請機關</span><input v-model.trim="createDraft.requestingAgency" maxlength="200" /></label>
-          <label><span>縣市代碼 *</span><input v-model.trim="createDraft.cityCode" required maxlength="20" /></label>
-          <label><span>行政區代碼 *</span><input v-model.trim="createDraft.districtCode" required maxlength="20" /></label>
           <label class="create-case-grid__wide">
-            <span>???? *</span>
+            <span>行政區 *</span>
+            <select v-model="createDraft.districtCode" required data-testid="create-case-district">
+              <option value="" disabled>請選擇新北市行政區</option>
+              <option v-for="district in NEW_TAIPEI_DISTRICTS" :key="district.code" :value="district.code">
+                {{ district.name }}
+              </option>
+            </select>
+            <small>本系統查估範圍固定為新北市；正式行政區代碼由系統自動帶入。</small>
+          </label>
+          <label class="create-case-grid__wide">
+            <span>土地用途 *</span>
             <select v-model="createDraft.landUseType" required data-testid="case-land-use-type">
-              <option disabled value="">???????</option>
+              <option disabled value="">請選擇土地用途</option>
               <option v-for="option in landUseOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
             </select>
-            <small>??????????????????????</small>
+            <small>請從清單選擇，系統會自動儲存對應的正式規則代碼。</small>
           </label>
         </div>
 
@@ -351,6 +359,7 @@ onMounted(() => {
 .create-case-grid__wide { grid-column: 1 / -1; }
 .create-case-grid input,
 .create-case-grid select { min-height: 44px; padding: 9px 11px; border: 1px solid var(--app-line); border-radius: 10px; color: var(--app-ink); background: rgba(255,255,255,.8); font: inherit; }
+.create-case-grid label small { color: var(--app-muted); font-size: 10px; font-weight: 500; line-height: 1.5; }
 .create-case-grid input:focus,
 .create-case-grid select:focus { outline: 3px solid rgba(200, 91, 67, .16); border-color: var(--app-accent); }
 .create-case-actions { display: flex; justify-content: flex-end; gap: 8px; }

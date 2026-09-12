@@ -5,24 +5,13 @@ import PageHeader from '../components/common/PageHeader.vue'
 import { authorizedModules } from '../components/common/appModules'
 import { liquidGlass as vLiquidGlass } from '../directives/liquidGlass'
 import { useAuthStore } from '../stores/auth.store'
+import { userRoleLabel } from '../utils/fieldLabels'
 
 const authStore = useAuthStore()
 
 const modules = computed(() => authorizedModules(authStore.permissions, authStore.roles))
 const displayName = computed(() => authStore.user?.displayName || authStore.user?.username || '目前使用者')
 
-const roleLabels: Readonly<Record<string, string>> = {
-  APPRAISER: '估價人員',
-  REVIEWER: '審查人員',
-  INSPECTOR: '案件查詢',
-  ADMIN: '系統管理員',
-  SYSTEM_ADMIN: '系統管理員',
-  SUPERADMIN: '系統管理員',
-}
-
-function roleLabel(role: string): string {
-  return roleLabels[role] ?? role
-}
 </script>
 
 <template>
@@ -40,7 +29,7 @@ function roleLabel(role: string): string {
         <p>{{ authStore.user?.email || authStore.user?.username || '已登入工作帳號' }}</p>
       </div>
       <div class="app-home__roles" aria-label="目前角色">
-        <span v-for="role in authStore.roles" :key="role">{{ roleLabel(role) }}</span>
+        <span v-for="role in authStore.roles" :key="role">{{ userRoleLabel(role) }}</span>
       </div>
     </section>
 

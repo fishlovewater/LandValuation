@@ -391,7 +391,7 @@ function workflowStatusLabel(status: string): string {
     DENIED: '未執行',
     FAILED: '失敗',
   }
-  return labels[status] ?? status
+  return labels[status] ?? '狀態待確認'
 }
 
 function workflowToolSummary(tool: AssistantMessageResponseDto['tools'][number]): string {
@@ -489,7 +489,7 @@ onBeforeUnmount(() => {
       <ErrorState v-else-if="error && !session && !generalKnowledgeMode" :message="error" @retry="loadSession" />
       <EmptyState
         v-else-if="!generalKnowledgeMode && !hasContext && !session"
-        title="尚未選取可用的 F03 案件"
+        title="尚未選取可用的比準地地價估計表案件"
         :description="canStartSession ? '請先從可查看的估價案件開啟智能助理。' : '目前帳號沒有查看估價案件的權限。'"
       >
         <template #action>

@@ -76,8 +76,8 @@ F03_FIELDS = fs("基本資料", (("case_no", "案號"), ("valuation_base_date", 
     ("benchmark_land_id", "比準地編號"), ("benchmark_land_no", "比準地地號"),
     ("price_zone_no", "地價區段號"), ("benchmark_location", "土地坐落"),
     ("benchmark_area_sqm", "面積（㎡）"), ("land_use_zone", "使用分區或編定用地"))) + fs("估價方法與權重", (
-    ("comparison_price", "比較法價格（元／㎡）"), ("comparison_weight", "比較法權重"),
-    ("income_price", "收益法價格（元／㎡）"), ("income_weight", "收益法權重"),
+    ("comparison_price", "比準地比較價格（元／㎡）"), ("comparison_weight", "比較價格權重"),
+    ("income_price", "比準地收益價格（元／㎡）"), ("income_weight", "收益價格權重"),
     ("benchmark_land_price", "比準地地價（元／㎡）"), ("decision_reason", "價格決定理由"))) + fs("市場資料與簽章", (
     ("market_period_start", "案例蒐集期間起日"), ("market_period_end", "案例蒐集期間迄日"),
     ("market_condition", "市場概況"), ("selection_scope_reason", "案例範圍及選取理由"),

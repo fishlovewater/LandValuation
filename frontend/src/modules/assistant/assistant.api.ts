@@ -20,7 +20,7 @@ export const ASSISTANT_QUESTION_VALIDATION_MESSAGE = '問題至少需要 2 個�
 
 export class AssistantContextError extends Error {
   constructor() {
-    super('請先開啟一筆可查看的 F03 案件，再使用案件相關功能。')
+    super('請先開啟一筆可查看的比準地地價估計表案件，再使用案件相關功能。')
     this.name = 'AssistantContextError'
   }
 }
@@ -273,7 +273,7 @@ export function safeAssistantErrorMessage(error: unknown): string {
       return '案件目前已進入不可修改狀態；仍可查詢案件或法規，但不能執行修改型操作。'
     }
     if (code === 'FORM_STATE_CONFLICT') {
-      return '目前 F03 狀態不可修改；仍可查詢資料，但不能執行需要變更表單的操作。'
+      return '目前比準地地價估計表狀態不可修改；仍可查詢資料，但不能執行需要變更表單的操作。'
     }
     return '目前操作與案件或表單狀態衝突，請重新整理後確認目前狀態。'
   }

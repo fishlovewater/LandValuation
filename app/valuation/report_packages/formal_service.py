@@ -9,6 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
+from app.core.config import get_settings
 from app.core.exceptions import AppError, ResourceNotFoundError
 from app.storage.paths import build_generated_report_object_key
 from app.storage.service import StorageService
@@ -63,6 +64,8 @@ from app.valuation.schemas import FormStatus
 FORMAL_FORMULA_CODE = "NTPC_COMPARISON_V1"
 FORMAL_ROUNDING_CODE = "NTPC_LAND_PRICE_V1"
 MAP_MIME_TYPES = {"application/pdf", "image/png", "image/jpeg"}
+MAX_OFFICIAL_TEMPLATE_BYTES = 30 * 1024 * 1024
+MAX_OFFICIAL_TEMPLATE_MANIFEST_BYTES = 1024 * 1024
 LAND_USE_ALIASES = {
     "住宅用地": "RESIDENTIAL",
     "商業用地": "COMMERCIAL",
@@ -80,6 +83,47 @@ def _read_and_close(response) -> bytes:
         release = getattr(response, "release_conn", None)
         if callable(release):
             release()
+
+
+async def _optional_official_template_assets(
+    storage: StorageService,
+) -> tuple[bytes | None, dict | None]:
+    settings = get_settings()
+    template_key = settings.official_report_blank_template_object_key
+    manifest_key = settings.official_report_blank_template_manifest_object_key
+    if template_key is None:
+        return None, None
+    template_response = await storage.download(template_key)
+    manifest_response = await storage.download(manifest_key or "")
+    template_bytes = await run_in_threadpool(_read_and_close, template_response)
+    manifest_bytes = await run_in_threadpool(_read_and_close, manifest_response)
+    if len(template_bytes) > MAX_OFFICIAL_TEMPLATE_BYTES:
+        raise AppError(
+            "OFFICIAL_TEMPLATE_TOO_LARGE",
+            "官方空白 PDF 超過 30 MB 上限",
+            500,
+        )
+    if len(manifest_bytes) > MAX_OFFICIAL_TEMPLATE_MANIFEST_BYTES:
+        raise AppError(
+            "OFFICIAL_TEMPLATE_MANIFEST_TOO_LARGE",
+            "官方模板 manifest 超過 1 MB 上限",
+            500,
+        )
+    try:
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AppError(
+            "OFFICIAL_TEMPLATE_MANIFEST_INVALID",
+            "官方模板 manifest 不是有效的 UTF-8 JSON",
+            500,
+        ) from exc
+    if not isinstance(manifest, dict):
+        raise AppError(
+            "OFFICIAL_TEMPLATE_MANIFEST_INVALID",
+            "官方模板 manifest 根節點必須為 JSON object",
+            500,
+        )
+    return template_bytes, manifest
 
 
 class FormalReportService:
@@ -753,8 +797,25 @@ class FormalReportService:
                 "uploaded_at": record.uploaded_at.isoformat(),
                 "content": content,
             }
+        official_template_pdf_bytes, official_template_manifest = (
+            await _optional_official_template_assets(self.storage)
+        )
+        report_template_metadata = {"mode": "STRUCTURED_REDRAWN"}
+        if official_template_pdf_bytes is not None:
+            manifest_for_metadata = official_template_manifest or {}
+            report_template_metadata = {
+                "mode": "OFFICIAL_BLANK_OVERLAY",
+                "template_sha256": sha256(official_template_pdf_bytes).hexdigest(),
+                "manifest_version": manifest_for_metadata.get("manifest_version"),
+                "template_name": manifest_for_metadata.get("template_name"),
+            }
         pdf_bytes = await run_in_threadpool(
-            build_pdf_safely, build_six_page_formal_pdf, data, map_documents
+            build_pdf_safely,
+            build_six_page_formal_pdf,
+            data,
+            map_documents,
+            official_template_pdf_bytes=official_template_pdf_bytes,
+            official_template_manifest=official_template_manifest,
         )
         identical_document = await self.documents.get_by_checksum(
             case_id, sha256(pdf_bytes).hexdigest()
@@ -773,6 +834,7 @@ class FormalReportService:
                 user=user,
                 request_id=request_id,
                 reused_existing_document=True,
+                report_template_metadata=report_template_metadata,
             )
             return self._report_response(
                 identical_document,
@@ -834,6 +896,7 @@ class FormalReportService:
                 acknowledged_warning_codes=acknowledged_warning_codes,
                 user=user,
                 request_id=request_id,
+                report_template_metadata=report_template_metadata,
             )
         except Exception:
             await self.storage.delete(object_key)
@@ -854,6 +917,7 @@ class FormalReportService:
         user: User,
         request_id: UUID | None,
         reused_existing_document: bool = False,
+        report_template_metadata: dict | None = None,
     ) -> None:
         for record in records.values():
             record.form_status = FormStatus.FINAL.value
@@ -872,6 +936,8 @@ class FormalReportService:
                     "version_no": document.version_no,
                     "reused_existing_document": reused_existing_document,
                     "acknowledged_warning_codes": sorted(acknowledged_warning_codes),
+                    "report_template": report_template_metadata
+                    or {"mode": "STRUCTURED_REDRAWN"},
                 },
                 occurred_by_user_id=user.user_id,
                 request_id=request_id,

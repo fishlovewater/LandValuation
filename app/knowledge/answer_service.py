@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +21,12 @@ from app.knowledge.source_policy import is_demo_reference
 from app.storage.service import StorageService
 
 logger = logging.getLogger(__name__)
+
+_CONTEXT_REFERENCE_PATTERN = re.compile(
+    r"(?:它|那一(?:條|項|段|個|份)|這一(?:條|項|段|個|份)|上述|前述|"
+    r"前面(?:提到|說到|那個)|剛才|剛剛|前一(?:條|項|段)|"
+    r"該(?:條|項|規定|文件|來源|內容)|這個|那個)"
+)
 
 
 async def _retrieval_candidates(
@@ -73,6 +80,13 @@ def _contextual_question(
     question: str, conversation_history: list[dict[str, str]] | None
 ) -> str:
     if not conversation_history:
+        return question
+    # Conversation history is only a pronoun/reference resolver.  Appending it
+    # to every standalone question pollutes lexical ranking with terms from old
+    # answers (for example "文件／檢核／流程"), which can promote unrelated
+    # source pages.  Keep complete questions self-contained and bring history
+    # in only when the current wording actually points back to prior context.
+    if not _CONTEXT_REFERENCE_PATTERN.search(question):
         return question
     recent = conversation_history[-8:]
     lines = [

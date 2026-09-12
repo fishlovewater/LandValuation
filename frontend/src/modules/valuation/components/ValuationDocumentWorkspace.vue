@@ -11,6 +11,32 @@ import type {
 
 type FieldAnalysisFormCode = 'S01' | 'F01' | 'F02' | 'F02-RF' | 'F03' | 'F04'
 
+const startupDocuments: ReadonlyArray<{
+  category: DocumentCategory
+  label: string
+  detail: string
+  requirement: 'recommended' | 'required'
+}> = [
+  {
+    category: 'parcel-factor-list',
+    label: '宗地個別因素清冊',
+    detail: '案件啟動建議資料；可上傳既有 XLS／XLSX，協助辨識宗地與個別因素欄位。',
+    requirement: 'recommended',
+  },
+  {
+    category: 'cadastral-map',
+    label: '預定徵收範圍地籍圖',
+    detail: '核對宗地位置與徵收範圍；目前比準地地價估計表的必要來源之一。',
+    requirement: 'required',
+  },
+  {
+    category: 'land-register',
+    label: '土地登記資料',
+    detail: '核對地號、面積等土地基本資料；目前比準地地價估計表的必要來源之一。',
+    requirement: 'required',
+  },
+]
+
 const props = defineProps<{
   documents: DocumentArtifactModel[]
   previewDocumentId: string | null
@@ -48,6 +74,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   preview: [documentId: string]
+  prepareParcelImport: [documentId: string]
   extract: [documentId: string]
   reclassify: [documentId: string]
   remove: [documentId: string, filename: string]
@@ -66,6 +93,18 @@ function analysisFormValue(documentId: string): FieldAnalysisFormCode {
 function categoryValue(documentId: string): DocumentCategory {
   return props.documentCategoryDraft[documentId] ?? 'original'
 }
+
+function hasActiveCategory(category: DocumentCategory): boolean {
+  return props.documents.some((document) => document.isActive && document.documentType === category)
+}
+
+function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
+  return document.documentType === 'parcel-factor-list'
+    && [
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ].includes(document.mimeType.toLowerCase())
+}
 </script>
 
 <template>
@@ -73,10 +112,30 @@ function categoryValue(documentId: string): DocumentCategory {
     <div class="document-workspace__heading">
       <div>
         <strong>來源文件與文件辨識</strong>
-        <span>先選擇文件預覽，再開始文件辨識（AI／OCR）。辨識結果不會直接改寫正式資料，仍需人工確認。</span>
+        <span>新案件建議先準備宗地個別因素清冊、預定徵收範圍地籍圖與土地登記資料。上傳後可預覽並進行辨識；辨識結果仍需人工確認。</span>
       </div>
       <span>{{ documents.length }} 份</span>
     </div>
+
+    <section class="startup-documents" aria-labelledby="startup-documents-title">
+      <div class="startup-documents__heading">
+        <strong id="startup-documents-title">案件啟動資料</strong>
+        <span>先從這 3 類資料開始，不需要先準備完整查估書。</span>
+      </div>
+      <div class="startup-documents__grid">
+        <article v-for="item in startupDocuments" :key="item.category">
+          <div>
+            <strong>{{ item.label }}</strong>
+            <span>{{ item.detail }}</span>
+          </div>
+          <small
+            :data-state="hasActiveCategory(item.category) ? 'ready' : item.requirement"
+          >
+            {{ hasActiveCategory(item.category) ? '已上傳' : item.requirement === 'required' ? '尚未上傳' : '建議上傳' }}
+          </small>
+        </article>
+      </div>
+    </section>
 
     <div class="document-ai-grid">
       <div class="document-ai-grid__list">
@@ -93,8 +152,16 @@ function categoryValue(documentId: string): DocumentCategory {
             </div>
             <div class="document-list__actions">
               <button class="finding-action" type="button" @click="emit('preview', document.documentId)">預覽</button>
+              <button
+                v-if="canPrepareParcelImport(document)"
+                class="finding-action finding-action--primary"
+                type="button"
+                :data-testid="`parcel-import-preview-${document.documentId}`"
+                :disabled="Boolean(documentActionId)"
+                @click="emit('prepareParcelImport', document.documentId)"
+              >解析宗地清冊</button>
               <label v-if="canExtractDocument(document)" class="document-list__analysis-form">
-                <span>??????</span>
+                <span>文件類型提示</span>
                 <select
                   :value="analysisFormValue(document.documentId)"
                   :data-testid="`document-analysis-form-${document.documentId}`"
@@ -102,7 +169,7 @@ function categoryValue(documentId: string): DocumentCategory {
                   @change="emit('updateAnalysisForm', document.documentId, ($event.target as HTMLSelectElement).value as FieldAnalysisFormCode)"
                 >
                   <option v-for="code in analysisFormCodes" :key="code" :value="code">
-                    {{ formDisplayName(code) }}（{{ code }}）
+                    {{ formDisplayName(code) }}
                   </option>
                 </select>
               </label>
@@ -145,7 +212,7 @@ function categoryValue(documentId: string): DocumentCategory {
             </div>
           </li>
         </ul>
-        <p v-else class="empty-copy">尚未上傳案件來源文件。請先選擇文件類型並上傳。</p>
+        <p v-else class="empty-copy">尚未上傳案件啟動資料。建議先從宗地個別因素清冊、地籍圖與土地登記資料開始。</p>
       </div>
 
       <section class="document-preview" aria-labelledby="document-preview-title">
@@ -179,9 +246,10 @@ function categoryValue(documentId: string): DocumentCategory {
     <form v-if="canUpload" class="upload-form" @submit.prevent="emit('upload')">
       <label><span>文件類型</span>
         <select :value="uploadCategory" @change="emit('updateUploadCategory', ($event.target as HTMLSelectElement).value as DocumentCategory)">
-          <option value="original">原始文件</option>
-          <option value="cadastral-map">地籍圖</option>
+          <option value="parcel-factor-list">宗地個別因素清冊</option>
+          <option value="cadastral-map">預定徵收範圍地籍圖</option>
           <option value="land-register">土地登記資料</option>
+          <option value="original">其他原始查估文件</option>
           <option value="photos">照片</option>
           <option value="attachments">其他附件</option>
           <option value="map-section-sketch">地段示意圖</option>
@@ -189,7 +257,11 @@ function categoryValue(documentId: string): DocumentCategory {
           <option value="map-land-value-section">地價區段圖</option>
         </select>
       </label>
-      <label class="upload-form__file"><span>選擇檔案</span><input id="valuation-source-file" type="file" required @change="emit('chooseUpload', $event)" /></label>
+      <label class="upload-form__file">
+        <span>選擇檔案</span>
+        <input id="valuation-source-file" type="file" accept=".pdf,.xls,.xlsx,.png,.jpg,.jpeg,.docx" required @change="emit('chooseUpload', $event)" />
+        <small>宗地個別因素清冊可直接使用既有 .xls／.xlsx；PDF 也可進行文字辨識。</small>
+      </label>
       <button class="solid-button" type="submit" :disabled="uploading || !uploadFile">
         {{ uploading ? '上傳中…' : '上傳文件' }}
       </button>
@@ -203,6 +275,18 @@ function categoryValue(documentId: string): DocumentCategory {
 .document-workspace__heading div { display:grid; gap:3px; }
 .document-workspace__heading strong { color:var(--app-ink); }
 .document-workspace__heading span { color:var(--app-muted); font-size:11px; }
+.startup-documents { display:grid; gap:9px; padding:11px 12px; border:1px solid #d9e4ef; border-radius:11px; background:#f8fbfe; }
+.startup-documents__heading { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+.startup-documents__heading strong { color:var(--app-ink); font-size:12px; }
+.startup-documents__heading span { color:var(--app-muted); font-size:10px; }
+.startup-documents__grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+.startup-documents__grid article { display:flex; min-width:0; align-items:flex-start; justify-content:space-between; gap:8px; padding:10px; border:1px solid #e0e7ef; border-radius:9px; background:#fff; }
+.startup-documents__grid article > div { display:grid; gap:4px; min-width:0; }
+.startup-documents__grid article strong { color:var(--app-ink); font-size:11px; }
+.startup-documents__grid article span { color:var(--app-muted); font-size:9px; line-height:1.55; }
+.startup-documents__grid article small { flex:0 0 auto; padding:4px 7px; border-radius:999px; color:#925421; background:#fff0df; font-size:9px; font-weight:850; white-space:nowrap; }
+.startup-documents__grid article small[data-state="required"] { color:#a44334; background:#fff0ed; }
+.startup-documents__grid article small[data-state="ready"] { color:#2f745b; background:#edf8f3; }
 .document-ai-grid { display:grid; grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr); gap:14px; min-height:460px; }
 .document-ai-grid__list { min-width:0; }
 .document-list { display:grid; gap:7px; margin:0; padding:0; list-style:none; }
@@ -226,6 +310,7 @@ function categoryValue(documentId: string): DocumentCategory {
 .finding-action--danger { border-color:rgba(164,67,52,.28); color:#a44334; }
 .upload-form { display:grid; grid-template-columns:180px minmax(0,1fr) auto; align-items:end; gap:10px; }
 .upload-form label { display:grid; gap:5px; color:var(--app-ink-soft); font-size:11px; font-weight:800; }
+.upload-form label small { color:var(--app-muted); font-size:9px; font-weight:500; line-height:1.45; }
 .upload-form select,.upload-form input { min-height:44px; padding:8px 10px; border:1px solid var(--app-line); border-radius:9px; color:var(--app-ink); background:rgba(255,255,255,.82); }
 .solid-button { min-height:44px; padding:10px 16px; border:1px solid var(--app-line); border-radius:9px; color:var(--app-ink-soft); background:var(--app-paper-strong); cursor:pointer; font-size:13px; font-weight:800; }
 .solid-button:disabled { cursor:not-allowed; opacity:.55; }
@@ -246,5 +331,5 @@ function categoryValue(documentId: string): DocumentCategory {
 .document-preview__evidence strong { color:#8a531e; font-size:10px; }
 .document-preview__evidence blockquote { margin:0; color:#3d4a58; font-size:11px; line-height:1.6; white-space:pre-wrap; }
 @media (max-width:1100px){.document-ai-grid{grid-template-columns:1fr}.document-preview__body iframe{min-height:520px}}
-@media (max-width:760px){.upload-form{grid-template-columns:1fr}.document-list__actions{align-items:stretch}.document-list__analysis-form{min-width:0;align-items:stretch;flex-direction:column}.document-list__manage{grid-template-columns:1fr;align-items:stretch}.document-preview__heading{align-items:stretch;flex-direction:column}.solid-button{width:100%}}
+@media (max-width:760px){.startup-documents__heading{align-items:flex-start;flex-direction:column}.startup-documents__grid{grid-template-columns:1fr}.upload-form{grid-template-columns:1fr}.document-list__actions{align-items:stretch}.document-list__analysis-form{min-width:0;align-items:stretch;flex-direction:column}.document-list__manage{grid-template-columns:1fr;align-items:stretch}.document-preview__heading{align-items:stretch;flex-direction:column}.solid-button{width:100%}}
 </style>

@@ -28,6 +28,10 @@ const filters = computed(() => ({
   status: stringQuery('status', ''),
   riskLevel: stringQuery('riskLevel', ''),
 }))
+const hasActiveQueueView = computed(() =>
+  ['q', 'status', 'riskLevel', 'statusGroup', 'sortBy', 'sortDirection', 'page']
+    .some((key) => Boolean(stringQuery(key, ''))),
+)
 
 const queueRows = computed(() => {
   const rows = [...cases.value]
@@ -106,10 +110,12 @@ function currentQueueQuery(): Record<string, string> {
 
 function updateQuery(query: Record<string, string>): void {
   const merged = currentQueueQuery()
+  const changesFilter = Object.hasOwn(query, 'status') || Object.hasOwn(query, 'riskLevel')
   for (const [key, value] of Object.entries(query)) {
     if (value) merged[key] = value
     else delete merged[key]
   }
+  if (changesFilter) delete merged.page
   void router.replace({ query: normalizedQueueQuery(merged) }).then(loadData)
 }
 
@@ -120,10 +126,18 @@ function applyKpi(kind: 'status' | 'risk' | 'finding', statusCode = 'in_progress
   delete next.status
   delete next.riskLevel
   delete next.statusGroup
+  delete next.page
   if (kind === 'status') next.statusGroup = statusCode
   if (kind === 'risk') next.riskLevel = 'HIGH'
   if (kind === 'finding') next.statusGroup = 'needs_input'
-  updateQuery(next)
+  void router.replace({ query: normalizedQueueQuery(next) }).then(loadData)
+}
+
+function resetQueueView(): void {
+  const pageSizeValue = stringQuery('pageSize', '')
+  void router.replace({
+    query: pageSizeValue && pageSizeValue !== '20' ? { pageSize: pageSizeValue } : {},
+  }).then(loadData)
 }
 
 function openCase(row: { reviewId?: string }): void {
@@ -201,7 +215,18 @@ onBeforeUnmount(() => {
             <p class="review-dashboard__eyebrow">待辦案件</p>
             <h2 id="review-queue-title">案件佇列</h2>
           </div>
-          <span class="review-dashboard__queue-count">共 {{ total }} 件</span>
+          <div class="review-dashboard__queue-tools">
+            <span class="review-dashboard__queue-count">共 {{ total }} 件</span>
+            <button
+              class="review-dashboard__reset"
+              type="button"
+              data-testid="reset-review-queue"
+              :disabled="!hasActiveQueueView"
+              @click="resetQueueView"
+            >
+              顯示全部案件
+            </button>
+          </div>
         </div>
         <CaseTable
           :cases="queueRows"
@@ -213,12 +238,14 @@ onBeforeUnmount(() => {
           :filters="filters"
           :filter-options="{
             status: [
+              { value: '', label: '全部狀態' },
               { value: 'READY_FOR_REVIEW', label: '待審查' },
               { value: 'REVIEW_REQUIRED', label: '需審查' },
               { value: 'RETURNED_FOR_REVISION', label: '退回補正' },
               { value: 'REVIEW_COMPLETED', label: '審查完成' },
             ],
             riskLevel: [
+              { value: '', label: '全部風險' },
               { value: 'LOW', label: '低風險' },
               { value: 'MEDIUM', label: '中風險' },
               { value: 'HIGH', label: '高風險' },
@@ -262,6 +289,10 @@ onBeforeUnmount(() => {
 .review-dashboard__eyebrow { margin: 0 0 5px; color: var(--app-accent-deep); font-size: 10px; font-weight: 900; letter-spacing: .15em; }
 .review-dashboard__queue-heading h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 24px; }
 .review-dashboard__queue-count { color: var(--app-muted); font-size: 12px; }
+.review-dashboard__queue-tools { display: flex; align-items: center; gap: 10px; }
+.review-dashboard__reset { min-height: 38px; padding: 7px 12px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-accent-deep); background: var(--app-paper-strong); cursor: pointer; font-size: 12px; font-weight: 800; }
+.review-dashboard__reset:hover:not(:disabled) { border-color: var(--app-accent); background: #fffaf6; }
+.review-dashboard__reset:disabled { color: var(--app-muted); cursor: default; opacity: .55; }
 
 @media (max-width: 980px) {
   .review-dashboard { padding-inline: 18px; }
@@ -272,5 +303,6 @@ onBeforeUnmount(() => {
   .review-dashboard { padding-inline: 14px; }
   .review-dashboard__kpis { grid-template-columns: 1fr 1fr; }
   .review-dashboard__queue-heading { align-items: flex-start; flex-direction: column; }
+  .review-dashboard__queue-tools { width: 100%; justify-content: space-between; }
 }
 </style>

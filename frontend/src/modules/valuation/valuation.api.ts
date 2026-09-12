@@ -31,7 +31,10 @@ import type {
   FormResponseDto,
   ExtractionResponseDto,
   ManualFieldValuesRequestDto,
+  ParcelBatchImportRequestDto,
+  ParcelBatchImportResponseDto,
   ParcelCreateDto,
+  ParcelImportPreviewDto,
   ParcelResponseDto,
   ParcelUpdateDto,
   ReportPageCode,
@@ -294,6 +297,25 @@ export const valuationApi = {
   async previewSpreadsheet(caseId: string, documentId: string): Promise<SpreadsheetPreviewDto> {
     const response = await http.get<SpreadsheetPreviewDto>(
       `/valuation/cases/${caseId}/documents/${documentId}/spreadsheet-preview`,
+    )
+    return response.data
+  },
+
+  async previewParcelImport(caseId: string, documentId: string): Promise<ParcelImportPreviewDto> {
+    const response = await http.get<ParcelImportPreviewDto>(
+      `/valuation/cases/${caseId}/documents/${documentId}/parcel-import-preview`,
+    )
+    return response.data
+  },
+
+  async importParcelsFromDocument(
+    caseId: string,
+    documentId: string,
+    payload: ParcelBatchImportRequestDto,
+  ): Promise<ParcelBatchImportResponseDto> {
+    const response = await http.post<ParcelBatchImportResponseDto>(
+      `/valuation/cases/${caseId}/documents/${documentId}/parcel-import`,
+      payload,
     )
     return response.data
   },

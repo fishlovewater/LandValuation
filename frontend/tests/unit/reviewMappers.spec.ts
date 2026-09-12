@@ -5,6 +5,7 @@ import {
   fieldPathLabel,
   latestGeneratedReport,
   mapDocument,
+  mapVersionDiff,
   mapWorkbenchDetail,
   mimeTypeLabel,
   missingItemStatusLabel,
@@ -233,5 +234,39 @@ describe('review mappers', () => {
         currentValue: '-5',
       }),
     ])
+  })
+
+  it('summarizes structured version-diff values without exposing backend field names', () => {
+    const mapped = mapVersionDiff({
+      document_group_id: '12121212-1212-4121-8121-121212121212',
+      field_code: 'ADJUSTMENT_RATE',
+      field_path: 'comparison.adjustment_rate',
+      previous: {
+        document_id: '13131313-1313-4131-8131-131313131313',
+        document_group_id: '12121212-1212-4121-8121-121212121212',
+        document_version: 1,
+        field_code: 'ADJUSTMENT_RATE',
+        field_path: 'comparison.adjustment_rate',
+        normalized_value: { before_value: '舊值', provider: 'ollama' },
+        raw_text: null,
+        page_number: 3,
+      },
+      current: {
+        document_id: '14141414-1414-4141-8141-141414141414',
+        document_group_id: '12121212-1212-4121-8121-121212121212',
+        document_version: 2,
+        field_code: 'ADJUSTMENT_RATE',
+        field_path: 'comparison.adjustment_rate',
+        normalized_value: { after_value: '新值', model_id: 'internal-model' },
+        raw_text: null,
+        page_number: 3,
+      },
+    })
+
+    expect(mapped.previousValue).toBe('修改前內容：舊值')
+    expect(mapped.currentValue).toBe('修改後內容：新值')
+    expect(mapped.previousValue).not.toContain('before_value')
+    expect(mapped.currentValue).not.toContain('model_id')
+    expect(mapped.currentValue).not.toContain('{')
   })
 })

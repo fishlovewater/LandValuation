@@ -9,6 +9,12 @@ from sqlalchemy.engine import URL
 
 F03_PRODUCTION_RULE_SET_CODE = "F03_MVP_VALIDATION"
 F03_DEMO_RULE_SET_CODES = frozenset({"DEMO-F03-FORMAL-VALIDATION"})
+UNSAFE_JWT_SECRET_VALUES = frozenset(
+    {
+        "change-me-before-use",
+        "change-this-competition-secret",
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -58,6 +64,8 @@ class Settings(BaseSettings):
     minio_bucket: str = "land-valuation"
     minio_secure: bool = False
     minio_presigned_expiry_seconds: int = 900
+    official_report_blank_template_object_key: str | None = None
+    official_report_blank_template_manifest_object_key: str | None = None
 
     knowledge_answer_provider: str = "evidence_only"
     knowledge_ai_max_source_characters: int = Field(default=60000, ge=2000, le=200000)
@@ -145,7 +153,7 @@ class Settings(BaseSettings):
     def reject_development_secret_outside_development(self):
         if (
             self.app_env.lower() not in {"development", "test"}
-            and self.jwt_secret_key.get_secret_value() == "change-this-competition-secret"
+            and self.jwt_secret_key.get_secret_value().strip() in UNSAFE_JWT_SECRET_VALUES
         ):
             raise ValueError("JWT_SECRET_KEY must be replaced outside development")
         return self
@@ -163,14 +171,29 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def validate_official_report_template_pair(self):
+        template_key = (self.official_report_blank_template_object_key or "").strip()
+        manifest_key = (
+            self.official_report_blank_template_manifest_object_key or ""
+        ).strip()
+        if bool(template_key) != bool(manifest_key):
+            raise ValueError(
+                "OFFICIAL_REPORT_BLANK_TEMPLATE_OBJECT_KEY and "
+                "OFFICIAL_REPORT_BLANK_TEMPLATE_MANIFEST_OBJECT_KEY must be set together"
+            )
+        self.official_report_blank_template_object_key = template_key or None
+        self.official_report_blank_template_manifest_object_key = manifest_key or None
+        return self
+
+    @model_validator(mode="after")
     def validate_f03_rule_set_code(self):
         code = self.f03_validation_rule_set_code.strip()
         environment = self.app_env.lower()
-        if environment != "development" and code != F03_PRODUCTION_RULE_SET_CODE:
+        if environment not in {"development", "test"} and code != F03_PRODUCTION_RULE_SET_CODE:
             raise ValueError(
                 "F03_VALIDATION_RULE_SET_CODE must be F03_MVP_VALIDATION outside development"
             )
-        if environment == "development" and code not in {
+        if environment in {"development", "test"} and code not in {
             F03_PRODUCTION_RULE_SET_CODE,
             *F03_DEMO_RULE_SET_CODES,
         }:
@@ -228,7 +251,7 @@ class Settings(BaseSettings):
 
     @property
     def resolved_f03_validation_rule_set_code(self) -> str:
-        if self.app_env.lower() != "development":
+        if self.app_env.lower() not in {"development", "test"}:
             return F03_PRODUCTION_RULE_SET_CODE
         return self.f03_validation_rule_set_code
 

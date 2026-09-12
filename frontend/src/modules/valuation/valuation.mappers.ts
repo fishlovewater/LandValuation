@@ -1,4 +1,5 @@
 import type { CaseSummary } from '../../types/case'
+import { userStructuredValue } from '../../utils/fieldLabels'
 import type {
   BenchmarkLandModel,
   BenchmarkLandResponseDto,
@@ -58,12 +59,7 @@ function displayValidationValue(value: unknown): string | null {
   if (typeof value === 'number' || typeof value === 'bigint') {
     return String(value)
   }
-  try {
-    const serialized = JSON.stringify(value)
-    return serialized === undefined ? String(value) : serialized
-  } catch {
-    return String(value)
-  }
+  return userStructuredValue(value)
 }
 
 function formContentString(dto: FormResponseDto, key: string): string | null {

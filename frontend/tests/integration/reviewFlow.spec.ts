@@ -222,7 +222,13 @@ describe('review demo flow', () => {
     await wrapper.get('[data-testid="kpi-in-progress"]').trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.query.statusGroup).toBe('in_progress')
+    expect(router.currentRoute.value.query.page).toBeUndefined()
     expect(requests.filter((request) => request.url === '/review/workbench/cases')).toHaveLength(2)
+    expect(requests.filter((request) => request.url === '/review/workbench/cases').at(-1)?.params).toMatchObject({
+      status_group: 'in_progress',
+      limit: 20,
+      offset: 0,
+    })
 
     await wrapper.get(`[data-testid="review-case-row-${ids.review}"]`).trigger('click')
     await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('review-workbench'))
@@ -233,10 +239,50 @@ describe('review demo flow', () => {
     expect(router.currentRoute.value.query).toMatchObject({
       sortBy: 'caseNo',
       sortDirection: 'asc',
-      page: '2',
       pageSize: '20',
       statusGroup: 'in_progress',
     })
+    expect(router.currentRoute.value.query.page).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('can reset all review filters, KPI scope, sorting, and pagination to show the full queue', async () => {
+    const queueRequests: unknown[] = []
+    http.defaults.adapter = vi.fn(async (config) => {
+      if (config.method === 'get' && config.url === '/review/workbench/summary') {
+        return response(summaryDto, config)
+      }
+      if (config.method === 'get' && config.url === '/review/workbench/cases') {
+        queueRequests.push(config.params)
+        return response({ items: [queueItemDto], total: 6, limit: 20, offset: 0 }, config)
+      }
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/app/review/dashboard?status=REVIEW_REQUIRED&riskLevel=HIGH&statusGroup=in_progress&sortBy=caseNo&sortDirection=asc&page=3&pageSize=20')
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('NB-2026-0008'))
+
+    expect(wrapper.get('select[name="status"]').find('option[value=""]').text()).toBe('全部狀態')
+    expect(wrapper.get('select[name="riskLevel"]').find('option[value=""]').text()).toBe('全部風險')
+    expect(wrapper.get('[data-testid="reset-review-queue"]').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('[data-testid="reset-review-queue"]').trigger('click')
+    await vi.waitFor(() => expect(queueRequests).toHaveLength(2))
+
+    expect(router.currentRoute.value.query).toEqual({})
+    expect(queueRequests.at(-1)).toMatchObject({
+      q: undefined,
+      status: undefined,
+      risk_level: undefined,
+      status_group: undefined,
+      limit: 20,
+      offset: 0,
+    })
+    expect(wrapper.get('select[name="status"]').element.value).toBe('')
+    expect(wrapper.get('select[name="riskLevel"]').element.value).toBe('')
+    expect(wrapper.get('[data-testid="reset-review-queue"]').attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
 

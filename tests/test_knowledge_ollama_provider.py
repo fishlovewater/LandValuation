@@ -186,6 +186,47 @@ def test_relevant_quote_prefers_question_topic_sentence() -> None:
     assert quote == "比準地指地價區段內具代表性，以作為各宗土地市價比較基準之宗地。"
 
 
+def test_relevant_quote_multi_sentence_window_is_exact_source_span() -> None:
+    content = (
+        "前言與其他事項。"
+        "買賣實例遇有急買急賣時應先辨識特殊交易。"
+        "特殊交易價格明顯偏高或偏低時應作適當修正。"
+        "後續再依一般程序辦理。"
+    )
+
+    quote = OllamaKnowledgeProvider._relevant_quote(
+        "急買急賣的特殊交易價格要怎麼修正？",
+        content,
+        "土地徵收補償市價查估作業手冊",
+    )
+
+    assert quote is not None
+    assert quote in content
+    assert "\n" not in quote
+    assert "急買急賣" in quote
+    assert "適當修正" in quote
+
+
+def test_relevant_quote_preserves_original_blank_lines_in_exact_span() -> None:
+    content = (
+        "其他說明。\r\n\r\n"
+        "估價基準日應依規定確認。\r\n"
+        "案例蒐集期間應配合估價基準日辦理。\r\n\r\n"
+        "附錄說明。"
+    )
+
+    quote = OllamaKnowledgeProvider._relevant_quote(
+        "估價基準日與案例蒐集期間如何辦理？",
+        content,
+        "土地徵收補償市價查估作業手冊",
+    )
+
+    assert quote is not None
+    assert quote in content
+    assert "估價基準日" in quote
+    assert "案例蒐集期間" in quote
+
+
 def test_relevant_quote_for_explicit_article_returns_that_article_not_reference() -> None:
     content = (
         "第 29 條\n前條補償程序另有規定。\n"
