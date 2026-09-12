@@ -583,6 +583,10 @@ export function selectEvidenceDocument(
   documents: ReviewDocumentModel[],
   preferredDocumentId: string | null | undefined,
 ): ReviewDocumentModel | null {
+  if (preferredDocumentId) {
+    return documents.find((document) => document.documentId === preferredDocumentId) ?? null
+  }
+
   const supported = documents
     .filter((document) =>
       normalized(document.documentType) === 'ORIGINAL'
@@ -595,5 +599,5 @@ export function selectEvidenceDocument(
       if (versionDelta) return versionDelta
       return right.uploadedAt.localeCompare(left.uploadedAt)
     })
-  return supported.find((document) => document.documentId === preferredDocumentId) ?? supported[0] ?? null
+  return supported[0] ?? null
 }

@@ -169,14 +169,17 @@ describe('review mappers', () => {
     expect(item.district).toBe('新店區')
   })
 
-  it('chooses the latest active original PDF and never falls back to correction files', () => {
+  it('uses the exact finding document and never substitutes another PDF', () => {
     const documents = [
       { document_id: 'old', document_type: 'original', original_filename: 'old.pdf', mime_type: 'application/pdf', version_no: 1, is_active: false, uploaded_at: '2026-09-01T00:00:00Z' },
       { document_id: 'correction', document_type: 'correction-request', original_filename: 'correction.pdf', mime_type: 'application/pdf', version_no: 99, is_active: true, uploaded_at: '2026-09-06T00:00:00Z' },
       { document_id: 'latest', document_type: 'original', original_filename: 'latest.pdf', mime_type: 'application/pdf', version_no: 2, is_active: true, uploaded_at: '2026-09-05T00:00:00Z' },
     ]
+    const mapped = documents.map((document) => mapDocument(document))
 
-    expect(selectEvidenceDocument(documents.map((document) => mapDocument(document)), 'old')?.documentId).toBe('latest')
+    expect(selectEvidenceDocument(mapped, 'old')?.documentId).toBe('old')
+    expect(selectEvidenceDocument(mapped, 'missing')).toBeNull()
+    expect(selectEvidenceDocument(mapped, null)?.documentId).toBe('latest')
     expect(mapDocument(documents[2]).documentTypeLabel).toBe('原始查估文件')
   })
 
