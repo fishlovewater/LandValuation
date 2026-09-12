@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import {
+  PhArrowRight as ArrowRight,
   PhCalculator as Calculator,
   PhCalendarBlank as CalendarBlank,
   PhChartLineUp as ChartLineUp,
@@ -18,6 +20,8 @@ import type {
   SourceMarker,
 } from '../valuation.types'
 
+type F03DetailStep = 'basis' | 'price' | 'market' | 'reason'
+
 const props = defineProps<{
   f03: F03DraftModel | null
   benchmarks: BenchmarkLandModel[]
@@ -31,6 +35,37 @@ const emit = defineEmits<{
   dirty: []
   save: []
 }>()
+
+const activeStep = ref<F03DetailStep>('basis')
+
+function setActiveStep(step: F03DetailStep): void {
+  activeStep.value = step
+}
+
+function hasValue(value: string | null | undefined): boolean {
+  return Boolean(String(value ?? '').trim())
+}
+
+function basisReady(): boolean {
+  return Boolean(props.draft.benchmarkLandId && hasValue(props.draft.valuationBaseDate))
+}
+
+function priceDataReady(): boolean {
+  return hasValue(props.draft.comparisonPrice)
+    || hasValue(props.draft.incomePrice)
+    || hasValue(props.draft.comparisonWeight)
+    || hasValue(props.draft.incomeWeight)
+}
+
+function marketDataReady(): boolean {
+  return hasValue(props.draft.marketPeriodStart)
+    || hasValue(props.draft.marketPeriodEnd)
+    || hasValue(props.draft.marketCondition)
+}
+
+function reasonDataReady(): boolean {
+  return hasValue(props.draft.selectionScopeReason) || hasValue(props.draft.decisionReason)
+}
 </script>
 
 <template>
@@ -85,7 +120,7 @@ const emit = defineEmits<{
       <div class="form-heading">
         <div>
           <h3>人工確認欄位</h3>
-          <span>以下資料是後續規則引擎計算與正式檢核的輸入。</span>
+          <span>依序確認估價基礎、價格權重、市場條件與專業判斷；不用一次閱讀整張表。</span>
         </div>
         <span class="value-kind" data-value-kind="human-confirmed">
           <CheckCircle :size="13" weight="fill" aria-hidden="true" />
@@ -93,8 +128,27 @@ const emit = defineEmits<{
         </span>
       </div>
 
+      <nav class="f03-detail-flow" aria-label="估價參數填寫步驟" data-testid="f03-detail-flow">
+        <button type="button" :class="{ 'is-active': activeStep === 'basis', 'is-complete': basisReady() }" data-testid="f03-step-basis" @click="setActiveStep('basis')">
+          <span>1</span>
+          <div><strong>比準地與基準日</strong><small>{{ basisReady() ? '已確認' : '先確認' }}</small></div>
+        </button>
+        <button type="button" :class="{ 'is-active': activeStep === 'price', 'is-complete': priceDataReady() }" data-testid="f03-step-price" @click="setActiveStep('price')">
+          <span>2</span>
+          <div><strong>價格與權重</strong><small>{{ priceDataReady() ? '已有資料' : '待確認' }}</small></div>
+        </button>
+        <button type="button" :class="{ 'is-active': activeStep === 'market', 'is-complete': marketDataReady() }" data-testid="f03-step-market" @click="setActiveStep('market')">
+          <span>3</span>
+          <div><strong>市場條件</strong><small>{{ marketDataReady() ? '已有資料' : '需要時補充' }}</small></div>
+        </button>
+        <button type="button" :class="{ 'is-active': activeStep === 'reason', 'is-complete': reasonDataReady() }" data-testid="f03-step-reason" @click="setActiveStep('reason')">
+          <span>4</span>
+          <div><strong>專業判斷</strong><small>{{ reasonDataReady() ? '已有說明' : '需要時補充' }}</small></div>
+        </button>
+      </nav>
+
       <fieldset class="field-sections" :disabled="!canEditF03">
-        <section class="field-section" aria-labelledby="f03-basis-title">
+        <section v-show="activeStep === 'basis'" class="field-section" aria-labelledby="f03-basis-title">
           <div class="field-section__heading">
             <span aria-hidden="true"><Target :size="18" weight="duotone" /></span>
             <div>
@@ -116,9 +170,15 @@ const emit = defineEmits<{
               <input id="f03-valuation-base-date" v-model="props.draft.valuationBaseDate" type="date" @input="emit('dirty')">
             </label>
           </div>
+          <div class="field-section__next">
+            <button type="button" data-testid="f03-next-price" @click="setActiveStep('price')">
+              下一步：價格與權重
+              <ArrowRight :size="14" weight="bold" aria-hidden="true" />
+            </button>
+          </div>
         </section>
 
-        <section class="field-section" aria-labelledby="f03-price-title">
+        <section v-show="activeStep === 'price'" class="field-section" aria-labelledby="f03-price-title">
           <div class="field-section__heading">
             <span aria-hidden="true"><ChartLineUp :size="18" weight="duotone" /></span>
             <div>
@@ -132,9 +192,19 @@ const emit = defineEmits<{
             <label><span>比準地收益價格（元／㎡）</span><input id="f03-income-price" v-model="props.draft.incomePrice" inputmode="decimal" @input="emit('dirty')"></label>
             <label><span>收益價格權重</span><input id="f03-income-weight" v-model="props.draft.incomeWeight" inputmode="decimal" @input="emit('dirty')"></label>
           </div>
+          <div class="field-section__guidance">
+            <Info :size="15" weight="duotone" aria-hidden="true" />
+            <span>這裡只填採用的價格與權重；最終比準地地價由下一階段正式計算，不需要人工計算結果。</span>
+          </div>
+          <div class="field-section__next">
+            <button type="button" data-testid="f03-next-market" @click="setActiveStep('market')">
+              下一步：市場條件
+              <ArrowRight :size="14" weight="bold" aria-hidden="true" />
+            </button>
+          </div>
         </section>
 
-        <section class="field-section" aria-labelledby="f03-market-title">
+        <section v-show="activeStep === 'market'" class="field-section" aria-labelledby="f03-market-title">
           <div class="field-section__heading">
             <span aria-hidden="true"><CalendarBlank :size="18" weight="duotone" /></span>
             <div>
@@ -147,9 +217,15 @@ const emit = defineEmits<{
             <label><span>市場期間迄日</span><input id="f03-market-period-end" v-model="props.draft.marketPeriodEnd" type="date" @input="emit('dirty')"></label>
             <label class="field-grid__wide"><span>市場條件</span><input id="f03-market-condition" v-model="props.draft.marketCondition" @input="emit('dirty')"></label>
           </div>
+          <div class="field-section__next">
+            <button type="button" data-testid="f03-next-reason" @click="setActiveStep('reason')">
+              下一步：專業判斷
+              <ArrowRight :size="14" weight="bold" aria-hidden="true" />
+            </button>
+          </div>
         </section>
 
-        <section class="field-section" aria-labelledby="f03-reason-title">
+        <section v-show="activeStep === 'reason'" class="field-section" aria-labelledby="f03-reason-title">
           <div class="field-section__heading">
             <span aria-hidden="true"><TextAlignLeft :size="18" weight="duotone" /></span>
             <div>
@@ -268,6 +344,40 @@ const emit = defineEmits<{
 .form-heading h3 { margin: 0; color: var(--app-ink); font-size: 15px; }
 .form-heading > div > span { color: var(--app-muted); font-size: 10px; line-height: 1.5; }
 
+.f03-detail-flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.f03-detail-flow button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #dfe6ed;
+  border-radius: 9px;
+  color: #68798a;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+.f03-detail-flow button > span {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 999px;
+  color: #fff;
+  background: #7a8b9d;
+  font-size: 9px;
+  font-weight: 900;
+}
+.f03-detail-flow button > div { display: grid; gap: 2px; min-width: 0; }
+.f03-detail-flow button strong { color: var(--app-ink); font-size: 10px; line-height: 1.35; }
+.f03-detail-flow button small { color: var(--app-muted); font-size: 8px; }
+.f03-detail-flow button.is-active { border-color: #aac3db; color: #2e5984; background: #f1f6fb; }
+.f03-detail-flow button.is-active > span { background: #2e5984; }
+.f03-detail-flow button.is-complete:not(.is-active) { border-color: #cfe4da; background: #f5faf7; }
+.f03-detail-flow button.is-complete:not(.is-active) > span { background: #3c8368; }
+
 .field-sections { display: grid; gap: 10px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .field-sections:disabled { opacity: .68; }
 .field-section {
@@ -316,6 +426,10 @@ const emit = defineEmits<{
 .field-grid input:focus,
 .field-grid select:focus,
 .field-grid textarea:focus { border-color: rgba(46, 89, 132, .48); box-shadow: 0 0 0 3px rgba(46, 89, 132, .08); }
+.field-section__guidance { display: flex; align-items: flex-start; gap: 7px; padding: 9px 10px; border: 1px solid #dce7f1; border-radius: 8px; color: #486075; background: #f6f9fc; font-size: 10px; line-height: 1.5; }
+.field-section__guidance > svg { flex: 0 0 auto; margin-top: 1px; color: #2e5984; }
+.field-section__next { display: flex; justify-content: flex-end; padding-top: 2px; }
+.field-section__next button { display: inline-flex; min-height: 36px; align-items: center; justify-content: center; gap: 5px; padding: 7px 10px; border: 1px solid #c9d6e2; border-radius: 8px; color: #244d73; background: #fff; cursor: pointer; font-size: 10px; font-weight: 900; }
 
 .action-row { justify-content: space-between; gap: 14px; padding-top: 2px; }
 .action-row__note { align-items: flex-start; gap: 7px; max-width: 680px; color: var(--app-muted); font-size: 10px; line-height: 1.5; }
@@ -366,9 +480,15 @@ const emit = defineEmits<{
   .action-row { align-items: stretch; flex-direction: column; }
   .source-marker { align-self: flex-start; }
   .official-value__result { margin-left: 0; }
+  .f03-detail-flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .field-grid,
   .field-grid--narrative { grid-template-columns: 1fr; }
   .field-grid__wide { grid-column: auto; }
+  .field-section__next button { width: 100%; }
   .solid-button { width: 100%; }
+}
+
+@media (max-width: 460px) {
+  .f03-detail-flow { grid-template-columns: 1fr; }
 }
 </style>
