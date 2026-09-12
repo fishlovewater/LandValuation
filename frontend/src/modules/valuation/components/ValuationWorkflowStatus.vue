@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { PhArrowRight as ArrowRight } from '@phosphor-icons/vue'
+import {
+  PhArrowRight as ArrowRight,
+  PhCheckCircle as CheckCircle,
+  PhFileText as FileText,
+  PhListChecks as ListChecks,
+  PhShieldCheck as ShieldCheck,
+  PhWarningCircle as WarningCircle,
+} from '@phosphor-icons/vue'
 
 const props = defineProps<{
   title: string
@@ -19,35 +26,56 @@ const emit = defineEmits<{
 <template>
   <section class="workflow-status" data-testid="valuation-workflow-guide" aria-labelledby="workflow-status-title">
     <div class="workflow-status__copy">
-      <div>
-        <p>目前進度</p>
-        <h2 id="workflow-status-title">{{ props.title }}</h2>
+      <div class="workflow-status__title">
+        <span class="workflow-status__title-icon" aria-hidden="true">
+          <ListChecks :size="20" weight="duotone" />
+        </span>
+        <div>
+          <p>目前進度</p>
+          <h2 id="workflow-status-title">{{ props.title }}</h2>
+        </div>
       </div>
       <span class="workflow-status__stage">{{ props.stageLabel }}</span>
     </div>
 
     <div class="workflow-status__stats">
-      <span>來源文件 {{ props.documentCount }} 份</span>
+      <span>
+        <FileText :size="14" weight="duotone" aria-hidden="true" />
+        來源文件 {{ props.documentCount }} 份
+      </span>
       <span v-if="props.pendingCandidateCount !== null && props.pendingCandidateCount !== undefined">
+        <WarningCircle v-if="props.pendingCandidateCount" :size="14" weight="fill" aria-hidden="true" />
+        <CheckCircle v-else :size="14" weight="fill" aria-hidden="true" />
         辨識結果待確認 {{ props.pendingCandidateCount }} 筆
       </span>
       <span v-if="props.missingFieldCount !== null && props.missingFieldCount !== undefined">
+        <WarningCircle v-if="props.missingFieldCount" :size="14" weight="fill" aria-hidden="true" />
+        <CheckCircle v-else :size="14" weight="fill" aria-hidden="true" />
         比準地地價估計表缺欄位 {{ props.missingFieldCount }} 項
       </span>
       <span v-if="props.validationErrorCount !== null && props.validationErrorCount !== undefined">
+        <WarningCircle v-if="props.validationErrorCount" :size="14" weight="fill" aria-hidden="true" />
+        <ShieldCheck v-else :size="14" weight="fill" aria-hidden="true" />
         檢核錯誤 {{ props.validationErrorCount }} 項
       </span>
     </div>
 
-    <button
-      v-if="props.issueCount"
-      type="button"
-      data-testid="workflow-next-action"
-      @click="emit('nextAction')"
-    >
-      <span>查看第一個待處理項目</span>
-      <ArrowRight :size="14" weight="bold" aria-hidden="true" />
-    </button>
+    <div class="workflow-status__action">
+      <span v-if="!props.issueCount" class="workflow-status__ready">
+        <CheckCircle :size="15" weight="fill" aria-hidden="true" />
+        目前沒有阻擋事項
+      </span>
+      <button
+        v-else
+        type="button"
+        data-testid="workflow-next-action"
+        @click="emit('nextAction')"
+      >
+        <WarningCircle :size="14" weight="fill" aria-hidden="true" />
+        <span>查看第一個待處理項目</span>
+        <ArrowRight :size="14" weight="bold" aria-hidden="true" />
+      </button>
+    </div>
   </section>
 </template>
 
@@ -69,6 +97,24 @@ const emit = defineEmits<{
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+}
+
+.workflow-status__title {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+}
+
+.workflow-status__title-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--app-accent-deep);
+  background: #e8f1fa;
 }
 
 .workflow-status__copy p {
@@ -105,6 +151,9 @@ const emit = defineEmits<{
 }
 
 .workflow-status__stats span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 7px 10px;
   border-radius: 8px;
   color: var(--app-ink-soft);
@@ -113,21 +162,36 @@ const emit = defineEmits<{
   font-weight: 800;
 }
 
-.workflow-status > button {
+.workflow-status__stats span > svg { flex: 0 0 auto; color: #55738f; }
+
+.workflow-status__action { flex: 0 0 auto; }
+
+.workflow-status__action > button,
+.workflow-status__ready {
   display: inline-flex;
   min-height: 36px;
-  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.workflow-status__action > button {
   padding: 6px 11px;
   border: 1px solid rgba(200, 91, 67, .26);
-  border-radius: 8px;
   color: var(--app-accent-deep);
   background: #fff;
   cursor: pointer;
-  font-size: 11px;
-  font-weight: 900;
+}
+
+.workflow-status__ready {
+  padding: 6px 10px;
+  border: 1px solid #cfe4da;
+  color: #2f7456;
+  background: #f3f9f6;
 }
 
 @media (max-width: 760px) {
@@ -141,6 +205,8 @@ const emit = defineEmits<{
     flex-direction: column;
   }
 
-  .workflow-status > button { width: 100%; }
+  .workflow-status__action,
+  .workflow-status__action > button,
+  .workflow-status__ready { width: 100%; }
 }
 </style>
