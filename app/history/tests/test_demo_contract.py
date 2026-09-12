@@ -39,6 +39,13 @@ def test_downloadable_both_case_is_seeded_as_review_report():
     )
 
 
+def test_demo_cli_uses_psycopg_compatible_windows_event_loop():
+    source = inspect.getsource(demo.run_cli)
+
+    assert 'sys.platform == "win32"' in source
+    assert "WindowsSelectorEventLoopPolicy" in source
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("command", ("seed", "reset"))
 async def test_mutating_demo_commands_require_development(monkeypatch, command):

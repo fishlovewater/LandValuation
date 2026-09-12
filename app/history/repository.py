@@ -9,6 +9,44 @@ from app.history.permissions import HistoryScope
 from app.history.schemas import HistorySearchParams
 
 
+_NEW_TAIPEI_CITY_CODES = ("31", "65000", "65000000", "NWT")
+_NEW_TAIPEI_DISTRICT_PAIRS = {
+    "3101": "65000010",  # 板橋區
+    "3102": "65000020",  # 三重區
+    "3103": "65000040",  # 永和區
+    "3104": "65000030",  # 中和區
+    "3105": "65000060",  # 新店區
+    "3106": "65000050",  # 新莊區
+    "3107": "65000070",
+    "3108": "65000080",
+    "3109": "65000090",
+    "3110": "65000100",
+    "3111": "65000110",
+    "3112": "65000120",
+    "3113": "65000130",
+    "3114": "65000140",
+    "3115": "65000150",
+    "3116": "65000160",
+    "3117": "65000170",
+    "3118": "65000180",
+    "3119": "65000190",
+    "3120": "65000200",
+    "3121": "65000210",
+    "3122": "65000220",
+    "3123": "65000230",
+    "3124": "65000240",
+    "3125": "65000250",
+    "3126": "65000260",
+    "3127": "65000270",
+    "3128": "65000280",
+    "3129": "65000290",
+}
+_NEW_TAIPEI_DISTRICT_ALIASES = {
+    **_NEW_TAIPEI_DISTRICT_PAIRS,
+    **{official: legacy for legacy, official in _NEW_TAIPEI_DISTRICT_PAIRS.items()},
+}
+
+
 class HistoryRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
@@ -141,11 +179,28 @@ class HistoryRepository:
                     )
                 )"""
             )
-        for field in ("city_code", "district_code"):
-            value = getattr(params, field)
-            if value:
-                filters.append(f"{field} = :{field}")
-                values[field] = value
+        if params.city_code:
+            if params.city_code in _NEW_TAIPEI_CITY_CODES:
+                filters.append(
+                    "(city_code = :city_code OR city_code = :city_code_alias_1 "
+                    "OR city_code = :city_code_alias_2 OR city_code = :city_code_alias_3)"
+                )
+                values["city_code"] = _NEW_TAIPEI_CITY_CODES[0]
+                values["city_code_alias_1"] = _NEW_TAIPEI_CITY_CODES[1]
+                values["city_code_alias_2"] = _NEW_TAIPEI_CITY_CODES[2]
+                values["city_code_alias_3"] = _NEW_TAIPEI_CITY_CODES[3]
+            else:
+                filters.append("city_code = :city_code")
+                values["city_code"] = params.city_code
+        if params.district_code:
+            district_alias = _NEW_TAIPEI_DISTRICT_ALIASES.get(params.district_code)
+            if district_alias:
+                filters.append("(district_code = :district_code OR district_code = :district_code_alias)")
+                values["district_code"] = params.district_code
+                values["district_code_alias"] = district_alias
+            else:
+                filters.append("district_code = :district_code")
+                values["district_code"] = params.district_code
         if params.section_name:
             filters.append(
                 """EXISTS (

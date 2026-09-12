@@ -28,6 +28,19 @@ const VALUATION_TYPE_LABELS: Readonly<Record<string, string>> = {
   PARCEL: '宗地估價',
 }
 
+const CASE_TYPE_LABELS: Readonly<Record<string, string>> = {
+  LAND: '土地徵收補償市價查估案件',
+}
+
+const FORM_CODE_LABELS: Readonly<Record<string, string>> = {
+  S01: '地價區段勘查表',
+  F01: '買賣實例調查估價表',
+  F02: '比較法調查估價表',
+  'F02-RF': '影響地價區域因素分析明細表',
+  F03: '比準地地價估計表',
+  F04: '徵收土地宗地市價估計表',
+}
+
 const DOCUMENT_TYPE_LABELS: Readonly<Record<string, string>> = {
   ORIGINAL: '原始查估文件',
   'LAND-REGISTER': '土地登記謄本',
@@ -84,6 +97,14 @@ export function valuationTypeLabel(value: string | null | undefined): string {
   return VALUATION_TYPE_LABELS[normalized(value)] ?? '其他估價類型'
 }
 
+export function caseTypeLabel(value: string | null | undefined): string {
+  return CASE_TYPE_LABELS[normalized(value)] ?? '其他案件類型'
+}
+
+export function formCodeLabel(value: string | null | undefined): string {
+  return FORM_CODE_LABELS[normalized(value)] ?? '查估書表'
+}
+
 function documentTypeLabel(value: string): string {
   return DOCUMENT_TYPE_LABELS[normalized(value)] ?? '其他文件'
 }
@@ -93,7 +114,7 @@ function mimeTypeLabel(value: string): string {
 }
 
 function sourceModuleLabel(value: 'valuation' | 'review'): string {
-  return value === 'review' ? '審查' : '估價'
+  return value === 'review' ? '智慧審查' : '估價作業'
 }
 
 export function mapHistoryPermissions(dto: HistoryPermissionsDto): HistoryPermissionsModel {
@@ -143,6 +164,7 @@ export function mapHistoryDocument(dto: HistoryDocumentDto): HistoryDocumentMode
   return {
     documentId: dto.document_id,
     caseId: dto.case_id,
+    documentGroupId: dto.document_group_id,
     documentType: dto.document_type,
     documentTypeLabel: documentTypeLabel(dto.document_type),
     sourceModule: dto.source_module,
@@ -268,7 +290,7 @@ export function mapHistoryTimeline(dto: HistoryCaseDetailDto): HistoryTimelineEv
     title: '估價表單更新',
     idKey: 'form_instance_id',
     description: (row) => {
-      const code = stringValue(row.form_code, '估價表單')
+      const code = formCodeLabel(stringValue(row.form_code))
       const status = stringValue(row.form_status)
       return status ? `${code}，狀態：${statusLabel(status)}` : code
     },
@@ -378,7 +400,7 @@ export function mapHistoryDetail(dto: HistoryCaseDetailDto): HistoryCaseDetailMo
     caseId,
     caseNo,
     caseTitle,
-    caseType: stringValue(caseData.case_type),
+    caseType: caseTypeLabel(stringValue(caseData.case_type)),
     caseStatusCode,
     caseStatusLabel: statusLabel(caseStatusCode),
     valuationBaseDate: stringValue(caseData.valuation_base_date),

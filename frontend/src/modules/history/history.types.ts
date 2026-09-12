@@ -144,6 +144,7 @@ export interface HistoryPermissionsModel {
 export interface HistoryDocumentModel {
   documentId: string
   caseId: string
+  documentGroupId: string
   documentType: string
   documentTypeLabel: string
   sourceModule: 'valuation' | 'review'

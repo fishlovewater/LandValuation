@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import hashlib
 import os
+import sys
 from io import BytesIO
 from pathlib import Path
 from uuid import UUID
@@ -331,7 +332,16 @@ async def main(command: str) -> None:
             await engine.dispose()
 
 
+def run_cli(command: str) -> None:
+    # psycopg's async connection is incompatible with Windows' default
+    # ProactorEventLoop.  Keep this CLI aligned with scripts/run_local_api.py
+    # so ``python -m app.history.demo ...`` works from PowerShell as documented.
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.run(main(command))
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Manage Case-history demo data")
     parser.add_argument("command", choices=("seed", "status", "reset"))
-    asyncio.run(main(parser.parse_args().command))
+    run_cli(parser.parse_args().command)

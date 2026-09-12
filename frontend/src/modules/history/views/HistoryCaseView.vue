@@ -13,7 +13,9 @@ import { liquidGlass as vLiquidGlass } from '../../../directives/liquidGlass'
 import { statusLabel } from '../../../utils/enumLabels'
 import { isTechnicalOnlyField } from '../../../utils/fieldLabels'
 import { historyApi, safeHistoryDownloadError, safeHistoryErrorMessage } from '../history.api'
+import { historyLocationLabel } from '../history.location'
 import {
+  formCodeLabel,
   mapHistoryDetail,
   readableDate,
   readableFieldLabel,
@@ -43,15 +45,26 @@ import type {
   HistoryCaseDetailModel,
   HistoryDocumentModel,
   HistoryReviewModel,
+  HistoryTimelineEvent,
   HistoryValuationModel,
 } from '../history.types'
 
-type DetailTab = 'overview' | 'valuation' | 'review' | 'versions'
+type DetailTab = 'overview' | 'timeline' | 'valuation' | 'review' | 'versions'
+type TimelineFilter = 'all' | HistoryTimelineEvent['module']
 interface DisplayValue { value: string; technicalCode?: string }
 interface DisplayField extends DisplayValue { label: string }
 interface TechnicalField { label: string; code: string }
 interface DisplayRecord { key: string; title: string; fields: DisplayField[]; technicalFields: TechnicalField[] }
 type EnumLabeler = (value: string | null | undefined) => string
+
+const STRUCTURED_CHANGE_VALUE_KEYS = new Set([
+  'before_value',
+  'after_value',
+  'old_value',
+  'new_value',
+  'previous_value',
+  'current_value',
+])
 
 const route = useRoute()
 const router = useRouter()
@@ -60,6 +73,7 @@ const loading = ref(false)
 const error = ref('')
 const message = ref('')
 const activeTab = ref<DetailTab>('overview')
+const timelineFilter = ref<TimelineFilter>('all')
 const busyDocumentId = ref<string | null>(null)
 const errorByDocument = ref<Record<string, string>>({})
 const previewDocument = ref<HistoryDocumentModel | null>(null)
@@ -77,6 +91,41 @@ const hasReview = computed(() => Boolean(detail.value?.permissions.canViewReview
 const hasVersionHistory = computed(() => Boolean(
   detail.value && (detail.value.versions.length || detail.value.changes.length || detail.value.versionDiffs.length),
 ))
+const currentDocumentCount = computed(() => {
+  const documents = detail.value?.documents ?? []
+  return new Set(documents.map((document) => document.documentGroupId || document.documentId)).size
+})
+const documentSummary = computed(() => {
+  const totalVersions = detail.value?.documents.length ?? 0
+  const historyVersions = Math.max(0, totalVersions - currentDocumentCount.value)
+  return historyVersions
+    ? `${currentDocumentCount.value} 份目前文件 · ${historyVersions} 個歷史版本`
+    : `${currentDocumentCount.value} 份目前文件`
+})
+const districtDisplay = computed(() => {
+  if (!detail.value) return '—'
+  return historyLocationLabel(detail.value.cityCode, detail.value.districtCode)
+})
+const timelineFilterOptions = computed<Array<{ value: TimelineFilter; label: string; count: number }>>(() => {
+  const events = detail.value?.timeline ?? []
+  const labels: Array<{ value: HistoryTimelineEvent['module']; label: string }> = [
+    { value: 'case', label: '案件' },
+    { value: 'valuation', label: '估價' },
+    { value: 'review', label: '審查' },
+    { value: 'document', label: '文件' },
+  ]
+  return [
+    { value: 'all', label: '全部', count: events.length },
+    ...labels
+      .map((option) => ({ ...option, count: events.filter((event) => event.module === option.value).length }))
+      .filter((option) => option.count > 0),
+  ]
+})
+const filteredTimelineEvents = computed(() => {
+  const events = detail.value?.timeline ?? []
+  if (timelineFilter.value === 'all') return events
+  return events.filter((event) => event.module === timelineFilter.value)
+})
 
 function safeRecordEntries(record: Record<string, unknown>): Array<[string, unknown]> {
   return Object.entries(record).filter(([key, value]) => {
@@ -96,8 +145,24 @@ function displayEnumValue(value: unknown, labeler: EnumLabeler): DisplayValue {
   return code && label === labeler(undefined) ? { value: label, technicalCode: code } : { value: label }
 }
 
+function displayStructuredChangeValue(value: unknown): DisplayValue {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { value: readableValue(value) }
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([key, item]) => !isTechnicalOnlyField(key) && item !== null && item !== undefined && item !== '')
+    .slice(0, 4)
+  if (!entries.length) return { value: '—' }
+
+  return {
+    value: entries
+      .map(([key, item]) => `${readableFieldLabel(key)}：${displayFieldValue(key, item).value}`)
+      .join('、'),
+  }
+}
+
 function displayFieldValue(key: string, value: unknown): DisplayValue {
   if (value === null || value === undefined || value === '') return { value: '—' }
+  if (STRUCTURED_CHANGE_VALUE_KEYS.has(key)) return displayStructuredChangeValue(value)
   if (key.endsWith('_at') || key.endsWith('_date')) return { value: readableDate(value) }
   if (key === 'review_type') return displayEnumValue(value, reviewTypeLabel)
   if (key === 'review_status') return displayEnumValue(value, reviewStatusLabel)
@@ -106,6 +171,7 @@ function displayFieldValue(key: string, value: unknown): DisplayValue {
   if (key === 'finding_status' || key === 'status') return displayEnumValue(value, findingStatusLabel)
   if (key.endsWith('_status') || key === 'case_status') return displayEnumValue(value, statusLabel)
   if (key === 'valuation_type') return displayEnumValue(value, valuationTypeLabel)
+  if (key === 'form_code') return { value: formCodeLabel(typeof value === 'string' ? value : undefined) }
   if (key === 'finding_code' || key === 'rule_code') return displayEnumValue(value, findingCodeLabel)
   if (key === 'finding_type') return displayEnumValue(value, findingTypeLabel)
   if (key === 'field_path') return displayEnumValue(value, fieldPathLabel)
@@ -155,7 +221,7 @@ function displayRecords(
 function valuationRecords(valuation: HistoryValuationModel | null): DisplayRecord[] {
   if (!valuation) return []
   return [
-    ...displayRecords(valuation.forms, ['form_code'], '估價表單'),
+    ...displayRecords(valuation.forms, ['form_code'], '查估書表'),
     ...displayRecords(valuation.valuations, ['valuation_type', 'result_status'], '估價結果'),
     ...displayRecords(valuation.comparisonAnalyses, ['analysis_status'], '比較分析'),
     ...displayRecords(valuation.benchmarkValuations, ['valuation_status'], '比準地估價'),
@@ -191,7 +257,7 @@ function versionFieldLabel(fieldCode: string, fieldPath?: string | null): string
 
 function changeEntityLabel(value: string): string {
   const labels: Readonly<Record<string, string>> = {
-    case: '案件', document: '文件', valuation: '估價資料', review: '審查資料', form: '估價表單',
+    case: '案件', document: '文件', valuation: '估價資料', review: '審查資料', form: '查估書表',
   }
   return labels[value.toLowerCase()] ?? '案件資料'
 }
@@ -300,6 +366,7 @@ watch(caseId, () => {
   clearDocumentPreview()
   detail.value = null
   activeTab.value = 'overview'
+  timelineFilter.value = 'all'
   void load()
 })
 
@@ -315,14 +382,20 @@ onBeforeUnmount(() => {
 <template>
   <section class="history-case" data-testid="history-case">
     <PageHeader
-      eyebrow="案件歷程"
-      :title="detail?.caseNo || '案件歷程明細'"
-      :description="detail ? detail.caseTitle : '查看授權的案件資料、文件與歷程。'"
+      eyebrow="案件歷史"
+      title="案件資料"
+      :description="detail ? `${detail.caseNo} · ${detail.caseTitle}` : '查看授權的案件資料與相關文件。'"
     >
       <template #actions>
         <button type="button" class="history-case__back" data-testid="history-back-search" @click="backToSearch">返回案件清單</button>
       </template>
     </PageHeader>
+
+    <ol class="history-case__flow" aria-label="案件歷史操作流程">
+      <li class="is-complete"><span>1</span><div><strong>確認權限</strong><small>依登入帳號自動判斷</small></div></li>
+      <li class="is-complete"><span>2</span><div><strong>搜尋案件</strong><small>已選取案件</small></div></li>
+      <li class="is-current"><span>3</span><div><strong>查看資料 / 下載文件</strong><small>目前所在步驟</small></div></li>
+    </ol>
 
     <LoadingSkeleton v-if="loading && !detail" :rows="6" label="案件歷程明細載入中" />
     <ErrorState v-else-if="error && !detail" :message="error" @retry="load" />
@@ -331,19 +404,36 @@ onBeforeUnmount(() => {
       <p v-if="error || message" class="history-case__message" :class="{ 'is-error': error }" role="status">{{ error || message }}</p>
 
       <section v-liquid-glass data-lg class="history-case__identity lg" aria-labelledby="history-case-identity-title">
-        <div>
-          <p class="history-case__eyebrow">案件資訊</p>
-          <h2 id="history-case-identity-title">{{ detail.caseTitle }}</h2>
-          <p class="history-case__identity-meta">{{ detail.caseNo }} · {{ detail.cityCode }} / {{ detail.districtCode }} · 基準日 {{ readableDate(detail.valuationBaseDate) }}</p>
+        <div class="history-case__identity-heading">
+          <div>
+            <p class="history-case__eyebrow">案件資料</p>
+            <h2 id="history-case-identity-title">{{ detail.caseTitle }}</h2>
+            <p class="history-case__identity-no">{{ detail.caseNo }}</p>
+          </div>
+          <div class="history-case__identity-status">
+            <StatusBadge :status="detail.caseStatusCode" />
+            <RiskBadge v-if="detail.riskLevelCode" :risk="detail.riskLevelCode" />
+          </div>
         </div>
-        <div class="history-case__identity-status">
-          <StatusBadge :status="detail.caseStatusCode" />
-          <RiskBadge v-if="detail.riskLevelCode" :risk="detail.riskLevelCode" />
+        <dl class="history-case__identity-grid">
+          <div><dt>案件類型</dt><dd>{{ detail.caseType || '—' }}</dd></div>
+          <div><dt>案件地區</dt><dd>{{ districtDisplay }}</dd></div>
+          <div><dt>估價基準日</dt><dd>{{ readableDate(detail.valuationBaseDate) }}</dd></div>
+          <div><dt>案件狀態</dt><dd>{{ detail.caseStatusLabel }}</dd></div>
+          <div><dt>最後更新</dt><dd>{{ readableDate(detail.updatedAt) }}</dd></div>
+          <div><dt>案件文件</dt><dd>{{ currentDocumentCount }} 份</dd></div>
+        </dl>
+        <div class="history-case__identity-footer">
+          <span>可查看：{{ hasValuation ? '估價資料' : '' }}{{ hasValuation && hasReview ? '、' : '' }}{{ hasReview ? '審查資料' : '' }}</span>
+          <span>{{ documentSummary }}</span>
         </div>
       </section>
 
       <nav class="history-case__tabs" aria-label="案件歷程資料區段">
-        <button type="button" :class="{ 'is-active': activeTab === 'overview' }" data-testid="history-tab-overview" @click="activeTab = 'overview'">案件總覽</button>
+        <button type="button" :class="{ 'is-active': activeTab === 'overview' }" data-testid="history-tab-overview" @click="activeTab = 'overview'">案件資料</button>
+        <button type="button" :class="{ 'is-active': activeTab === 'timeline' }" data-testid="history-tab-timeline" @click="activeTab = 'timeline'">
+          <span>案件歷程</span><small class="history-case__tab-count">{{ detail.timeline.length }}</small>
+        </button>
         <button v-if="detail.permissions.canViewValuation" type="button" :class="{ 'is-active': activeTab === 'valuation' }" data-testid="history-tab-valuation" @click="activeTab = 'valuation'">
           <span>估價資料</span><small class="history-case__tab-count">{{ valuationItems.length }}</small>
         </button>
@@ -358,13 +448,13 @@ onBeforeUnmount(() => {
       <template v-if="activeTab === 'overview'">
         <div class="history-case__overview-grid">
           <section v-liquid-glass data-lg class="history-case__facts lg" aria-labelledby="history-case-facts-title">
-            <p class="history-case__eyebrow">基本資料</p>
-            <h2 id="history-case-facts-title">案件基本資料</h2>
+            <p class="history-case__eyebrow">資料概況</p>
+            <h2 id="history-case-facts-title">案件內容摘要</h2>
             <dl>
-              <div><dt>案件編號</dt><dd>{{ detail.caseNo }}</dd></div>
-              <div><dt>案件類型</dt><dd>{{ detail.caseType || '—' }}</dd></div>
-              <div><dt>案件狀態</dt><dd>{{ detail.caseStatusLabel }}</dd></div>
-              <div><dt>最後更新</dt><dd>{{ readableDate(detail.updatedAt) }}</dd></div>
+              <div><dt>土地資料</dt><dd>{{ detail.parcels.length }} 筆</dd></div>
+              <div><dt>案件文件</dt><dd>{{ currentDocumentCount }} 份</dd></div>
+              <div v-if="hasValuation"><dt>估價資料</dt><dd>{{ valuationItems.length }} 筆紀錄</dd></div>
+              <div v-if="hasReview"><dt>審查資料</dt><dd>{{ reviewItems.length }} 筆紀錄</dd></div>
             </dl>
           </section>
           <DocumentList
@@ -417,15 +507,31 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </section>
-        <CaseTimeline :events="detail.timeline" />
       </template>
+
+      <section v-else-if="activeTab === 'timeline'" class="history-case__timeline-section" data-testid="history-timeline-section">
+        <nav class="history-case__timeline-filter" aria-label="案件歷程事件篩選">
+          <button
+            v-for="option in timelineFilterOptions"
+            :key="option.value"
+            type="button"
+            :class="{ 'is-active': timelineFilter === option.value }"
+            :data-testid="`history-timeline-filter-${option.value}`"
+            @click="timelineFilter = option.value"
+          >
+            <span>{{ option.label }}</span>
+            <small>{{ option.count }}</small>
+          </button>
+        </nav>
+        <CaseTimeline :events="filteredTimelineEvents" />
+      </section>
 
       <section v-else-if="activeTab === 'valuation'" v-liquid-glass data-lg class="history-case__data-section lg" data-testid="history-valuation-section" aria-labelledby="history-valuation-title">
         <div class="history-case__section-heading">
           <div><p class="history-case__eyebrow">估價紀錄</p><h2 id="history-valuation-title">估價資料</h2></div>
           <span>{{ valuationItems.length }} 筆估價紀錄</span>
         </div>
-        <p v-if="!valuationItems.length" class="history-case__empty">目前沒有可顯示的估價結構化資料。</p>
+        <p v-if="!valuationItems.length" class="history-case__empty">目前沒有可顯示的估價紀錄。</p>
         <div v-else class="history-case__record-grid">
           <article v-for="item in valuationItems" :key="item.key" class="history-case__record">
             <h3>{{ item.title }}</h3>
@@ -439,7 +545,7 @@ onBeforeUnmount(() => {
           <div><p class="history-case__eyebrow">審查紀錄</p><h2 id="history-review-title">審查資料</h2></div>
           <span>{{ reviewItems.length }} 筆審查紀錄</span>
         </div>
-        <p v-if="!reviewItems.length" class="history-case__empty">目前沒有可顯示的審查結構化資料。</p>
+        <p v-if="!reviewItems.length" class="history-case__empty">目前沒有可顯示的審查紀錄。</p>
         <div v-else class="history-case__record-grid">
           <article v-for="item in reviewItems" :key="item.key" class="history-case__record">
             <h3>{{ item.title }}</h3>
@@ -468,14 +574,14 @@ onBeforeUnmount(() => {
             <div class="history-case__diff-values">
               <div>
                 <span>修改前 · 第 {{ diff.previous.document_version }} 版</span>
-                <strong>{{ readableValue(diff.previous.value) }}</strong>
+                <strong>{{ displayFieldValue(diff.field_code, diff.previous.value).value }}</strong>
                 <small v-if="diff.previous.page_number">來源第 {{ diff.previous.page_number }} 頁</small>
                 <p v-if="diff.previous.raw_text">{{ diff.previous.raw_text }}</p>
               </div>
               <span class="history-case__diff-arrow" aria-hidden="true">→</span>
               <div class="is-current">
                 <span>修改後 · 第 {{ diff.current.document_version }} 版</span>
-                <strong>{{ readableValue(diff.current.value) }}</strong>
+                <strong>{{ displayFieldValue(diff.field_code, diff.current.value).value }}</strong>
                 <small v-if="diff.current.page_number">來源第 {{ diff.current.page_number }} 頁</small>
                 <p v-if="diff.current.raw_text">{{ diff.current.raw_text }}</p>
               </div>
@@ -490,7 +596,7 @@ onBeforeUnmount(() => {
             <li v-for="(change, index) in detail.changes" :key="`${change.changed_at}-${index}`">
               <div>
                 <strong>{{ changeEntityLabel(change.entity_type) }} · {{ readableFieldLabel(change.field_name) }}</strong>
-                <span>{{ readableValue(change.old_value) }} → {{ readableValue(change.new_value) }}</span>
+                <span>{{ displayFieldValue(change.field_name, change.old_value).value }} → {{ displayFieldValue(change.field_name, change.new_value).value }}</span>
                 <p v-if="change.change_reason">{{ change.change_reason }}</p>
               </div>
               <small>{{ change.changed_by || '系統流程' }} · {{ readableDate(change.changed_at) }}</small>
@@ -508,11 +614,28 @@ onBeforeUnmount(() => {
 .history-case__back:hover { border-color: var(--app-accent); color: var(--app-accent-deep); }
 .history-case__message { margin: 10px 0 0; color: var(--app-green); font-size: 13px; font-weight: 700; }
 .history-case__message.is-error { color: #ac3c37; }
-.history-case__identity { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-top: 12px; padding: 20px; border: 1px solid rgba(255,255,255,.72); border-radius: var(--app-radius-md); background: rgba(248,250,252,.74); box-shadow: var(--app-shadow-soft); }
+.history-case__flow { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0; margin:0 0 15px; padding:0; border:1px solid var(--app-line); border-radius:12px; overflow:hidden; background:rgba(255,255,255,.68); list-style:none; }
+.history-case__flow li { display:flex; align-items:center; gap:10px; min-width:0; padding:11px 15px; }
+.history-case__flow li + li { border-left:1px solid var(--app-line); }
+.history-case__flow li > span { display:grid; width:26px; height:26px; flex:0 0 26px; place-items:center; border:1px solid var(--app-line); border-radius:999px; color:var(--app-muted); background:#fff; font-size:10px; font-weight:900; }
+.history-case__flow li div { display:grid; min-width:0; gap:2px; }
+.history-case__flow strong { color:var(--app-ink-soft); font-size:11px; }
+.history-case__flow small { overflow:hidden; color:var(--app-muted); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
+.history-case__flow .is-complete > span { border-color:#b8d8c6; color:#276345; background:#eef7f2; }
+.history-case__flow .is-current { background:color-mix(in srgb, var(--app-primary-soft) 72%, white); }
+.history-case__flow .is-current > span { border-color:var(--app-primary); color:#fff; background:var(--app-primary); }
+.history-case__flow .is-current strong { color:var(--app-primary-deep); }
+.history-case__identity { display:grid; gap:17px; margin-top:12px; padding:20px; border:1px solid rgba(255,255,255,.72); border-radius:var(--app-radius-md); background:rgba(248,250,252,.74); box-shadow:var(--app-shadow-soft); }
+.history-case__identity-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; }
 .history-case__eyebrow { margin: 0 0 5px; color: var(--app-accent-deep); font-size: 10px; font-weight: 900; letter-spacing: .15em; }
 .history-case__identity h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 25px; }
-.history-case__identity-meta { margin: 8px 0 0; color: var(--app-ink-soft); font-size: 12px; }
+.history-case__identity-no { margin:6px 0 0; color:var(--app-muted); font-size:11px; font-weight:800; letter-spacing:.06em; }
 .history-case__identity-status { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.history-case__identity-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; margin:0; overflow:hidden; border:1px solid var(--app-line); border-radius:10px; background:var(--app-line); }
+.history-case__identity-grid div { display:grid; gap:4px; min-width:0; padding:11px 12px; background:rgba(255,255,255,.88); }
+.history-case__identity-grid dt { color:var(--app-muted); font-size:9px; font-weight:800; }
+.history-case__identity-grid dd { margin:0; overflow-wrap:anywhere; color:var(--app-ink); font-size:12px; font-weight:800; }
+.history-case__identity-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; color:var(--app-muted); font-size:10px; }
 .history-case__tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 15px; border-bottom: 1px solid var(--app-line); }
 .history-case__tabs button { display: inline-flex; min-height: 44px; align-items: center; gap: 7px; margin-bottom: -1px; padding: 8px 14px; border: 1px solid transparent; border-bottom: 2px solid transparent; border-radius: 8px 8px 0 0; color: var(--app-ink-soft); background: transparent; cursor: pointer; font-size: 13px; font-weight: 800; }
 .history-case__tabs button:hover,
@@ -545,7 +668,13 @@ onBeforeUnmount(() => {
 .history-case__parcel { display: grid; gap: 4px; padding: 11px; border: 1px solid #e5e9f0; border-radius: 9px; background: #fbfcfe; }
 .history-case__parcel strong { color: var(--app-ink); font-size: 13px; }
 .history-case__parcel span { color: var(--app-ink-soft); font-size: 11px; }
-.history-case__overview-grid + .case-timeline { margin-top: 15px; }
+.history-case__timeline-section { margin-top:15px; }
+.history-case__timeline-filter { display:flex; flex-wrap:wrap; gap:7px; margin-bottom:10px; padding:10px; border:1px solid var(--app-line); border-radius:10px; background:rgba(255,255,255,.66); }
+.history-case__timeline-filter button { display:inline-flex; min-height:36px; align-items:center; gap:7px; padding:6px 10px; border:1px solid var(--app-line); border-radius:999px; color:var(--app-ink-soft); background:#fff; cursor:pointer; font-size:11px; font-weight:800; }
+.history-case__timeline-filter button:hover { border-color:var(--app-primary); color:var(--app-primary-deep); }
+.history-case__timeline-filter button.is-active { border-color:var(--app-primary); color:#fff; background:var(--app-primary); }
+.history-case__timeline-filter small { display:grid; min-width:18px; height:18px; place-items:center; padding:0 5px; border-radius:999px; color:var(--app-muted); background:#edf1f5; font-size:8px; }
+.history-case__timeline-filter button.is-active small { color:var(--app-primary-deep); background:#fff; }
 .history-case__data-section { margin-top: 15px; }
 .history-case__section-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 15px; }
 .history-case__section-heading h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 25px; }
@@ -590,6 +719,7 @@ onBeforeUnmount(() => {
 
 @media (max-width: 900px) {
   .history-case { padding-inline: 18px; }
+  .history-case__identity-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .history-case__overview-grid { grid-template-columns: 1fr; }
   .history-case__record-grid { grid-template-columns: 1fr; }
   .history-case__diff-grid { grid-template-columns:1fr; }
@@ -597,8 +727,13 @@ onBeforeUnmount(() => {
 
 @media (max-width: 640px) {
   .history-case { padding-inline: 14px; }
-  .history-case__identity { flex-direction: column; }
+  .history-case__flow { grid-template-columns:1fr; }
+  .history-case__flow li + li { border-top:1px solid var(--app-line); border-left:0; }
+  .history-case__flow small { white-space:normal; }
+  .history-case__identity-heading { flex-direction:column; }
   .history-case__identity-status { justify-content: flex-start; }
+  .history-case__identity-grid { grid-template-columns:1fr; }
+  .history-case__identity-footer { align-items:flex-start; flex-direction:column; }
   .history-case__document-preview > header { flex-direction:column; }
   .history-case__document-frame { min-height:420px; }
   .history-case__parcel-list { grid-template-columns: 1fr; }

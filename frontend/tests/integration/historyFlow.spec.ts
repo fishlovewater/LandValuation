@@ -7,7 +7,7 @@ import { http, tokenService } from '../../src/api/http'
 import { createAppRouter } from '../../src/router'
 import type { AuthUser } from '../../src/modules/auth/auth.types'
 import { historyApi } from '../../src/modules/history/history.api'
-import { mapHistoryDocument } from '../../src/modules/history/history.mappers'
+import { caseTypeLabel, formCodeLabel, mapHistoryDocument } from '../../src/modules/history/history.mappers'
 import { useAuthStore } from '../../src/stores/auth.store'
 
 const ids = {
@@ -107,35 +107,77 @@ describe('history demo flow', () => {
     }) as unknown as typeof originalAdapter
 
     const router = createAppRouter(createMemoryHistory())
-    await router.push('/app/history/search?keyword=HIST-VAL-001&city_code=31&sort=updated_at&order=asc&offset=20&limit=20')
+    await router.push('/app/history/search?keyword=HIST-VAL-001&city_code=31&district_code=3101&sort=updated_at&order=asc&offset=20&limit=20')
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('HIST-VAL-001'))
 
     expect(wrapper.get('[data-testid="history-advanced-toggle"]').attributes('aria-expanded')).toBe('true')
     expect(wrapper.get('[data-testid="history-advanced-filters"]').isVisible()).toBe(true)
+    expect(wrapper.find('[data-testid="history-city-code"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="history-district-code"]').findAll('option')).toHaveLength(30)
+    expect((wrapper.get('[data-testid="history-district-code"]').element as HTMLSelectElement).value).toBe('65000010')
     expect(requests[0]?.params).toEqual({
       keyword: 'HIST-VAL-001',
-      city_code: '31',
+      city_code: '65000000',
+      district_code: '65000010',
       sort: 'updated_at',
       order: 'asc',
       offset: 20,
       limit: 20,
     })
-    expect(wrapper.get('[data-testid="history-case-row-71000000-0000-4000-8000-000000000001"]').text()).toContain('有結構化資料')
-    expect(wrapper.get('[data-testid="history-case-row-71000000-0000-4000-8000-000000000001"]').text()).toContain('尚無文件資料')
+    const caseRow = wrapper.get('[data-testid="history-case-row-71000000-0000-4000-8000-000000000001"]')
+    expect(caseRow.text()).toContain('新北市 板橋區')
+    expect(caseRow.text()).not.toContain('3101')
+    expect(caseRow.text()).toContain('有案件資料')
+    expect(caseRow.text()).toContain('尚無附件')
 
     await wrapper.get('[data-testid="history-keyword"]').setValue('HIST-REV-001')
     expect((wrapper.get('[data-testid="history-keyword"]').element as HTMLInputElement).value).toBe('HIST-REV-001')
     await wrapper.get('[data-testid="history-search-submit"]').trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.query.keyword).toBe('HIST-REV-001')
+    expect(router.currentRoute.value.query.offset).toBeUndefined()
     expect(requests.at(-1)?.params).toEqual({
       keyword: 'HIST-REV-001',
-      city_code: '31',
+      city_code: '65000000',
+      district_code: '65000010',
       order: 'asc',
-      offset: 20,
+      offset: 0,
       limit: 20,
     })
+    wrapper.unmount()
+  })
+
+  it('keeps an invalid date range on the client instead of sending a bad history query', async () => {
+    useAuthStore().user = appraiser
+    const requests: Array<{ params?: unknown }> = []
+    http.defaults.adapter = vi.fn(async (config) => {
+      requests.push({ params: config.params })
+      return response({
+        items: [structuredCase],
+        total: 1,
+        offset: 0,
+        limit: 20,
+        permissions: { can_view_valuation: true, can_view_review: false },
+      }, config)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/app/history/search')
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('HIST-VAL-001'))
+    expect(requests).toHaveLength(1)
+
+    await wrapper.get('[data-testid="history-advanced-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="history-date-from"]').setValue('2026-09-10')
+    await wrapper.get('[data-testid="history-date-to"]').setValue('2026-09-01')
+    await wrapper.get('[data-testid="history-search-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('日期起日不可晚於日期迄日')
+    expect(requests).toHaveLength(1)
+    expect(router.currentRoute.value.query.dateFrom).toBeUndefined()
+    expect(router.currentRoute.value.query.dateTo).toBeUndefined()
     wrapper.unmount()
   })
 
@@ -162,7 +204,7 @@ describe('history demo flow', () => {
     expect(wrapper.get('[data-testid="history-date-field"]').findAll('option').map((option) => option.element.getAttribute('value'))).toEqual(['updated_at'])
     expect(wrapper.get('[data-testid="history-sort"]').findAll('option').map((option) => option.element.getAttribute('value'))).toEqual(['updated_at'])
     expect(requests[0]?.params).toEqual({
-      city_code: '31',
+      city_code: '65000000',
       order: 'asc',
       offset: 20,
       limit: 20,
@@ -230,6 +272,7 @@ describe('history demo flow', () => {
             case_id: ids.missingObjectCase,
             case_no: 'HIST-REV-001',
             case_title: 'History 測試－Review metadata 但 MinIO 缺檔',
+            case_type: 'LAND',
             case_status: 'REVIEWING',
             valuation_base_date: '2026-08-02',
             city_code: '31',
@@ -254,7 +297,7 @@ describe('history demo flow', () => {
               { risk_summary_id: '75000000-0000-4000-8000-000000000007', overall_risk_level: 'FUTURE_RISK_LEVEL', summary: '未來風險摘要', generated_at: '2026-08-21T11:00:00+08:00' },
             ],
             decisions: [
-              { decision_id: '75000000-0000-4000-8000-000000000003', decision: 'ACCEPTED', decided_at: '2026-08-20T11:30:00+08:00' },
+              { decision_id: '75000000-0000-4000-8000-000000000003', decision: 'ACCEPTED', before_value: { review_status: 'RECEIVED' }, after_value: { review_status: 'REVIEW_COMPLETED' }, decided_at: '2026-08-20T11:30:00+08:00' },
               { decision_id: '75000000-0000-4000-8000-000000000008', decision: 'PARTIALLY_ACCEPTED', decided_at: '2026-08-20T11:40:00+08:00' },
               { decision_id: '75000000-0000-4000-8000-000000000009', decision: 'REQUIRES_SUPPLEMENT', decided_at: '2026-08-20T11:50:00+08:00' },
               { decision_id: '75000000-0000-4000-8000-000000000010', decision: 'EXPERT_REVIEW', decided_at: '2026-08-20T12:00:00+08:00' },
@@ -285,14 +328,23 @@ describe('history demo flow', () => {
     await vi.waitFor(() => expect(wrapper.text()).toContain('HIST-REV-001'))
 
     expect(wrapper.text()).toContain('審查資料')
+    expect(wrapper.text()).toContain('土地徵收補償市價查估案件')
+    expect(wrapper.text()).not.toContain('LAND')
     expect(wrapper.get('[data-testid="history-tab-review"]').text()).toContain('11')
     expect(wrapper.text()).not.toContain('估價資料')
     expect(wrapper.text()).not.toContain('object_key')
     expect(wrapper.text()).not.toContain('cases/')
-    expect(wrapper.text()).toContain('風險等級：高風險')
-    expect(wrapper.text()).toContain('決定：接受系統結果')
-    expect(wrapper.text()).not.toContain('風險等級：HIGH')
-    expect(wrapper.text()).not.toContain('決定：ACCEPTED')
+
+    await wrapper.get('[data-testid="history-tab-timeline"]').trigger('click')
+    const timelineSection = wrapper.get('[data-testid="history-timeline-section"]')
+    expect(timelineSection.get('[data-testid="history-timeline-filter-all"]').text()).toContain('全部')
+    expect(timelineSection.find('[data-testid="history-timeline-filter-review"]').exists()).toBe(true)
+    await timelineSection.get('[data-testid="history-timeline-filter-review"]').trigger('click')
+    expect(timelineSection.text()).toContain('風險等級：高風險')
+    expect(timelineSection.text()).toContain('決定：接受系統結果')
+    expect(timelineSection.text()).not.toContain('風險等級：HIGH')
+    expect(timelineSection.text()).not.toContain('決定：ACCEPTED')
+    expect(timelineSection.text()).not.toContain('history-demo-missing.docx')
 
     await wrapper.get('[data-testid="history-tab-review"]').trigger('click')
     const reviewSection = wrapper.get('[data-testid="history-review-section"]')
@@ -309,6 +361,12 @@ describe('history demo flow', () => {
     expect(reviewSection.text()).toContain('其他審查類型')
     expect(reviewSection.text()).toContain('未知狀態')
     expect(reviewSection.text()).toContain('未標示風險')
+    expect(reviewSection.text()).toContain('修改前內容')
+    expect(reviewSection.text()).toContain('審查狀態：已收件')
+    expect(reviewSection.text()).toContain('修改後內容')
+    expect(reviewSection.text()).toContain('審查狀態：審查完成')
+    expect(reviewSection.text()).not.toContain('RECEIVED')
+    expect(reviewSection.text()).not.toContain('REVIEW_COMPLETED')
 
     expect(reviewSection.text()).not.toContain('FUTURE_REVIEW_KIND')
     expect(reviewSection.text()).not.toContain('FUTURE_REVIEW_STATUS')
@@ -321,6 +379,9 @@ describe('history demo flow', () => {
     expect(reviewSection.findAll('details')).toHaveLength(0)
 
     await wrapper.get('[data-testid="history-tab-overview"]').trigger('click')
+    expect(wrapper.text()).toContain('智慧審查文件')
+    expect(wrapper.text()).toContain('1 份目前文件')
+    expect(wrapper.text()).toContain('目前版本')
     await wrapper.get(`[data-testid="history-preview-${ids.missingDocument}"]`).trigger('click')
     await vi.waitFor(() => expect(wrapper.find('[data-testid="history-document-preview"]').exists()).toBe(true))
     await vi.waitFor(() => expect(wrapper.text()).toContain('文件目前無法下載'))
@@ -342,6 +403,14 @@ describe('history demo flow', () => {
     expect(mapHistoryDocument({ ...base, document_id: ids.draftReport, document_type: 'generated-draft-report' }).documentTypeLabel).toBe('草稿報告')
     expect(mapHistoryDocument({ ...base, document_id: ids.generatedReport, document_type: 'generated-report' }).documentTypeLabel).toBe('正式報告')
     expect(mapHistoryDocument({ ...base, document_id: ids.unknownDocument, document_type: 'future-document-kind' }).documentTypeLabel).toBe('其他文件')
+  })
+
+  it('maps internal case and form codes to user-facing official names', () => {
+    expect(caseTypeLabel('LAND')).toBe('土地徵收補償市價查估案件')
+    expect(caseTypeLabel('FUTURE_CASE_KIND')).toBe('其他案件類型')
+    expect(formCodeLabel('F03')).toBe('比準地地價估計表')
+    expect(formCodeLabel('F02-RF')).toBe('影響地價區域因素分析明細表')
+    expect(formCodeLabel('FUTURE_FORM')).toBe('查估書表')
   })
 })
 
