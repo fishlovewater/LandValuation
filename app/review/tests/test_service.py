@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.exceptions import AppError
-from app.review.schemas import ReviewUpdate
+from app.review.schemas import ReviewCreate, ReviewUpdate
 from app.review.service import ReviewService, ensure_transition
 
 
@@ -38,6 +38,25 @@ def test_illegal_review_transition_raises_conflict():
 def test_completed_review_cannot_transition():
     with pytest.raises(AppError):
         ensure_transition("REVIEW_COMPLETED", "PREPROCESSING")
+
+
+def test_legacy_direct_review_create_is_disabled():
+    class FakeRepository:
+        async def create(self, *_args, **_kwargs):
+            raise AssertionError("legacy direct create must not reach repository")
+
+    service = ReviewService(FakeRepository())
+
+    with pytest.raises(AppError) as exc_info:
+        asyncio.run(
+            service.create(
+                ReviewCreate(case_id=uuid4()),
+                uuid4(),
+            )
+        )
+
+    assert exc_info.value.code == "LEGACY_REVIEW_CREATE_DISABLED"
+    assert exc_info.value.status_code == 409
 
 
 def test_generic_review_update_rejects_limited_correction_state():

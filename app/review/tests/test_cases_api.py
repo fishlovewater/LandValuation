@@ -13,6 +13,7 @@ from app.main import app
 def queue_case(postgres_connection):
     user_id = uuid4()
     case_id = uuid4()
+    review_id = uuid4()
     case_no = f"QUEUE-{str(case_id)[:8]}"
     with postgres_connection.cursor() as cursor:
         cursor.execute(
@@ -34,9 +35,23 @@ def queue_case(postgres_connection):
             """,
             (case_id, case_no),
         )
+        cursor.execute(
+            """
+            INSERT INTO review.reviews (
+                review_id, case_id, review_status, started_by_user_id,
+                received_at, started_at
+            ) VALUES (%s, %s, 'RECEIVED', %s, now(), now())
+            """,
+            (review_id, case_id, user_id),
+        )
     postgres_connection.commit()
 
-    yield SimpleNamespace(user_id=user_id, case_id=case_id, case_no=case_no)
+    yield SimpleNamespace(
+        user_id=user_id,
+        case_id=case_id,
+        case_no=case_no,
+        review_id=review_id,
+    )
 
     with postgres_connection.cursor() as cursor:
         cursor.execute("DELETE FROM review.reviews WHERE case_id = %s", (case_id,))
@@ -58,7 +73,7 @@ def authorized_client(queue_case):
         app.dependency_overrides.clear()
 
 
-def test_create_list_get_assign_and_prioritize_review_case(authorized_client, queue_case):
+def test_direct_platform_review_create_is_disabled(authorized_client, queue_case):
     received_at = datetime.now(UTC).replace(microsecond=0)
     response = authorized_client.post(
         "/api/v1/review/cases",
@@ -69,13 +84,13 @@ def test_create_list_get_assign_and_prioritize_review_case(authorized_client, qu
         },
     )
 
-    assert response.status_code == 201
-    created = response.json()
-    assert created["case_id"] == str(queue_case.case_id)
-    assert created["review_status"] == "RECEIVED"
-    assert created["manual_priority"] == 0
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "LEGACY_REVIEW_CREATE_DISABLED"
 
-    review_id = created["review_id"]
+
+def test_list_get_assign_and_prioritize_review_case(authorized_client, queue_case):
+    review_id = str(queue_case.review_id)
+
     listed = authorized_client.get("/api/v1/review/cases?status=RECEIVED")
     assert listed.status_code == 200
     assert listed.json()["total"] >= 1
@@ -102,12 +117,8 @@ def test_create_list_get_assign_and_prioritize_review_case(authorized_client, qu
 
 
 def test_update_rejects_illegal_status_transition(authorized_client, queue_case):
-    created = authorized_client.post(
-        "/api/v1/review/cases", json={"case_id": str(queue_case.case_id)}
-    ).json()
-
     response = authorized_client.patch(
-        f"/api/v1/review/cases/{created['review_id']}",
+        f"/api/v1/review/cases/{queue_case.review_id}",
         json={"review_status": "APPROVED"},
     )
 

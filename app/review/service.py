@@ -126,7 +126,12 @@ class ReviewService:
         self.repository = repository
 
     async def create(self, payload: ReviewCreate, actor_id):
-        return await self.repository.create(payload, actor_id)
+        del payload, actor_id
+        raise AppError(
+            "LEGACY_REVIEW_CREATE_DISABLED",
+            "平台案件只能由正式送審流程建立審查；外部案件請使用外部案件建立功能",
+            409,
+        )
 
     async def get(self, review_id):
         review = await self.repository.get(review_id)
