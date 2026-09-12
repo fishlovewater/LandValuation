@@ -347,6 +347,13 @@ const manualFieldEntries = computed(() => allManualFieldEntries.value.filter(
 const manualEditableEntries = computed(() => manualFieldEntries.value.filter(
   (entry) => !(entry.formCode === 'F03' && entry.fieldName === 'benchmark_land_id'),
 ))
+const manualMissingRequiredKeys = computed(() => (
+  workflowGuidance.value?.form_guidance.flatMap((guidance) =>
+    guidance.missing_required_fields
+      .filter((fieldName) => !(guidance.form_code === 'F03' && f03DraftHasField(fieldName)))
+      .map((fieldName) => `${guidance.form_code}.${fieldName}`),
+  ) ?? []
+))
 const unresolvedNonF03RequiredFields = computed(() => (
   workflowGuidance.value?.form_guidance.flatMap((guidance) =>
     guidance.form_code === 'F03'
@@ -2476,6 +2483,7 @@ onBeforeUnmount(clearPreviewUrl)
         :active-form="activeManualForm"
         :entries="manualFieldEntries"
         :editable-count="manualEditableEntries.length"
+        :missing-required-keys="manualMissingRequiredKeys"
         :values="manualFieldValue"
         :errors="workflowGuidance.manual_field_errors ?? {}"
         :saving="manualFieldsSaving"

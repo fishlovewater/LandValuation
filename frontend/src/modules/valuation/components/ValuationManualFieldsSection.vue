@@ -18,6 +18,7 @@ const props = defineProps<{
   activeForm: FieldAnalysisFormCode
   entries: ManualFieldEntry[]
   editableCount: number
+  missingRequiredKeys: string[]
   values: Record<string, string>
   errors: Record<string, string>
   saving: boolean
@@ -31,10 +32,13 @@ const emit = defineEmits<{
   save: []
 }>()
 
-const completedCount = computed(() => props.entries.filter((entry) => {
-  if (entry.formCode === 'F03' && entry.fieldName === 'benchmark_land_id') return false
-  return Boolean((props.values[entry.key] ?? '').trim())
-}).length)
+const missingRequiredSet = computed(() => new Set(props.missingRequiredKeys))
+const missingEntries = computed(() => props.entries.filter((entry) => missingRequiredSet.value.has(entry.key)))
+const otherEntries = computed(() => props.entries.filter((entry) => !missingRequiredSet.value.has(entry.key)))
+
+function missingCountForForm(formCode: FieldAnalysisFormCode): number {
+  return props.missingRequiredKeys.filter((key) => key.startsWith(`${formCode}.`)).length
+}
 
 function handleFormChange(event: Event): void {
   emit('updateActiveForm', (event.target as HTMLSelectElement).value as FieldAnalysisFormCode)
@@ -64,8 +68,10 @@ function handleValueInput(key: string, event: Event): void {
         </div>
       </div>
       <div class="manual-fields__stats" aria-label="必要欄位狀態">
-        <span>{{ props.entries.length }} 項欄位</span>
-        <span>{{ completedCount }} 項已填</span>
+        <span :data-state="missingEntries.length ? 'attention' : 'ready'">
+          {{ missingEntries.length ? `待補 ${missingEntries.length} 項` : '必要欄位已齊' }}
+        </span>
+        <span>本表單 {{ props.entries.length }} 項可確認</span>
       </div>
     </div>
 
@@ -73,22 +79,91 @@ function handleValueInput(key: string, event: Event): void {
       <label class="manual-fields__selector">
         <span>目前查估表單</span>
         <select :value="props.activeForm" data-testid="manual-form-selector" @change="handleFormChange">
-          <option value="F01">F01－買賣實例調查估價表</option>
-          <option value="F02">F02－比較法調查估價表</option>
-          <option value="F02-RF">F02-RF－影響地價區域因素分析明細表</option>
-          <option value="F03">F03－比準地地價估計表</option>
-          <option value="F04">F04－徵收土地宗地市價估計表</option>
-          <option value="S01">S01－地價區段勘查表</option>
+          <option value="F01">F01－買賣實例調查估價表{{ missingCountForForm('F01') ? `（待補 ${missingCountForForm('F01')}）` : '' }}</option>
+          <option value="F02">F02－比較法調查估價表{{ missingCountForForm('F02') ? `（待補 ${missingCountForForm('F02')}）` : '' }}</option>
+          <option value="F02-RF">F02-RF－影響地價區域因素分析明細表{{ missingCountForForm('F02-RF') ? `（待補 ${missingCountForForm('F02-RF')}）` : '' }}</option>
+          <option value="F03">F03－比準地地價估計表{{ missingCountForForm('F03') ? `（待補 ${missingCountForForm('F03')}）` : '' }}</option>
+          <option value="F04">F04－徵收土地宗地市價估計表{{ missingCountForForm('F04') ? `（待補 ${missingCountForForm('F04')}）` : '' }}</option>
+          <option value="S01">S01－地價區段勘查表{{ missingCountForForm('S01') ? `（待補 ${missingCountForForm('S01')}）` : '' }}</option>
         </select>
       </label>
       <div class="manual-fields__notice">
         <Info :size="17" weight="duotone" aria-hidden="true" />
-        <span>只會送出非空欄位；未填欄位不會用空字串覆蓋既有資料。</span>
+        <span>先完成下方必要缺漏即可繼續流程；已填與其他可調整欄位不需要逐項重填。</span>
       </div>
     </div>
 
-    <div class="manual-fields__grid">
-      <template v-for="entry in props.entries" :key="entry.key">
+    <section v-if="missingEntries.length" class="manual-fields__priority" aria-labelledby="manual-fields-priority-title">
+      <div class="manual-fields__section-heading">
+        <div>
+          <strong id="manual-fields-priority-title">目前需要補齊</strong>
+          <span>以下欄位會阻擋後續估價流程，先處理這些即可。</span>
+        </div>
+        <span class="manual-fields__required-count">{{ missingEntries.length }} 項必要資料</span>
+      </div>
+      <div class="manual-fields__grid">
+        <template v-for="entry in missingEntries" :key="entry.key">
+          <div
+            v-if="entry.formCode === 'F03' && entry.fieldName === 'benchmark_land_id'"
+            class="manual-fields__relation"
+            data-testid="manual-benchmark-helper"
+          >
+            <span class="manual-fields__relation-icon" aria-hidden="true">
+              <Database :size="20" weight="duotone" />
+            </span>
+            <div class="manual-fields__relation-copy">
+              <strong>比準地地價估計表 → 比準地</strong>
+              <span>這是案件資料關聯，不是一般文字欄位。請從已建立的比準地中選擇，避免人工輸入系統識別值。</span>
+            </div>
+            <button class="manual-fields__link" type="button" @click="emit('goLand')">
+              前往宗地與比準地
+              <ArrowRight :size="15" weight="bold" aria-hidden="true" />
+            </button>
+          </div>
+
+          <label v-else class="manual-field-card manual-field-card--required" :data-error="Boolean(props.errors[entry.key])">
+            <span class="manual-field-card__heading">
+              <span class="manual-field-card__label">
+                <PencilSimple :size="14" weight="duotone" aria-hidden="true" />
+                {{ props.fieldMetadata(entry.formCode, entry.fieldName).label }}
+              </span>
+              <span class="manual-field-card__required">必要</span>
+            </span>
+            <input
+              :value="props.values[entry.key] ?? ''"
+              :data-testid="`manual-field-${entry.formCode}-${entry.fieldName}`"
+              :type="props.fieldMetadata(entry.formCode, entry.fieldName).inputType ?? 'text'"
+              :placeholder="`請填寫：${props.fieldMetadata(entry.formCode, entry.fieldName).label}`"
+              autocomplete="off"
+              @input="handleValueInput(entry.key, $event)"
+            >
+            <small class="manual-fields__hint">
+              {{ props.fieldMetadata(entry.formCode, entry.fieldName).guidance }}
+            </small>
+            <small v-if="props.errors[entry.key]" class="manual-fields__error">
+              <WarningCircle :size="13" weight="fill" aria-hidden="true" />
+              {{ props.errors[entry.key] }}
+            </small>
+          </label>
+        </template>
+      </div>
+    </section>
+
+    <div v-else class="manual-fields__form-ready">
+      <CheckCircle :size="19" weight="fill" aria-hidden="true" />
+      <div>
+        <strong>此表單沒有缺少的必要欄位</strong>
+        <span>若不需要更正既有值，可以直接處理下一個待辦。</span>
+      </div>
+    </div>
+
+    <details v-if="otherEntries.length" class="manual-fields__other">
+      <summary>查看已填與其他可調整欄位（{{ otherEntries.length }}）</summary>
+      <div class="manual-fields__other-copy">
+        只有需要核對或更正時才修改；空白欄位不會覆蓋既有資料。
+      </div>
+      <div class="manual-fields__grid">
+      <template v-for="entry in otherEntries" :key="entry.key">
         <div
           v-if="entry.formCode === 'F03' && entry.fieldName === 'benchmark_land_id'"
           class="manual-fields__relation"
@@ -135,12 +210,13 @@ function handleValueInput(key: string, event: Event): void {
           </small>
         </label>
       </template>
-    </div>
+      </div>
+    </details>
 
     <div class="manual-fields__footer">
       <div class="manual-fields__footer-copy">
-        <strong>儲存後會重新檢核相關資料</strong>
-        <span>欄位更新會影響相關計算與送審文件，必要時需重新執行計算與檢核。</span>
+        <strong>{{ missingEntries.length ? `完成目前 ${missingEntries.length} 項必要資料後儲存` : '有修改時再儲存' }}</strong>
+        <span>儲存後系統會重新判斷還缺哪些資料，不需要自行比對所有表單欄位。</span>
       </div>
       <button
         v-if="props.editableCount"
@@ -249,6 +325,8 @@ function handleValueInput(key: string, event: Event): void {
   font-weight: 800;
   white-space: nowrap;
 }
+.manual-fields__stats span[data-state="attention"] { border-color: #ead9b2; color: #8a6515; background: #fff8e8; }
+.manual-fields__stats span[data-state="ready"] { border-color: #cfe4da; color: #2f7456; background: #f3f9f6; }
 
 .manual-fields__control-bar {
   display: grid;
@@ -294,6 +372,24 @@ function handleValueInput(key: string, event: Event): void {
 .manual-fields__selector select:focus,
 .manual-fields__grid input:focus { border-color: rgba(46, 89, 132, .48); box-shadow: 0 0 0 3px rgba(46, 89, 132, .08); }
 
+.manual-fields__priority { display: grid; gap: 10px; }
+.manual-fields__section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.manual-fields__section-heading > div { display: grid; gap: 3px; }
+.manual-fields__section-heading strong { color: var(--app-ink); font-size: 13px; }
+.manual-fields__section-heading > div > span { color: var(--app-muted); font-size: 10px; line-height: 1.5; }
+.manual-fields__required-count { flex: 0 0 auto; padding: 5px 8px; border-radius: 999px; color: #8a6515; background: #fff3d9; font-size: 9px; font-weight: 900; }
+
+.manual-fields__form-ready { display: flex; align-items: flex-start; gap: 9px; padding: 12px 13px; border: 1px solid #cfe4da; border-radius: 9px; color: #2f7456; background: #f5faf7; }
+.manual-fields__form-ready > svg { flex: 0 0 auto; margin-top: 1px; }
+.manual-fields__form-ready > div { display: grid; gap: 3px; }
+.manual-fields__form-ready strong { font-size: 12px; }
+.manual-fields__form-ready span { color: #587866; font-size: 10px; line-height: 1.5; }
+
+.manual-fields__other { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--app-line); }
+.manual-fields__other > summary { width: fit-content; color: #405d78; cursor: pointer; font-size: 10px; font-weight: 900; }
+.manual-fields__other[open] > summary { color: #2e5984; }
+.manual-fields__other-copy { margin: 7px 0 10px; color: var(--app-muted); font-size: 10px; line-height: 1.5; }
+
 .manual-fields__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -312,10 +408,12 @@ function handleValueInput(key: string, event: Event): void {
   font-weight: 800;
 }
 .manual-field-card[data-error="true"] { border-color: rgba(164, 67, 52, .32); background: #fff8f6; }
+.manual-field-card--required { border-color: #d9c999; background: #fffdf7; }
 .manual-field-card__heading { justify-content: space-between; gap: 10px; }
 .manual-field-card__label { min-width: 0; gap: 6px; color: var(--app-ink); }
 .manual-field-card__label svg { flex: 0 0 auto; color: var(--app-accent-deep); }
 .manual-field-card__filled { flex: 0 0 auto; gap: 4px; color: #2f7456; font-size: 9px; font-weight: 850; white-space: nowrap; }
+.manual-field-card__required { flex: 0 0 auto; padding: 3px 6px; border-radius: 999px; color: #8a6515; background: #fff0ca; font-size: 8px; font-weight: 900; white-space: nowrap; }
 
 .manual-fields__relation {
   grid-column: 1 / -1;
@@ -438,6 +536,7 @@ function handleValueInput(key: string, event: Event): void {
   }
 
   .manual-fields__heading,
+  .manual-fields__section-heading,
   .manual-fields__relation,
   .manual-fields__footer {
     align-items: stretch;
