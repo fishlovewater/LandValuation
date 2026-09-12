@@ -18,9 +18,8 @@ test.describe('persistent Demo OCR + Ollama field analysis', () => {
     await page.getByTestId('demo-login-appraiser').click()
     expect((await loginResponse).status()).toBe(200)
 
-    await page.goto(`/app/valuation/cases/${encodeURIComponent(caseId)}/prepare`)
-    await expect(page.getByTestId('valuation-step-2')).toBeVisible()
-    await page.getByTestId('valuation-step-2').click()
+    await page.goto(`/app/valuation/cases/${encodeURIComponent(caseId)}/documents`)
+    await expect(page.getByTestId('valuation-step-2')).toHaveAttribute('aria-current', 'step')
     await expect(page.locator('#valuation-document-workspace')).toBeVisible()
 
     const documentRow = page.locator('li').filter({ hasText: sourceFilename }).first()

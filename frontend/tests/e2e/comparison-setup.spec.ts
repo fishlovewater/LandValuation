@@ -22,13 +22,13 @@ test.describe('structured comparison setup', () => {
 
   test('supports the explicit disabled path and creates one traceable comparison setup without raw UUID editing', async ({ page }, testInfo) => {
     await loginAs(page, 'APPRAISER', demo.appraiser, testInfo)
-    await page.goto(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/prepare`)
-    await expect(page.locator('#case-summary-title')).toContainText(demo.caseNo)
+    await page.goto(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/calculation`)
+    await expect(page.getByTestId('case-context')).toContainText(demo.caseNo)
 
-    await page.getByTestId('valuation-step-4').click()
     await page.getByTestId('run-valuation').click()
-    await expect(page.getByText('已完成計算、檢核、F03 確認與單表輸出。')).toBeVisible()
+    await expect(page.getByText('已完成計算、檢核、比準地地價估計表確認與單表輸出。')).toBeVisible()
     await page.getByTestId('go-to-submit').click()
+    await expect(page).toHaveURL(new RegExp(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/report$`))
 
     await page.getByTestId('open-report-page-editors').click()
     await page.getByRole('button', { name: 'F02', exact: true }).click()

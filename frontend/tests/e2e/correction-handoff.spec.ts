@@ -31,13 +31,13 @@ async function logout(page: Page): Promise<void> {
 }
 
 async function submitValuation(page: Page): Promise<string> {
-  await page.goto(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/prepare`)
-  await expect(page.locator('#case-summary-title')).toContainText(demo.caseNo)
-  await page.getByTestId('valuation-step-4').click()
+  await page.goto(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/calculation`)
+  await expect(page.getByTestId('case-context')).toContainText(demo.caseNo)
   await page.getByTestId('run-valuation').click()
-  await expect(page.getByText('已完成計算、檢核、F03 確認與單表輸出。')).toBeVisible()
+  await expect(page.getByText('已完成計算、檢核、比準地地價估計表確認與單表輸出。')).toBeVisible()
 
   await page.getByTestId('go-to-submit').click()
+  await expect(page).toHaveURL(new RegExp(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/report$`))
   await expect(page.getByTestId('report-package-draft-flow')).toBeVisible()
   await page.getByTestId('report-page-s01-confirm').check()
   await page.getByTestId('report-page-f02-rf-confirm').check()
@@ -142,7 +142,7 @@ async function sendCorrection(page: Page, reviewId: string): Promise<void> {
   await page.getByTestId('correction-request-form').locator('button[type="submit"]').click()
   expect((await createRequest).status()).toBe(201)
   expect((await sendRequest).status()).toBe(200)
-  await expect(page.getByTestId('correction-status-panel')).toContainText('SENT')
+  await expect(page.getByTestId('correction-status-panel')).toContainText('已送出')
   await expect(page.getByTestId('awaiting-correction')).toBeDisabled()
 }
 
@@ -159,7 +159,7 @@ test.describe('real correction handoff workflow', () => {
     await logout(page)
 
     await loginAs(page, 'APPRAISER', demo.appraiser, testInfo)
-    await page.goto(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/prepare`)
+    await page.goto(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/data`)
 
     const correctionPanel = page.getByTestId('valuation-correction-request')
     await expect(correctionPanel).toBeVisible()

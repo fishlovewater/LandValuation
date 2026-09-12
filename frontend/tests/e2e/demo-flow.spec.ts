@@ -134,17 +134,16 @@ async function logout(page: Page): Promise<void> {
 }
 
 async function submitPreparedValuation(page: Page): Promise<string> {
-  await page.goto(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/prepare`)
-  await expect(page.locator('#case-summary-title')).toContainText(demo.caseNo)
-  await page.getByTestId('valuation-step-4').click()
+  await page.goto(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/calculation`)
+  await expect(page.getByTestId('case-context')).toContainText(demo.caseNo)
   const runButton = page.getByTestId('run-valuation')
   await expect(runButton).toBeEnabled()
   await runButton.click()
-  await expect(page.getByText('已完成計算、檢核、F03 確認與單表輸出。')).toBeVisible()
+  await expect(page.getByText('已完成計算、檢核、比準地地價估計表確認與單表輸出。')).toBeVisible()
 
   await expect(page.getByTestId('go-to-submit')).toBeEnabled()
   await Promise.all([
-    page.waitForURL(new RegExp(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/submit$`)),
+    page.waitForURL(new RegExp(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/report$`)),
     page.getByTestId('go-to-submit').click(),
   ])
 
