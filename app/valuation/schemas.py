@@ -17,6 +17,17 @@ VALUATION_CASE_TYPE_ALIASES = frozenset(
         "土地徵收補償市價查估案件",
     }
 )
+NEW_TAIPEI_CITY_CODE = "65000000"
+NEW_TAIPEI_CITY_CODE_ALIASES = frozenset(
+    {
+        NEW_TAIPEI_CITY_CODE,
+        "65000",
+        "NWT",
+    }
+)
+NEW_TAIPEI_DISTRICT_CODES = frozenset(
+    f"65000{district:02d}0" for district in range(1, 30)
+)
 
 
 def normalize_valuation_case_type(value: str) -> str:
@@ -25,6 +36,20 @@ def normalize_valuation_case_type(value: str) -> str:
     if alias not in VALUATION_CASE_TYPE_ALIASES:
         raise ValueError("案件類型僅支援土地徵收補償市價查估")
     return VALUATION_CASE_TYPE
+
+
+def normalize_new_taipei_city_code(value: str) -> str:
+    normalized = value.strip().upper()
+    if normalized not in NEW_TAIPEI_CITY_CODE_ALIASES:
+        raise ValueError("本系統估價案件僅支援新北市")
+    return NEW_TAIPEI_CITY_CODE
+
+
+def validate_new_taipei_district_code(value: str) -> str:
+    normalized = value.strip()
+    if normalized not in NEW_TAIPEI_DISTRICT_CODES:
+        raise ValueError("請提供有效的新北市行政區代碼")
+    return normalized
 
 
 class CaseStatus(StrEnum):
@@ -76,7 +101,7 @@ class CaseCreate(RequestModel):
     requesting_agency: str | None = Field(default=None, max_length=200)
     valuation_base_date: date
     valuation_due_date: date | None = None
-    city_code: str = Field(min_length=1, max_length=20)
+    city_code: str = Field(default=NEW_TAIPEI_CITY_CODE, min_length=1, max_length=20)
     district_code: str = Field(min_length=1, max_length=20)
     land_use_type: str | None = Field(default=None, max_length=100)
 
@@ -84,6 +109,16 @@ class CaseCreate(RequestModel):
     @classmethod
     def normalize_case_type(cls, value: str) -> str:
         return normalize_valuation_case_type(value)
+
+    @field_validator("city_code")
+    @classmethod
+    def normalize_city_code(cls, value: str) -> str:
+        return normalize_new_taipei_city_code(value)
+
+    @field_validator("district_code")
+    @classmethod
+    def validate_district_code(cls, value: str) -> str:
+        return validate_new_taipei_district_code(value)
 
 
 class CaseUpdate(RequestModel):
@@ -102,6 +137,20 @@ class CaseUpdate(RequestModel):
         if value is None:
             return None
         return normalize_valuation_case_type(value)
+
+    @field_validator("city_code")
+    @classmethod
+    def normalize_city_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_new_taipei_city_code(value)
+
+    @field_validator("district_code")
+    @classmethod
+    def validate_district_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_new_taipei_district_code(value)
 
     @model_validator(mode="after")
     def require_update_field(self):

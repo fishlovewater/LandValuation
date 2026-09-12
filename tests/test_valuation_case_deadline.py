@@ -97,6 +97,68 @@ def test_case_type_rejects_values_outside_the_supported_valuation_workflow() -> 
         CaseUpdate(case_type="EXTERNAL_REVIEW")
 
 
+@pytest.mark.parametrize("city_code", ["65000000", "65000", "NWT", "nwt"])
+def test_case_city_aliases_are_normalized_to_new_taipei(city_code: str) -> None:
+    payload = CaseCreate(
+        case_no="VAL-2026-CITY",
+        case_title="新北市範圍測試",
+        case_type="LAND",
+        valuation_base_date=date(2026, 9, 12),
+        city_code=city_code,
+        district_code="65000010",
+    )
+
+    assert payload.city_code == "65000000"
+    assert CaseUpdate(city_code=city_code).city_code == "65000000"
+
+
+def test_case_city_defaults_to_new_taipei() -> None:
+    payload = CaseCreate(
+        case_no="VAL-2026-CITY-DEFAULT",
+        case_title="固定縣市測試",
+        case_type="LAND",
+        valuation_base_date=date(2026, 9, 12),
+        district_code="65000060",
+    )
+
+    assert payload.city_code == "65000000"
+
+
+@pytest.mark.parametrize("district_code", ["65000010", "65000060", "65000290"])
+def test_case_accepts_official_new_taipei_district_codes(district_code: str) -> None:
+    payload = CaseCreate(
+        case_no="VAL-2026-DISTRICT",
+        case_title="行政區代碼測試",
+        case_type="LAND",
+        valuation_base_date=date(2026, 9, 12),
+        district_code=district_code,
+    )
+
+    assert payload.district_code == district_code
+    assert CaseUpdate(district_code=district_code).district_code == district_code
+
+
+def test_case_rejects_locations_outside_new_taipei_scope() -> None:
+    with pytest.raises(ValidationError, match="本系統估價案件僅支援新北市"):
+        CaseCreate(
+            case_no="VAL-2026-OTHER-CITY",
+            case_title="其他縣市案件",
+            case_type="LAND",
+            valuation_base_date=date(2026, 9, 12),
+            city_code="63000000",
+            district_code="65000010",
+        )
+
+    with pytest.raises(ValidationError, match="有效的新北市行政區代碼"):
+        CaseCreate(
+            case_no="VAL-2026-BAD-DISTRICT",
+            case_title="無效行政區案件",
+            case_type="LAND",
+            valuation_base_date=date(2026, 9, 12),
+            district_code="65000990",
+        )
+
+
 @pytest.mark.asyncio
 async def test_case_bootstrap_uses_same_request_to_create_initial_f03() -> None:
     payload = CaseCreate(
