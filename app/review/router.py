@@ -824,19 +824,19 @@ async def get_structured_review_report(
     return await service_for(session).build_report(validation_run_id)
 
 
-async def _require_final_report_run(service: ReviewService, validation_run_id: UUID):
+async def _require_reportable_run(service: ReviewService, validation_run_id: UUID):
     run = await service.get_run(validation_run_id)
     review = await service.get(run.review_id)
-    if review.review_status != "REVIEW_COMPLETED":
+    if run.run_status != "COMPLETED":
         raise AppError(
             "REVIEW_REPORT_NOT_AVAILABLE",
-            "最終風險報告僅在審查完成後可產生",
+            "審查報告僅能基於已完成的智慧檢核產生",
             409,
         )
     if review.latest_validation_run_id != validation_run_id:
         raise AppError(
             "REVIEW_REPORT_NOT_AVAILABLE",
-            "最終風險報告僅能基於最新一次已完成檢核",
+            "審查報告僅能基於最新一次已完成智慧檢核產生",
             409,
         )
     return run
@@ -854,7 +854,7 @@ async def generate_review_report_pdf(
     user=Depends(require_permissions("review.execute")),
 ) -> ReportDocumentRead:
     service = service_for(session)
-    run = await _require_final_report_run(service, validation_run_id)
+    run = await _require_reportable_run(service, validation_run_id)
     report = await service.build_report(validation_run_id)
     content = build_review_pdf(report)
     document_id = uuid4()
@@ -963,7 +963,7 @@ async def generate_final_review_report(
     user=Depends(require_permissions("review.execute")),
 ) -> GeneratedReportRead:
     service = service_for(session)
-    run = await _require_final_report_run(service, validation_run_id)
+    run = await _require_reportable_run(service, validation_run_id)
     report = await service.build_report(validation_run_id)
     return await _store_generated_report(
         service=service,

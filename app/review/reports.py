@@ -94,6 +94,23 @@ class ReportRiskSummary(BaseModel):
     risk_reasons: list
 
 
+class ReportSkippedRule(BaseModel):
+    validation_rule_id: UUID
+    rule_code: str
+    rule_name: str
+    reason_code: str
+    reason: str
+    missing_field_codes: list[str] = Field(default_factory=list)
+    status: Literal["SKIPPED"] = "SKIPPED"
+
+
+class ReportCoverage(BaseModel):
+    total_rule_count: int
+    executed_rule_count: int
+    skipped_rule_count: int
+    skipped_rules: list[ReportSkippedRule] = Field(default_factory=list)
+
+
 class ReportUrgency(BaseModel):
     level: str
     remaining_days: int | None = None
@@ -145,6 +162,7 @@ class ReviewReportInput(BaseModel):
     missing_item_count: int
     findings: list[dict[str, Any]]
     risk_summary: ReportRiskSummary
+    review_coverage: ReportCoverage | None = None
     decisions: list[ReportDecision]
     urgency: ReportUrgency | None = None
     correction_requests: list[ReportCorrectionRequest] = Field(default_factory=list)
@@ -159,6 +177,7 @@ class ReviewReport(BaseModel):
     missing_item_count: int
     findings: list[ReportFinding]
     risk_summary: ReportRiskSummary
+    review_coverage: ReportCoverage | None = None
     case_decisions: list[ReportDecision]
     urgency: ReportUrgency | None = None
     correction_requests: list[ReportCorrectionRequest] = Field(default_factory=list)
@@ -205,6 +224,7 @@ def build_review_report(data: ReviewReportInput) -> ReviewReport:
         missing_item_count=data.missing_item_count,
         findings=findings,
         risk_summary=data.risk_summary,
+        review_coverage=data.review_coverage,
         case_decisions=case_decisions,
         urgency=data.urgency,
         correction_requests=data.correction_requests,

@@ -3,11 +3,13 @@ from uuid import uuid4
 
 from app.review.reports import (
     ReportCase,
+    ReportCoverage,
     ReportDecision,
     ReportInputDocument,
     ReportInputProvenance,
     ReportRiskSummary,
     ReportRun,
+    ReportSkippedRule,
     ReviewReportInput,
     build_review_report,
 )
@@ -77,6 +79,21 @@ def report_input():
             missing_item_count=0,
             risk_reasons=["RATE_OUT_OF_RANGE"],
         ),
+        review_coverage=ReportCoverage(
+            total_rule_count=2,
+            executed_rule_count=1,
+            skipped_rule_count=1,
+            skipped_rules=[
+                ReportSkippedRule(
+                    validation_rule_id=uuid4(),
+                    rule_code="LAND_REGISTER_CROSSCHECK",
+                    rule_name="土地登記資料交叉檢核",
+                    reason_code="MISSING_REQUIRED_FIELDS",
+                    reason="缺少可供交叉檢核的土地登記資料",
+                    missing_field_codes=["LAND_REGISTER_AREA"],
+                )
+            ],
+        ),
         decisions=[
             ReportDecision(
                 decision_id=uuid4(),
@@ -121,6 +138,10 @@ def test_report_keeps_machine_ai_and_human_records_separate():
     assert report.findings[0].ai_assessment.reasoning_summary
     assert report.findings[0].decisions[0].reason == "現勘資料支持部分調整"
     assert report.risk_summary.high_count == 1
+    assert report.review_coverage is not None
+    assert report.review_coverage.executed_rule_count == 1
+    assert report.review_coverage.skipped_rule_count == 1
+    assert report.review_coverage.skipped_rules[0].status == "SKIPPED"
     assert report.input_provenance is not None
     assert report.input_provenance.source == "EXTERNAL"
     assert report.input_provenance.version_no == 2

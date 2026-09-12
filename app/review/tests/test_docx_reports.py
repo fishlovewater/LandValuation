@@ -19,12 +19,13 @@ def test_docx_contains_required_sections(report_fixture):  # noqa: F811
     text = "\n".join(paragraph.text for paragraph in document.paragraphs)
     for heading in [
         "案件基本資料",
+        "檢核覆蓋率",
         "審查輸入版本",
         "風險與期限",
         "疑點與證據",
         "修正要求",
         "新版重檢結果",
-        "最終審查結論",
+        "審查結論",
     ]:
         assert heading in text
     assert "審查人員另訂正式值" not in text
@@ -60,6 +61,14 @@ def test_docx_separates_risk_from_deadline_urgency(report_fixture):  # noqa: F81
     text = _all_text(document)
     assert "內容風險等級" in text
     assert "期限緊急度" in text
+
+
+def test_docx_marks_skipped_checks_as_not_passed(report_fixture):  # noqa: F811
+    document = Document(BytesIO(build_review_docx(report_fixture)))
+    text = _all_text(document)
+    assert "未執行不代表通過" in text
+    assert "LAND_REGISTER_CROSSCHECK" in text
+    assert "LAND_REGISTER_AREA" in text
 
 
 def test_docx_exposes_no_storage_internals(report_fixture):  # noqa: F811

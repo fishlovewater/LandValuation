@@ -48,6 +48,20 @@ def build_review_pdf(report: ReviewReport) -> bytes:
             missing=report.risk_summary.missing_item_count,
         )
     )
+    if report.review_coverage is not None:
+        coverage = report.review_coverage
+        line(
+            "Coverage TOTAL={total} EXECUTED={executed} SKIPPED={skipped}".format(
+                total=coverage.total_rule_count,
+                executed=coverage.executed_rule_count,
+                skipped=coverage.skipped_rule_count,
+            )
+        )
+        if coverage.skipped_rules:
+            line("Skipped checks (not passed)", "Helvetica-Bold", 11)
+            for item in coverage.skipped_rules:
+                fields = ",".join(item.missing_field_codes) or "external-evidence"
+                line(f"{item.rule_code} | {item.reason_code} | {fields}")
     y -= 8
     line("Findings", "Helvetica-Bold", 12)
     for finding in report.findings:

@@ -70,6 +70,28 @@ def build_review_docx(report: ReviewReport) -> bytes:
         ],
     )
 
+    document.add_heading("檢核覆蓋率", level=1)
+    coverage = report.review_coverage
+    if coverage is None:
+        document.add_paragraph("此歷史批次未保存檢核覆蓋率資訊。")
+    else:
+        _key_value_table(
+            document,
+            [
+                ("適用規則總數", coverage.total_rule_count),
+                ("已執行規則", coverage.executed_rule_count),
+                ("未執行規則", coverage.skipped_rule_count),
+            ],
+        )
+        if coverage.skipped_rules:
+            document.add_paragraph("未執行不代表通過；以下項目因資料不足未進行自動檢核。")
+            for item in coverage.skipped_rules:
+                fields = "、".join(item.missing_field_codes) or "外部佐證資料"
+                document.add_paragraph(
+                    f"{item.rule_name}（{item.rule_code}）：{item.reason}；缺少：{fields}",
+                    style="List Bullet",
+                )
+
     provenance = report.input_provenance
     document.add_heading("審查輸入版本", level=1)
     if provenance is None:
@@ -208,8 +230,10 @@ def build_review_docx(report: ReviewReport) -> bytes:
             style="List Bullet",
         )
 
-    document.add_heading("最終審查結論", level=1)
+    document.add_heading("審查結論", level=1)
     document.add_paragraph(f"審查狀態：{report.review_status}")
+    if report.review_status != "REVIEW_COMPLETED":
+        document.add_paragraph("智慧審查已完成；本報告仍可由審查人員進一步人工確認與補充決策。")
     if not report.case_decisions and not report.history:
         document.add_paragraph("本批次尚無案件層級審查紀錄。")
     for event in report.history:

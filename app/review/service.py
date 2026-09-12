@@ -35,6 +35,7 @@ from app.review.reports import (
     ReportHistoryEvent,
     ReportInputDocument,
     ReportInputProvenance,
+    ReportCoverage,
     ReportRiskSummary,
     ReportRun,
     ReportUrgency,
@@ -2258,6 +2259,12 @@ class ReviewService:
         urgency = classify_urgency(review.due_at, datetime.now(UTC), thresholds)
         if (run.input_snapshot or {}).get("demo_notice"):
             case_context = {**case_context, "case_title": "【Demo 展示，缺件不代表通過】" + case_context["case_title"]}
+        coverage_snapshot = run.input_snapshot.get("review_coverage")
+        review_coverage = (
+            ReportCoverage.model_validate(coverage_snapshot)
+            if isinstance(coverage_snapshot, dict)
+            else None
+        )
         data = ReviewReportInput(
             case=ReportCase(**case_context),
             run=ReportRun(
@@ -2284,6 +2291,7 @@ class ReviewService:
                 missing_item_count=risk.missing_item_count,
                 risk_reasons=risk.risk_reasons,
             ),
+            review_coverage=review_coverage,
             decisions=[
                 ReportDecision(
                     decision_id=item.decision_id,

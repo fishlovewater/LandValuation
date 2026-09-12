@@ -183,6 +183,30 @@ def _build_summary(sheet, report: ReviewReport) -> None:
         ("修正期限", _local(urgency.due_at) if urgency else ""),
         ("修正通知次數", len(report.correction_requests)),
     ]
+    if report.review_coverage is not None:
+        rows.extend(
+            [
+                ("適用檢核規則總數", report.review_coverage.total_rule_count),
+                ("已執行檢核規則", report.review_coverage.executed_rule_count),
+                ("未執行檢核規則", report.review_coverage.skipped_rule_count),
+                (
+                    "檢核覆蓋說明",
+                    "未執行不代表通過；資料不足的規則會保留在未執行清單。",
+                ),
+                (
+                    "未執行規則",
+                    "\n".join(
+                        f"{item.rule_name}（{item.rule_code}）：{item.reason}"
+                        + (
+                            f"；缺少：{'、'.join(item.missing_field_codes)}"
+                            if item.missing_field_codes
+                            else ""
+                        )
+                        for item in report.review_coverage.skipped_rules
+                    ),
+                ),
+            ]
+        )
     sheet.append(["項目", "內容"])
     for cell in sheet[1]:
         cell.font = Font(bold=True)

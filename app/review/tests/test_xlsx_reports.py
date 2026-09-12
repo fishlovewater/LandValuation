@@ -116,6 +116,9 @@ def test_xlsx_reopens_and_contains_case_and_urgency(report_fixture):
     # Deadline urgency is reported separately from content risk.
     assert "期限緊急度" in summary_text
     assert "內容風險等級" in summary_text
+    assert "適用檢核規則總數" in summary_text
+    assert "未執行不代表通過" in summary_text
+    assert "LAND_REGISTER_CROSSCHECK" in summary_text
 
 
 def test_xlsx_recheck_sheet_lists_outcomes(report_fixture):

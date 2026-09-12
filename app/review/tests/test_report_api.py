@@ -1,5 +1,4 @@
 import hashlib
-import hashlib
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -65,8 +64,14 @@ def test_structured_report_api_is_available_for_completed_run(
         f"/api/v1/review/runs/{run['validation_run_id']}/report"
     )
     assert structured.status_code == 200
-    assert structured.json()["case"]["case_no"].startswith("RUN-")
-    finding = structured.json()["findings"][0]
+    body = structured.json()
+    assert body["case"]["case_no"].startswith("RUN-")
+    coverage = body["review_coverage"]
+    assert coverage["total_rule_count"] == coverage["executed_rule_count"]
+    assert coverage["total_rule_count"] > 0
+    assert coverage["skipped_rule_count"] == 0
+    assert coverage["skipped_rules"] == []
+    finding = body["findings"][0]
     assert finding["finding_code"] == (
         f"{runnable_review.rule_version_id}:{runnable_review.validation_rule_id}"
     )
@@ -249,7 +254,7 @@ def test_generate_and_download_report(
         app.dependency_overrides.pop(get_storage_service, None)
 
 
-def test_final_report_requires_completed_review(
+def test_report_generation_is_available_after_latest_smart_review_run_completes(
     authorized_client, runnable_review
 ):
     run = authorized_client.post(
@@ -268,11 +273,11 @@ def test_final_report_requires_completed_review(
         )
     finally:
         app.dependency_overrides.pop(get_storage_service, None)
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "REVIEW_REPORT_NOT_AVAILABLE"
-    assert pdf_response.status_code == 409
-    assert pdf_response.json()["error"]["code"] == "REVIEW_REPORT_NOT_AVAILABLE"
-    assert storage.objects == {}
+    assert response.status_code == 201
+    assert response.json()["original_filename"].endswith(".xlsx")
+    assert pdf_response.status_code == 201
+    assert pdf_response.json()["original_filename"].endswith(".pdf")
+    assert len(storage.objects) == 2
 
 
 def test_report_generation_rejects_unknown_format(

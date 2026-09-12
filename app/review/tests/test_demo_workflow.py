@@ -226,14 +226,21 @@ def test_demo_seed_is_idempotent_and_real_api_workflow_completes(postgres_connec
             assert report2.json()["input_provenance"]["version_no"] == 2
             assert report2.json()["input_provenance"]["fingerprint"] == projected_run2["external_input_fingerprint"]
 
-            blocked_pdf = client.post(
+            # A completed smart-review run is already reportable even before
+            # the reviewer closes the overall case workflow.
+            generated_pdf = client.post(
                 f"/api/v1/review/runs/{run2_id}/report/pdf", headers=headers
             )
-            assert blocked_pdf.status_code == 409
-            assert blocked_pdf.json()["error"]["code"] == "REVIEW_REPORT_NOT_AVAILABLE"
+            assert generated_pdf.status_code == 201
+            downloaded_pdf = client.get(
+                f"/api/v1/review/runs/{run2_id}/report/pdf/download",
+                headers=headers,
+            )
+            assert downloaded_pdf.status_code == 200
+            assert downloaded_pdf.content.startswith(b"%PDF-")
 
-            # Complete the review, then export the immutable Excel and Word
-            # artifacts and reopen both byte streams.
+            # The reviewer can still finish the human workflow afterwards;
+            # Excel and Word exports remain available from the same latest run.
             remaining = client.get(
                 f"/api/v1/review/runs/{run2_id}/findings", headers=headers
             ).json()
@@ -255,16 +262,6 @@ def test_demo_seed_is_idempotent_and_real_api_workflow_completes(postgres_connec
                 headers=headers,
             )
             assert completed.status_code == 201
-            generated = client.post(
-                f"/api/v1/review/runs/{run2_id}/report/pdf", headers=headers
-            )
-            assert generated.status_code == 201
-            downloaded = client.get(
-                f"/api/v1/review/runs/{run2_id}/report/pdf/download",
-                headers=headers,
-            )
-            assert downloaded.status_code == 200
-            assert downloaded.content.startswith(b"%PDF-")
             for format_name, opener in (
                 ("xlsx", load_workbook),
                 ("docx", Document),
