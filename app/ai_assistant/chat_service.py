@@ -22,9 +22,17 @@ CASE_ASSISTANT_SYSTEM_PROMPT = (
     "review_access 只代表審查結果的可讀權限，不代表估價文件或其他案件資料都不可讀。"
 )
 
+CASE_COLLECTION_ASSISTANT_SYSTEM_PROMPT = (
+    "你是土地估價系統內的 AI 助手。請使用繁體中文、簡潔且專業地回答。"
+    "你只能根據系統提供的已授權案件清單回答，不得推測清單之外的案件。"
+    "若清單為空，直接說目前沒有符合條件的可調閱案件。"
+    "不得要求使用者切換模式、改走其他流程或自行選擇資料來源。"
+    "若 truncated=true，必須清楚說明目前只列出部分結果。"
+)
+
 HYBRID_ASSISTANT_SYSTEM_PROMPT = (
     "你是土地估價系統內的 AI 助手。請使用繁體中文，以一份連貫回答整合目前案件事實與正式知識證據。"
-    "CASE_CONTEXT 與 case_summary 是後端依登入權限取得或整理的案件資料，只能用來陳述本案事實；"
+    "CASE_CONTEXT 與 case_summary 是後端依登入權限取得或整理的案件資料，可能是目前案件或授權案件集合，只能用來陳述系統提供的案件事實；"
     "KNOWLEDGE_RESULT 是後端知識檢索與來源驗證後的結果，只能用來陳述法規、手冊、程序或正式依據。"
     "不得把 CASE_CONTEXT 當成法規證據，也不得用模型記憶補造 KNOWLEDGE_RESULT 沒有支持的正式結論。"
     "KNOWLEDGE_RESULT.answer 若含【來源1】等標記，引用相關正式結論時必須原樣保留這些標記，不得新增不存在的來源編號。"
@@ -226,6 +234,76 @@ async def answer_structured_case_chat(
     return fallback, "mock-assistant-router-v1"
 
 
+def collection_fallback_reply(context: dict[str, Any]) -> str:
+    cases = context.get("cases") if isinstance(context.get("cases"), list) else []
+    total = int(context.get("total") or 0)
+    if not cases:
+        return "目前沒有符合條件的可調閱案件。"
+
+    lines = []
+    for item in cases:
+        if not isinstance(item, dict):
+            continue
+        case_no = str(item.get("case_no") or "未提供案件編號")
+        title = str(item.get("case_title") or "")
+        status = str(item.get("case_status") or "狀態未提供")
+        lines.append(f"{case_no}{f'（{title}）' if title else ''}：{status}")
+    if not lines:
+        return "目前沒有符合條件的可調閱案件。"
+
+    prefix = f"目前找到 {total} 件符合條件的可調閱案件："
+    suffix = ""
+    if context.get("truncated"):
+        suffix = f"\n目前先列出前 {len(lines)} 件。"
+    return prefix + "\n" + "\n".join(f"- {line}" for line in lines) + suffix
+
+
+async def answer_structured_collection_chat(
+    question: str,
+    *,
+    collection_context: dict[str, Any],
+    conversation_history: list[dict[str, str]] | None = None,
+) -> tuple[str, str | None]:
+    fallback = collection_fallback_reply(collection_context)
+    settings = get_settings()
+    provider_name = settings.ai_provider.upper()
+    history = (conversation_history or [])[-6:]
+    context_json = json.dumps(collection_context, ensure_ascii=False, default=str)
+    prompt = f"系統授權案件清單：\n{context_json}\n\n使用者問題：{question}"
+
+    if provider_name == "OLLAMA":
+        provider = OllamaChatProvider(
+            settings,
+            [],
+            system_prompt=CASE_COLLECTION_ASSISTANT_SYSTEM_PROMPT,
+        )
+        messages: list[dict[str, Any]] = [
+            {"role": item["role"], "content": item["content"]}
+            for item in history
+            if item.get("role") in {"user", "assistant"} and item.get("content")
+        ]
+        messages.append({"role": "user", "content": prompt})
+        response = await provider.converse(messages)
+        return response.text.strip() or fallback, settings.ollama_model
+
+    if provider_name == "BEDROCK":
+        provider = BedrockConverseProvider(
+            settings,
+            [],
+            system_prompt=CASE_COLLECTION_ASSISTANT_SYSTEM_PROMPT,
+        )
+        messages = [
+            {"role": item["role"], "content": [{"text": item["content"]}]}
+            for item in history
+            if item.get("role") in {"user", "assistant"} and item.get("content")
+        ]
+        messages.append({"role": "user", "content": [{"text": prompt}]})
+        response = await provider.converse(messages)
+        return response.text.strip() or fallback, settings.bedrock_model_id
+
+    return fallback, "mock-assistant-router-v1"
+
+
 async def answer_hybrid_chat(
     question: str,
     *,
@@ -291,4 +369,10 @@ async def answer_hybrid_chat(
     return fallback, "mock-assistant-router-v2"
 
 
-__all__ = ["answer_general_chat", "answer_hybrid_chat", "answer_structured_case_chat"]
+__all__ = [
+    "answer_general_chat",
+    "answer_hybrid_chat",
+    "answer_structured_case_chat",
+    "answer_structured_collection_chat",
+    "collection_fallback_reply",
+]

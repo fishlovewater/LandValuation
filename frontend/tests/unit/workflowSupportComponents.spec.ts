@@ -7,11 +7,13 @@ import ValuationFormalValidationPanel from '../../src/modules/valuation/componen
 import ValuationF03Section from '../../src/modules/valuation/components/ValuationF03Section.vue'
 import ValuationGeneralValidationPanel from '../../src/modules/valuation/components/ValuationGeneralValidationPanel.vue'
 import ValuationIssueDrawer from '../../src/modules/valuation/components/ValuationIssueDrawer.vue'
+import ValuationManualFieldsSection from '../../src/modules/valuation/components/ValuationManualFieldsSection.vue'
 import ValuationReportArtifacts from '../../src/modules/valuation/components/ValuationReportArtifacts.vue'
 import ValuationReportPackageWorkspace from '../../src/modules/valuation/components/ValuationReportPackageWorkspace.vue'
 import ValuationSubmissionBar from '../../src/modules/valuation/components/ValuationSubmissionBar.vue'
 import ValuationSubmitReadiness from '../../src/modules/valuation/components/ValuationSubmitReadiness.vue'
 import ValuationSubmitSummary from '../../src/modules/valuation/components/ValuationSubmitSummary.vue'
+import ValuationWorkflowStatus from '../../src/modules/valuation/components/ValuationWorkflowStatus.vue'
 import ReviewActionBar from '../../src/modules/review/components/ReviewActionBar.vue'
 
 describe('SpreadsheetPreview', () => {
@@ -82,6 +84,66 @@ describe('ValuationCaseWorkspaceHeader', () => {
     expect(details.text()).toContain('商業用地')
     expect(details.text()).not.toMatch(/\bLAND\b/)
     expect(details.text()).not.toContain('COMMERCIAL')
+  })
+})
+
+describe('ValuationWorkflowStatus', () => {
+  it('shows only the current blocking task as the actionable guidance', async () => {
+    const wrapper = mount(ValuationWorkflowStatus, {
+      props: {
+        title: '來源資料',
+        stageLabel: '流程 1 / 4',
+        documentCount: 0,
+        pendingCandidateCount: 0,
+        missingFieldCount: null,
+        validationErrorCount: null,
+        issueCount: 2,
+        issueTitle: '尚未上傳案件啟動資料',
+        issueDetail: '先補齊必要來源文件，再進行辨識。',
+      },
+    })
+
+    const task = wrapper.get('[data-testid="workflow-current-task"]')
+    expect(task.text()).toContain('目前要處理')
+    expect(task.text()).toContain('尚未上傳案件啟動資料')
+    expect(task.text()).toContain('先補齊必要來源文件')
+    expect(wrapper.text()).not.toContain('查看第一個待處理項目')
+
+    await wrapper.get('[data-testid="workflow-next-action"]').trigger('click')
+    expect(wrapper.emitted('nextAction')).toHaveLength(1)
+  })
+})
+
+describe('ValuationManualFieldsSection', () => {
+  it('renders F02 case-context requirements as structured-data helpers instead of text inputs', () => {
+    const wrapper = mount(ValuationManualFieldsSection, {
+      props: {
+        activeForm: 'F02',
+        entries: [
+          { key: 'F02.parcel_id', formCode: 'F02', fieldName: 'parcel_id' },
+          { key: 'F02.benchmark_land_no', formCode: 'F02', fieldName: 'benchmark_land_no' },
+        ],
+        editableCount: 0,
+        missingRequiredKeys: [],
+        values: {
+          'F02.parcel_id': '樹德段284地號',
+          'F02.benchmark_land_no': '樹德段1415地號',
+        },
+        errors: {},
+        saving: false,
+        systemManagedKeys: ['F02.parcel_id', 'F02.benchmark_land_no'],
+        fieldMetadata: (_formCode: string, fieldName: string) => ({
+          label: fieldName === 'parcel_id' ? '宗地' : '比準地地號',
+          guidance: '由案件結構化資料帶入',
+        }),
+      },
+    })
+
+    expect(wrapper.findAll('[data-testid="manual-system-managed-helper"]')).toHaveLength(2)
+    expect(wrapper.find('[data-testid="manual-field-F02-parcel_id"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="manual-field-F02-benchmark_land_no"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="save-manual-fields"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('不接受文字代填')
   })
 })
 

@@ -16,6 +16,8 @@ const props = defineProps<{
   missingFieldCount?: number | null
   validationErrorCount?: number | null
   issueCount: number
+  issueTitle?: string
+  issueDetail?: string
 }>()
 
 const emit = defineEmits<{
@@ -65,16 +67,24 @@ const emit = defineEmits<{
         <CheckCircle :size="15" weight="fill" aria-hidden="true" />
         目前沒有阻擋事項
       </span>
-      <button
-        v-else
-        type="button"
-        data-testid="workflow-next-action"
-        @click="emit('nextAction')"
-      >
-        <WarningCircle :size="14" weight="fill" aria-hidden="true" />
-        <span>查看第一個待處理項目</span>
-        <ArrowRight :size="14" weight="bold" aria-hidden="true" />
-      </button>
+      <div v-else class="workflow-status__current-task" data-testid="workflow-current-task">
+        <span class="workflow-status__current-task-icon" aria-hidden="true">
+          <WarningCircle :size="16" weight="fill" />
+        </span>
+        <span class="workflow-status__current-task-copy">
+          <small>目前要處理</small>
+          <strong>{{ props.issueTitle || `尚有 ${props.issueCount} 項待處理` }}</strong>
+          <span v-if="props.issueDetail">{{ props.issueDetail }}</span>
+        </span>
+        <button
+          type="button"
+          data-testid="workflow-next-action"
+          @click="emit('nextAction')"
+        >
+          <span>前往處理</span>
+          <ArrowRight :size="14" weight="bold" aria-hidden="true" />
+        </button>
+      </div>
     </div>
   </section>
 </template>
@@ -164,9 +174,8 @@ const emit = defineEmits<{
 
 .workflow-status__stats span > svg { flex: 0 0 auto; color: #55738f; }
 
-.workflow-status__action { flex: 0 0 auto; }
+.workflow-status__action { flex: 0 1 420px; }
 
-.workflow-status__action > button,
 .workflow-status__ready {
   display: inline-flex;
   min-height: 36px;
@@ -179,19 +188,54 @@ const emit = defineEmits<{
   white-space: nowrap;
 }
 
-.workflow-status__action > button {
-  padding: 6px 11px;
-  border: 1px solid rgba(200, 91, 67, .26);
-  color: var(--app-accent-deep);
-  background: #fff;
-  cursor: pointer;
-}
-
 .workflow-status__ready {
   padding: 6px 10px;
   border: 1px solid #cfe4da;
   color: #2f7456;
   background: #f3f9f6;
+}
+
+.workflow-status__current-task {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-width: 280px;
+  padding: 9px 10px;
+  border: 1px solid #ead9b2;
+  border-radius: 9px;
+  background: #fffaf0;
+}
+
+.workflow-status__current-task-icon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 999px;
+  color: #8a6515;
+  background: #fff1c9;
+}
+
+.workflow-status__current-task-copy { display: grid; gap: 2px; min-width: 0; }
+.workflow-status__current-task-copy small { color: #8a6515; font-size: 9px; font-weight: 900; letter-spacing: .08em; }
+.workflow-status__current-task-copy strong { color: var(--app-ink); font-size: 11px; line-height: 1.4; }
+.workflow-status__current-task-copy > span { color: var(--app-muted); font-size: 9px; line-height: 1.45; }
+.workflow-status__current-task button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border: 1px solid #d4b56b;
+  border-radius: 8px;
+  color: #795713;
+  background: #fff;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 900;
+  white-space: nowrap;
 }
 
 @media (max-width: 760px) {
@@ -206,7 +250,8 @@ const emit = defineEmits<{
   }
 
   .workflow-status__action,
-  .workflow-status__action > button,
   .workflow-status__ready { width: 100%; }
+  .workflow-status__current-task { min-width: 0; grid-template-columns: auto minmax(0, 1fr); }
+  .workflow-status__current-task button { grid-column: 1 / -1; width: 100%; }
 }
 </style>

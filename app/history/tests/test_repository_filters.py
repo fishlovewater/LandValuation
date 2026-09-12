@@ -41,3 +41,13 @@ def test_persistent_demo_city_code_is_treated_as_new_taipei_alias() -> None:
 
     assert "city_code_alias_3" in " AND ".join(filters)
     assert values["city_code_alias_3"] == "NWT"
+
+
+def test_correction_result_includes_current_revision_required_status() -> None:
+    repository = HistoryRepository(None)  # type: ignore[arg-type]
+
+    valuation_only = repository._result_sql(HistoryScope(valuation=True, review=False))
+    with_review = repository._result_sql(HistoryScope(valuation=True, review=True))
+
+    assert "'CORRECTION', 'REVISION_REQUIRED'" in valuation_only
+    assert "'CORRECTION', 'REVISION_REQUIRED'" in with_review

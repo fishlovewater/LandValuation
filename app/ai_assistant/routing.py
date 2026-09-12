@@ -24,11 +24,12 @@ SEMANTIC_ROUTER_SYSTEM_PROMPT = """你是土地估價系統 AI 助手的內部�
 
 判斷規則：
 - CHAT：一般聊天、改寫、說明或不需要目前案件資料與正式知識來源即可回答的問題。
-- CASE：必須讀取目前已連結案件／審查／案件歷程的結構化資料，但不需要法規、手冊或正式知識來源。
+- CASE：必須讀取已授權案件資料；可為目前選取的單一案件，也可為案件歷程工作區中的授權案件集合，但不需要法規、手冊或正式知識來源。
 - KNOWLEDGE：必須查詢法規、手冊、正式依據、定義或土地估價知識，但不需要目前案件資料。
 - HYBRID：同時需要目前案件資料與正式知識來源，例如判斷本案作法、數值、文件或審查結果是否符合規定。
 
 「這筆、這案、目前、它、剛剛那個」等自然指涉，在 HAS_CASE_CONTEXT=true 且對話內容合理指向目前案件時，應視為案件情境，不要求使用者一定說出「案件」兩字。
+當 WORKSPACE=history 時，即使沒有選定單一 case_id，系統仍可查詢目前使用者有權限調閱的案件集合；例如「我有哪些案件」「哪個案件在補正中」都應選 CASE。
 只有真正承接上一輪問題的追問才沿用 PREVIOUS_ROUTE。工作區 valuation、review、history 都使用相同判斷規則；history 只是唯讀情境，不代表不能讀案件資料。
 你只負責選資料路徑，不負責授權。不可因為某路徑可能沒有權限就改判其他路徑。"""
 
@@ -86,6 +87,13 @@ _CASE_TERMS = (
     "能送",
     "可以送",
     "可不可以送",
+    "我的案件",
+    "哪些案件",
+    "哪個案件",
+    "有哪些案件",
+    "補正中",
+    "正在補正",
+    "需要補正",
 )
 
 _KNOWLEDGE_TERMS = (
@@ -130,6 +138,7 @@ def route_assistant_question(
     question: str,
     *,
     has_case_context: bool,
+    workspace: str | None = None,
     previous_route: AssistantAnswerRoute | str | None = None,
 ) -> AssistantAnswerRoute:
     """Choose the minimum authorized data path needed for a question."""
@@ -138,7 +147,8 @@ def route_assistant_question(
     if not normalized or _SMALLTALK_PATTERN.fullmatch(normalized):
         return AssistantAnswerRoute.CHAT
 
-    asks_case = has_case_context and any(term in normalized for term in _CASE_TERMS)
+    has_structured_case_scope = has_case_context or (workspace or "").strip().lower() == "history"
+    asks_case = has_structured_case_scope and any(term in normalized for term in _CASE_TERMS)
     asks_knowledge = any(term in normalized for term in _KNOWLEDGE_TERMS)
 
     if asks_case and asks_knowledge:
@@ -153,7 +163,7 @@ def route_assistant_question(
             prior = AssistantAnswerRoute(previous_route)
         except ValueError:
             prior = AssistantAnswerRoute.CHAT
-        if not has_case_context and prior in {AssistantAnswerRoute.CASE, AssistantAnswerRoute.HYBRID}:
+        if not has_structured_case_scope and prior in {AssistantAnswerRoute.CASE, AssistantAnswerRoute.HYBRID}:
             return AssistantAnswerRoute.CHAT
         return prior
 
@@ -188,14 +198,19 @@ def _semantic_router_payload(
     return json.dumps(payload, ensure_ascii=False)
 
 
-def _parse_semantic_route(output: str, *, has_case_context: bool) -> AssistantAnswerRoute:
+def _parse_semantic_route(
+    output: str,
+    *,
+    has_case_context: bool,
+    workspace: str | None = None,
+) -> AssistantAnswerRoute:
     cleaned = output.strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
     parsed: Any = json.loads(cleaned)
     raw_route = parsed.get("route") if isinstance(parsed, dict) else None
     route = AssistantAnswerRoute(str(raw_route).strip().upper())
-    if has_case_context:
+    if has_case_context or (workspace or "").strip().lower() == "history":
         return route
     if route == AssistantAnswerRoute.CASE:
         return AssistantAnswerRoute.CHAT
@@ -222,9 +237,16 @@ async def analyze_assistant_question(
     fallback = route_assistant_question(
         question,
         has_case_context=has_case_context,
+        workspace=workspace,
         previous_route=previous_route,
     )
     if not question.strip() or _SMALLTALK_PATTERN.fullmatch(question.strip()):
+        return fallback
+    if (
+        (workspace or "").strip().lower() == "history"
+        and not has_case_context
+        and fallback in {AssistantAnswerRoute.CASE, AssistantAnswerRoute.HYBRID}
+    ):
         return fallback
 
     try:
@@ -258,7 +280,11 @@ async def analyze_assistant_question(
             )
         else:
             return fallback
-        return _parse_semantic_route(response.text, has_case_context=has_case_context)
+        return _parse_semantic_route(
+            response.text,
+            has_case_context=has_case_context,
+            workspace=workspace,
+        )
     except Exception as exc:  # semantic routing must never make chat unavailable
         logger.warning(
             "Assistant semantic routing failed; using deterministic fallback: %s",

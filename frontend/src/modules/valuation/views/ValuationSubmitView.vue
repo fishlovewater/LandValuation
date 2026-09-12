@@ -32,7 +32,6 @@ import {
 import ValuationCaseWorkspaceHeader, { type ValuationWorkspaceStage } from '../components/ValuationCaseWorkspaceHeader.vue'
 import ValuationFormalValidationPanel from '../components/ValuationFormalValidationPanel.vue'
 import ValuationGeneralValidationPanel from '../components/ValuationGeneralValidationPanel.vue'
-import ValuationIssueDrawer from '../components/ValuationIssueDrawer.vue'
 import ValuationReportArtifacts from '../components/ValuationReportArtifacts.vue'
 import ValuationReportPackageWorkspace from '../components/ValuationReportPackageWorkspace.vue'
 import ValuationSubmissionBar from '../components/ValuationSubmissionBar.vue'
@@ -52,6 +51,8 @@ const formalPdfGenerating = ref(false)
 const error = ref('')
 const refreshWarning = ref('')
 const submitRequestId = ref<string | null>(null)
+const submitTemplateDocumentIds = ref<string[] | null>(null)
+const submitPrimaryTemplateDocumentId = ref<string | null>(null)
 const formalPdfRequestId = ref<string | null>(null)
 const acknowledgedWarningCodes = ref<string[]>([])
 const reportPageDraftId = ref<string | null>(null)
@@ -423,6 +424,8 @@ async function saveReportPageEditor(value: {
     reportPageCalculated.value = false
     flow.formalValidation = null
     flow.formalReport = null
+    submitTemplateDocumentIds.value = null
+    submitPrimaryTemplateDocumentId.value = null
     acknowledgedWarningCodes.value = []
     editorNotice.value = `${value.pageCode} 已儲存。因輸入已變更，請重新確認本頁並重新執行正式計算與檢核。`
   } catch (caught: unknown) {
@@ -447,6 +450,8 @@ async function handleComparisonChanged(): Promise<void> {
   reportPageCalculated.value = false
   flow.formalValidation = null
   flow.formalReport = null
+  submitTemplateDocumentIds.value = null
+  submitPrimaryTemplateDocumentId.value = null
   acknowledgedWarningCodes.value = []
   editorNotice.value = '比較法設定已變更。F02 / F02-RF 已重新載入；請重新確認兩頁並執行正式計算與檢核。'
 }
@@ -669,11 +674,15 @@ async function loadData(): Promise<void> {
   if (!sameCase) {
     resetValuationFlow()
     submitRequestId.value = null
+    submitTemplateDocumentIds.value = null
+    submitPrimaryTemplateDocumentId.value = null
     formalPdfRequestId.value = null
   }
   submitting.value = false
   formalValidating.value = false
   formalPdfGenerating.value = false
+  submitTemplateDocumentIds.value = null
+  submitPrimaryTemplateDocumentId.value = null
   acknowledgedWarningCodes.value = []
   reportPageDraftId.value = null
   reportPageSaving.value = false
@@ -743,6 +752,14 @@ async function loadData(): Promise<void> {
       const restoredReport = formalStatus.report
         ? mapFormalReportResponse(formalStatus.report)
         : null
+      const existingTemplateExports = formalStatus.template_exports ?? []
+      submitTemplateDocumentIds.value = existingTemplateExports.length
+        ? existingTemplateExports.map((item) => item.document_id)
+        : null
+      submitPrimaryTemplateDocumentId.value =
+        existingTemplateExports.find((item) => item.form_code === 'F02')?.document_id
+        ?? existingTemplateExports[0]?.document_id
+        ?? null
 
       if (
         restoredValidation &&
@@ -864,6 +881,8 @@ async function runFormalValidation(): Promise<void> {
   refreshWarning.value = ''
   flow.formalValidation = null
   flow.formalReport = null
+  submitTemplateDocumentIds.value = null
+  submitPrimaryTemplateDocumentId.value = null
   acknowledgedWarningCodes.value = []
   try {
     const formalValidationDto = await valuationApi.formalValidate(requestedCaseId, reportPackageId)
@@ -971,11 +990,29 @@ async function submitForReview(): Promise<void> {
   try {
     const requestId = submitRequestId.value ?? createValuationRequestId()
     submitRequestId.value = requestId
+    let templateDocumentIds = submitTemplateDocumentIds.value
+    let primaryTemplateDocumentId = submitPrimaryTemplateDocumentId.value
+    if (!templateDocumentIds?.length || !primaryTemplateDocumentId) {
+      const templateExports = await valuationApi.generateTemplateExports(requestedCaseId, reportPackageId)
+      if (!isCurrentCase(token, requestedCaseId)) return
+      templateDocumentIds = templateExports.map((item) => item.document_id)
+      primaryTemplateDocumentId =
+        templateExports.find((item) => item.form_code === 'F02')?.document_id
+        ?? templateExports[0]?.document_id
+        ?? null
+      if (!templateDocumentIds.length || !primaryTemplateDocumentId) {
+        error.value = '正式送審附件未產生，暫時無法送審。請重新產生查估書附件後再試。'
+        return
+      }
+      submitTemplateDocumentIds.value = templateDocumentIds
+      submitPrimaryTemplateDocumentId.value = primaryTemplateDocumentId
+    }
     const result = await valuationApi.submitForReview(requestedCaseId, {
       request_id: requestId,
       expected_case_version: authoritativeF02.versionNo,
       source_validation_run_id: formalReport.validationRunId,
-      source_report_document_id: formalReport.documentId,
+      source_report_document_id: primaryTemplateDocumentId,
+      source_template_document_ids: [...templateDocumentIds],
     })
     if (!isCurrentCase(token, requestedCaseId)) return
     submitRequestId.value = null
@@ -992,7 +1029,11 @@ async function submitForReview(): Promise<void> {
     }
   } catch (caught: unknown) {
     if (!isCurrentCase(token, requestedCaseId)) return
-    if (isDefinitiveValuationError(caught)) submitRequestId.value = null
+    if (isDefinitiveValuationError(caught)) {
+      submitRequestId.value = null
+      submitTemplateDocumentIds.value = null
+      submitPrimaryTemplateDocumentId.value = null
+    }
     error.value = safeValuationErrorMessage(caught)
   } finally {
     if (isCurrentCase(token, requestedCaseId)) submitting.value = false
@@ -1020,11 +1061,6 @@ watch(caseId, () => {
         :report-available="true"
         @back="backToDashboard"
         @navigate="navigateWorkspaceStage"
-      />
-
-      <ValuationIssueDrawer
-        :items="submitIssues"
-        @select="focusSubmitTarget"
       />
 
       <ValuationSubmitSummary

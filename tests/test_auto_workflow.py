@@ -9,10 +9,11 @@ import pytest
 from fastapi import UploadFile
 from pydantic import ValidationError
 
-from app.valuation.automation.schemas import AutomatedIntakeManifest
+from app.valuation.automation.schemas import AutomatedIntakeManifest, ManualFieldValuesRequest
 from app.valuation.automation.service import (
     AUTO_EXTRACT_MIME_TYPES,
     F04_AUTO_APPLY_FIELDS,
+    LOCATION_SCOPED_MANUAL_FORM_CODES,
     AutomatedWorkflowService,
     classify_document,
 )
@@ -247,6 +248,230 @@ def test_guidance_requirements_match_f01_calculation_inputs() -> None:
         "main_road_width_m",
         "survey_date",
     )
+
+
+def test_shared_manual_forms_are_not_location_scoped() -> None:
+    assert LOCATION_SCOPED_MANUAL_FORM_CODES == frozenset({"S01", "F01", "F04"})
+    assert "F02" not in LOCATION_SCOPED_MANUAL_FORM_CODES
+    assert "F02-RF" not in LOCATION_SCOPED_MANUAL_FORM_CODES
+    assert "F03" not in LOCATION_SCOPED_MANUAL_FORM_CODES
+
+
+@pytest.mark.asyncio
+async def test_save_manual_f02_stays_shared_with_active_location() -> None:
+    case_id = uuid4()
+    location_id = uuid4()
+    user = SimpleNamespace(user_id=uuid4())
+    f03_form = SimpleNamespace(
+        form_code="F03",
+        form_instance_id=uuid4(),
+        form_content={},
+        updated_by_user_id=None,
+    )
+    f02_form = SimpleNamespace(
+        form_code="F02",
+        form_instance_id=uuid4(),
+        form_content={"report_type": "REPORT_COMPARISON_COMMERCIAL"},
+        updated_by_user_id=None,
+    )
+    forms = [f03_form, f02_form]
+
+    class FakeRepository:
+        async def save_form(self, _form):
+            return _form
+
+    class FakeValuation:
+        repository = FakeRepository()
+
+        async def _owned_editable_case(self, _case_id, _user):
+            return SimpleNamespace(
+                valuation_base_date=date(2026, 9, 13),
+                land_use_type="COMMERCIAL",
+            )
+
+        async def list_forms(self, _case_id, _user):
+            return forms
+
+    class FakeSession:
+        async def scalar(self, _statement):
+            return SimpleNamespace(location_id=location_id)
+
+    class FakePages:
+        async def _read_records(self, _case_id, _report_id, _user):
+            return None, {"F02": SimpleNamespace(form_status="DRAFT")}
+
+    async def ignore_export(_case_id, _user):
+        return None
+
+    async def fake_review(_case_id, _user):
+        return SimpleNamespace()
+
+    service = object.__new__(AutomatedWorkflowService)
+    service.session = FakeSession()
+    service.valuation = FakeValuation()
+    service.pages = FakePages()
+    service._save_confirmation_export = ignore_export
+    service.review = fake_review
+
+    result = await service.save_manual_fields(
+        case_id,
+        ManualFieldValuesRequest(
+            location_id=location_id,
+            values={
+                "F02": {
+                    "parcel_id": "樹德段284地號",
+                    "benchmark_land_no": "樹德段1415地號",
+                }
+            },
+        ),
+        user,
+    )
+
+    assert f02_form.form_content["manual_overrides"] == {
+        "parcel_id": "樹德段284地號",
+        "benchmark_land_no": "樹德段1415地號",
+    }
+    assert "manual_overrides_by_location" not in f02_form.form_content
+    assert result.manual_field_values["F02"] == f02_form.form_content["manual_overrides"]
+    assert result.manual_field_values_by_location == {}
+
+
+@pytest.mark.asyncio
+async def test_form_guidance_resolves_f02_context_from_structured_case_data() -> None:
+    f03_id = uuid4()
+    f02_id = uuid4()
+    required_f02 = FORM_REQUIREMENTS["F02"].required_fields
+    forms = [
+        SimpleNamespace(
+            form_code="F03",
+            form_instance_id=f03_id,
+            version_no=1,
+            form_content={},
+        ),
+        SimpleNamespace(
+            form_code="F02",
+            form_instance_id=f02_id,
+            version_no=2,
+            form_content={
+                "manual_overrides": {
+                    # Deliberately stale text must not be authoritative.
+                    "parcel_id": "stale-manual-parcel",
+                    "benchmark_land_no": "stale-manual-benchmark",
+                }
+            },
+        ),
+    ]
+
+    class FakeValuation:
+        async def list_forms(self, _case_id, _user):
+            return forms
+
+        async def get_case(self, _case_id, _user):
+            return SimpleNamespace(valuation_base_date=date(2026, 9, 13))
+
+        async def list_parcels(self, _case_id, _user):
+            return [SimpleNamespace(parcel_id=uuid4())]
+
+    class FakeF03:
+        async def list_benchmark_lands(self, _case_id, _user):
+            return [
+                SimpleNamespace(
+                    benchmark_land_no="樹德段1415地號",
+                    price_zone_no="Z-001",
+                )
+            ]
+
+        async def get_draft(self, _case_id, _form_id, _user):
+            return SimpleNamespace(
+                benchmark_land_id=uuid4(),
+                valuation_base_date=date(2026, 9, 13),
+            )
+
+    service = object.__new__(AutomatedWorkflowService)
+    service.valuation = FakeValuation()
+    service.f03 = FakeF03()
+    candidates = [
+        SimpleNamespace(
+            form_code="F02",
+            field_name="parcel_id",
+            field_status="REJECTED",
+        )
+    ]
+
+    guidance = await service._form_guidance(uuid4(), SimpleNamespace(), candidates)
+    f02_guidance = next(item for item in guidance if item.form_code == "F02")
+
+    assert f02_guidance.missing_required_fields == []
+    assert set(required_f02).issubset(set(f02_guidance.confirmed_or_applied_fields))
+
+
+@pytest.mark.asyncio
+async def test_form_guidance_does_not_accept_manual_text_as_f02_structured_context() -> None:
+    forms = [
+        SimpleNamespace(
+            form_code="F03",
+            form_instance_id=uuid4(),
+            version_no=1,
+            form_content={},
+        ),
+        SimpleNamespace(
+            form_code="F02",
+            form_instance_id=uuid4(),
+            version_no=1,
+            form_content={
+                "manual_overrides": {
+                    "parcel_id": "樹德段284地號",
+                    "benchmark_land_no": "樹德段1415地號",
+                    "price_zone_no": "Z-001",
+                    "valuation_base_date": "2026-09-13",
+                }
+            },
+        ),
+    ]
+
+    class FakeValuation:
+        async def list_forms(self, _case_id, _user):
+            return forms
+
+        async def get_case(self, _case_id, _user):
+            return SimpleNamespace(valuation_base_date=date(2026, 9, 13))
+
+        async def list_parcels(self, _case_id, _user):
+            return []
+
+    class FakeF03:
+        async def list_benchmark_lands(self, _case_id, _user):
+            return []
+
+        async def get_draft(self, _case_id, _form_id, _user):
+            return SimpleNamespace(
+                benchmark_land_id=None,
+                valuation_base_date=date(2026, 9, 13),
+            )
+
+    service = object.__new__(AutomatedWorkflowService)
+    service.valuation = FakeValuation()
+    service.f03 = FakeF03()
+
+    guidance = await service._form_guidance(
+        uuid4(),
+        SimpleNamespace(),
+        [
+            SimpleNamespace(
+                form_code="F02",
+                field_name="parcel_id",
+                field_status="REJECTED",
+            )
+        ],
+    )
+    f02_guidance = next(item for item in guidance if item.form_code == "F02")
+
+    assert set(f02_guidance.missing_required_fields) == {
+        "parcel_id",
+        "benchmark_land_no",
+        "price_zone_no",
+    }
+    assert "valuation_base_date" not in f02_guidance.missing_required_fields
 
 
 def test_f04_ai_catalog_only_auto_applies_safe_non_calculated_fields() -> None:

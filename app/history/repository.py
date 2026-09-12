@@ -65,7 +65,7 @@ class HistoryRepository:
         if not scope.review:
             return """
                 CASE
-                    WHEN case_status = 'CORRECTION' THEN 'CORRECTION'
+                    WHEN case_status IN ('CORRECTION', 'REVISION_REQUIRED') THEN 'CORRECTION'
                     ELSE 'IN_PROGRESS'
                 END
             """
@@ -74,7 +74,7 @@ class HistoryRepository:
                 WHEN review_status IN ('COMPLETED', 'APPROVED', 'REVIEW_COMPLETED') THEN 'PASSED'
                 WHEN review_status = 'SUPPLEMENT_REQUIRED' THEN 'SUPPLEMENT_REQUIRED'
                 WHEN review_status = 'RETURNED_FOR_REVISION' THEN 'RETURNED'
-                WHEN case_status = 'CORRECTION' THEN 'CORRECTION'
+                WHEN case_status IN ('CORRECTION', 'REVISION_REQUIRED') THEN 'CORRECTION'
                 ELSE 'IN_PROGRESS'
             END
         """

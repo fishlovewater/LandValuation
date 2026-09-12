@@ -54,7 +54,6 @@ import {
 import ValuationCaseWorkspaceHeader, { type ValuationWorkspaceStage } from '../components/ValuationCaseWorkspaceHeader.vue'
 import ValuationCaseOverview from '../components/ValuationCaseOverview.vue'
 import ValuationDataStageNavigator from '../components/ValuationDataStageNavigator.vue'
-import ValuationIssueDrawer from '../components/ValuationIssueDrawer.vue'
 import ValuationWizardFooter from '../components/ValuationWizardFooter.vue'
 import ValuationWorkflowStatus from '../components/ValuationWorkflowStatus.vue'
 import ValuationDocumentStage from '../components/ValuationDocumentStage.vue'
@@ -132,9 +131,10 @@ const parcelImporting = ref(false)
 const activeLocation = computed(() => (
   locations.value.find((item) => item.location_id === activeLocationId.value) ?? null
 ))
+const activeSourceDocuments = computed(() => flow.documents.filter((item) => item.isActive))
 const locationDocuments = computed(() => activeLocationId.value
-  ? flow.documents.filter((item) => item.locationId === activeLocationId.value)
-  : flow.documents)
+  ? activeSourceDocuments.value.filter((item) => item.locationId === activeLocationId.value)
+  : activeSourceDocuments.value)
 const locationParcels = computed(() => activeLocationId.value
   ? parcels.value.filter((item) => item.location_id === activeLocationId.value)
   : parcels.value)
@@ -146,6 +146,18 @@ const FORM_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   'F02-RF': '影響地價區域因素分析明細表',
   F03: '比準地地價估計表',
   F04: '徵收土地宗地市價估計表',
+}
+
+const LOCATION_SCOPED_MANUAL_FORM_CODES = new Set(['S01', 'F01', 'F04'])
+const SYSTEM_MANAGED_F02_FIELDS = new Set([
+  'F02.parcel_id',
+  'F02.benchmark_land_no',
+  'F02.price_zone_no',
+  'F02.valuation_base_date',
+])
+
+function isSystemManagedWorkflowField(formCode: string, fieldName: string): boolean {
+  return SYSTEM_MANAGED_F02_FIELDS.has(`${formCode}.${fieldName}`)
 }
 
 function formDisplayName(code: string): string {
@@ -349,12 +361,14 @@ const manualFieldEntries = computed(() => allManualFieldEntries.value.filter(
   (entry) => entry.formCode === activeManualForm.value,
 ))
 const manualEditableEntries = computed(() => manualFieldEntries.value.filter(
-  (entry) => !(entry.formCode === 'F03' && entry.fieldName === 'benchmark_land_id'),
+  (entry) => !(entry.formCode === 'F03' && entry.fieldName === 'benchmark_land_id')
+    && !isSystemManagedWorkflowField(entry.formCode, entry.fieldName),
 ))
 const manualMissingRequiredKeys = computed(() => (
   workflowGuidance.value?.form_guidance.flatMap((guidance) =>
     guidance.missing_required_fields
       .filter((fieldName) => !(guidance.form_code === 'F03' && f03DraftHasField(fieldName)))
+      .filter((fieldName) => !isSystemManagedWorkflowField(guidance.form_code, fieldName))
       .map((fieldName) => `${guidance.form_code}.${fieldName}`),
   ) ?? []
 ))
@@ -362,7 +376,9 @@ const unresolvedNonF03RequiredFields = computed(() => (
   workflowGuidance.value?.form_guidance.flatMap((guidance) =>
     guidance.form_code === 'F03'
       ? []
-      : guidance.missing_required_fields.map((fieldName) => `${guidance.form_code}.${fieldName}`),
+      : guidance.missing_required_fields
+        .filter((fieldName) => !isSystemManagedWorkflowField(guidance.form_code, fieldName))
+        .map((fieldName) => `${guidance.form_code}.${fieldName}`),
   ) ?? []
 ))
 const dataIssueCounts = computed(() => ({
@@ -379,11 +395,6 @@ const canRunValuation = computed(() => Boolean(
     && flow.f03
     && preCalculationIssueCount.value === 0,
 ))
-const wizardIssueCounts = computed<Partial<Record<WizardStep, number>>>(() => ({
-  2: pendingCandidates.value.length + (!flow.documents.length ? 1 : 0),
-  3: dataBlockingIssueCount.value,
-  4: flow.validation?.failedCount ?? 0,
-}))
 const workspaceStage = computed<ValuationWorkspaceStage>(() => {
   if (activeWizardStep.value === 1) return 'case'
   if (activeWizardStep.value === 2) return activeIntakeStage.value
@@ -391,7 +402,7 @@ const workspaceStage = computed<ValuationWorkspaceStage>(() => {
   return 'calculation'
 })
 const workspaceIssueCounts = computed(() => ({
-  documents: flow.documents.length ? 0 : 1,
+  documents: activeSourceDocuments.value.length ? 0 : 1,
   'ai-review': pendingCandidates.value.length,
   data: dataBlockingIssueCount.value,
   calculation: flow.validation?.failedCount ?? 0,
@@ -399,14 +410,14 @@ const workspaceIssueCounts = computed(() => ({
 }))
 const caseProgressPercent = computed(() => {
   let progress = 0
-  if (flow.documents.length && pendingCandidates.value.length === 0) progress += 25
+  if (activeSourceDocuments.value.length && pendingCandidates.value.length === 0) progress += 25
   if (dataBlockingIssueCount.value === 0) progress += 25
   if (flow.validation?.canGenerateReport && flow.report) progress += 25
   return progress
 })
 const workflowIssues = computed(() => {
   const items: Array<{ id: string; title: string; detail: string; target: string; severity: 'error' | 'warning' | 'pending' }> = []
-  if (!flow.documents.length) items.push({ id: 'documents', title: '尚未上傳案件啟動資料', detail: '建議先上傳宗地個別因素清冊、預定徵收範圍地籍圖與土地登記資料；系統會保留來源並協助辨識可用欄位。', target: 'documents', severity: 'pending' })
+  if (!activeSourceDocuments.value.length) items.push({ id: 'documents', title: '尚未上傳案件啟動資料', detail: '建議先上傳宗地個別因素清冊、預定徵收範圍地籍圖與土地登記資料；系統會保留來源並協助辨識可用欄位。', target: 'documents', severity: 'pending' })
   if (pendingCandidates.value.length) items.push({ id: 'candidates', title: '智能辨識結果待確認', detail: `還有 ${pendingCandidates.value.length} 筆辨識結果需要人工確認或修改。`, target: 'candidates', severity: 'warning' })
   if (!parcels.value.length) items.push({ id: 'parcel', title: '尚未建立宗地資料', detail: '建立本案宗地後，才能完成正式估價資料。', target: 'land', severity: 'pending' })
   if (!flow.benchmarks.length) items.push({ id: 'benchmark', title: '尚未建立比準地', detail: '至少需要一筆比準地資料供後續估價流程使用。', target: 'land', severity: 'pending' })
@@ -416,6 +427,7 @@ const workflowIssues = computed(() => {
   if ((flow.validation?.failedCount ?? 0) > 0) items.push({ id: 'validation-errors', title: '正式檢核仍有阻擋錯誤', detail: `有 ${flow.validation?.failedCount ?? 0} 個阻擋錯誤必須修正後才能產出查估書。`, target: 'validation', severity: 'error' })
   return items
 })
+const currentWorkflowIssue = computed(() => workflowIssues.value[0] ?? null)
 const wizardStepTitle = computed(() => {
   if (activeWizardStep.value === 1) return '案件基本資料'
   if (activeWizardStep.value === 2) return '來源資料'
@@ -614,18 +626,24 @@ function candidateProviderLabel(provider: string): string {
 }
 
 function initializeManualFieldInputs(response: AutomatedWorkflowResponseDto): void {
+  // Shared forms (F02/F02-RF/F03) must always read the case-scoped value first.
+  // Older data may still contain the pre-fix location-scoped F02 overrides;
+  // deliberately ignore those so they cannot shadow the authoritative value.
+  for (const [formCode, fields] of Object.entries(response.manual_field_values ?? {})) {
+    for (const [fieldName, value] of Object.entries(fields)) {
+      const key = `${formCode}.${fieldName}`
+      if (!LOCATION_SCOPED_MANUAL_FORM_CODES.has(formCode) || !(key in manualFieldValue)) {
+        manualFieldValue[key] = displayCandidateValue(value)
+      }
+    }
+  }
   const scopedValues = activeLocationId.value
     ? response.manual_field_values_by_location?.[activeLocationId.value] ?? {}
     : {}
   for (const [formCode, fields] of Object.entries(scopedValues)) {
+    if (!LOCATION_SCOPED_MANUAL_FORM_CODES.has(formCode)) continue
     for (const [fieldName, value] of Object.entries(fields)) {
       manualFieldValue[`${formCode}.${fieldName}`] = displayCandidateValue(value)
-    }
-  }
-  for (const [formCode, fields] of Object.entries(response.manual_field_values ?? {})) {
-    for (const [fieldName, value] of Object.entries(fields)) {
-      const key = `${formCode}.${fieldName}`
-      if (!(key in manualFieldValue)) manualFieldValue[key] = displayCandidateValue(value)
     }
   }
 }
@@ -1331,6 +1349,10 @@ function goToWorkflowNextAction(): void {
     activeWizardStep.value = 3
     activeDataSection.value = 'f03'
     void focusElementById('f03-data-section', '補正版已建立，請依修正通知逐項調整資料。')
+    return
+  }
+  if (currentWorkflowIssue.value) {
+    goToWorkflowIssue(currentWorkflowIssue.value.target)
     return
   }
   if (workflowGuidance.value?.pending_candidate_count) {
@@ -2312,7 +2334,10 @@ onBeforeUnmount(clearPreviewUrl)
 </script>
 
 <template>
-  <div class="valuation-view">
+  <div
+    class="valuation-view"
+    :class="{ 'valuation-view--source-compact': activeWizardStep === 2 && activeIntakeStage === 'documents' }"
+  >
     <LoadingSkeleton v-if="loading" :rows="7" label="案件估價資料載入中" />
     <ErrorState v-else-if="error && !flow.case" :message="error" @retry="loadData" />
 
@@ -2329,12 +2354,6 @@ onBeforeUnmount(clearPreviewUrl)
         @navigate="navigateWorkspaceStage"
       />
 
-      <ValuationIssueDrawer
-        v-if="flow.case.basicInfoConfirmedAt"
-        :items="workflowIssues"
-        @select="goToWorkflowIssue"
-      />
-
       <ValuationReviewHandoffPanel
         v-if="reviewHandoff && (reviewHandoff.correction || formalSupplementMissingItems.length)"
         :handoff="reviewHandoff"
@@ -2348,13 +2367,16 @@ onBeforeUnmount(clearPreviewUrl)
       />
 
       <ValuationWorkflowStatus
+        v-if="flow.case.basicInfoConfirmedAt && !(activeWizardStep === 2 && activeIntakeStage === 'documents')"
         :title="wizardStepTitle"
         :stage-label="workspaceStepLabel"
-        :document-count="flow.documents.length"
+        :document-count="activeSourceDocuments.length"
         :pending-candidate-count="workflowGuidance?.pending_candidate_count"
         :missing-field-count="f03Guidance ? unresolvedF03RequiredFields.length : null"
         :validation-error-count="flow.validation?.failedCount"
-        :issue-count="wizardIssueCounts[activeWizardStep] ?? 0"
+        :issue-count="workflowIssues.length"
+        :issue-title="currentWorkflowIssue?.title"
+        :issue-detail="currentWorkflowIssue?.detail"
         @next-action="goToWorkflowNextAction"
       />
 
@@ -2382,22 +2404,23 @@ onBeforeUnmount(clearPreviewUrl)
 
       <section
         v-if="activeWizardStep === 2 || activeWizardStep === 3"
-        class="location-context"
+        class="location-strip"
         aria-label="目前資料位置"
       >
-        <div class="location-context__copy">
-          <strong>資料位置</strong>
-          <span>來源文件、辨識結果與宗地資料會依資料位置分開保存；正式比準地仍在估價資料階段設定。</span>
+        <div class="location-strip__current">
+          <span class="location-strip__label">資料位置</span>
+          <label class="location-strip__select">
+            <span class="sr-only">目前資料位置</span>
+            <select :value="activeLocationId ?? ''" data-testid="valuation-location-select" @change="handleLocationChange">
+              <option v-for="location in locations" :key="location.location_id" :value="location.location_id">
+                {{ location.label }}{{ location.is_benchmark_location ? '（比準地來源位置）' : '' }}
+              </option>
+            </select>
+          </label>
+          <small v-if="activeLocation?.is_benchmark_location">比準地來源</small>
         </div>
-        <label class="location-context__select">
-          <span>切換資料位置</span>
-          <select :value="activeLocationId ?? ''" data-testid="valuation-location-select" @change="handleLocationChange">
-            <option v-for="location in locations" :key="location.location_id" :value="location.location_id">
-              {{ location.label }}{{ location.is_benchmark_location ? '（比準地來源位置）' : '' }}
-            </option>
-          </select>
-        </label>
-        <div v-if="canEditLandContext" class="location-context__actions">
+
+        <div v-if="canEditLandContext" class="location-strip__actions">
           <input
             v-model="newLocationLabel"
             type="text"
@@ -2405,13 +2428,21 @@ onBeforeUnmount(clearPreviewUrl)
             aria-label="新增資料位置名稱"
             @keyup.enter="addLocation"
           >
-          <button type="button" :disabled="!newLocationLabel.trim()" @click="addLocation">新增位置</button>
           <button
+            class="location-strip__primary-action"
             type="button"
-            :disabled="!activeLocationId || activeLocation?.is_benchmark_location"
+            :disabled="!newLocationLabel.trim()"
+            @click="addLocation"
+          >
+            新增
+          </button>
+          <button
+            v-if="activeLocationId && !activeLocation?.is_benchmark_location"
+            class="location-strip__secondary-action"
+            type="button"
             @click="chooseBenchmarkLocation"
           >
-            {{ activeLocation?.is_benchmark_location ? '目前為比準地來源位置' : '設為比準地來源位置' }}
+            設為比準地來源
           </button>
         </div>
       </section>
@@ -2469,6 +2500,7 @@ onBeforeUnmount(clearPreviewUrl)
         @upload="uploadSourceDocument"
         @import-parcels="importParcelRows"
         @review-candidates="openCandidateReview"
+        @continue-data="navigateWorkspaceStage('data')"
       />
 
       <ValuationCandidateWorkspace
@@ -2537,6 +2569,7 @@ onBeforeUnmount(clearPreviewUrl)
         :errors="workflowGuidance.manual_field_errors ?? {}"
         :saving="manualFieldsSaving"
         :field-metadata="manualFieldMetadata"
+        :system-managed-keys="[...SYSTEM_MANAGED_F02_FIELDS]"
         @update-active-form="activeManualForm = $event"
         @update-value="setManualFieldValue"
         @go-land="jumpToDataSection('land')"
@@ -2600,7 +2633,7 @@ onBeforeUnmount(clearPreviewUrl)
       <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
 
       <ValuationWizardFooter
-        v-if="activeWizardStep <= 4"
+        v-if="activeWizardStep <= 4 && !(activeWizardStep === 2 && activeIntakeStage === 'documents')"
         :title="wizardStepTitle"
         :next-label="wizardNextLabel"
         :is-first-step="activeWizardStep === 1"
@@ -2619,6 +2652,7 @@ onBeforeUnmount(clearPreviewUrl)
   gap: 18px;
   padding: 0 28px 34px;
 }
+.valuation-view--source-compact { gap:10px; padding-bottom:20px; }
 
 .valuation-view :deep(.case-workspace-header) {
   margin-inline: -28px;
@@ -2627,6 +2661,22 @@ onBeforeUnmount(clearPreviewUrl)
 .inline-notice, .inline-error { margin: 0; padding: 12px 14px; border-radius: var(--app-radius-sm); font-size: 13px; }
 .inline-notice { color: var(--app-green); background: rgba(59, 129, 102, 0.08); }
 .inline-error { color: #a44334; background: #fff0ed; }
+
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+.location-strip { display:flex; min-height:48px; align-items:center; justify-content:space-between; gap:10px; padding:6px 8px; border:1px solid rgba(105,126,143,.18); border-radius:10px; background:rgba(255,255,255,.88); }
+.location-strip__current { display:flex; min-width:0; align-items:center; gap:7px; }
+.location-strip__label { flex:0 0 auto; color:var(--app-muted); font-size:9px; font-weight:900; letter-spacing:.06em; }
+.location-strip__select { min-width:180px; max-width:320px; }
+.location-strip select,.location-strip input { height:34px; border:1px solid rgba(105,126,143,.24); border-radius:8px; outline:none; color:var(--app-ink); background:#fff; font:inherit; font-size:10px; }
+.location-strip select { width:100%; padding:0 28px 0 9px; }
+.location-strip input { width:180px; padding:0 9px; }
+.location-strip select:focus,.location-strip input:focus { border-color:rgba(35,95,135,.58); box-shadow:0 0 0 3px rgba(35,95,135,.08); }
+.location-strip__current small { padding:4px 7px; border-radius:999px; color:var(--app-green); background:rgba(59,129,102,.08); font-size:8px; font-weight:900; white-space:nowrap; }
+.location-strip__actions { display:flex; min-width:0; align-items:center; justify-content:flex-end; gap:6px; }
+.location-strip__primary-action,.location-strip__secondary-action { height:34px; padding:0 10px; border-radius:8px; cursor:pointer; font-size:9px; font-weight:900; white-space:nowrap; }
+.location-strip__primary-action { border:1px solid var(--app-accent-deep); color:#fff; background:var(--app-accent-deep); }
+.location-strip__secondary-action { border:1px solid rgba(105,126,143,.24); color:var(--app-ink-soft); background:#fff; }
+.location-strip__primary-action:disabled { cursor:not-allowed; opacity:.45; }
 
 .remediation-return {
   display: flex;
@@ -2657,7 +2707,14 @@ onBeforeUnmount(clearPreviewUrl)
 
 @media (max-width: 760px) {
   .valuation-view { padding: 18px 16px 28px; }
+  .valuation-view--source-compact { gap:8px; padding-bottom:18px; }
   .valuation-view :deep(.case-workspace-header) { margin: -18px -16px 0; }
+  .location-strip { align-items:stretch; flex-direction:column; }
+  .location-strip__current { flex-wrap:wrap; }
+  .location-strip__select { min-width:0; max-width:none; flex:1 1 220px; }
+  .location-strip__actions { justify-content:stretch; flex-wrap:wrap; }
+  .location-strip input { width:auto; min-width:180px; flex:1 1 180px; }
+  .location-strip__primary-action,.location-strip__secondary-action { flex:1 1 auto; }
   .remediation-return { align-items: stretch; flex-direction: column; }
   .remediation-return button { width: 100%; }
 }

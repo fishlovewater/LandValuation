@@ -34,6 +34,9 @@ const ids = {
   f03Report: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   completeReport: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab',
   formalReport: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaf',
+  templateS01: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1',
+  templateF02: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2',
+  templateF02Rf: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee3',
   reportPackage: '12121212-1212-4121-8121-121212121212',
   submission: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
   review: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
@@ -383,6 +386,39 @@ const formalReportDto = {
   request_id: null,
 }
 
+const templateExportsDto = [
+  {
+    form_code: 'S01',
+    title: '表3 地價區段勘查表',
+    document_id: ids.templateS01,
+    filename: 'S01.xlsx',
+    mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    version_no: 1,
+    file_size_bytes: 1024,
+    download_path: `/valuation/cases/${ids.case}/documents/${ids.templateS01}/download`,
+  },
+  {
+    form_code: 'F02',
+    title: '表4 比較法調查估價表',
+    document_id: ids.templateF02,
+    filename: 'F02.xlsx',
+    mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    version_no: 1,
+    file_size_bytes: 2048,
+    download_path: `/valuation/cases/${ids.case}/documents/${ids.templateF02}/download`,
+  },
+  {
+    form_code: 'F02-RF',
+    title: '表5-1 影響地價區域因素分析明細表',
+    document_id: ids.templateF02Rf,
+    filename: 'F02-RF.xlsx',
+    mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    version_no: 1,
+    file_size_bytes: 1536,
+    download_path: `/valuation/cases/${ids.case}/documents/${ids.templateF02Rf}/download`,
+  },
+]
+
 const submissionDto = {
   submission_id: ids.submission,
   submission_no: 1,
@@ -612,6 +648,9 @@ describe('valuation demo flow', () => {
         return response(reportDto, config, 201)
       }
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-validation`) return response(formalValidationDto, config, 201)
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/template-exports`) {
+        return response(templateExportsDto, config, 201)
+      }
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-pdf`) {
         formalPdfBodies.push(requestBody(config.data))
         expect(formalPdfBodies[0]).toEqual({
@@ -627,10 +666,12 @@ describe('valuation demo flow', () => {
           request_id: expect.any(String),
           expected_case_version: authoritativeFormDto.version_no,
           source_validation_run_id: ids.formalValidationRun,
-          source_report_document_id: ids.formalReport,
+          source_report_document_id: ids.templateF02,
+          source_template_document_ids: [ids.templateS01, ids.templateF02, ids.templateF02Rf],
         })
         expect(body.source_report_document_id).not.toBe(ids.completeReport)
         expect(body.source_report_document_id).not.toBe(ids.f03Report)
+        expect(body.source_report_document_id).not.toBe(ids.formalReport)
         return response(submissionDto, config, 201)
       }
       throw new Error(`Unexpected request ${config.method} ${config.url}`)
@@ -643,7 +684,7 @@ describe('valuation demo flow', () => {
 
     expect(wrapper.text()).toContain('NB-2026-0001')
     expect(wrapper.text()).toContain('作業期限')
-    expect(wrapper.text()).toContain('繼續估價')
+    expect(wrapper.get(`[data-testid="case-open-${ids.case}"]`).text()).toContain('估價')
     expect(wrapper.get('[data-testid="valuation-dashboard-header"]').text()).toContain('估價案件')
     const dashboardSummary = wrapper.get('[data-testid="valuation-dashboard-summary"]')
     expect(dashboardSummary.text()).toContain('待處理')
@@ -803,11 +844,15 @@ describe('valuation demo flow', () => {
         return response({
           validation: formalValidationNoWarningsDto,
           report: formalReportDto,
+          template_exports: templateExportsDto,
           requires_revalidation_for_submission: false,
         }, config)
       }
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-validation`) {
         return response(formalValidationDto, config, 201)
+      }
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/template-exports`) {
+        return response(templateExportsDto, config, 201)
       }
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/submit-for-review`) {
         submitAttempts += 1
@@ -867,6 +912,7 @@ describe('valuation demo flow', () => {
         return response({
           validation: formalValidationNoWarningsDto,
           report: null,
+          template_exports: templateExportsDto,
           requires_revalidation_for_submission: false,
         }, config)
       }
@@ -885,7 +931,8 @@ describe('valuation demo flow', () => {
           request_id: expect.any(String),
           expected_case_version: checkedAuthoritativeFormDto.version_no,
           source_validation_run_id: ids.formalValidationRun,
-          source_report_document_id: ids.formalReport,
+          source_report_document_id: ids.templateF02,
+          source_template_document_ids: [ids.templateS01, ids.templateF02, ids.templateF02Rf],
         })
         return response(submissionDto, config, 201)
       }
@@ -1182,11 +1229,15 @@ describe('valuation demo flow', () => {
         return response({
           validation: formalValidationNoWarningsDto,
           report: formalReportDto,
+          template_exports: templateExportsDto,
           requires_revalidation_for_submission: false,
         }, config)
       }
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-validation`) {
         return response(formalValidationDto, config, 201)
+      }
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/template-exports`) {
+        return response(templateExportsDto, config, 201)
       }
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/submit-for-review`) {
         submitAttempts += 1
@@ -1581,6 +1632,8 @@ describe('valuation demo flow', () => {
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.find('[data-testid="valuation-step-2"]').exists()).toBe(true))
     await wrapper.get('[data-testid="valuation-step-2"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="open-source-document-workspace"]').exists()).toBe(true))
+    await wrapper.get('[data-testid="open-source-document-workspace"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.find(`[data-testid="extract-document-${ids.sourceDocument}"]`).exists()).toBe(true))
     expect(wrapper.get('#documents-stage-title').text()).toContain('準備估價需要的原始資料')
     expect(wrapper.find('[data-testid="document-ai-process-guide"]').exists()).toBe(false)
@@ -1774,6 +1827,8 @@ describe('valuation demo flow', () => {
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.find('[data-testid="valuation-step-2"]').exists()).toBe(true))
     await wrapper.get('[data-testid="valuation-step-2"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="open-source-document-workspace"]').exists()).toBe(true))
+    await wrapper.get('[data-testid="open-source-document-workspace"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.find(`[data-testid="document-category-${ids.sourceDocument}"]`).exists()).toBe(true))
 
     await wrapper.get(`[data-testid="document-category-${ids.sourceDocument}"]`).setValue('land-register')

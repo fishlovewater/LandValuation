@@ -14,6 +14,7 @@ from app.auth.dependencies import get_current_user
 from app.main import app
 from app.review.tests.test_workflow_e2e import (  # noqa: F401
     add_complete_inputs,
+    create_review_record,
     workflow_data,
 )
 
@@ -43,11 +44,7 @@ def review_client(workflow_data):  # noqa: F811
 @pytest.fixture
 def review_with_findings(review_client, workflow_data, postgres_connection):
     """Create a case, run the pipeline, and return (review_id, findings)."""
-    created = review_client.post(
-        "/api/v1/review/cases", json={"case_id": str(workflow_data.case_id)}
-    )
-    assert created.status_code == 201
-    review_id = created.json()["review_id"]
+    review_id = create_review_record(postgres_connection, workflow_data)
     review_client.post(f"/api/v1/review/cases/{review_id}/completeness-check")
     add_complete_inputs(postgres_connection, workflow_data)
     review_client.post(f"/api/v1/review/cases/{review_id}/completeness-check")

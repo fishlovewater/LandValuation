@@ -113,7 +113,12 @@ async def answer_knowledge_question(
 
     try:
         case_context = (
-            await load_authorized_case_context(session, user, request.case_id)
+            await load_authorized_case_context(
+                session,
+                user,
+                request.case_id,
+                workspace=request.workspace,
+            )
             if request.case_id is not None
             else None
         )

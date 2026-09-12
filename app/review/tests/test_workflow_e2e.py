@@ -178,6 +178,30 @@ def add_complete_inputs(connection, data, version=1):
     connection.commit()
 
 
+def create_review_record(connection, data):
+    """Fabricate the Review row required by lower-level workflow tests.
+
+    Production Review creation is intentionally restricted to the formal
+    valuation submission/external-case intake flows.  These tests exercise
+    Review internals directly, so they seed the aggregate instead of calling
+    the disabled legacy ``POST /review/cases`` route.
+    """
+    review_id = uuid4()
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO review.reviews (
+                review_id, case_id, review_status, started_by_user_id,
+                received_at, started_at
+            )
+            VALUES (%s, %s, 'RECEIVED', %s, now(), now())
+            """,
+            (review_id, data.case_id, data.user_id),
+        )
+    connection.commit()
+    return review_id
+
+
 def _snapshot_field_ids(run):
     return {check["extracted_field_id"] for check in run["input_snapshot"]["checks"]}
 
@@ -198,9 +222,7 @@ def _assert_completed_after_started(run):
 
 
 def test_fixed_case_workflow_preserves_trusted_history(workflow_client, workflow_data, postgres_connection):
-    created = workflow_client.post("/api/v1/review/cases", json={"case_id": str(workflow_data.case_id)})
-    assert created.status_code == 201
-    review_id = created.json()["review_id"]
+    review_id = create_review_record(postgres_connection, workflow_data)
     assert workflow_client.post(f"/api/v1/review/cases/{review_id}/completeness-check").json()["review_status"] == "PENDING_MATERIALS"
 
     add_complete_inputs(postgres_connection, workflow_data)

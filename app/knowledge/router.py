@@ -8,7 +8,10 @@ from app.ai_assistant.chat_service import (
     answer_general_chat,
     answer_hybrid_chat,
     answer_structured_case_chat,
+    answer_structured_collection_chat,
+    collection_fallback_reply,
 )
+from app.ai_assistant.history_context import load_authorized_history_collection_context
 from app.ai_assistant.routing import AssistantAnswerRoute, analyze_assistant_question
 from app.auth.dependencies import CurrentUser, DbSession, require_permissions
 from app.auth.models import User
@@ -216,8 +219,14 @@ async def create_conversation(
             "審查或疑點情境必須同時包含案件識別資料。",
             422,
         )
+    workspace = _normalize_workspace(payload.workspace)
     if payload.case_id is not None:
-        context = await load_authorized_case_context(session, user, payload.case_id)
+        context = await load_authorized_case_context(
+            session,
+            user,
+            payload.case_id,
+            workspace=workspace,
+        )
         _validate_case_subcontext(
             context,
             review_id=payload.review_id,
@@ -236,7 +245,7 @@ async def create_conversation(
         case_id=payload.case_id,
         review_id=payload.review_id,
         finding_id=payload.finding_id,
-        workspace=_normalize_workspace(payload.workspace),
+        workspace=workspace,
     )
     return _conversation_response(record)
 
@@ -297,7 +306,12 @@ async def ask_conversation(
 
     case_context = None
     if case_id is not None:
-        case_context = await load_authorized_case_context(session, user, case_id)
+        case_context = await load_authorized_case_context(
+            session,
+            user,
+            case_id,
+            workspace=workspace,
+        )
         _validate_case_subcontext(
             case_context,
             review_id=review_id,
@@ -325,6 +339,17 @@ async def ask_conversation(
         previous_route=_previous_answer_route(existing),
         conversation_history=history,
     )
+    collection_context = None
+    if (
+        route in {AssistantAnswerRoute.CASE, AssistantAnswerRoute.HYBRID}
+        and workspace == "history"
+        and case_id is None
+    ):
+        collection_context = await load_authorized_history_collection_context(
+            session,
+            user,
+            payload.question,
+        )
     if route == AssistantAnswerRoute.CHAT:
         answer, model_id = await answer_general_chat(
             payload.question,
@@ -339,24 +364,35 @@ async def ask_conversation(
             model_id=model_id,
         )
     elif route == AssistantAnswerRoute.CASE:
-        if case_context is None:
+        if case_context is None and collection_context is None:
             raise AppError(
                 "CASE_CONTEXT_NOT_AVAILABLE",
                 "目前頁面沒有可供查詢的案件資料。",
                 422,
             )
-        answer, model_id = await answer_structured_case_chat(
-            payload.question,
-            case_context=case_context.model_dump(mode="json"),
-            review_id=str(review_id) if review_id else None,
-            finding_id=str(finding_id) if finding_id else None,
-            conversation_history=history,
-        )
+        if collection_context is not None:
+            answer, model_id = await answer_structured_collection_chat(
+                payload.question,
+                collection_context=collection_context,
+                conversation_history=history,
+            )
+        else:
+            answer, model_id = await answer_structured_case_chat(
+                payload.question,
+                case_context=case_context.model_dump(mode="json"),
+                review_id=str(review_id) if review_id else None,
+                finding_id=str(finding_id) if finding_id else None,
+                conversation_history=history,
+            )
         result = KnowledgeAnswerResponse(
             answer_status="SUPPORTED",
             answer=answer,
             answer_route=route.value,
-            generation_mode="STRUCTURED_CASE_DATA",
+            generation_mode=(
+                "STRUCTURED_CASE_COLLECTION"
+                if collection_context is not None
+                else "STRUCTURED_CASE_DATA"
+            ),
             next_action="CONTINUE_CONVERSATION",
             model_id=model_id,
             case_context=case_context,
@@ -380,7 +416,7 @@ async def ask_conversation(
         ).model_copy(update={"answer_route": route.value})
     else:
         _require_knowledge_access(user)
-        if case_context is None:
+        if case_context is None and collection_context is None:
             raise AppError(
                 "CASE_CONTEXT_NOT_AVAILABLE",
                 "目前頁面沒有可供查詢的案件資料。",
@@ -399,13 +435,24 @@ async def ask_conversation(
             ),
             conversation_history=history,
         )
+        structured_context = (
+            collection_context
+            if collection_context is not None
+            else case_context.model_dump(mode="json")
+        )
+        case_summary = (
+            collection_fallback_reply(collection_context)
+            if collection_context is not None
+            else None
+        )
         hybrid_answer, hybrid_model_id = await answer_hybrid_chat(
             payload.question,
-            case_context=case_context.model_dump(mode="json"),
+            case_context=structured_context,
             knowledge_result=knowledge_result.model_dump(mode="json"),
             review_id=str(review_id) if review_id else None,
             finding_id=str(finding_id) if finding_id else None,
             conversation_history=history,
+            case_summary=case_summary,
         )
         result = knowledge_result.model_copy(
             update={

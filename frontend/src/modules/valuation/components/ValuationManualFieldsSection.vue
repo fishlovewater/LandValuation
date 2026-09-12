@@ -22,6 +22,7 @@ const props = defineProps<{
   values: Record<string, string>
   errors: Record<string, string>
   saving: boolean
+  systemManagedKeys: string[]
   fieldMetadata: (formCode: string, fieldName: string) => ManualFieldMetadata
 }>()
 
@@ -33,8 +34,13 @@ const emit = defineEmits<{
 }>()
 
 const missingRequiredSet = computed(() => new Set(props.missingRequiredKeys))
+const systemManagedSet = computed(() => new Set(props.systemManagedKeys))
 const missingEntries = computed(() => props.entries.filter((entry) => missingRequiredSet.value.has(entry.key)))
 const otherEntries = computed(() => props.entries.filter((entry) => !missingRequiredSet.value.has(entry.key)))
+
+function isSystemManaged(entry: ManualFieldEntry): boolean {
+  return systemManagedSet.value.has(entry.key)
+}
 
 function missingCountForForm(formCode: FieldAnalysisFormCode): number {
   return props.missingRequiredKeys.filter((key) => key.startsWith(`${formCode}.`)).length
@@ -121,6 +127,24 @@ function handleValueInput(key: string, event: Event): void {
             </button>
           </div>
 
+          <div
+            v-else-if="isSystemManaged(entry)"
+            class="manual-fields__relation"
+            data-testid="manual-system-managed-helper"
+          >
+            <span class="manual-fields__relation-icon" aria-hidden="true">
+              <Database :size="20" weight="duotone" />
+            </span>
+            <div class="manual-fields__relation-copy">
+              <strong>{{ props.fieldMetadata(entry.formCode, entry.fieldName).label }}</strong>
+              <span>此欄位由案件基本資料或「宗地與比準地」的結構化資料自動帶入，不接受文字代填；若資料不正確，請回到正式資料來源修正。</span>
+            </div>
+            <button class="manual-fields__link" type="button" @click="emit('goLand')">
+              檢查宗地與比準地
+              <ArrowRight :size="15" weight="bold" aria-hidden="true" />
+            </button>
+          </div>
+
           <label v-else class="manual-field-card manual-field-card--required" :data-error="Boolean(props.errors[entry.key])">
             <span class="manual-field-card__heading">
               <span class="manual-field-card__label">
@@ -178,6 +202,24 @@ function handleValueInput(key: string, event: Event): void {
           </div>
           <button class="manual-fields__link" type="button" @click="emit('goLand')">
             前往宗地與比準地
+            <ArrowRight :size="15" weight="bold" aria-hidden="true" />
+          </button>
+        </div>
+
+        <div
+          v-else-if="isSystemManaged(entry)"
+          class="manual-fields__relation"
+          data-testid="manual-system-managed-helper"
+        >
+          <span class="manual-fields__relation-icon" aria-hidden="true">
+            <Database :size="20" weight="duotone" />
+          </span>
+          <div class="manual-fields__relation-copy">
+            <strong>{{ props.fieldMetadata(entry.formCode, entry.fieldName).label }}</strong>
+            <span>此欄位由案件基本資料或「宗地與比準地」的結構化資料自動帶入，不接受文字代填；若資料不正確，請回到正式資料來源修正。</span>
+          </div>
+          <button class="manual-fields__link" type="button" @click="emit('goLand')">
+            檢查宗地與比準地
             <ArrowRight :size="15" weight="bold" aria-hidden="true" />
           </button>
         </div>

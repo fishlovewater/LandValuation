@@ -139,6 +139,10 @@ AUTO_EXTRACT_MIME_TYPES = frozenset(
     }
 )
 
+# S01/F01/F04 facts belong to one valuation location. Shared report/form data
+# must remain case-scoped even while the workbench has an active location.
+LOCATION_SCOPED_MANUAL_FORM_CODES = frozenset({"S01", "F01", "F04"})
+
 
 def classify_document(
     filename: str | None,
@@ -534,7 +538,12 @@ class AutomatedWorkflowService:
         forms = await self.valuation.list_forms(case_id, user)
         forms_by_code: dict[str, object] = {}
         for form in forms:
-            forms_by_code.setdefault(str(form.form_code), form)
+            code = str(form.form_code)
+            current = forms_by_code.get(code)
+            if current is None or int(getattr(form, "version_no", 0)) > int(
+                getattr(current, "version_no", 0)
+            ):
+                forms_by_code[code] = form
 
         # The simplified intake always creates F03 and, when applicable, the
         # three-page report package.  A user may nevertheless need to fill an
@@ -558,14 +567,17 @@ class AutomatedWorkflowService:
             forms_by_code[code] = created
 
         requested_report_codes = requested_codes.intersection({"S01", "F02-RF", "F02"})
-        report_root = next(
-            (
-                form for form in forms
-                if str(form.form_code) == "F02"
-                and isinstance(form.form_content, dict)
-                and form.form_content.get("report_type") == "REPORT_COMPARISON_COMMERCIAL"
-            ),
-            None,
+        report_roots = [
+            form
+            for form in forms
+            if str(form.form_code) == "F02"
+            and isinstance(form.form_content, dict)
+            and form.form_content.get("report_type") == "REPORT_COMPARISON_COMMERCIAL"
+        ]
+        report_root = max(
+            report_roots,
+            key=lambda form: int(getattr(form, "version_no", 0)),
+            default=None,
         )
         # Older cases can have only F01/F03/F04.  Lazily create the commercial
         # three-page draft when a report-page value is actually submitted;
@@ -588,7 +600,12 @@ class AutomatedWorkflowService:
 
         forms_by_code = {}
         for form in forms:
-            forms_by_code.setdefault(str(form.form_code), form)
+            code = str(form.form_code)
+            current = forms_by_code.get(code)
+            if current is None or int(getattr(form, "version_no", 0)) > int(
+                getattr(current, "version_no", 0)
+            ):
+                forms_by_code[code] = form
         # A new manual value supersedes the previous value.  If a formal
         # report was already generated, reopen its three report pages so the
         # new value can be written into the formal S01 page and recalculated.
@@ -652,8 +669,15 @@ class AutomatedWorkflowService:
 
             # Keep every accepted catalogue value, including fields that are
             # not yet represented by a formal page schema, for audit/export.
+            # Only location-owned forms are split by valuation location. Shared
+            # F02/F02-RF/F03 values remain case-scoped even when location_id is
+            # present in the workbench request.
             content = dict(form.form_content or {})
-            if payload.location_id is None:
+            location_scoped = (
+                payload.location_id is not None
+                and form_code in LOCATION_SCOPED_MANUAL_FORM_CODES
+            )
+            if not location_scoped:
                 overrides = dict(content.get("manual_overrides") or {})
                 overrides.update(non_empty)
                 content["manual_overrides"] = overrides
@@ -673,7 +697,9 @@ class AutomatedWorkflowService:
         # F01/F04 pages are generated.  They must never overwrite a shared
         # formal page belonging to another location.
         if payload.location_id is not None:
-            direct_updates = {code: {} for code in direct_updates}
+            for code in LOCATION_SCOPED_MANUAL_FORM_CODES:
+                if code in direct_updates:
+                    direct_updates[code] = {}
         for form_code, values in direct_updates.items():
             if not values:
                 continue
@@ -720,8 +746,6 @@ class AutomatedWorkflowService:
                 and str(value).strip() != ""
             },
         }
-        if payload.location_id is not None:
-            report_page_updates = {"F02": {}, "F02-RF": {}}
         if report_root is not None:
             for form_code, values in report_page_updates.items():
                 if not values:
@@ -1600,6 +1624,9 @@ class AutomatedWorkflowService:
         forms_by_code: dict[str, list] = defaultdict(list)
         for form in forms:
             forms_by_code[form.form_code].append(form)
+        case = await self.valuation.get_case(case_id, user)
+        parcels = await self.valuation.list_parcels(case_id, user)
+        benchmarks = await self.f03.list_benchmark_lands(case_id, user)
         candidate_codes = {item.form_code for item in candidates}
         guidance_codes = [FormCode.F03.value]
         if FormCode.F01.value in forms_by_code or FormCode.F01.value in candidate_codes:
@@ -1624,15 +1651,46 @@ class AutomatedWorkflowService:
                 for item in related
                 if item.field_status == "NEEDS_CONFIRMATION"
             }
-            form = forms_by_code[code][0] if forms_by_code.get(code) else None
+            form = (
+                max(
+                    forms_by_code[code],
+                    key=lambda item: int(getattr(item, "version_no", 0)),
+                )
+                if forms_by_code.get(code)
+                else None
+            )
             values: dict = {}
+            shared_manual_values: dict = {}
             if form is not None:
                 content = form.form_content
                 if isinstance(content, dict) and isinstance(content.get("data"), dict):
                     values = content["data"]
+                if isinstance(content, dict) and isinstance(content.get("manual_overrides"), dict):
+                    shared_manual_values = content["manual_overrides"]
             completed = {
                 name for name, value in values.items() if value not in (None, "", [], {})
             }
+            completed.update(
+                name
+                for name, value in shared_manual_values.items()
+                if value not in (None, "", [], {})
+            )
+            if code == FormCode.F02.value:
+                # These four F02 requirements are case context, not editable
+                # F02 page fields.  Resolve them from structured records so a
+                # stale/manual text value can never be the reason the workflow
+                # is either blocked or incorrectly unlocked.
+                completed.difference_update(
+                    {"parcel_id", "benchmark_land_no", "price_zone_no", "valuation_base_date"}
+                )
+                if parcels:
+                    completed.add("parcel_id")
+                if benchmarks:
+                    completed.add("benchmark_land_no")
+                if any(getattr(item, "price_zone_no", None) for item in benchmarks):
+                    completed.add("price_zone_no")
+                if getattr(case, "valuation_base_date", None) is not None:
+                    completed.add("valuation_base_date")
             if code == FormCode.F03.value:
                 # F03 is stored in benchmark_valuations rather than
                 # form_content.data.  Looking only at form_content made a

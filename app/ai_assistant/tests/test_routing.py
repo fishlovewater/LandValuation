@@ -1,6 +1,10 @@
 import pytest
 
-from app.ai_assistant.routing import AssistantAnswerRoute, route_assistant_question
+from app.ai_assistant.routing import (
+    AssistantAnswerRoute,
+    analyze_assistant_question,
+    route_assistant_question,
+)
 
 
 @pytest.mark.parametrize(
@@ -51,3 +55,20 @@ def test_follow_up_does_not_reuse_case_route_without_case_context():
         has_case_context=False,
         previous_route=AssistantAnswerRoute.CASE,
     ) == AssistantAnswerRoute.CHAT
+
+
+def test_history_workspace_can_route_collection_question_without_selected_case():
+    assert route_assistant_question(
+        "我有哪個案件是在補正中？",
+        has_case_context=False,
+        workspace="history",
+    ) == AssistantAnswerRoute.CASE
+
+
+@pytest.mark.asyncio
+async def test_history_collection_question_keeps_deterministic_case_route():
+    assert await analyze_assistant_question(
+        "我有哪個案件是在補正中？",
+        has_case_context=False,
+        workspace="history",
+    ) == AssistantAnswerRoute.CASE

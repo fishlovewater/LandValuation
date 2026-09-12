@@ -68,22 +68,12 @@ const emit = defineEmits<{
   upload: []
   importParcels: [rows: ParcelImportRowDto[]]
   reviewCandidates: []
+  continueData: []
 }>()
 </script>
 
 <template>
-  <section class="document-stage" aria-labelledby="documents-stage-title">
-    <div class="document-stage__heading">
-      <div>
-        <p class="document-stage__eyebrow">來源資料</p>
-        <h2 id="documents-stage-title">準備估價需要的原始資料</h2>
-        <span class="document-stage__description">上傳並整理原始資料，系統會自動辨識可用欄位；辨識結果仍由人工確認後才會套用。</span>
-      </div>
-      <div class="document-stage__heading-actions">
-        <span class="document-stage__count">{{ props.documents.length }} 份來源文件</span>
-      </div>
-    </div>
-
+  <section class="document-stage" aria-label="來源資料">
     <ValuationDocumentWorkspace
       :documents="props.documents"
       :preview-document-id="props.previewDocumentId"
@@ -121,6 +111,7 @@ const emit = defineEmits<{
       @prepare-parcel-import="emit('prepareParcelImport', $event)"
       @extract="emit('extract', $event)"
       @review-candidates="emit('reviewCandidates')"
+      @continue-data="emit('continueData')"
       @reclassify="emit('reclassify', $event)"
       @remove="(documentId, filename) => emit('remove', documentId, filename)"
       @download="emit('download', $event)"
@@ -146,69 +137,11 @@ const emit = defineEmits<{
 <style scoped>
 .document-stage {
   display: grid;
-  gap: 16px;
-  padding: 22px;
-  border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-md);
-  background: var(--app-paper-strong);
-}
-
-.document-stage__heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.document-stage__heading h2 {
-  margin: 0;
-  color: var(--app-ink);
-  font-family: var(--app-font-display);
-  font-size: 24px;
-  font-weight: 600;
-  letter-spacing: -.04em;
-}
-.document-stage__description { display:block; max-width:760px; margin-top:6px; color:var(--app-muted); font-size:11px; line-height:1.6; }
-.document-stage__heading-actions { display:flex; align-items:center; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
-.document-stage__review { display:inline-flex; min-height:36px; align-items:center; justify-content:center; gap:6px; padding:6px 10px; border:1px solid #2e5984; border-radius:8px; color:#fff; background:#2e5984; cursor:pointer; font-size:10px; font-weight:900; white-space:nowrap; }
-.document-stage__review:hover { background:#244d73; }
-
-.document-stage__eyebrow {
-  margin: 0 0 6px;
-  color: var(--app-accent-deep);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: .12em;
-}
-
-.document-stage__count {
-  display: inline-flex;
-  min-height: 30px;
-  align-items: center;
-  padding: 5px 10px;
-  border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-pill);
-  color: var(--app-ink-soft);
-  background: #f7f8fb;
-  font-size: 11px;
-  font-weight: 800;
-  white-space: nowrap;
+  gap: 10px;
+  min-width: 0;
 }
 
 @media (max-width: 760px) {
-  .document-stage {
-    padding: 16px;
-  }
-
-  .document-stage__heading {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .document-stage__count {
-    width: fit-content;
-  }
-  .document-stage__heading-actions { justify-content:flex-start; }
-  .document-stage__review { width:100%; }
+  .document-stage { gap: 8px; }
 }
 </style>

@@ -16,7 +16,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <footer class="wizard-footer" aria-label="估價流程導覽">
+  <footer class="wizard-footer" data-testid="valuation-workflow-guide" aria-label="估價流程導覽">
     <button
       class="wizard-footer__secondary"
       type="button"

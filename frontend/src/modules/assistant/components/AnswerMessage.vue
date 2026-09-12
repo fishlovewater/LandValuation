@@ -42,7 +42,7 @@ function selectCitation(citationId: string): void {
         data-testid="assistant-case-source"
       >
         <strong>系統來源</strong>
-        <span>目前案件中已授權的結構化資料</span>
+        <span>系統中已授權的結構化資料</span>
       </div>
       <p v-for="(claim, claimIndex) in answer.claims" :key="`${claimIndex}-${claim.text}`" class="answer-message__claim">
         <span>{{ claim.text }}</span>
