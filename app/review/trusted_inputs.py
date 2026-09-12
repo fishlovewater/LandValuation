@@ -3,13 +3,23 @@ from dataclasses import dataclass, field
 from decimal import Decimal, DecimalException, InvalidOperation
 
 from app.core.exceptions import AppError
-from app.review.recalculation import AdjustmentResult, RATE_QUANTUM, recalculate_adjustment_rate
+from app.review.recalculation import (
+    AdjustmentResult,
+    RATE_QUANTUM,
+    WEIGHT_TOLERANCE,
+    WEIGHT_TOTAL,
+    WeightSumResult,
+    recalculate_adjustment_rate,
+    validate_weight_sum,
+)
 
 
 HIGH_IMPACT_FIELD_CODES = frozenset(
     {
         "adjustment_rate",
         "comparison_price",
+        "comparison_weight",
+        "income_weight",
         "recalculated_price",
         "final_valuation",
         "expert_grade",
@@ -115,6 +125,8 @@ class PreparedRule:
     adjustment_result: AdjustmentResult | None = None
     reported_grade: str | None = None
     system_grade: str | None = None
+    source_fields: tuple[TrustedField, ...] = ()
+    weight_sum_result: WeightSumResult | None = None
 
 
 @dataclass(frozen=True)
@@ -123,9 +135,11 @@ class RuleContract:
     target_field_code: str
     expected_value_type: str
     configuration: dict
+    required_field_codes: tuple[str, ...] = ()
     system_rate: Decimal | None = None
     tolerance: Decimal | None = None
     system_grade: str | None = None
+    expected_total: Decimal | None = None
 
 
 def trusted_fields_by_code(fields):
@@ -187,8 +201,9 @@ def _finite_decimal(value: object) -> Decimal | None:
 def validate_rule_contracts(validation_rules) -> tuple[RuleContract, ...]:
     contracts = []
     expected_fields = {
-        "ADJUSTMENT_RATE": ("adjustment_rate", "DECIMAL"),
-        "EXPERT_GRADE": ("expert_grade", "TEXT"),
+        "ADJUSTMENT_RATE": (("adjustment_rate",), "DECIMAL"),
+        "EXPERT_GRADE": (("expert_grade",), "TEXT"),
+        "F03_WEIGHT_SUM": (("comparison_weight", "income_weight"), "DECIMAL"),
     }
     for rule in validation_rules:
         rule_code = rule.get("rule_code")
@@ -197,8 +212,9 @@ def validate_rule_contracts(validation_rules) -> tuple[RuleContract, ...]:
             raise _configuration_error(f"尚未支援規則：{rule_code}", rule)
         if not isinstance(target_field_code, str) or not target_field_code.strip():
             raise _configuration_error("檢核規則缺少 target_field_code", rule)
-        expected_field_code, expected_value_type = expected_fields[rule_code]
-        if target_field_code != expected_field_code:
+        required_field_codes, expected_value_type = expected_fields[rule_code]
+        expected_target_field_code = ",".join(required_field_codes)
+        if target_field_code != expected_target_field_code:
             raise _configuration_error(
                 f"規則 {rule_code} 的 target_field_code 不正確", rule
             )
@@ -231,11 +247,12 @@ def validate_rule_contracts(validation_rules) -> tuple[RuleContract, ...]:
                     target_field_code=target_field_code,
                     expected_value_type=expected_value_type,
                     configuration=configuration,
+                    required_field_codes=required_field_codes,
                     system_rate=system_rate,
                     tolerance=tolerance,
                 )
             )
-        else:
+        elif rule_code == "EXPERT_GRADE":
             system_grade = configuration.get("system_grade")
             if not isinstance(system_grade, str) or not system_grade.strip():
                 raise _configuration_error("級距規則缺少有效的 system_grade", rule)
@@ -245,7 +262,26 @@ def validate_rule_contracts(validation_rules) -> tuple[RuleContract, ...]:
                     target_field_code=target_field_code,
                     expected_value_type=expected_value_type,
                     configuration=configuration,
+                    required_field_codes=required_field_codes,
                     system_grade=system_grade,
+                )
+            )
+        else:
+            expected_total = _finite_decimal(configuration.get("expected_total"))
+            tolerance = _finite_decimal(configuration.get("tolerance"))
+            if expected_total != WEIGHT_TOTAL or tolerance != WEIGHT_TOLERANCE:
+                raise _configuration_error(
+                    "F03 權重規則必須使用合計 1 與 0.000001 容許差異", rule
+                )
+            contracts.append(
+                RuleContract(
+                    rule=rule,
+                    target_field_code=target_field_code,
+                    expected_value_type=expected_value_type,
+                    configuration=configuration,
+                    required_field_codes=required_field_codes,
+                    tolerance=tolerance,
+                    expected_total=expected_total,
                 )
             )
     return tuple(contracts)
@@ -256,15 +292,17 @@ def prepare_trusted_rules(
 ) -> tuple[PreparedRule, ...]:
     prepared = []
     for contract in contracts:
-        field = fields.get(contract.target_field_code)
+        primary_field_code = contract.required_field_codes[0]
+        field = fields.get(primary_field_code)
         if field is None:
             raise AppError(
                 "TRUSTED_INPUT_UNVERIFIED",
-                f"正式抽取欄位不可用：{contract.target_field_code}",
+                f"正式抽取欄位不可用：{primary_field_code}",
                 409,
-                {"field_code": contract.target_field_code},
+                {"field_code": primary_field_code},
             )
-        if contract.rule["rule_code"] == "ADJUSTMENT_RATE":
+        rule_code = contract.rule["rule_code"]
+        if rule_code == "ADJUSTMENT_RATE":
             reported_rate = _finite_decimal(field.confirmed_value)
             if reported_rate is None:
                 raise _unverified_value_error(field)
@@ -283,9 +321,10 @@ def prepare_trusted_rules(
                     system_rate=contract.system_rate,
                     tolerance=contract.tolerance,
                     adjustment_result=adjustment_result,
+                    source_fields=(field,),
                 )
             )
-        else:
+        elif rule_code == "EXPERT_GRADE":
             if not isinstance(field.confirmed_value, str) or not field.confirmed_value.strip():
                 raise _unverified_value_error(field)
             prepared.append(
@@ -295,6 +334,56 @@ def prepare_trusted_rules(
                     configuration=contract.configuration,
                     reported_grade=field.confirmed_value,
                     system_grade=contract.system_grade,
+                    source_fields=(field,),
+                )
+            )
+        else:
+            source_fields = tuple(fields.get(code) for code in contract.required_field_codes)
+            missing_code = next(
+                (
+                    code
+                    for code, source_field in zip(contract.required_field_codes, source_fields)
+                    if source_field is None
+                ),
+                None,
+            )
+            if missing_code is not None:
+                raise AppError(
+                    "TRUSTED_INPUT_UNVERIFIED",
+                    f"正式抽取欄位不可用：{missing_code}",
+                    409,
+                    {"field_code": missing_code},
+                )
+            trusted_source_fields = tuple(
+                source_field for source_field in source_fields if source_field is not None
+            )
+            weights = tuple(
+                _finite_decimal(source_field.confirmed_value)
+                for source_field in trusted_source_fields
+            )
+            invalid_index = next(
+                (index for index, value in enumerate(weights) if value is None),
+                None,
+            )
+            if invalid_index is not None:
+                raise _unverified_value_error(trusted_source_fields[invalid_index])
+            comparison_weight, income_weight = weights
+            try:
+                weight_sum_result = validate_weight_sum(
+                    comparison_weight,
+                    income_weight,
+                    expected_total=contract.expected_total,
+                    tolerance=contract.tolerance,
+                )
+            except (DecimalException, OverflowError) as exc:
+                raise _unverified_value_error(field) from exc
+            prepared.append(
+                PreparedRule(
+                    rule=contract.rule,
+                    field=field,
+                    configuration=contract.configuration,
+                    source_fields=trusted_source_fields,
+                    weight_sum_result=weight_sum_result,
                 )
             )
     return tuple(prepared)

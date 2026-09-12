@@ -25,6 +25,9 @@ def runnable_review(request, postgres_connection):
     source_extraction_status = options.get("source_extraction_status", "COMPLETED")
     tied_rule_versions = options.get("tied_rule_versions", False)
     unsupported_rule = options.get("unsupported_rule", False)
+    include_weight_rule = options.get("include_weight_rule", False)
+    comparison_weight = options.get("comparison_weight", "0.6")
+    income_weight = options.get("income_weight", "0.4")
     ids = SimpleNamespace(
         user_id=uuid4(),
         case_id=uuid4(),
@@ -38,11 +41,15 @@ def runnable_review(request, postgres_connection):
         adjustment_rule_id=uuid4(),
         validation_rule_id=None,
         expert_rule_id=uuid4(),
+        weight_rule_id=uuid4(),
         unsupported_rule_id=uuid4(),
         extraction_id=uuid4(),
         form_instance_id=uuid4(),
+        f03_form_instance_id=uuid4(),
         adjustment_field_id=uuid4(),
         expert_grade_field_id=uuid4(),
+        comparison_weight_field_id=uuid4(),
+        income_weight_field_id=uuid4(),
         unrelated_field_id=uuid4(),
     )
     ids.validation_rule_id = ids.adjustment_rule_id
@@ -104,6 +111,19 @@ def runnable_review(request, postgres_connection):
             """,
             (ids.form_instance_id, ids.case_id, ids.original_document_id),
         )
+        if include_weight_rule:
+            cursor.execute(
+                """
+                INSERT INTO valuation.form_instances (
+                    form_instance_id, case_id, form_code, version_no, form_status,
+                    form_content, output_document_id
+                ) VALUES (
+                    %s, %s, 'F03', 1, 'FINAL',
+                    '{"report_type": "BENCHMARK_LAND_VALUATION"}'::jsonb, %s
+                )
+                """,
+                (ids.f03_form_instance_id, ids.case_id, ids.original_document_id),
+            )
         approved = source_publication_status == "PUBLISHED"
         cursor.execute(
             """
@@ -150,11 +170,13 @@ def runnable_review(request, postgres_connection):
         rule_names = {
             "ADJUSTMENT_RATE": "調整率一致性檢核",
             "EXPERT_GRADE": "級距一致性檢核",
+            "F03_WEIGHT_SUM": "F03 權重範圍與加總",
         }
-        for rule_id, rule_code, target_field_code, severity, expression in (
+        rule_rows = [
             (
                 ids.adjustment_rule_id,
                 "ADJUSTMENT_RATE",
+                "comparison",
                 "adjustment_rate",
                 "HIGH",
                 '{"system_rate":"-5","tolerance":"0"}',
@@ -162,24 +184,38 @@ def runnable_review(request, postgres_connection):
             (
                 ids.expert_rule_id,
                 "EXPERT_GRADE",
+                "comparison",
                 "expert_grade",
                 "MEDIUM",
                 '{"system_grade":"A"}',
             ),
-        ):
+        ]
+        if include_weight_rule:
+            rule_rows.append(
+                (
+                    ids.weight_rule_id,
+                    "F03_WEIGHT_SUM",
+                    "benchmark_valuations",
+                    "comparison_weight,income_weight",
+                    "HIGH",
+                    '{"expected_total":"1","tolerance":"0.000001"}',
+                )
+            )
+        for rule_id, rule_code, target_table, target_field_code, severity, expression in rule_rows:
             cursor.execute(
                 """
                 INSERT INTO valuation.validation_rules (
                     validation_rule_id, rule_version_id, rule_code, rule_name,
                     target_table, target_field_code, severity, rule_expression,
                     message_template, is_active
-                ) VALUES (%s, %s, %s, %s, 'comparison', %s, %s, %s, %s, true)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, true)
                 """,
                 (
                     rule_id,
                     ids.rule_version_id,
                     rule_code,
                     rule_names[rule_code],
+                    target_table,
                     target_field_code,
                     severity,
                     expression,
@@ -216,9 +252,11 @@ def runnable_review(request, postgres_connection):
                     ids.user_id,
                 ),
             )
-            for field_id, field_code, raw_text, normalized_value, status in (
+            field_rows = [
                 (
                     ids.adjustment_field_id,
+                    "F01",
+                    ids.form_instance_id,
                     "adjustment_rate",
                     "報告記載調整率 -12%",
                     '"-12"',
@@ -226,6 +264,8 @@ def runnable_review(request, postgres_connection):
                 ),
                 (
                     ids.expert_grade_field_id,
+                    "F01",
+                    ids.form_instance_id,
                     "expert_grade",
                     "報告評定 A 級",
                     '"A"',
@@ -233,12 +273,38 @@ def runnable_review(request, postgres_connection):
                 ),
                 (
                     ids.unrelated_field_id,
+                    "F01",
+                    ids.form_instance_id,
                     "property_description",
                     "土地描述",
                     '"郊區住宅用地"',
                     "APPLIED",
                 ),
-            ):
+            ]
+            if include_weight_rule:
+                field_rows.extend(
+                    [
+                        (
+                            ids.comparison_weight_field_id,
+                            "F03",
+                            ids.f03_form_instance_id,
+                            "comparison_weight",
+                            f"比較法權重 {comparison_weight}",
+                            json.dumps(comparison_weight),
+                            "APPLIED",
+                        ),
+                        (
+                            ids.income_weight_field_id,
+                            "F03",
+                            ids.f03_form_instance_id,
+                            "income_weight",
+                            f"收益法權重 {income_weight}",
+                            json.dumps(income_weight),
+                            "APPLIED",
+                        ),
+                    ]
+                )
+            for field_id, form_code, applied_form_instance_id, field_code, raw_text, normalized_value, status in field_rows:
                 field_status = status
                 confirmed_value = normalized_value if field_status == "APPLIED" else None
                 verified = field_status == "APPLIED"
@@ -251,7 +317,7 @@ def runnable_review(request, postgres_connection):
                         source_page, source_text, field_status, confirmed_value,
                         confirmed_by_user_id, confirmed_at, applied_form_instance_id,
                         applied_at
-                    ) VALUES (%s, %s, %s, %s, 'F01', %s, %s::jsonb, 0.9500,
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, 0.9500,
                               3, %s, %s, %s::jsonb, %s, %s, %s, %s)
                     """,
                     (
@@ -259,6 +325,7 @@ def runnable_review(request, postgres_connection):
                         ids.case_id,
                         ids.extraction_id,
                         ids.original_document_id,
+                        form_code,
                         field_code,
                         normalized_value,
                         raw_text,
@@ -266,7 +333,7 @@ def runnable_review(request, postgres_connection):
                         confirmed_value,
                         ids.user_id if verified else None,
                         confirmed_at,
-                        ids.form_instance_id if verified else None,
+                        applied_form_instance_id if verified else None,
                         confirmed_at,
                     ),
                 )
@@ -653,6 +720,98 @@ def test_run_executes_every_server_selected_rule_and_preserves_server_evidence(
     assert risk.status_code == 200
     assert risk.json()["overall_risk_level"] == "HIGH"
     assert risk.json()["high_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "runnable_review",
+    [{"include_weight_rule": True, "comparison_weight": "0.6", "income_weight": "0.4"}],
+    indirect=True,
+)
+def test_f03_weight_sum_rule_passes_and_freezes_both_weight_sources(
+    authorized_client, runnable_review
+):
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
+    )
+
+    assert response.status_code == 200
+    run = response.json()
+    assert run["failed_count"] == 1
+    assert run["passed_count"] == 2
+    weight_check = next(
+        check
+        for check in run["input_snapshot"]["checks"]
+        if check["rule_code"] == "F03_WEIGHT_SUM"
+    )
+    assert weight_check["reported_value"] == {
+        "comparison_weight": "0.6",
+        "income_weight": "0.4",
+        "weight_sum": "1.0",
+    }
+    assert [field["field_code"] for field in weight_check["source_fields"]] == [
+        "comparison_weight",
+        "income_weight",
+    ]
+    assert weight_check["rule_result"] == {
+        "weight_sum": "1.0",
+        "expected_total": "1",
+        "tolerance": "0.000001",
+        "within_range": True,
+        "matches_total": True,
+        "valid": True,
+    }
+
+    findings = authorized_client.get(
+        f"/api/v1/review/runs/{run['validation_run_id']}/findings"
+    )
+    assert findings.status_code == 200
+    assert "F03_WEIGHT_SUM_MISMATCH" not in {
+        finding["finding_type"] for finding in findings.json()
+    }
+
+
+@pytest.mark.parametrize(
+    "runnable_review",
+    [{"include_weight_rule": True, "comparison_weight": "0.7", "income_weight": "0.2"}],
+    indirect=True,
+)
+def test_f03_weight_sum_rule_creates_traceable_finding_when_total_is_invalid(
+    authorized_client, runnable_review
+):
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
+    )
+
+    assert response.status_code == 200
+    run = response.json()
+    assert run["failed_count"] == 2
+    assert run["passed_count"] == 1
+
+    findings = authorized_client.get(
+        f"/api/v1/review/runs/{run['validation_run_id']}/findings"
+    )
+    assert findings.status_code == 200
+    finding = next(
+        item for item in findings.json() if item["finding_type"] == "F03_WEIGHT_SUM_MISMATCH"
+    )
+    assert finding["severity"] == "HIGH"
+    assert finding["field_path"] == "F03.comparison_weight,F03.income_weight"
+    assert [item["field_code"] for item in finding["source_evidence"]] == [
+        "comparison_weight",
+        "income_weight",
+    ]
+    assert finding["comparison_result"] == {
+        "comparison_weight": "0.7",
+        "income_weight": "0.2",
+        "weight_sum": "0.9",
+        "within_range": True,
+        "expected_weight_sum": "1",
+        "tolerance": "0.000001",
+        "matches_total": False,
+        "valid": False,
+    }
+    assert finding["recommended_action"] == {"action": "VERIFY_F03_METHOD_WEIGHTS"}
+    assert finding["legal_basis"][0]["rule_code"] == "F03_WEIGHT_SUM"
 
 
 def test_submitted_review_run_uses_immutable_snapshot_after_live_field_mutation(

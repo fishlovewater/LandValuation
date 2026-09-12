@@ -23,6 +23,18 @@ class WeightedPriceResult:
     final: Decimal
 
 
+@dataclass(frozen=True)
+class WeightSumResult:
+    comparison_weight: Decimal
+    income_weight: Decimal
+    total: Decimal
+    expected_total: Decimal
+    tolerance: Decimal
+    within_range: bool
+    matches_total: bool
+    valid: bool
+
+
 def recalculate_adjustment_rate(
     reported_rate: Decimal, system_rate: Decimal, tolerance: Decimal
 ) -> AdjustmentResult:
@@ -57,6 +69,33 @@ def recalculate_weighted_price(items) -> WeightedPriceResult:
     return WeightedPriceResult(
         unrounded=unrounded,
         final=unrounded.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+    )
+
+
+def validate_weight_sum(
+    comparison_weight: Decimal,
+    income_weight: Decimal,
+    *,
+    expected_total: Decimal = WEIGHT_TOTAL,
+    tolerance: Decimal = WEIGHT_TOLERANCE,
+) -> WeightSumResult:
+    """Validate F03 method weights without applying any price-rounding policy."""
+
+    total = comparison_weight + income_weight
+    within_range = all(
+        Decimal("0") <= weight <= Decimal("1")
+        for weight in (comparison_weight, income_weight)
+    )
+    matches_total = abs(total - expected_total) <= tolerance
+    return WeightSumResult(
+        comparison_weight=comparison_weight,
+        income_weight=income_weight,
+        total=total,
+        expected_total=expected_total,
+        tolerance=tolerance,
+        within_range=within_range,
+        matches_total=matches_total,
+        valid=within_range and matches_total,
     )
 
 

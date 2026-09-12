@@ -430,7 +430,9 @@ describe('history demo flow', () => {
     expect(reviewSection.text()).not.toContain('FUTURE_FINDING_STATUS')
     expect(reviewSection.text()).not.toContain('FUTURE_RISK_LEVEL')
     expect(reviewSection.text()).not.toContain('FUTURE_DECISION')
-    expect(reviewSection.findAll('details')).toHaveLength(0)
+    const progressiveRecords = reviewSection.findAll('.history-case__record-more')
+    expect(progressiveRecords.length).toBeGreaterThan(0)
+    expect(progressiveRecords.every((record) => record.attributes('open') === undefined)).toBe(true)
 
     await wrapper.get('[data-testid="history-tab-overview"]').trigger('click')
     expect(wrapper.text()).toContain('智慧審查文件')

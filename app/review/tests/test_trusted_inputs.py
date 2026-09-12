@@ -95,6 +95,84 @@ def test_rule_json_numbers_are_parsed_as_exact_decimals():
     }
 
 
+def test_f03_weight_sum_contract_requires_both_canonical_weight_fields():
+    contract = validate_rule_contracts(
+        [
+            {
+                "rule_code": "F03_WEIGHT_SUM",
+                "target_field_code": "comparison_weight,income_weight",
+                "rule_expression": '{"expected_total":"1","tolerance":"0.000001"}',
+            }
+        ]
+    )[0]
+
+    assert contract.required_field_codes == ("comparison_weight", "income_weight")
+    assert contract.expected_total == Decimal("1")
+    assert contract.tolerance == Decimal("0.000001")
+
+
+def test_f03_weight_sum_contract_rejects_noncanonical_target_fields():
+    with pytest.raises(AppError) as raised:
+        validate_rule_contracts(
+            [
+                {
+                    "rule_code": "F03_WEIGHT_SUM",
+                    "target_field_code": "income_weight,comparison_weight",
+                    "rule_expression": '{"expected_total":"1","tolerance":"0.000001"}',
+                }
+            ]
+        )
+
+    assert raised.value.code == "RULE_CONFIGURATION_INVALID"
+
+
+def test_f03_weight_sum_preflight_uses_exact_confirmed_decimals():
+    contracts = validate_rule_contracts(
+        [
+            {
+                "rule_code": "F03_WEIGHT_SUM",
+                "target_field_code": "comparison_weight,income_weight",
+                "rule_expression": '{"expected_total":"1","tolerance":"0.000001"}',
+            }
+        ]
+    )
+    fields = {
+        "comparison_weight": field("comparison_weight", value="0.6"),
+        "income_weight": field("income_weight", value="0.4"),
+    }
+
+    prepared = prepare_trusted_rules(contracts, fields)[0]
+
+    assert tuple(item.field_code for item in prepared.source_fields) == (
+        "comparison_weight",
+        "income_weight",
+    )
+    assert prepared.weight_sum_result is not None
+    assert prepared.weight_sum_result.total == Decimal("1.0")
+    assert prepared.weight_sum_result.valid is True
+
+
+def test_f03_weight_sum_preflight_rejects_float_confirmed_weight():
+    contracts = validate_rule_contracts(
+        [
+            {
+                "rule_code": "F03_WEIGHT_SUM",
+                "target_field_code": "comparison_weight,income_weight",
+                "rule_expression": '{"expected_total":"1","tolerance":"0.000001"}',
+            }
+        ]
+    )
+    fields = {
+        "comparison_weight": field("comparison_weight", value=0.6),
+        "income_weight": field("income_weight", value="0.4"),
+    }
+
+    with pytest.raises(AppError) as raised:
+        prepare_trusted_rules(contracts, fields)
+
+    assert raised.value.code == "TRUSTED_INPUT_UNVERIFIED"
+
+
 class _MappingsResult:
     def __init__(self, rows):
         self.rows = rows

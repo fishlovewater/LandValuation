@@ -1017,7 +1017,11 @@ class ReviewService:
             contracts = validate_rule_contracts(active_rules)
         except AppError as error:
             return (trusted_preflight_to_missing(error),)
-        required_codes = {contract.target_field_code for contract in contracts}
+        required_codes = {
+            field_code
+            for contract in contracts
+            for field_code in contract.required_field_codes
+        }
         problems = required_field_problems(required_codes, fields)
         if problems:
             return tuple(
@@ -1143,7 +1147,11 @@ class ReviewService:
             )
 
         contracts = validate_rule_contracts(validation_rules)
-        required_codes = {contract.target_field_code for contract in contracts}
+        required_codes = {
+            field_code
+            for contract in contracts
+            for field_code in contract.required_field_codes
+        }
         problems = required_field_problems(required_codes, fields)
         if problems:
             problem = problems[0]
@@ -1182,6 +1190,20 @@ class ReviewService:
                 "verification_status": field.verification_status,
             }
         ]
+
+    @staticmethod
+    def _source_evidence_many(
+        context: TrustedRunContext, fields: tuple[TrustedField, ...]
+    ) -> "list[dict]":
+        evidence: list[dict] = []
+        for field in fields:
+            evidence.extend(
+                ReviewService._source_evidence(
+                    ReviewService._field_document(context, field),
+                    field,
+                )
+            )
+        return evidence
 
     @staticmethod
     def _field_document(context: TrustedRunContext, field: TrustedField) -> dict:
@@ -1260,16 +1282,40 @@ class ReviewService:
         for prepared_rule in context.prepared_rules:
             rule = prepared_rule.rule
             field = prepared_rule.field
+            if prepared_rule.weight_sum_result is not None:
+                result = prepared_rule.weight_sum_result
+                reported_value = {
+                    "comparison_weight": str(result.comparison_weight),
+                    "income_weight": str(result.income_weight),
+                    "weight_sum": str(result.total),
+                }
+            elif prepared_rule.reported_rate is not None:
+                reported_value = str(prepared_rule.reported_rate)
+            else:
+                reported_value = prepared_rule.reported_grade
+            source_fields = prepared_rule.source_fields or (field,)
             checks.append(
                 {
                     "finding_code": ReviewService._finding_code(rule),
                     "validation_rule_id": str(rule["validation_rule_id"]),
                     "rule_code": rule["rule_code"],
                     **ReviewService._field_snapshot(field),
-                    "reported_value": str(
-                        prepared_rule.reported_rate
-                        if prepared_rule.reported_rate is not None
-                        else prepared_rule.reported_grade
+                    "reported_value": ReviewService._json_value(reported_value),
+                    "source_fields": [
+                        ReviewService._field_snapshot(item)
+                        for item in source_fields
+                    ],
+                    "rule_result": ReviewService._json_value(
+                        {
+                            "weight_sum": prepared_rule.weight_sum_result.total,
+                            "expected_total": prepared_rule.weight_sum_result.expected_total,
+                            "tolerance": prepared_rule.weight_sum_result.tolerance,
+                            "within_range": prepared_rule.weight_sum_result.within_range,
+                            "matches_total": prepared_rule.weight_sum_result.matches_total,
+                            "valid": prepared_rule.weight_sum_result.valid,
+                        }
+                        if prepared_rule.weight_sum_result is not None
+                        else None
                     ),
                     "rule_configuration": ReviewService._json_value(
                         prepared_rule.configuration
@@ -1488,6 +1534,76 @@ class ReviewService:
                         "within_tolerance": False,
                     },
                     recommended_action={"action": "VERIFY_ADJUSTMENT_BASIS"},
+                    ai_status="AI_EXPLANATION_UNAVAILABLE",
+                    supersedes_finding_id=(supersedes_by_rule_id or {}).get(
+                        str(rule["validation_rule_id"])
+                    ),
+                    rule_version_id=context.rule_version["rule_version_id"],
+                )
+                findings.append(finding)
+                run.failed_count += 1
+            elif rule["rule_code"] == "F03_WEIGHT_SUM":
+                result = prepared_rule.weight_sum_result
+                if result is None:
+                    raise RuntimeError("F03 權重規則未完成 trusted preflight")
+                if result.valid:
+                    run.passed_count += 1
+                    continue
+                source_fields = prepared_rule.source_fields
+                actual_value = {
+                    "comparison_weight": str(result.comparison_weight),
+                    "income_weight": str(result.income_weight),
+                    "weight_sum": str(result.total),
+                    "within_range": result.within_range,
+                }
+                expected_value = {
+                    "weight_sum": str(result.expected_total),
+                    "tolerance": str(result.tolerance),
+                    "weight_range": ["0", "1"],
+                }
+                machine_finding = await self.repository.create_validation_finding(
+                    validation_run_id=run.validation_run_id,
+                    validation_rule_id=rule["validation_rule_id"],
+                    field_code=rule["target_field_code"],
+                    severity=rule["severity"],
+                    actual_value=actual_value,
+                    expected_value=expected_value,
+                    finding_message="比較法與收益法權重必須介於 0 到 1 且合計為 1",
+                )
+                finding = await self.repository.create_finding(
+                    review_id=review.review_id,
+                    source_validation_finding_id=machine_finding.finding_id,
+                    validation_run_id=run.validation_run_id,
+                    finding_code=finding_code,
+                    finding_type="F03_WEIGHT_SUM_MISMATCH",
+                    severity=rule["severity"],
+                    title="F03 權重範圍或加總不一致",
+                    description=(
+                        "比較法與收益法權重需各介於 0 到 1，且合計為 1；"
+                        "系統僅檢查權重，不套用任何地價尾數進位規則。"
+                    ),
+                    status="OPEN",
+                    document_id=field_document["document_id"],
+                    document_version=field_document["version_no"],
+                    page_number=field.page_number,
+                    field_path=",".join(item.field_path for item in source_fields),
+                    source_evidence=self._source_evidence_many(context, source_fields),
+                    reported_text="；".join(
+                        item.raw_text for item in source_fields if item.raw_text
+                    ),
+                    reported_value=(
+                        f"comparison_weight={result.comparison_weight}; "
+                        f"income_weight={result.income_weight}; total={result.total}"
+                    ),
+                    legal_basis=self._legal_basis(context, rule),
+                    comparison_result={
+                        **actual_value,
+                        "expected_weight_sum": str(result.expected_total),
+                        "tolerance": str(result.tolerance),
+                        "matches_total": result.matches_total,
+                        "valid": False,
+                    },
+                    recommended_action={"action": "VERIFY_F03_METHOD_WEIGHTS"},
                     ai_status="AI_EXPLANATION_UNAVAILABLE",
                     supersedes_finding_id=(supersedes_by_rule_id or {}).get(
                         str(rule["validation_rule_id"])
