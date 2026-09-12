@@ -33,17 +33,22 @@ const emit = defineEmits<{
 const detailsOpen = ref(false)
 
 const stages = [
-  { key: 'documents', label: '文件與辨識', legacyTestId: 'valuation-step-2' },
-  { key: 'ai-review', label: 'AI 結果確認', legacyTestId: '' },
-  { key: 'data', label: '資料補齊', legacyTestId: 'valuation-step-3' },
-  { key: 'calculation', label: '計算與檢核', legacyTestId: 'valuation-step-4' },
-  { key: 'report', label: '查估書與送審', legacyTestId: 'valuation-step-5' },
+  { key: 'documents', label: '來源資料', description: '文件與辨識', legacyTestId: 'valuation-step-2' },
+  { key: 'data', label: '估價資料', description: '宗地、比準地與採用值', legacyTestId: 'valuation-step-3' },
+  { key: 'calculation', label: '計算與檢核', description: '估價結果與資料檢核', legacyTestId: 'valuation-step-4' },
+  { key: 'report', label: '查估書與送審', description: '正式文件與送審', legacyTestId: 'valuation-step-5' },
 ] as const
+type MainWorkspaceStage = (typeof stages)[number]['key']
 
 const currentIndex = computed(() => {
   if (props.currentStage === 'case') return -1
+  if (props.currentStage === 'ai-review') return 0
   return stages.findIndex((stage) => stage.key === props.currentStage)
 })
+
+const sourceIssueCount = computed(() =>
+  (props.issueCounts.documents ?? 0) + (props.issueCounts['ai-review'] ?? 0),
+)
 
 const normalizedProgress = computed(() => Math.max(0, Math.min(100, Math.round(props.progressPercent))))
 
@@ -52,12 +57,22 @@ function stageComplete(index: number): boolean {
   return index < currentIndex.value
 }
 
-function stageDisabled(stage: (typeof stages)[number]['key']): boolean {
+function stageActive(stage: MainWorkspaceStage): boolean {
+  if (stage === 'documents') return props.currentStage === 'documents' || props.currentStage === 'ai-review'
+  return props.currentStage === stage
+}
+
+function stageIssueCount(stage: MainWorkspaceStage): number {
+  if (stage === 'documents') return sourceIssueCount.value
+  return props.issueCounts[stage] ?? 0
+}
+
+function stageDisabled(stage: MainWorkspaceStage): boolean {
   return stage === 'report' && !props.reportAvailable && props.currentStage !== 'report'
 }
 
-function navigate(stage: ValuationWorkspaceStage): void {
-  if (stage !== 'case' && stageDisabled(stage)) return
+function navigate(stage: MainWorkspaceStage): void {
+  if (stageDisabled(stage)) return
   emit('navigate', stage)
 }
 </script>
@@ -120,44 +135,33 @@ function navigate(stage: ValuationWorkspaceStage): void {
     </div>
 
     <div class="case-workspace-header__workflow">
-      <button
-        class="case-workspace-header__prerequisite"
-        type="button"
-        data-testid="valuation-step-1"
-        :class="{ 'is-active': currentStage === 'case' }"
-        :aria-current="currentStage === 'case' ? 'step' : undefined"
-        @click="navigate('case')"
-      >
-        <span class="case-workspace-header__check"><Check :size="13" weight="bold" aria-hidden="true" /></span>
-        <span>案件資料</span>
-      </button>
-
-      <div class="case-workspace-header__divider" aria-hidden="true"></div>
-
       <ol class="case-workspace-header__stages">
         <li
           v-for="(stage, index) in stages"
           :key="stage.key"
           :class="{
-            'is-active': currentStage === stage.key,
+            'is-active': stageActive(stage.key),
             'is-complete': stageComplete(index),
           }"
         >
           <button
             type="button"
-            :data-testid="stage.legacyTestId || `valuation-workspace-stage-${stage.key}`"
+            :data-testid="stage.legacyTestId"
             :data-workspace-stage="stage.key"
             :disabled="stageDisabled(stage.key)"
-            :aria-current="currentStage === stage.key ? 'step' : undefined"
+            :aria-current="stageActive(stage.key) ? 'step' : undefined"
             @click="navigate(stage.key)"
           >
             <span class="case-workspace-header__stage-number" aria-hidden="true">
               <Check v-if="stageComplete(index)" :size="12" weight="bold" />
               <template v-else>{{ index + 1 }}</template>
             </span>
-            <span class="case-workspace-header__stage-label">{{ stage.label }}</span>
-            <span v-if="issueCounts[stage.key]" class="case-workspace-header__issue" aria-label="待處理項目">
-              {{ issueCounts[stage.key] }}
+            <span class="case-workspace-header__stage-copy">
+              <strong>{{ stage.label }}</strong>
+              <small>{{ stage.description }}</small>
+            </span>
+            <span v-if="stageIssueCount(stage.key)" class="case-workspace-header__issue" aria-label="待處理項目">
+              {{ stageIssueCount(stage.key) }}
             </span>
           </button>
         </li>
@@ -398,7 +402,7 @@ function navigate(stage: ValuationWorkspaceStage): void {
   display: grid;
   min-width: 0;
   flex: 1 1 auto;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 5px;
   margin: 0;
   padding: 0;
@@ -471,11 +475,11 @@ function navigate(stage: ValuationWorkspaceStage): void {
   background: #eaf5ef;
 }
 
-.case-workspace-header__stage-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.case-workspace-header__stage-copy { display:grid; min-width:0; gap:1px; text-align:left; }
+.case-workspace-header__stage-copy strong { overflow:hidden; font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
+.case-workspace-header__stage-copy small { overflow:hidden; color:#8391a0; font-size:8px; font-weight:700; text-overflow:ellipsis; white-space:nowrap; }
+.is-active .case-workspace-header__stage-copy small { color:#5f7892; }
+.is-complete .case-workspace-header__stage-copy small { color:#708d80; }
 
 .case-workspace-header__issue {
   display: inline-grid;
@@ -518,7 +522,7 @@ function navigate(stage: ValuationWorkspaceStage): void {
   }
 
   .case-workspace-header__stages {
-    min-width: 700px;
+    min-width: 620px;
   }
 }
 

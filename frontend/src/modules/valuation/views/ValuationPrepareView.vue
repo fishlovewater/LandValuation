@@ -2245,7 +2245,7 @@ onBeforeUnmount(clearPreviewUrl)
       <ValuationCaseWorkspaceHeader
         :case-model="flow.case"
         :district-label="newTaipeiDistrictName(flow.case.districtCode)"
-        :status-label="statusLabel(f03Form?.status ?? 'DRAFT')"
+        :status-label="flow.case.basicInfoConfirmedAt ? statusLabel(flow.case.status) : '待確認案件資料'"
         :current-stage="workspaceStage"
         :progress-percent="caseProgressPercent"
         :issue-counts="workspaceIssueCounts"
