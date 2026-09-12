@@ -11,6 +11,7 @@ from app.ai_assistant.routing import AssistantAnswerRoute, route_assistant_quest
         ("比準地在查估流程中的用途是什麼？", False, AssistantAnswerRoute.KNOWLEDGE),
         ("目前這個案件還缺少哪些資料？", True, AssistantAnswerRoute.CASE),
         ("目前有哪些來源文件可以核對？", True, AssistantAnswerRoute.CASE),
+        ("我有哪些文件可以看？", True, AssistantAnswerRoute.CASE),
         ("這個案件的調整率是否符合規定？", True, AssistantAnswerRoute.HYBRID),
     ],
 )

@@ -92,7 +92,17 @@ def _case_fallback_reply(question: str, context: dict[str, Any]) -> str:
     case = context.get("case") if isinstance(context.get("case"), dict) else {}
     review = context.get("latest_review") if isinstance(context.get("latest_review"), dict) else {}
     selected = context.get("selected_finding") if isinstance(context.get("selected_finding"), dict) else {}
+    documents = context.get("documents") if isinstance(context.get("documents"), list) else []
     normalized = question.strip().lower()
+
+    if any(term in normalized for term in ("哪些文件", "有哪些文件", "文件可以看", "可查看的文件", "附件")):
+        if not context.get("document_access"):
+            return str(context.get("document_access_note") or "目前無法列出案件文件。")
+        visible_documents = [item for item in documents if isinstance(item, dict)]
+        if not visible_documents:
+            return "目前案件沒有可查看的有效文件。"
+        labels = [str(item.get("file_name") or "未命名文件") for item in visible_documents]
+        return "目前這個案件可查看的文件有：" + "、".join(labels) + "。"
 
     if selected:
         title = str(selected.get("title") or "目前疑點")

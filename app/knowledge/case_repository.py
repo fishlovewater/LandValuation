@@ -31,6 +31,26 @@ class CaseContextRepository:
             raise ResourceNotFoundError("案件")
         return dict(row)
 
+    async def active_documents(self, case_id: UUID) -> list[dict]:
+        rows = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT document_id, document_type,
+                           original_filename AS file_name,
+                           mime_type AS content_type, version_no,
+                           uploaded_at, file_size_bytes
+                    FROM valuation.documents
+                    WHERE case_id = :case_id
+                      AND is_active = true
+                    ORDER BY uploaded_at DESC, version_no DESC, document_id DESC
+                    """
+                ),
+                {"case_id": case_id},
+            )
+        ).mappings().all()
+        return [dict(row) for row in rows]
+
     async def latest_review(self, case_id: UUID) -> dict | None:
         review = (
             await self.session.execute(

@@ -143,10 +143,23 @@ class ReviewResultSummary(BaseModel):
     missing_items: list[MissingItemSummary] = Field(default_factory=list)
 
 
+class CaseDocumentSummary(BaseModel):
+    document_id: UUID
+    document_type: str
+    file_name: str
+    content_type: str
+    version_no: int
+    uploaded_at: datetime
+    file_size_bytes: int
+
+
 class CaseAssistantContextResponse(BaseModel):
     """Read-only data contract for a future case-aware front-end assistant."""
 
     case: CaseBrief
+    document_access: bool = False
+    document_access_note: str = ""
+    documents: list[CaseDocumentSummary] = Field(default_factory=list)
     review_access: bool
     review_access_note: str
     latest_review: ReviewResultSummary | None = None
