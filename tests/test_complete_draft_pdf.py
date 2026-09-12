@@ -108,6 +108,8 @@ def test_six_page_formal_requires_and_preserves_all_maps() -> None:
             "map-zoning": document,
             "map-land-value-section": document,
         },
+        official_template_pdf_bytes=None,
+        official_template_manifest=None,
     )
 
     reader = PdfReader(BytesIO(result))

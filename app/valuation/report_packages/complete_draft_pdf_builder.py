@@ -13,6 +13,9 @@ from app.valuation.report_packages.draft_pdf_builder import (
     build_three_page_draft_pdf,
     build_three_page_formal_pdf,
 )
+from app.valuation.report_packages.official_template_overlay import (
+    overlay_official_blank_template,
+)
 
 
 MAP_PAGES = (
@@ -259,11 +262,26 @@ def build_six_page_draft_pdf(
 def build_six_page_formal_pdf(
     data: dict[str, Any],
     map_documents: dict[str, dict[str, Any]],
+    *,
+    official_template_pdf_bytes: bytes | None = None,
+    official_template_manifest: dict[str, Any] | None = None,
 ) -> bytes:
     """Build the immutable six-page report after the formal validation gate."""
     _register_cjk_font()
     # Missing maps are represented by formal blank placeholder pages so the second system can review the case.
-    first_three = PdfReader(BytesIO(build_three_page_formal_pdf(data)))
+    if official_template_pdf_bytes is not None:
+        if official_template_manifest is None:
+            raise ValueError("official template manifest is required with template PDF")
+        first_three_bytes = overlay_official_blank_template(
+            official_template_pdf_bytes,
+            official_template_manifest,
+            data,
+        )
+    else:
+        first_three_bytes = build_three_page_formal_pdf(data)
+    first_three = PdfReader(BytesIO(first_three_bytes))
+    if len(first_three.pages) != 3:
+        raise RuntimeError("正式前三頁 PDF 產生後頁數驗證失敗")
     writer = PdfWriter()
     for page in first_three.pages:
         writer.add_page(page)
