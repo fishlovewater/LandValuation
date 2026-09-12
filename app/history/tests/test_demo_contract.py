@@ -7,9 +7,11 @@ from app.history import demo
 
 def test_demo_ids_are_unique():
     assert len(set(demo.CASE_IDS)) == 3
-    assert len(set(demo.DOCUMENT_IDS)) == 2
+    assert len(set(demo.DOCUMENT_IDS)) == 5
     assert len(set(demo.REVIEW_IDS)) == 2
     assert len(set(demo.USER_IDS)) == 2
+    assert len(set(demo.EXTRACTION_IDS)) == 2
+    assert len(set(demo.EXTRACTED_FIELD_IDS)) == 2
 
 
 def test_demo_users_cover_the_two_history_roles():
@@ -28,6 +30,18 @@ def test_missing_object_is_distinct_from_downloadable_object():
     assert demo.MISSING_OBJECT_KEY != demo.DOWNLOAD_OBJECT_KEY
     assert demo.MISSING_OBJECT_KEY.endswith("history-demo-missing.docx")
     assert demo.DOWNLOAD_OBJECT_KEY.endswith("history-demo-report.pdf")
+
+
+def test_rich_demo_documents_cover_word_excel_and_version_history():
+    assert len(set(demo.UPLOAD_OBJECT_KEYS)) == 4
+    assert demo.DOCX_OBJECT_KEY in demo.UPLOAD_OBJECT_KEYS
+    assert demo.XLSX_V1_OBJECT_KEY in demo.UPLOAD_OBJECT_KEYS
+    assert demo.XLSX_V2_OBJECT_KEY in demo.UPLOAD_OBJECT_KEYS
+    assert demo.XLSX_V1_OBJECT_KEY != demo.XLSX_V2_OBJECT_KEY
+    seed_source = inspect.getsource(demo.seed)
+    assert "_build_docx_bytes()" in seed_source
+    assert "_build_xlsx_bytes(1, 120000)" in seed_source
+    assert "_build_xlsx_bytes(2, 125000)" in seed_source
 
 
 def test_downloadable_both_case_is_seeded_as_review_report():
@@ -105,4 +119,7 @@ def test_demo_review_insert_uses_authoritative_deterministic_timestamps():
     source = inspect.getsource(demo.seed).replace(" ", "")
 
     assert "review_status,received_at,started_at,completed_at" in source
-    assert source.count("TIMESTAMPTZ") == 5
+    review_insert = source.split("INSERTINTOreview.reviews", 1)[1].split(
+        "INSERTINTOreview.risk_summaries", 1
+    )[0]
+    assert review_insert.count("TIMESTAMPTZ") == 5

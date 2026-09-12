@@ -307,6 +307,8 @@ function fileSize(value: number): string {
   color: var(--app-accent-deep);
 }
 .document-list__download:hover:not(:disabled) { color:#fff; background:var(--app-accent-deep); }
+.document-list button:focus-visible,
+.document-list summary:focus-visible { outline:3px solid color-mix(in srgb, var(--app-accent) 30%, white); outline-offset:2px; }
 
 .document-list__download:disabled,
 .document-list__preview:disabled { cursor: not-allowed; opacity: .55; }

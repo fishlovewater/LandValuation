@@ -46,6 +46,9 @@ services:
     container_name: land_valuation_persistent_demo_api
     ports: !override
       - "18000:8000"
+    command: >-
+      /bin/sh -c "python -m app.history.demo seed &&
+      exec uvicorn app.main:app --host 0.0.0.0 --port 8000"
     environment:
       F03_VALIDATION_RULE_SET_CODE: DEMO-F03-FORMAL-VALIDATION
       DEMO_QUICK_LOGIN_ENABLED: "true"

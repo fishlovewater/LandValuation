@@ -285,7 +285,7 @@ onBeforeUnmount(() => activeController?.abort())
         <span>1</span>
         <div><strong>確認權限</strong><small>依登入帳號自動判斷</small></div>
       </li>
-      <li class="is-current">
+      <li class="is-current" aria-current="step">
         <span>2</span>
         <div><strong>搜尋案件</strong><small>輸入案件編號、名稱或地號</small></div>
       </li>
@@ -407,7 +407,7 @@ onBeforeUnmount(() => activeController?.abort())
             <p class="history-search__eyebrow">案件列表</p>
             <h2 id="history-results-title">搜尋結果</h2>
           </div>
-          <span class="history-search__total">共 {{ total }} 件 · 第 {{ page }} / {{ pageCount }} 頁</span>
+          <span class="history-search__total" aria-live="polite">共 {{ total }} 件 · 第 {{ page }} / {{ pageCount }} 頁</span>
         </div>
 
         <LoadingSkeleton v-if="loading && !rows.length" :rows="5" label="案件歷程載入中" />
@@ -499,6 +499,9 @@ onBeforeUnmount(() => activeController?.abort())
 .history-search__advanced-toggle { display: inline-flex; min-height: 42px; align-items: center; gap: 7px; padding: 8px 13px; border: 1px solid rgba(46,89,132,.2); border-radius: 8px; color: var(--app-primary-deep); background: var(--app-primary-soft); cursor: pointer; font-size: 12px; font-weight: 800; }
 .history-search__advanced-toggle:hover { border-color: var(--app-primary); }
 .history-search__advanced-toggle span { display: inline-grid; min-width: 20px; height: 20px; place-items: center; border-radius: 999px; color: #fff; background: var(--app-primary); font-size: 9px; }
+.history-search button:focus-visible,
+.history-search input:focus-visible,
+.history-search select:focus-visible { outline:3px solid color-mix(in srgb, var(--app-accent) 30%, white); outline-offset:2px; }
 .history-search__quick-fields { display: grid; grid-template-columns:minmax(0,1fr) minmax(170px,.28fr) auto; align-items:end; gap: 10px; margin-top: 16px; }
 .history-search__fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; margin-top: 13px; }
 .history-search__quick-fields label,

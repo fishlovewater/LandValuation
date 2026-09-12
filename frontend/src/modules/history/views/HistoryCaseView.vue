@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import EmptyState from '../../../components/common/EmptyState.vue'
 import DocumentTextPreview from '../../../components/common/DocumentTextPreview.vue'
@@ -268,6 +268,29 @@ function syncTab(): void {
   if (activeTab.value === 'versions' && !hasVersionHistory.value) activeTab.value = 'overview'
 }
 
+function handleTabKeydown(event: KeyboardEvent): void {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  const tablist = event.currentTarget as HTMLElement | null
+  if (!tablist) return
+  const tabs = Array.from(tablist.querySelectorAll<HTMLButtonElement>('[role="tab"]'))
+  if (!tabs.length) return
+  const currentIndex = tabs.findIndex((tab) => tab === document.activeElement)
+  if (currentIndex < 0) return
+
+  let nextIndex = currentIndex
+  if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabs.length
+  if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + tabs.length) % tabs.length
+  if (event.key === 'Home') nextIndex = 0
+  if (event.key === 'End') nextIndex = tabs.length - 1
+
+  const nextTab = tabs[nextIndex]
+  const nextValue = nextTab?.dataset.tab as DetailTab | undefined
+  if (!nextTab || !nextValue) return
+  event.preventDefault()
+  activeTab.value = nextValue
+  nextTab.focus()
+}
+
 async function load(): Promise<void> {
   if (!caseId.value) return
   const serial = ++loadSerial
@@ -310,6 +333,21 @@ function clearDocumentPreview(): void {
   previewError.value = ''
 }
 
+function closeDocumentPreview(): void {
+  const documentId = previewDocument.value?.documentId ?? ''
+  clearDocumentPreview()
+  if (!documentId) return
+  void nextTick(() => {
+    document.querySelector<HTMLButtonElement>(`[data-testid="history-preview-${documentId}"]`)?.focus()
+  })
+}
+
+function handlePreviewKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return
+  event.preventDefault()
+  closeDocumentPreview()
+}
+
 async function previewHistoryDocument(historyDocument: HistoryDocumentModel): Promise<void> {
   if (previewLoading.value || historyDocument.downloadAvailable === false) return
   if (previewDocument.value?.documentId === historyDocument.documentId && previewUrl.value) return
@@ -334,6 +372,8 @@ async function previewHistoryDocument(historyDocument: HistoryDocumentModel): Pr
     previewError.value = safeHistoryDownloadError(caught)
   } finally {
     previewLoading.value = false
+    await nextTick()
+    document.getElementById('history-document-preview')?.focus()
   }
 }
 
@@ -394,7 +434,7 @@ onBeforeUnmount(() => {
     <ol class="history-case__flow" aria-label="案件歷史操作流程">
       <li class="is-complete"><span>1</span><div><strong>確認權限</strong><small>依登入帳號自動判斷</small></div></li>
       <li class="is-complete"><span>2</span><div><strong>搜尋案件</strong><small>已選取案件</small></div></li>
-      <li class="is-current"><span>3</span><div><strong>查看資料 / 下載文件</strong><small>目前所在步驟</small></div></li>
+      <li class="is-current" aria-current="step"><span>3</span><div><strong>查看資料 / 下載文件</strong><small>目前所在步驟</small></div></li>
     </ol>
 
     <LoadingSkeleton v-if="loading && !detail" :rows="6" label="案件歷程明細載入中" />
@@ -429,23 +469,23 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <nav class="history-case__tabs" aria-label="案件歷程資料區段">
-        <button type="button" :class="{ 'is-active': activeTab === 'overview' }" data-testid="history-tab-overview" @click="activeTab = 'overview'">案件資料</button>
-        <button type="button" :class="{ 'is-active': activeTab === 'timeline' }" data-testid="history-tab-timeline" @click="activeTab = 'timeline'">
+      <nav class="history-case__tabs" role="tablist" aria-label="案件歷程資料區段" @keydown="handleTabKeydown">
+        <button id="history-tab-overview-button" type="button" role="tab" data-tab="overview" aria-controls="history-panel-overview" :aria-selected="activeTab === 'overview'" :tabindex="activeTab === 'overview' ? 0 : -1" :class="{ 'is-active': activeTab === 'overview' }" data-testid="history-tab-overview" @click="activeTab = 'overview'">案件資料</button>
+        <button id="history-tab-timeline-button" type="button" role="tab" data-tab="timeline" aria-controls="history-panel-timeline" :aria-selected="activeTab === 'timeline'" :tabindex="activeTab === 'timeline' ? 0 : -1" :class="{ 'is-active': activeTab === 'timeline' }" data-testid="history-tab-timeline" @click="activeTab = 'timeline'">
           <span>案件歷程</span><small class="history-case__tab-count">{{ detail.timeline.length }}</small>
         </button>
-        <button v-if="detail.permissions.canViewValuation" type="button" :class="{ 'is-active': activeTab === 'valuation' }" data-testid="history-tab-valuation" @click="activeTab = 'valuation'">
+        <button v-if="detail.permissions.canViewValuation" id="history-tab-valuation-button" type="button" role="tab" data-tab="valuation" aria-controls="history-panel-valuation" :aria-selected="activeTab === 'valuation'" :tabindex="activeTab === 'valuation' ? 0 : -1" :class="{ 'is-active': activeTab === 'valuation' }" data-testid="history-tab-valuation" @click="activeTab = 'valuation'">
           <span>估價資料</span><small class="history-case__tab-count">{{ valuationItems.length }}</small>
         </button>
-        <button v-if="detail.permissions.canViewReview" type="button" :class="{ 'is-active': activeTab === 'review' }" data-testid="history-tab-review" @click="activeTab = 'review'">
+        <button v-if="detail.permissions.canViewReview" id="history-tab-review-button" type="button" role="tab" data-tab="review" aria-controls="history-panel-review" :aria-selected="activeTab === 'review'" :tabindex="activeTab === 'review' ? 0 : -1" :class="{ 'is-active': activeTab === 'review' }" data-testid="history-tab-review" @click="activeTab = 'review'">
           <span>審查資料</span><small class="history-case__tab-count">{{ reviewItems.length }}</small>
         </button>
-        <button v-if="hasVersionHistory" type="button" :class="{ 'is-active': activeTab === 'versions' }" data-testid="history-tab-versions" @click="activeTab = 'versions'">
+        <button v-if="hasVersionHistory" id="history-tab-versions-button" type="button" role="tab" data-tab="versions" aria-controls="history-panel-versions" :aria-selected="activeTab === 'versions'" :tabindex="activeTab === 'versions' ? 0 : -1" :class="{ 'is-active': activeTab === 'versions' }" data-testid="history-tab-versions" @click="activeTab = 'versions'">
           <span>版本比較</span><small class="history-case__tab-count">{{ detail.versionDiffs.length || detail.versions.length }}</small>
         </button>
       </nav>
 
-      <template v-if="activeTab === 'overview'">
+      <section v-if="activeTab === 'overview'" id="history-panel-overview" role="tabpanel" aria-labelledby="history-tab-overview-button">
         <div class="history-case__overview-grid">
           <section v-liquid-glass data-lg class="history-case__facts lg" aria-labelledby="history-case-facts-title">
             <p class="history-case__eyebrow">資料概況</p>
@@ -465,14 +505,14 @@ onBeforeUnmount(() => {
             @download="downloadDocument"
           />
         </div>
-        <section v-if="previewDocument" class="history-case__document-preview" data-testid="history-document-preview" aria-labelledby="history-document-preview-title">
+        <section v-if="previewDocument" id="history-document-preview" class="history-case__document-preview" data-testid="history-document-preview" tabindex="-1" aria-live="polite" aria-labelledby="history-document-preview-title" @keydown="handlePreviewKeydown">
           <header>
             <div>
               <p class="history-case__eyebrow">文件預覽</p>
               <h2 id="history-document-preview-title">{{ previewDocument.fileName }}</h2>
               <span>{{ previewDocument.documentTypeLabel }} · 第 {{ previewDocument.versionNo }} 版 · {{ previewDocument.sourceModuleLabel }}</span>
             </div>
-            <button type="button" @click="clearDocumentPreview">關閉預覽</button>
+            <button type="button" @click="closeDocumentPreview">關閉預覽</button>
           </header>
           <LoadingSkeleton v-if="previewLoading" :rows="4" label="文件預覽載入中" />
           <ErrorState v-else-if="previewError" :message="previewError" @retry="previewHistoryDocument(previewDocument)" />
@@ -507,15 +547,16 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </section>
-      </template>
+      </section>
 
-      <section v-else-if="activeTab === 'timeline'" class="history-case__timeline-section" data-testid="history-timeline-section">
+      <section v-else-if="activeTab === 'timeline'" id="history-panel-timeline" role="tabpanel" aria-labelledby="history-tab-timeline-button" class="history-case__timeline-section" data-testid="history-timeline-section">
         <nav class="history-case__timeline-filter" aria-label="案件歷程事件篩選">
           <button
             v-for="option in timelineFilterOptions"
             :key="option.value"
             type="button"
             :class="{ 'is-active': timelineFilter === option.value }"
+            :aria-pressed="timelineFilter === option.value"
             :data-testid="`history-timeline-filter-${option.value}`"
             @click="timelineFilter = option.value"
           >
@@ -526,7 +567,7 @@ onBeforeUnmount(() => {
         <CaseTimeline :events="filteredTimelineEvents" />
       </section>
 
-      <section v-else-if="activeTab === 'valuation'" v-liquid-glass data-lg class="history-case__data-section lg" data-testid="history-valuation-section" aria-labelledby="history-valuation-title">
+      <section v-else-if="activeTab === 'valuation'" id="history-panel-valuation" role="tabpanel" aria-labelledby="history-tab-valuation-button" v-liquid-glass data-lg class="history-case__data-section lg" data-testid="history-valuation-section">
         <div class="history-case__section-heading">
           <div><p class="history-case__eyebrow">估價紀錄</p><h2 id="history-valuation-title">估價資料</h2></div>
           <span>{{ valuationItems.length }} 筆估價紀錄</span>
@@ -540,7 +581,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section v-else-if="activeTab === 'review'" v-liquid-glass data-lg class="history-case__data-section lg" data-testid="history-review-section" aria-labelledby="history-review-title">
+      <section v-else-if="activeTab === 'review'" id="history-panel-review" role="tabpanel" aria-labelledby="history-tab-review-button" v-liquid-glass data-lg class="history-case__data-section lg" data-testid="history-review-section">
         <div class="history-case__section-heading">
           <div><p class="history-case__eyebrow">審查紀錄</p><h2 id="history-review-title">審查資料</h2></div>
           <span>{{ reviewItems.length }} 筆審查紀錄</span>
@@ -554,7 +595,7 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section v-else-if="activeTab === 'versions'" class="history-case__version-section" data-testid="history-version-section" aria-labelledby="history-version-title">
+      <section v-else-if="activeTab === 'versions'" id="history-panel-versions" role="tabpanel" aria-labelledby="history-tab-versions-button" class="history-case__version-section" data-testid="history-version-section">
         <div class="history-case__section-heading">
           <div><p class="history-case__eyebrow">版本變更</p><h2 id="history-version-title">版本前後比較</h2></div>
           <span>{{ detail.versionDiffs.length }} 個欄位變更</span>
@@ -640,6 +681,11 @@ onBeforeUnmount(() => {
 .history-case__tabs button { display: inline-flex; min-height: 44px; align-items: center; gap: 7px; margin-bottom: -1px; padding: 8px 14px; border: 1px solid transparent; border-bottom: 2px solid transparent; border-radius: 8px 8px 0 0; color: var(--app-ink-soft); background: transparent; cursor: pointer; font-size: 13px; font-weight: 800; }
 .history-case__tabs button:hover,
 .history-case__tabs button.is-active { border-color: var(--app-line); border-bottom-color: var(--app-accent); color: var(--app-accent-deep); background: var(--app-paper-strong); }
+.history-case__back:focus-visible,
+.history-case__tabs button:focus-visible,
+.history-case__timeline-filter button:focus-visible,
+.history-case__document-preview header button:focus-visible { outline:3px solid color-mix(in srgb, var(--app-accent) 30%, white); outline-offset:2px; }
+.history-case__document-preview:focus-visible { outline:3px solid color-mix(in srgb, var(--app-primary) 25%, white); outline-offset:3px; }
 .history-case__tab-count { display: grid; min-width: 22px; height: 22px; place-items: center; padding: 0 6px; border-radius: 999px; color: #607286; background: #edf1f5; font-size: 9px; font-weight: 900; line-height: 1; }
 .history-case__tabs button.is-active .history-case__tab-count { color: #244d73; background: #e6eff8; }
 .history-case__overview-grid { display: grid; grid-template-columns: minmax(230px, .7fr) minmax(0, 1.3fr); gap: 15px; margin-top: 15px; }
