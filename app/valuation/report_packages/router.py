@@ -46,6 +46,7 @@ from app.valuation.report_packages.formal_schemas import (
     FormalWorkflowStatusResponse,
 )
 from app.valuation.report_packages.formal_service import FormalReportService
+from app.valuation.report_packages.formal_xlsx_builder import XLSX_MIME_TYPE
 from app.valuation.report_packages.service import ReportPackageService
 
 router = APIRouter()
@@ -464,4 +465,26 @@ async def download_complete_report(
         media_type=document.mime_type,
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded}"},
         background=background_tasks,
+    )
+
+
+@router.get("/cases/{case_id}/reports/{report_id}/formal-xlsx/download")
+async def download_formal_report_xlsx(
+    case_id: UUID,
+    report_id: UUID,
+    session: DbSession,
+    user: ReportPreviewDownloader,
+):
+    xlsx_bytes, filename = await FormalReportService(session).export_xlsx(
+        case_id, report_id, user
+    )
+    encoded = quote(filename)
+    return StreamingResponse(
+        BytesIO(xlsx_bytes),
+        media_type=XLSX_MIME_TYPE,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded}",
+            "X-Report-Status": "FINAL",
+            "X-Report-Format": "STRUCTURED_DATA_EXPORT",
+        },
     )

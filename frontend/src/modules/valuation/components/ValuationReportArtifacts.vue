@@ -5,6 +5,7 @@ import {
   PhDownloadSimple as DownloadSimple,
   PhFilePdf as FilePdf,
   PhFileText as FileText,
+  PhFileXls as FileXls,
 } from '@phosphor-icons/vue'
 import type { FormalReportModel, ReportArtifactModel } from '../valuation.types'
 
@@ -12,10 +13,12 @@ const props = defineProps<{
   formalReport: FormalReportModel | null
   report: ReportArtifactModel | null
   downloadingDocumentId: string | null
+  downloadingWorkbook?: boolean
 }>()
 
 const emit = defineEmits<{
   download: [documentId: string, filename: string]
+  'download-workbook': []
 }>()
 
 function fileSizeKb(bytes: number): number {
@@ -72,6 +75,18 @@ function isDownloading(documentId: string): boolean {
         <DownloadSimple v-if="!isDownloading(props.formalReport.documentId)" :size="16" weight="bold" aria-hidden="true" />
         <span>{{ isDownloading(props.formalReport.documentId) ? '下載中…' : '下載完整送審 PDF' }}</span>
       </button>
+      <div class="report-artifact__secondary-export">
+        <small>Excel 為正式查估資料的結構化匯出，方便核對與後續作業；正式送審主要文件仍為完整送審 PDF。</small>
+        <button
+          type="button"
+          data-testid="download-formal-workbook"
+          :disabled="Boolean(props.downloadingDocumentId) || props.downloadingWorkbook"
+          @click="emit('download-workbook')"
+        >
+          <FileXls v-if="!props.downloadingWorkbook" :size="16" weight="duotone" aria-hidden="true" />
+          <span>{{ props.downloadingWorkbook ? '匯出中…' : '下載查估資料 Excel' }}</span>
+        </button>
+      </div>
     </div>
   </section>
 
@@ -140,6 +155,8 @@ function isDownloading(documentId: string): boolean {
 .report-artifact__file button { display: inline-flex; min-height: 42px; width: fit-content; align-items: center; justify-content: center; gap: 7px; margin-top: 8px; padding: 9px 15px; border: 1px solid var(--app-line); border-radius: 9px; color: var(--app-ink-soft); background: #fff; cursor: pointer; font-size: 12px; font-weight: 800; }
 .report-artifact__file button.is-primary { border-color: var(--app-accent); color: #fff; background: var(--app-accent); }
 .report-artifact__file button:disabled { cursor: not-allowed; opacity: .55; }
+.report-artifact__secondary-export { display: grid; gap: 2px; margin-top: 4px; padding-top: 10px; border-top: 1px solid #e5eaf0; }
+.report-artifact__secondary-export button { margin-top: 6px; }
 
 @media (max-width: 760px) {
   .report-artifact { padding: 16px; }

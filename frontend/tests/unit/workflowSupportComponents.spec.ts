@@ -332,9 +332,12 @@ describe('ValuationReportArtifacts', () => {
 
     expect(wrapper.text()).toContain('完整送審 PDF')
     expect(wrapper.text()).toContain('正式送審仍以完整送審 PDF 為主')
+    expect(wrapper.text()).toContain('正式查估資料的結構化匯出')
     await wrapper.get('[data-testid="download-formal-report"]').trigger('click')
+    await wrapper.get('[data-testid="download-formal-workbook"]').trigger('click')
 
     expect(wrapper.emitted('download')?.[0]).toEqual(['formal-document', '完整送審.pdf'])
+    expect(wrapper.emitted('download-workbook')).toHaveLength(1)
   })
 })
 

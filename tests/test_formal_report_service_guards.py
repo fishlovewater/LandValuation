@@ -356,3 +356,91 @@ async def test_formal_calculation_can_skip_optional_comparison_analysis():
     assert comparison.calculation_status == "CALCULATED"
     assert comparison.calculation_snapshot["comparison_workflow_enabled"] is False
     assert saved == [regional, comparison]
+
+
+@pytest.mark.asyncio
+async def test_formal_xlsx_export_requires_finalized_pdf():
+    case_id = uuid4()
+    report_id = uuid4()
+
+    class _Pages:
+        async def _read_records(self, case, report, user):
+            del user
+            assert case == case_id
+            assert report == report_id
+            return SimpleNamespace(case_no="NB-2026-0001"), {
+                "F02": SimpleNamespace(
+                    form_status="CHECKED",
+                    output_document_id=None,
+                    version_no=4,
+                )
+            }
+
+    service = FormalReportService(
+        None,
+        pages=_Pages(),
+        repository=SimpleNamespace(),
+        documents=SimpleNamespace(),
+    )
+
+    with pytest.raises(AppError) as raised:
+        await service.export_xlsx(case_id, report_id, SimpleNamespace())
+
+    assert raised.value.code == "FORMAL_REPORT_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_formal_xlsx_export_uses_finalized_report_data(monkeypatch):
+    case_id = uuid4()
+    report_id = uuid4()
+    document_id = uuid4()
+    payload = {"version_no": 4, "context": {"case_no": "NB-2026-0001"}}
+
+    class _Pages:
+        async def _read_records(self, case, report, user):
+            del user
+            assert case == case_id
+            assert report == report_id
+            return SimpleNamespace(case_no="NB-2026-0001"), {
+                "F02": SimpleNamespace(
+                    form_status="FINAL",
+                    output_document_id=document_id,
+                    version_no=4,
+                )
+            }
+
+        async def draft_pdf_data(self, case, report, user):
+            del user
+            assert case == case_id
+            assert report == report_id
+            return payload
+
+    class _Documents:
+        async def get(self, case, document):
+            assert case == case_id
+            assert document == document_id
+            return SimpleNamespace(
+                is_active=True,
+                document_type="complete-valuation-report",
+            )
+
+    captured = []
+    monkeypatch.setattr(
+        formal_service_module,
+        "build_formal_report_xlsx",
+        lambda data: captured.append(data) or b"xlsx-bytes",
+    )
+    service = FormalReportService(
+        None,
+        pages=_Pages(),
+        repository=SimpleNamespace(),
+        documents=_Documents(),
+    )
+
+    content, filename = await service.export_xlsx(
+        case_id, report_id, SimpleNamespace()
+    )
+
+    assert content == b"xlsx-bytes"
+    assert filename == "valuation_data_NB-2026-0001_v4.xlsx"
+    assert captured == [payload]

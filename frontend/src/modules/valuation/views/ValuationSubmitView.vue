@@ -67,6 +67,7 @@ const reportPageEditorSaving = ref<ReportPageCode | null>(null)
 const activeReportPageCode = ref<ReportPageCode>('S01')
 const editorNotice = ref('')
 const downloadingDocumentId = ref<string | null>(null)
+const downloadingWorkbook = ref(false)
 let activeCaseToken = 0
 
 const caseId = computed(() => String(route.params.caseId ?? ''))
@@ -822,6 +823,31 @@ async function downloadOutput(documentId: string, filename: string): Promise<voi
   }
 }
 
+async function downloadFormalWorkbook(): Promise<void> {
+  const requestedCaseId = caseId.value
+  const reportId = flow.reportPackageId
+  if (!requestedCaseId || !reportId || downloadingWorkbook.value) return
+  downloadingWorkbook.value = true
+  error.value = ''
+  try {
+    const blob = await valuationApi.downloadFormalWorkbook(requestedCaseId, reportId)
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    const safeCaseNo = (flow.case?.caseNo || 'case').replace(/[\\/:*?"<>|]+/g, '_')
+    const versionNo = flow.formalReport?.versionNo ?? flow.authoritativeF02?.versionNo ?? 1
+    anchor.href = url
+    anchor.download = `查估資料_${safeCaseNo}_v${versionNo}.xlsx`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+  } catch (caught: unknown) {
+    error.value = safeValuationErrorMessage(caught)
+  } finally {
+    downloadingWorkbook.value = false
+  }
+}
+
 async function runFormalValidation(): Promise<void> {
   const requestedCaseId = caseId.value
   const token = activeCaseToken
@@ -1074,7 +1100,9 @@ watch(caseId, () => {
         :formal-report="flow.formalReport"
         :report="flow.report"
         :downloading-document-id="downloadingDocumentId"
+        :downloading-workbook="downloadingWorkbook"
         @download="downloadOutput"
+        @download-workbook="downloadFormalWorkbook"
       />
 
       <p v-if="error" class="inline-error" role="alert">{{ error }}</p>

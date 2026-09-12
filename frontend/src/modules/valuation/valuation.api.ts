@@ -475,6 +475,14 @@ export const valuationApi = {
     return response.data
   },
 
+  async downloadFormalWorkbook(caseId: string, reportId: string): Promise<Blob> {
+    const response = await http.get<Blob>(
+      `/valuation/cases/${caseId}/reports/${reportId}/formal-xlsx/download`,
+      { responseType: 'blob' },
+    )
+    return response.data
+  },
+
   async submitForReview(
     caseId: string,
     payload: SubmitForReviewCommandDto,

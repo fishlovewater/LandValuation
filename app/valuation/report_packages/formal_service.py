@@ -47,6 +47,7 @@ from app.valuation.report_packages.formal_schemas import (
     FormalValidationResponse,
     FormalWorkflowStatusResponse,
 )
+from app.valuation.report_packages.formal_xlsx_builder import build_formal_report_xlsx
 from app.valuation.report_packages.page_schemas import (
     F02DraftData,
     F02RFDraftData,
@@ -952,6 +953,45 @@ class FormalReportService:
         if document is None or document.document_type != "complete-valuation-report":
             raise ResourceNotFoundError("完整六頁查估書 PDF")
         return document
+
+    async def export_xlsx(
+        self, case_id: UUID, report_id: UUID, user: User
+    ) -> tuple[bytes, str]:
+        """Export the finalized structured report data as a readable workbook.
+
+        The XLSX is intentionally a data export rather than an imitation of an
+        official blank-form workbook.  A finalized, active formal PDF must
+        already exist so callers cannot mistake draft data for formal output.
+        """
+        case, records = await self.pages._read_records(case_id, report_id, user)
+        f02 = records["F02"]
+        if (
+            f02.form_status != FormStatus.FINAL.value
+            or f02.output_document_id is None
+        ):
+            raise AppError(
+                "FORMAL_REPORT_REQUIRED",
+                "請先完成正式檢核並產生完整送審 PDF，再匯出查估資料 Excel",
+                409,
+            )
+        document = await self.documents.get(case_id, f02.output_document_id)
+        if (
+            document is None
+            or not document.is_active
+            or document.document_type != "complete-valuation-report"
+        ):
+            raise AppError(
+                "FORMAL_REPORT_REQUIRED",
+                "目前沒有有效的完整送審 PDF，無法匯出正式查估資料 Excel",
+                409,
+            )
+
+        data = await self.pages.draft_pdf_data(case_id, report_id, user)
+        xlsx_bytes = await run_in_threadpool(build_formal_report_xlsx, data)
+        filename = safe_filename(
+            f"valuation_data_{case.case_no}_v{f02.version_no}.xlsx"
+        )
+        return xlsx_bytes, filename
 
     async def status(
         self, case_id: UUID, report_id: UUID, user: User

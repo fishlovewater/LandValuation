@@ -250,6 +250,22 @@ describe('valuation API transport', () => {
     ])
   })
 
+  it('downloads the finalized valuation workbook as a blob', async () => {
+    const caseId = '11111111-1111-4111-8111-111111111111'
+    const reportId = '33333333-3333-4333-8333-333333333333'
+    const workbook = new Blob(['xlsx'])
+
+    http.defaults.adapter = vi.fn(async (config) => {
+      expect(config.method).toBe('get')
+      expect(config.url).toBe(`/valuation/cases/${caseId}/reports/${reportId}/formal-xlsx/download`)
+      expect(config.responseType).toBe('blob')
+      return response(workbook, config)
+    }) as unknown as typeof originalAdapter
+
+    const result = await valuationApi.downloadFormalWorkbook(caseId, reportId)
+    expect(result).toBe(workbook)
+  })
+
   it('uses the existing parcel and benchmark-land backend contracts without inventing client-only fields', async () => {
     const caseId = '11111111-1111-4111-8111-111111111111'
     const parcelId = '22222222-2222-4222-8222-222222222222'
