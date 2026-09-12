@@ -3,6 +3,8 @@ import {
   correctionStatusLabel,
   documentTypeLabel,
   fieldPathLabel,
+  findingCodeLabel,
+  findingTypeLabel,
   latestGeneratedReport,
   mapDocument,
   mapVersionDiff,
@@ -33,6 +35,9 @@ describe('review mappers', () => {
     expect(missingItemStatusLabel('VERIFIED')).toBe('已確認')
     expect(correctionStatusLabel('RESUBMITTED')).toBe('已重新送審')
     expect(verificationStatusLabel('APPLIED')).toBe('已確認並套用')
+    expect(findingCodeLabel('F03_WEIGHT_SUM')).toBe('F03 權重檢核')
+    expect(findingTypeLabel('F03_WEIGHT_SUM_MISMATCH')).toBe('F03 權重規則檢核')
+    expect(findingTypeLabel('EXPERT_GRADE_JUDGMENT')).toBe('級距專業覆核')
   })
 
   it('counts confirmed issues as unresolved until correction recheck', () => {
@@ -95,8 +100,8 @@ describe('review mappers', () => {
         finding_id: ids.finding,
         review_id: ids.review,
         validation_run_id: ids.run,
-        finding_code: 'ADJUSTMENT_RATE',
-        finding_type: 'RULE',
+        finding_code: '11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+        finding_type: 'RATE_OUT_OF_RANGE',
         severity: 'ERROR',
         title: '調整率',
         description: '需確認',
@@ -112,7 +117,10 @@ describe('review mappers', () => {
         }],
         reported_text: null,
         reported_value: '0.10',
-        legal_basis: [],
+        legal_basis: [{
+          rule_code: 'ADJUSTMENT_RATE',
+          rule_name: '調整率一致性檢核',
+        }],
         reported_grade: null,
         system_grade: null,
         reported_adjustment_rate: '0.10',
@@ -140,6 +148,9 @@ describe('review mappers', () => {
     expect(detail.caseSourceLabel).toBe('平台送審')
     expect(detail.findings[0].sourceEvidence[0].title).toBe('資料來源｜調整率')
     expect(detail.findings[0].sourceEvidence[0].title).not.toContain('internal-extracted-field-id')
+    expect(detail.findings[0].findingCodeLabel).toBe('調整率')
+    expect(detail.findings[0].findingTypeLabel).toBe('調整率規則檢核')
+    expect(detail.findings[0].findingCodeLabel).not.toContain('11111111')
   })
 
   it('maps district codes to readable names in the review queue', () => {

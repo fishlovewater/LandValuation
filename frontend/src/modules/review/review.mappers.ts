@@ -114,6 +114,8 @@ const MIME_TYPE_LABELS: Readonly<Record<string, string>> = {
 
 const FINDING_CODE_LABELS: Readonly<Record<string, string>> = {
   ADJUSTMENT_RATE: '調整率',
+  F03_WEIGHT_SUM: 'F03 權重檢核',
+  EXPERT_GRADE: '級距專業覆核',
   GRADE_MISMATCH: '等級不一致',
   REQUIRED_FIELD_MISSING: '必要欄位缺漏',
 }
@@ -122,6 +124,15 @@ const FINDING_TYPE_LABELS: Readonly<Record<string, string>> = {
   RULE: '規則檢核',
   AI: '智慧分析',
   COMPLETENESS: '完整性檢核',
+  RATE_OUT_OF_RANGE: '調整率規則檢核',
+  F03_WEIGHT_SUM_MISMATCH: 'F03 權重規則檢核',
+  EXPERT_GRADE_JUDGMENT: '級距專業覆核',
+}
+
+const FINDING_TYPE_RULE_CODES: Readonly<Record<string, string>> = {
+  RATE_OUT_OF_RANGE: 'ADJUSTMENT_RATE',
+  F03_WEIGHT_SUM_MISMATCH: 'F03_WEIGHT_SUM',
+  EXPERT_GRADE_JUDGMENT: 'EXPERT_GRADE',
 }
 
 const FIELD_PATH_LABELS: Readonly<Record<string, string>> = {
@@ -426,13 +437,24 @@ function mapLegalBasis(values: unknown[]): ReviewReferenceModel[] {
   })
 }
 
+function semanticFindingRuleCode(dto: FindingDto): string | null {
+  for (const value of dto.legal_basis) {
+    const record = objectRecord(value)
+    if (!record) continue
+    const ruleCode = textValue(record.rule_code)
+    if (ruleCode) return ruleCode
+  }
+  return FINDING_TYPE_RULE_CODES[normalized(dto.finding_type)] ?? null
+}
+
 export function mapFinding(dto: FindingDto): ReviewFindingModel {
+  const semanticRuleCode = semanticFindingRuleCode(dto)
   return {
     findingId: dto.finding_id,
     reviewId: dto.review_id,
     validationRunId: dto.validation_run_id,
     findingCode: dto.finding_code,
-    findingCodeLabel: findingCodeLabel(dto.finding_code),
+    findingCodeLabel: findingCodeLabel(semanticRuleCode ?? dto.finding_code),
     findingType: dto.finding_type,
     findingTypeLabel: findingTypeLabel(dto.finding_type),
     severityCode: dto.severity,
