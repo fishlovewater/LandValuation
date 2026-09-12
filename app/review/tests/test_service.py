@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.exceptions import AppError
+from app.review.schemas import ReviewUpdate
 from app.review.service import ReviewService, ensure_transition
 
 
@@ -37,6 +38,66 @@ def test_illegal_review_transition_raises_conflict():
 def test_completed_review_cannot_transition():
     with pytest.raises(AppError):
         ensure_transition("REVIEW_COMPLETED", "PREPROCESSING")
+
+
+def test_generic_review_update_rejects_limited_correction_state():
+    review_id = uuid4()
+
+    class FakeRepository:
+        async def get(self, requested_review_id, *, for_update=False):
+            assert requested_review_id == review_id
+            assert for_update is True
+            return SimpleNamespace(
+                review_id=review_id,
+                review_status="RETURNED_FOR_REVISION",
+            )
+
+    service = ReviewService(FakeRepository())
+
+    with pytest.raises(AppError) as exc_info:
+        asyncio.run(
+            service.update(
+                review_id,
+                ReviewUpdate(review_status="PREPROCESSING"),
+            )
+        )
+
+    assert exc_info.value.code == "REVIEW_STATE_CONFLICT"
+    assert exc_info.value.status_code == 409
+
+
+def test_generic_review_update_keeps_normal_received_transition_available():
+    review_id = uuid4()
+
+    class FakeSession:
+        def __init__(self):
+            self.flush_count = 0
+
+        async def flush(self):
+            self.flush_count += 1
+
+    class FakeRepository:
+        def __init__(self):
+            self.session = FakeSession()
+            self.review = SimpleNamespace(
+                review_id=review_id,
+                review_status="RECEIVED",
+            )
+
+        async def get(self, requested_review_id, *, for_update=False):
+            assert requested_review_id == review_id
+            assert for_update is True
+            return self.review
+
+    repository = FakeRepository()
+    service = ReviewService(repository)
+
+    result = asyncio.run(
+        service.update(review_id, ReviewUpdate(review_status="PREPROCESSING"))
+    )
+
+    assert result.review_status == "PREPROCESSING"
+    assert repository.session.flush_count == 1
 
 
 def test_external_review_freezes_documents_fields_and_run_input_before_execution():

@@ -141,6 +141,11 @@ class ReviewService:
         review = await self.repository.get(review_id, for_update=True)
         if review is None:
             raise ResourceNotFoundError("審查案件")
+        ensure_review_status_allowed(
+            review.review_status,
+            REVIEW_MUTABLE_STATUSES,
+            action="更新審查案件",
+        )
         if payload.review_status in {
             "RETURNED_FOR_REVISION",
             "SUPPLEMENT_REQUIRED",

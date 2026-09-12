@@ -10,6 +10,11 @@ from app.review.correction_repository import CorrectionRepository
 from app.review.repository import ReviewRepository
 from app.review.schemas import ReviewCreate, ReviewUpdate
 from app.review.schemas import CorrectionRequestItemRead, CorrectionRequestRead
+from app.review.status_policy import (
+    REVIEW_EXTERNAL_INPUT_MUTATION_STATUSES,
+    REVIEW_STARTABLE_STATUSES,
+    ensure_review_status_allowed,
+)
 from app.review.urgency import UrgencyThresholds, classify_urgency
 from app.review.workbench_repository import EXTERNAL_REVIEW_CASE_TYPE, WorkbenchRepository
 from app.review.workbench_schemas import (
@@ -123,6 +128,17 @@ class WorkbenchService:
             )
         return review, case
 
+    async def _external_case_for_input_mutation(
+        self, review_id: UUID, *, action: str
+    ) -> tuple[object, dict]:
+        review, case = await self._external_case(review_id)
+        ensure_review_status_allowed(
+            review.review_status,
+            REVIEW_EXTERNAL_INPUT_MUTATION_STATUSES,
+            action=action,
+        )
+        return review, case
+
     async def upload_external_document(
         self,
         review_id: UUID,
@@ -132,7 +148,9 @@ class WorkbenchService:
         storage,
         document_group_id: UUID | None = None,
     ) -> WorkbenchDocumentRead:
-        _review, case = await self._external_case(review_id)
+        _review, case = await self._external_case_for_input_mutation(
+            review_id, action="上傳或更新外部審查來源文件"
+        )
         if category not in EXTERNAL_REVIEW_DOCUMENT_CATEGORIES:
             raise AppError(
                 "EXTERNAL_REVIEW_DOCUMENT_CATEGORY_INVALID",
@@ -158,7 +176,9 @@ class WorkbenchService:
         user: User,
         storage,
     ):
-        _review, case = await self._external_case(review_id)
+        _review, case = await self._external_case_for_input_mutation(
+            review_id, action="重新辨識外部審查來源文件"
+        )
         from app.valuation.extraction.service import ExtractionService
 
         return await ExtractionService(self.repository.session, storage).start(
@@ -193,7 +213,9 @@ class WorkbenchService:
         user: User,
         storage,
     ):
-        _review, case = await self._external_case(review_id)
+        _review, case = await self._external_case_for_input_mutation(
+            review_id, action="確認外部審查文件辨識欄位"
+        )
         from app.valuation.extraction.service import ExtractionService
 
         return await ExtractionService(self.repository.session, storage).confirm(
@@ -557,11 +579,12 @@ class WorkbenchService:
 
         review_service = ReviewService(self.review_repository)
         review = await review_service.get(review_id)
-        if review.review_status in {
-            "READY_FOR_REVIEW",
-            "RETURNED_FOR_REVISION",
-            "SUPPLEMENT_REQUIRED",
-        }:
+        ensure_review_status_allowed(
+            review.review_status,
+            REVIEW_STARTABLE_STATUSES,
+            action="執行智慧審查前置檢查",
+        )
+        if review.review_status == "READY_FOR_REVIEW":
             await review_service.update(
                 review_id, ReviewUpdate(review_status="PREPROCESSING")
             )

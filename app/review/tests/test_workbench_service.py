@@ -238,7 +238,7 @@ def test_external_document_upload_rejects_generated_report_category():
     class FakeReviewRepository:
         async def get(self, requested_review_id):
             assert requested_review_id == review_id
-            return SimpleNamespace(review_id=review_id)
+            return SimpleNamespace(review_id=review_id, review_status="RECEIVED")
 
     service = WorkbenchService(FakeWorkbenchRepository(), FakeReviewRepository())
 
@@ -255,6 +255,84 @@ def test_external_document_upload_rejects_generated_report_category():
 
     assert exc_info.value.code == "EXTERNAL_REVIEW_DOCUMENT_CATEGORY_INVALID"
     assert exc_info.value.status_code == 422
+
+
+@pytest.mark.parametrize("operation", ["upload", "extract", "confirm"])
+def test_external_input_mutations_fail_closed_once_review_is_deciding(operation: str):
+    review_id = uuid4()
+    case_id = uuid4()
+    document_id = uuid4()
+
+    class FakeWorkbenchRepository:
+        session = object()
+
+        async def get_case_summary(self, requested_review_id):
+            assert requested_review_id == review_id
+            return {"case_id": case_id, "case_type": "EXTERNAL_REVIEW"}
+
+    class FakeReviewRepository:
+        async def get(self, requested_review_id):
+            assert requested_review_id == review_id
+            return SimpleNamespace(
+                review_id=review_id,
+                review_status="REVIEW_REQUIRED",
+            )
+
+    service = WorkbenchService(FakeWorkbenchRepository(), FakeReviewRepository())
+
+    with pytest.raises(AppError) as exc_info:
+        if operation == "upload":
+            asyncio.run(
+                service.upload_external_document(
+                    review_id,
+                    DocumentCategory.ORIGINAL,
+                    object(),
+                    object(),
+                    object(),
+                )
+            )
+        elif operation == "extract":
+            asyncio.run(
+                service.start_external_document_extraction(
+                    review_id,
+                    document_id,
+                    object(),
+                    object(),
+                )
+            )
+        else:
+            asyncio.run(
+                service.confirm_external_document_extraction(
+                    review_id,
+                    document_id,
+                    object(),
+                    object(),
+                    object(),
+                )
+            )
+
+    assert exc_info.value.code == "REVIEW_STATE_CONFLICT"
+    assert exc_info.value.status_code == 409
+
+
+def test_workbench_preflight_rejects_returned_for_revision_bypass():
+    review_id = uuid4()
+
+    class FakeReviewRepository:
+        async def get(self, requested_review_id, **_kwargs):
+            assert requested_review_id == review_id
+            return SimpleNamespace(
+                review_id=review_id,
+                review_status="RETURNED_FOR_REVISION",
+            )
+
+    service = WorkbenchService(SimpleNamespace(), FakeReviewRepository())
+
+    with pytest.raises(AppError) as exc_info:
+        asyncio.run(service.preflight(review_id, uuid4()))
+
+    assert exc_info.value.code == "REVIEW_STATE_CONFLICT"
+    assert exc_info.value.status_code == 409
 
 
 def test_run_projection_exposes_external_snapshot_metadata_without_snapshot_body():
