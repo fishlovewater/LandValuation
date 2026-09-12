@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { PhCheckCircle as CheckCircle } from '@phosphor-icons/vue'
 import EmptyState from '../../../components/common/EmptyState.vue'
 import { verificationStatusLabel } from '../review.mappers'
@@ -25,34 +25,44 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   save: [value: { findingId: string; decision: FindingTriageDecision; reason: string }]
+  'dirty-change': [dirty: boolean]
 }>()
 
 const decisionCode = ref<FindingTriageDecision>('CONFIRMED_ISSUE')
 const reason = ref('')
 const validationMessage = ref('')
+const initialDecisionCode = ref<FindingTriageDecision>('CONFIRMED_ISSUE')
+const initialReason = ref('')
+
+function decisionCodeFromSaved(): FindingTriageDecision {
+  const saved = props.decision?.decisionCode
+  return saved === 'DISMISSED_FALSE_POSITIVE' || saved === 'EXPERT_REVIEW'
+    ? saved
+    : 'CONFIRMED_ISSUE'
+}
+
+function syncDraftFromProps(): void {
+  const nextDecision = decisionCodeFromSaved()
+  const nextReason = props.decision?.reason ?? ''
+  decisionCode.value = nextDecision
+  reason.value = nextReason
+  initialDecisionCode.value = nextDecision
+  initialReason.value = nextReason
+  validationMessage.value = ''
+}
+
+const dirty = computed(() =>
+  decisionCode.value !== initialDecisionCode.value
+  || reason.value !== initialReason.value,
+)
 
 watch(
-  () => props.finding?.findingId,
-  () => {
-    decisionCode.value = 'CONFIRMED_ISSUE'
-    reason.value = props.decision?.reason ?? ''
-    validationMessage.value = ''
-  },
+  () => [props.finding?.findingId, props.decision?.decisionId] as const,
+  syncDraftFromProps,
   { immediate: true },
 )
 
-watch(
-  () => props.decision,
-  (decision) => {
-    if (decision) {
-      decisionCode.value =
-        decision.decisionCode === 'DISMISSED_FALSE_POSITIVE' || decision.decisionCode === 'EXPERT_REVIEW'
-          ? decision.decisionCode
-          : 'CONFIRMED_ISSUE'
-      reason.value = decision.reason ?? ''
-    }
-  },
-)
+watch(dirty, (value) => emit('dirty-change', value), { immediate: true })
 
 function display(value: string | null): string {
   return value?.trim() ? value : '—'

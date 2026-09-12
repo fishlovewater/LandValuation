@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import {
   PhArrowLeft as ArrowLeft,
   PhInfo as Info,
@@ -62,8 +62,12 @@ const correctionMessage = ref('')
 const correctionDueAt = ref('')
 const supplementOpen = ref(false)
 const supplementDueAt = ref('')
+const findingDirty = ref(false)
+const externalIntakeDirty = ref(false)
+const draftResetKey = ref(0)
 let loadSerial = 0
 const drawerTrigger = ref<HTMLElement | null>(null)
+const UNSAVED_REVIEW_MESSAGE = '尚有未儲存的審查內容，確定離開嗎？'
 
 const reviewId = computed(() => {
   const param = route.params.reviewId
@@ -97,6 +101,7 @@ const latestRun = computed(() => {
     )
 })
 const unresolvedCount = computed(() => detail.value?.unresolvedFindingCount ?? 0)
+const hasUnsavedChanges = computed(() => findingDirty.value || externalIntakeDirty.value)
 const latestReport = computed(
   () => generatedReport.value ?? detail.value?.reportDocument ?? (detail.value ? latestGeneratedReport(detail.value.generatedReports) : null),
 )
@@ -423,6 +428,7 @@ async function saveFindingDecision(value: {
       decision: value.decision,
       reason: value.reason,
     })
+    findingDirty.value = false
     await refreshAfterMutation()
     const handledFinding = detail.value?.findings.find((finding) => finding.findingId === value.findingId)
     if (handledFinding && handledFinding.statusCode !== 'OPEN') {
@@ -546,6 +552,8 @@ async function sendExistingCorrection(): Promise<void> {
 async function recheckCorrection(): Promise<void> {
   const request = latestCorrection.value
   if (!request || request.status !== 'RESUBMITTED' || !canRecheckCorrection.value || mutating.value) return
+  if (!confirmDiscardUnsavedChanges()) return
+  resetUnsavedDrafts()
   mutating.value = true
   actionError.value = ''
   try {
@@ -561,6 +569,8 @@ async function recheckCorrection(): Promise<void> {
 
 async function startReview(): Promise<void> {
   if (!reviewId.value || !canStartReview.value) return
+  if (!confirmDiscardUnsavedChanges()) return
+  resetUnsavedDrafts()
   mutating.value = true
   actionError.value = ''
   try {
@@ -617,7 +627,26 @@ async function generateReport(): Promise<void> {
   }
 }
 
+function confirmDiscardUnsavedChanges(): boolean {
+  return !hasUnsavedChanges.value || window.confirm(UNSAVED_REVIEW_MESSAGE)
+}
+
+function resetUnsavedDrafts(): void {
+  findingDirty.value = false
+  externalIntakeDirty.value = false
+  draftResetKey.value += 1
+}
+
+function handleBeforeUnload(event: BeforeUnloadEvent): void {
+  if (!hasUnsavedChanges.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
 function selectFinding(findingId: string): void {
+  if (findingId === selectedFindingId.value) return
+  if (findingDirty.value && !window.confirm(UNSAVED_REVIEW_MESSAGE)) return
+  findingDirty.value = false
   selectedFindingId.value = findingId
   if (drawer.value === 'left') closeDrawer()
   void router.replace({ query: { ...route.query, finding: findingId } })
@@ -699,19 +728,35 @@ watch(
 )
 
 watch(reviewId, () => {
+  findingDirty.value = false
+  externalIntakeDirty.value = false
   selectedFindingId.value = ''
   generatedReport.value = null
   void loadDetail()
 })
 
 onMounted(() => {
+  window.addEventListener('beforeunload', handleBeforeUnload)
   const finding = stringQuery('finding')
   if (finding) selectedFindingId.value = finding
   void loadDetail()
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('beforeunload', handleBeforeUnload)
   document.removeEventListener('keydown', handleDrawerKeydown, true)
+})
+
+onBeforeRouteLeave(() => confirmDiscardUnsavedChanges())
+
+onBeforeRouteUpdate((to) => {
+  const nextReviewId = typeof to.params.reviewId === 'string' ? to.params.reviewId : ''
+  if (nextReviewId && nextReviewId !== reviewId.value) return confirmDiscardUnsavedChanges()
+  const nextFinding = typeof to.query.finding === 'string' ? to.query.finding : ''
+  if (findingDirty.value && nextFinding && nextFinding !== selectedFindingId.value) {
+    return window.confirm(UNSAVED_REVIEW_MESSAGE)
+  }
+  return true
 })
 </script>
 
@@ -799,11 +844,13 @@ onBeforeUnmount(() => {
 
         <ExternalReviewIntake
           v-if="detail.caseSourceCode === 'EXTERNAL'"
+          :key="`${detail.reviewId}:${draftResetKey}`"
           :review-id="detail.reviewId"
           :documents="detail.documents"
           :correction-request="latestCorrection"
           :can-mutate="canMutateExternalInput"
           @changed="loadDetail"
+          @dirty-change="externalIntakeDirty = $event"
         />
 
         <div v-if="showStartReview" class="review-workbench__start-panel" data-testid="review-start-panel">
@@ -848,6 +895,14 @@ onBeforeUnmount(() => {
           @open-result="openResult"
         />
         <p v-if="error || actionError" class="review-workbench__error" role="alert">{{ error || actionError }}</p>
+        <p
+          v-if="hasUnsavedChanges"
+          class="review-workbench__unsaved"
+          data-testid="review-unsaved-notice"
+          role="status"
+        >
+          尚有未儲存的審查內容
+        </p>
 
         <section
           v-if="detail.missingItems.length"
@@ -1077,6 +1132,7 @@ onBeforeUnmount(() => {
             </section>
             <div class="review-workbench__finding-frame" data-testid="right-finding-frame">
               <FindingPanel
+                :key="`${selectedFindingId}:${draftResetKey}`"
                 :finding="selectedFinding"
                 :decision="selectedDecision"
                 :can-decide="canDecide"
@@ -1084,6 +1140,7 @@ onBeforeUnmount(() => {
                 :readonly-reason="triageReadonlyReason"
                 :saving="mutating"
                 @save="saveFindingDecision"
+                @dirty-change="findingDirty = $event"
               />
             </div>
           </aside>
@@ -1192,6 +1249,7 @@ onBeforeUnmount(() => {
 .review-workbench__readonly-banner strong { color: var(--app-ink); font-size: 12px; }
 .review-workbench__readonly-banner p { margin: 0; color: var(--app-muted); font-size: 11px; line-height: 1.55; }
 .review-workbench__error { margin: 12px 0 0; color: #ac3c37; font-size: 13px; }
+.review-workbench__unsaved { margin: 10px 0 0; padding: 9px 11px; border: 1px solid #ead8b1; border-radius: 8px; color: #72531f; background: #fff8e8; font-size: 11px; font-weight: 800; }
 .review-workbench__supplement,
 .review-workbench__diffs,
 .review-workbench__correction { display: grid; gap: 10px; margin-top: 12px; padding: 16px 18px; border: 1px solid rgba(206, 147, 48, .28); border-radius: var(--app-radius-sm); background: #fffbf1; }

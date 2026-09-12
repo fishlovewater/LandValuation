@@ -38,7 +38,10 @@ const props = withDefaults(defineProps<{
   canMutate: true,
 })
 
-const emit = defineEmits<{ changed: [] }>()
+const emit = defineEmits<{
+  changed: []
+  'dirty-change': [dirty: boolean]
+}>()
 
 const categoryOptions: Array<{ value: ExternalDocumentCategory; label: string; description: string }> = [
   { value: 'original', label: '估價報告原始文件', description: '主要 OCR 與欄位確認來源' },
@@ -118,6 +121,15 @@ const filteredCandidates = computed(() => {
 
 const pendingCount = computed(() => extraction.value?.candidates.filter((item) => item.field_status === 'NEEDS_CONFIRMATION').length ?? 0)
 const confirmedCount = computed(() => extraction.value?.candidates.filter((item) => ['APPLIED', 'CONFIRMED'].includes(item.field_status)).length ?? 0)
+const candidateDraftDirty = computed(() => {
+  const candidates = extraction.value?.candidates ?? []
+  return Object.entries(candidateEdits.value).some(([candidateId, editedValue]) => {
+    const candidate = candidates.find((item) => item.extracted_field_id === candidateId)
+    if (!candidate) return false
+    const initialValue = valueText(candidate.confirmed_value ?? candidate.extracted_value)
+    return editedValue !== initialValue
+  })
+})
 const correctionExtractionReady = computed(() => Boolean(
   correctionAwaitingReturn.value
     && correctionCandidateDocument.value
@@ -161,6 +173,19 @@ function updateEdit(candidateId: string, value: string): void {
   candidateEdits.value = { ...candidateEdits.value, [candidateId]: value }
 }
 
+function confirmDiscardCandidateDrafts(): boolean {
+  if (!candidateDraftDirty.value) return true
+  if (!window.confirm('尚有未儲存的審查內容，確定離開嗎？')) return false
+  candidateEdits.value = {}
+  return true
+}
+
+function selectDocument(documentId: string): void {
+  if (documentId === selectedDocumentId.value) return
+  if (!confirmDiscardCandidateDrafts()) return
+  selectedDocumentId.value = documentId
+}
+
 function viewCandidateSource(candidate: ExtractedFieldResponseDto): void {
   selectedCandidateId.value = candidate.extracted_field_id
 }
@@ -188,6 +213,7 @@ function resetMessages(): void {
 
 async function upload(): Promise<void> {
   if (!props.canMutate || !uploadFile.value || uploading.value || generalOriginalUploadBlocked.value) return
+  if (!confirmDiscardCandidateDrafts()) return
   resetMessages()
   uploading.value = true
   try {
@@ -215,6 +241,7 @@ async function uploadCorrectionVersion(): Promise<void> {
     || uploadingCorrection.value
     || correction?.status !== 'SENT'
   ) return
+  if (!confirmDiscardCandidateDrafts()) return
   resetMessages()
   if (!base?.documentGroupId || !category) {
     error.value = '找不到原始文件的版本沿革，無法安全建立修正版。請重新整理案件後再試。'
@@ -245,6 +272,7 @@ async function registerCorrectionReturn(): Promise<void> {
   const correction = props.correctionRequest
   const document = correctionCandidateDocument.value
   if (!props.canMutate || !correction || !document || !correctionExtractionReady.value || registeringCorrection.value) return
+  if (!confirmDiscardCandidateDrafts()) return
   resetMessages()
   registeringCorrection.value = true
   try {
@@ -283,6 +311,7 @@ async function loadExtraction(documentId = selectedDocumentId.value): Promise<vo
 async function startExtraction(): Promise<void> {
   const document = selectedDocument.value
   if (!props.canMutate || !document || !extractionSupported.value || extracting.value) return
+  if (!confirmDiscardCandidateDrafts()) return
   resetMessages()
   extracting.value = true
   try {
@@ -331,6 +360,8 @@ watch(selectedDocumentId, (documentId) => {
   resetMessages()
   if (documentId && extractionSupported.value) void loadExtraction(documentId)
 })
+
+watch(candidateDraftDirty, (value) => emit('dirty-change', value), { immediate: true })
 
 watch(
   () => props.documents.map((document) => `${document.documentId}:${document.versionNo}`).join('|'),
@@ -483,7 +514,7 @@ watch(
             type="button"
             :class="{ 'is-selected': document.documentId === selectedDocumentId }"
             :data-testid="`external-document-${document.documentId}`"
-            @click="selectedDocumentId = document.documentId"
+            @click="selectDocument(document.documentId)"
           >
             <FileText :size="18" aria-hidden="true" />
             <span><strong>{{ document.filename }}</strong><small>{{ categoryLabel(document.documentType) }} · 第 {{ document.versionNo }} 版 · {{ document.isActive ? '目前版本' : '歷史版本' }}</small></span>

@@ -437,6 +437,19 @@ describe('review demo flow', () => {
     expect(requests.filter((request) => request.url?.includes('/triage'))).toHaveLength(0)
 
     await wrapper.get('[data-testid="finding-reason"]').setValue('依據報告與檢核規則結果確認。')
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="review-unsaved-notice"]').text()).toContain('尚有未儲存'))
+    const beforeUnload = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(beforeUnload)
+    expect(beforeUnload.defaultPrevented).toBe(true)
+
+    const confirmLeave = vi.fn(() => false)
+    Object.defineProperty(window, 'confirm', { value: confirmLeave, configurable: true })
+    await wrapper.get('[data-testid="review-back-to-queue"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('review-workbench')
+    expect(confirmLeave).toHaveBeenCalledWith('尚有未儲存的審查內容，確定離開嗎？')
+    Reflect.deleteProperty(window, 'confirm')
+
     await wrapper.get('[data-testid="save-finding-decision"]').trigger('click')
     await vi.waitFor(() => expect(requests.filter((request) => request.url?.includes('/triage'))).toHaveLength(1))
     await vi.waitFor(() => expect(requests.filter((request) => request.url === '/review/workbench/summary')).toHaveLength(1))
@@ -693,6 +706,11 @@ describe('review demo flow', () => {
     expect(requests).toContain(
       `get /review/workbench/cases/${idsWithDetail.review}/external-documents/${idsWithDetail.document}/extraction`,
     )
+    const candidateInput = wrapper.get('input[aria-label="調整率確認值"]')
+    await candidateInput.setValue('-11')
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="review-unsaved-notice"]').text()).toContain('尚有未儲存'))
+    await candidateInput.setValue('-12')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="review-unsaved-notice"]').exists()).toBe(false))
     wrapper.unmount()
   })
 
