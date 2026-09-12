@@ -266,7 +266,6 @@ const canReadAutomatedWorkflow = computed(() => [
   'document.download',
 ].every((permission) => auth.permissions.includes(permission)))
 const canProceedToSubmit = computed(() => Boolean(flow.validation?.canGenerateReport && flow.report))
-const f03Guidance = computed(() => workflowGuidance.value?.form_guidance.find((item) => item.form_code === 'F03') ?? null)
 const workflowMissingItems = computed(() => workflowGuidance.value?.missing_items ?? [])
 const allCandidates = computed(() => {
   const merged = new Map<string, ExtractedFieldResponseDto>()
@@ -319,23 +318,63 @@ function f03DraftHasField(fieldName: string): boolean {
   if (fieldName === 'valuation_base_date') return Boolean(draft.valuationBaseDate)
   return false
 }
-const unresolvedF03RequiredFields = computed(() =>
-  (f03Guidance.value?.missing_required_fields ?? []).filter((field) => !f03DraftHasField(field)),
-)
+function manualValuePresent(value: unknown): boolean {
+  return Boolean(displayCandidateValue(value).trim())
+}
+
 const allManualFieldEntries = computed(() => {
   const keys = new Set<string>()
-  for (const guidance of workflowGuidance.value?.form_guidance ?? []) {
-    for (const field of guidance.missing_required_fields) {
-      if (guidance.form_code === 'F03' && f03DraftHasField(field)) continue
-      keys.add(`${guidance.form_code}.${field}`)
+  const aiResolvedKeys = new Set<string>()
+  const rejectedKeys = new Set<string>()
+
+  // A non-empty AI result is already available to the workflow.  It must not
+  // be duplicated in the manual section.  A rejected result is different: it
+  // deliberately returns to the manual section for optional correction.
+  for (const candidate of allCandidates.value) {
+    if (candidate.form_code === 'F03' && candidate.field_name === 'benchmark_land_id') continue
+    const key = `${candidate.form_code}.${candidate.field_name}`
+    if (candidate.field_status === 'REJECTED') {
+      rejectedKeys.add(key)
+      continue
+    }
+    if (manualValuePresent(candidate.confirmed_value ?? candidate.extracted_value)) {
+      aiResolvedKeys.add(key)
+    } else {
+      keys.add(key)
     }
   }
-  for (const [formCode, fields] of Object.entries(workflowGuidance.value?.manual_field_values ?? {})) {
-    for (const field of Object.keys(fields)) keys.add(`${formCode}.${field}`)
+
+  // Formal fields reported as missing remain available for manual entry, but
+  // a confirmed AI value or an already persisted value takes them out of the
+  // manual queue.
+  for (const guidance of workflowGuidance.value?.form_guidance ?? []) {
+    for (const field of guidance.missing_required_fields) {
+      if (guidance.form_code === 'F03' && (field === 'benchmark_land_id' || f03DraftHasField(field))) continue
+      const key = `${guidance.form_code}.${field}`
+      if (!aiResolvedKeys.has(key)) keys.add(key)
+    }
   }
-  // Show the approved manual fields for every form, rather than exposing only
-  // whichever form happens to have a current validation error.
-  for (const key of Object.keys(MANUAL_FIELD_METADATA)) keys.add(key)
+
+  for (const [formCode, fields] of Object.entries(workflowGuidance.value?.manual_field_values ?? {})) {
+    for (const field of Object.keys(fields)) {
+      if (formCode === 'F03' && field === 'benchmark_land_id') continue
+      const key = `${formCode}.${field}`
+      if (!aiResolvedKeys.has(key) && !manualValuePresent(manualFieldValue[key])) keys.add(key)
+    }
+  }
+
+  // Keep the approved manual fields available only while they are actually
+  // blank.  This prevents AI-completed fields from reappearing here merely
+  // because they exist in the formal field metadata.
+  for (const key of Object.keys(MANUAL_FIELD_METADATA)) {
+    const split = key.indexOf('.')
+    const formCode = key.slice(0, split)
+    const fieldName = key.slice(split + 1)
+    if (formCode === 'F03' && (fieldName === 'benchmark_land_id' || f03DraftHasField(fieldName))) continue
+    if (!aiResolvedKeys.has(key) && !manualValuePresent(manualFieldValue[key])) keys.add(key)
+  }
+
+  for (const key of rejectedKeys) keys.add(key)
   return [...keys].sort().map((key) => {
     const split = key.indexOf('.')
     return { key, formCode: key.slice(0, split), fieldName: key.slice(split + 1) }
@@ -348,12 +387,12 @@ const manualEditableEntries = computed(() => manualFieldEntries.value.filter(
   (entry) => !(entry.formCode === 'F03' && entry.fieldName === 'benchmark_land_id'),
 ))
 const dataIssueCounts = computed(() => ({
-  overview: unresolvedF03RequiredFields.value.length + (!locationParcels.value.length ? 1 : 0) + (!flow.benchmarks.length ? 1 : 0),
+  overview: 0,
   manual: allManualFieldEntries.value.length,
-  land: (!locationParcels.value.length ? 1 : 0) + (!flow.benchmarks.length ? 1 : 0),
-  f03: unresolvedF03RequiredFields.value.length,
+  land: 0,
+  f03: 0,
 }))
-const preCalculationIssueCount = computed(() => dataIssueCounts.value.overview + pendingCandidates.value.length)
+const preCalculationIssueCount = computed(() => pendingCandidates.value.length)
 const canRunValuation = computed(() => Boolean(
   canEditF03.value
     && flow.f03
@@ -389,10 +428,6 @@ const workflowIssues = computed(() => {
   const items: Array<{ id: string; title: string; detail: string; target: string; severity: 'error' | 'warning' | 'pending' }> = []
   if (!flow.documents.length) items.push({ id: 'documents', title: '尚未上傳案件啟動資料', detail: '建議先上傳宗地個別因素清冊、預定徵收範圍地籍圖與土地登記資料；系統會保留來源並協助辨識可用欄位。', target: 'documents', severity: 'pending' })
   if (pendingCandidates.value.length) items.push({ id: 'candidates', title: '智能辨識結果待確認', detail: `還有 ${pendingCandidates.value.length} 筆辨識結果需要人工確認或修改。`, target: 'candidates', severity: 'warning' })
-  if (!parcels.value.length) items.push({ id: 'parcel', title: '尚未建立宗地資料', detail: '建立本案宗地後，才能完成正式估價資料。', target: 'land', severity: 'pending' })
-  if (!flow.benchmarks.length) items.push({ id: 'benchmark', title: '尚未建立比準地', detail: '至少需要一筆比準地資料供後續估價流程使用。', target: 'land', severity: 'pending' })
-  const missingCount = unresolvedF03RequiredFields.value.length
-  if (missingCount) items.push({ id: 'required-fields', title: '必要欄位尚未補齊', detail: `${missingCount} 個必要欄位仍缺值，可直接前往人工補充。`, target: manualFieldEntries.value.length ? 'manual' : 'f03', severity: 'warning' })
   if (dirty.value) items.push({ id: 'unsaved-f03', title: '比準地地價估計表有尚未儲存的修改', detail: '先儲存目前修改，避免後續計算仍使用前一版資料。', target: 'f03', severity: 'warning' })
   if ((flow.validation?.failedCount ?? 0) > 0) items.push({ id: 'validation-errors', title: '正式檢核仍有阻擋錯誤', detail: `有 ${flow.validation?.failedCount ?? 0} 個阻擋錯誤必須修正後才能產出查估書。`, target: 'validation', severity: 'error' })
   return items
@@ -1524,7 +1559,7 @@ async function addLocation(): Promise<void> {
     locations.value = [...locations.value, created]
     newLocationLabel.value = ''
     await changeActiveLocation(created.location_id)
-    notice.value = `${created.label} 已建立；後續文件、AI 辨識與宗地資料會歸屬這個地點。`
+    notice.value = `${created.label} 已建立；後續文件、AI 辨識與宗地資料會歸屬這個宗地。`
   } catch (caught: unknown) {
     error.value = safeValuationErrorMessage(caught)
   }
@@ -1540,12 +1575,38 @@ async function chooseBenchmarkLocation(): Promise<void> {
       ...item,
       is_benchmark_location: item.location_id === updated.location_id,
     }))
-    notice.value = `${updated.label} 已設為比準地來源地點。`
+    notice.value = `${updated.label} 已設為比準地來源宗地。`
   } catch (caught: unknown) {
     error.value = safeValuationErrorMessage(caught)
   }
 }
 
+async function removeActiveLocation(): Promise<void> {
+  if (!flow.case || !activeLocationId.value) return
+  const location = activeLocation.value
+  if (!location || location.is_benchmark_location) {
+    error.value = '目前宗地是比準地，請先指定其他宗地為比準地後再刪除。'
+    return
+  }
+  if (locations.value.filter((item) => item.is_active).length <= 1) {
+    error.value = '案件至少需要保留一個宗地。'
+    return
+  }
+  if (!window.confirm(`確定要刪除「宗地 ${location.display_order}｜${location.label}」嗎？`)) return
+
+  error.value = ''
+  notice.value = ''
+  try {
+    await valuationApi.archiveLocation(flow.case.caseId, location.location_id)
+    const remaining = locations.value.filter((item) => item.location_id !== location.location_id && item.is_active)
+    locations.value = remaining
+    const nextLocation = remaining[0]
+    if (nextLocation) await changeActiveLocation(nextLocation.location_id)
+    notice.value = `${location.label} 已刪除。`
+  } catch (caught: unknown) {
+    error.value = safeValuationErrorMessage(caught)
+  }
+}
 async function changeActiveLocation(locationId: string): Promise<void> {
   activeLocationId.value = locationId
   clearPreviewUrl()
@@ -1828,7 +1889,7 @@ async function saveManualFields(): Promise<void> {
     ;(values[entry.formCode] ??= {})[entry.fieldName] = value
   }
   if (!Object.keys(values).length) {
-    notice.value = '請至少填寫一個人工補充欄位；空白欄位不會儲存。'
+    notice.value = '本次沒有填寫資料；空白欄位會保留空白，不會阻擋後續流程。'
     return
   }
 
@@ -2277,7 +2338,7 @@ onBeforeUnmount(clearPreviewUrl)
         :stage-label="workspaceStepLabel"
         :document-count="flow.documents.length"
         :pending-candidate-count="workflowGuidance?.pending_candidate_count"
-        :missing-field-count="f03Guidance ? unresolvedF03RequiredFields.length : null"
+        :missing-field-count="null"
         :validation-error-count="flow.validation?.failedCount"
         :issue-count="wizardIssueCounts[activeWizardStep] ?? 0"
         @next-action="goToWorkflowNextAction"
@@ -2293,17 +2354,17 @@ onBeforeUnmount(clearPreviewUrl)
       <section
         v-if="activeWizardStep === 2 || activeWizardStep === 3"
         class="location-context"
-        aria-label="目前估價地點"
+        aria-label="目前估價宗地"
       >
         <div class="location-context__copy">
-          <strong>目前估價地點</strong>
-          <span>來源文件、AI 辨識、人工補充與宗地資料會依地點分開保存。</span>
+          <strong>目前估價宗地</strong>
+          <span>來源文件、AI 辨識、人工補充與宗地資料會依宗地分開保存。</span>
         </div>
         <label class="location-context__select">
-          <span>切換地點</span>
+          <span>切換宗地</span>
           <select :value="activeLocationId ?? ''" data-testid="valuation-location-select" @change="handleLocationChange">
             <option v-for="location in locations" :key="location.location_id" :value="location.location_id">
-              地點 {{ location.display_order }}｜{{ location.label }}{{ location.is_benchmark_location ? '（比準地）' : '' }}
+              宗地 {{ location.display_order }}｜{{ location.label }}{{ location.is_benchmark_location ? '（比準地）' : '' }}
             </option>
           </select>
         </label>
@@ -2311,17 +2372,23 @@ onBeforeUnmount(clearPreviewUrl)
           <input
             v-model="newLocationLabel"
             type="text"
-            placeholder="新增地點名稱"
-            aria-label="新增估價地點名稱"
+            placeholder="新增宗地名稱"
+            aria-label="新增估價宗地名稱"
             @keyup.enter="addLocation"
           >
-          <button type="button" :disabled="!newLocationLabel.trim()" @click="addLocation">新增地點</button>
+          <button type="button" :disabled="!newLocationLabel.trim()" @click="addLocation">新增宗地</button>
           <button
             type="button"
             :disabled="!activeLocationId || activeLocation?.is_benchmark_location"
             @click="chooseBenchmarkLocation"
           >
             {{ activeLocation?.is_benchmark_location ? '目前為比準地' : '設為比準地' }}
+          </button>          <button
+            type="button"
+            :disabled="!activeLocationId || activeLocation?.is_benchmark_location || locations.filter((item) => item.is_active).length <= 1"
+            @click="removeActiveLocation"
+          >
+            刪除宗地
           </button>
         </div>
       </section>

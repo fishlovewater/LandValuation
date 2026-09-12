@@ -202,8 +202,6 @@ def test_missing_items_are_based_on_actual_requirements_not_report_presence() ->
     )
     assert missing == [
         "AI_CANDIDATES_REQUIRE_CONFIRMATION",
-        "PARCELS_REQUIRED",
-        "BENCHMARK_LAND_REQUIRED",
         "COMMERCIAL_REPORT_REQUIRED",
         "FORMAL_RULE_VERSION_MISSING",
     ]

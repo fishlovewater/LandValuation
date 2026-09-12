@@ -83,7 +83,7 @@ const emit = defineEmits<{
         <span class="data-stage-nav__tab-icon" aria-hidden="true"><MapTrifold :size="17" weight="duotone" /></span>
         <span>
           <strong>宗地與比準地</strong>
-          <small>{{ props.issueCounts.land ? `${props.issueCounts.land} 待處理` : '已建立' }}</small>
+          <small>{{ props.issueCounts.land ? `${props.issueCounts.land} 待處理` : '沿用前面資料，可留白' }}</small>
         </span>
       </button>
       <button
@@ -117,7 +117,7 @@ const emit = defineEmits<{
         <span class="data-stage-nav__overview-icon" aria-hidden="true"><MapTrifold :size="18" weight="duotone" /></span>
         <div class="data-stage-nav__overview-copy">
           <strong>宗地與比準地</strong>
-          <span>確認宗地基本資料與後續計算使用的比準地。</span>
+          <span>沿用前面步驟已帶入的資料；缺少時可保留空白，不阻擋後續流程。</span>
         </div>
         <div class="data-stage-nav__overview-action">
           <small>{{ props.parcelCount }} 宗地 · {{ props.benchmarkCount }} 比準地</small>

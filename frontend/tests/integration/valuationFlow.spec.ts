@@ -1696,7 +1696,7 @@ describe('valuation demo flow', () => {
     await wrapper.get('[data-testid="save-manual-fields"]').trigger('click')
     await vi.waitFor(() => {
       expect(savedReason).toBe('人工核對附件後採用此值')
-      expect(wrapper.get('[data-testid="save-manual-fields"]').text()).toContain('儲存人工補充資料')
+      expect(wrapper.find('[data-testid="manual-field-F03-decision_reason"]').exists()).toBe(false)
     })
 
     expect(manualBody).toEqual({ values: { F03: { decision_reason: '人工核對附件後採用此值' } } })
@@ -1783,7 +1783,7 @@ describe('valuation demo flow', () => {
     Object.defineProperty(window, 'confirm', { configurable: true, value: originalConfirm })
   })
 
-  it('creates and edits parcels and creates a benchmark land through the existing backend contracts', async () => {
+  it('keeps the land context read-only and allows blank parcel data', async () => {
     const newParcelId = '25252525-2525-4252-8252-252525252525'
     const newBenchmarkId = '26262626-2626-4262-8262-262626262626'
     let parcelState: typeof parcelDto | null = null
@@ -1879,47 +1879,11 @@ describe('valuation demo flow', () => {
     await wrapper.get('[data-testid="data-section-land"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.find('[data-testid="valuation-land-context"]').exists()).toBe(true))
 
-    expect((wrapper.get('[data-testid="parcel-district-code"]').element as HTMLInputElement).value).toBe('中和區')
-    await wrapper.get('[data-testid="parcel-section-name"]').setValue('Test Section')
-    await wrapper.get('[data-testid="parcel-land-no"]').setValue('100-1')
-    await wrapper.get('[data-testid="parcel-area-sqm"]').setValue('300.50')
-    await wrapper.get('[data-testid="save-parcel"]').trigger('submit')
-    await vi.waitFor(() => expect(wrapper.find(`[data-testid="edit-parcel-${newParcelId}"]`).exists()).toBe(true))
-
-    await wrapper.get(`[data-testid="edit-parcel-${newParcelId}"]`).trigger('click')
-    await wrapper.get('[data-testid="parcel-area-sqm"]').setValue('301.25')
-    await wrapper.get('[data-testid="save-parcel"]').trigger('submit')
-    await vi.waitFor(() => expect(wrapper.get('[data-testid="valuation-land-context"]').text()).toContain('301.25'))
-
-    await wrapper.get('[data-testid="benchmark-no"]').setValue('BENCH-NEW')
-    await wrapper.get('[data-testid="benchmark-zone"]').setValue('ZONE-NEW')
-    await wrapper.get('[data-testid="save-benchmark"]').trigger('submit')
-    await vi.waitFor(() => expect(wrapper.get('[data-testid="valuation-land-context"]').text()).toContain('BENCH-NEW'))
-
-    expect(writes[0]).toEqual(expect.objectContaining({
-      method: 'post',
-      url: `/valuation/cases/${ids.case}/parcels`,
-      body: expect.objectContaining({
-        district_code: '65000030',
-        section_name: 'Test Section',
-        land_no: '100-1',
-        area_sqm: '300.50',
-      }),
-    }))
-    expect(writes[1]).toEqual(expect.objectContaining({
-      method: 'patch',
-      url: `/valuation/cases/${ids.case}/parcels/${newParcelId}`,
-      body: expect.objectContaining({ area_sqm: '301.25' }),
-    }))
-    expect(writes[2]).toEqual(expect.objectContaining({
-      method: 'post',
-      url: `/valuation/cases/${ids.case}/benchmark-lands`,
-      body: expect.objectContaining({
-        parcel_id: newParcelId,
-        benchmark_land_no: 'BENCH-NEW',
-        price_zone_no: 'ZONE-NEW',
-      }),
-    }))
+    expect(wrapper.find('[data-testid="parcel-editor"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="benchmark-parcel"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="save-parcel"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="save-benchmark"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="valuation-land-context"]').text()).toContain('可直接保留空白並繼續')
     wrapper.unmount()
   })
 

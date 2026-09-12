@@ -1761,10 +1761,10 @@ class AutomatedWorkflowService:
         ) is not None
         missing_items = self._workflow_missing_items(
             pending=pending,
+            # Parcel and benchmark data are sourced from the earlier intake
+            # step when available.  Missing values remain blank for the
+            # second review system and must not block moving forward.
             has_parcels=bool(parcels),
-            # The multi-location workflow selects its benchmark in step two.
-            # A legacy BenchmarkLandRecord is only needed for formal F03 work,
-            # not for normal case progress or document review.
             has_benchmarks=bool(benchmarks) or has_selected_benchmark_location,
             has_report=report_id is not None,
             land_use_type=case.land_use_type,
@@ -1850,10 +1850,9 @@ class AutomatedWorkflowService:
         missing: list[str] = []
         if pending:
             missing.append("AI_CANDIDATES_REQUIRE_CONFIRMATION")
-        if not has_parcels:
-            missing.append("PARCELS_REQUIRED")
-        if not has_benchmarks:
-            missing.append("BENCHMARK_LAND_REQUIRED")
+        # Do not turn missing parcel/benchmark records into workflow blockers.
+        # The prepare page is allowed to continue with blank cells, while
+        # previously captured values are still carried into the exports.
         normalized_land_use = str(land_use_type or "").strip().upper()
         if not has_report and normalized_land_use in {"COMMERCIAL", "商業用地"}:
             missing.append("COMMERCIAL_REPORT_REQUIRED")

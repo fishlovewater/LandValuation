@@ -71,7 +71,7 @@ const emit = defineEmits<{
         <div>
           <p>土地資料</p>
           <h2 id="land-context-title">宗地與比準地</h2>
-          <span>先確認本案宗地，再建立並指定後續查估採用的比準地。</span>
+          <span>本區只顯示前面步驟已帶入的宗地與比準地資料；沒有資料時可保留空白。</span>
         </div>
       </div>
       <div class="land-context__summary" aria-label="土地資料統計">
@@ -94,7 +94,7 @@ const emit = defineEmits<{
         </div>
 
         <p class="land-panel__help">
-          確認段名、地號、面積與使用分區。既有資料有誤時可直接修改，不需要重複新增。
+          宗地資料沿用前面步驟的辨識或匯入結果；本步驟不需重複填寫，缺少的欄位可留白。
         </p>
 
         <ul v-if="parcels.length" class="land-records">
@@ -117,10 +117,11 @@ const emit = defineEmits<{
         </ul>
         <div v-else class="land-panel__empty">
           <MapPin :size="20" weight="duotone" aria-hidden="true" />
-          <span>尚未建立宗地，請使用下方表單新增。</span>
+          <span>前面步驟尚未帶入宗地資料；本步驟可直接保留空白並繼續。</span>
         </div>
 
         <form
+          v-if="false"
           id="parcel-editor"
           class="land-form"
           tabindex="-1"
@@ -226,7 +227,7 @@ const emit = defineEmits<{
         </div>
 
         <p class="land-panel__help">
-          更換比準地時請新增一筆，再明確指定給比準地地價估計表；既有紀錄保留，不直接覆寫。
+          比準地沿用前面步驟已選定的宗地；本步驟不需重新建立或指定，缺少時可保留空白。
         </p>
 
         <ul v-if="benchmarks.length" class="land-records land-records--benchmark">
@@ -258,10 +259,10 @@ const emit = defineEmits<{
         </ul>
         <div v-else class="land-panel__empty">
           <Target :size="20" weight="duotone" aria-hidden="true" />
-          <span>尚未建立比準地；建立後才能初始化或指定比準地地價估計表。</span>
+          <span>前面步驟尚未選定比準地；本步驟可直接保留空白並繼續。</span>
         </div>
 
-        <form class="land-form" @submit.prevent="emit('saveBenchmark')">
+        <form v-if="false" class="land-form" @submit.prevent="emit('saveBenchmark')">
           <div class="land-form__heading">
             <div>
               <span>新增比較基準</span>
