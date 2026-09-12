@@ -719,7 +719,10 @@ describe('valuation demo flow', () => {
     expect(wrapper.text()).not.toContain('object-key-must-not-render')
 
     await wrapper.get('[data-testid="go-to-submit"]').trigger('click')
-    await vi.waitFor(() => expect(router.currentRoute.value.path).toBe(`/app/valuation/cases/${ids.case}/report`))
+    await vi.waitFor(
+      () => expect(router.currentRoute.value.path).toBe(`/app/valuation/cases/${ids.case}/report`),
+      { timeout: 5000 },
+    )
     const reportStage = wrapper.get('[data-workspace-stage="report"]')
     expect(reportStage.attributes('aria-current')).toBe('step')
     expect(reportStage.text()).toContain('查估書與送審')

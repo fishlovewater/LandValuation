@@ -1,4 +1,15 @@
 <script setup lang="ts">
+import {
+  PhArrowRight as ArrowRight,
+  PhCalculator as Calculator,
+  PhCheckCircle as CheckCircle,
+  PhDatabase as Database,
+  PhFileText as FileText,
+  PhShieldCheck as ShieldCheck,
+  PhWarningCircle as WarningCircle,
+  PhWrench as Wrench,
+  PhXCircle as XCircle,
+} from '@phosphor-icons/vue'
 import type {
   CalculationModel,
   ReportArtifactModel,
@@ -23,80 +34,321 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   run: []
-  fixFinding: [finding: ValidationFindingModel]
-  goSubmit: []
+  'fix-finding': [finding: ValidationFindingModel]
+  'go-submit': []
 }>()
 </script>
 
 <template>
-  <section class="valuation-surface calculation-launch" data-testid="calculation-launch" aria-labelledby="calculation-launch-title">
-    <div class="calculation-launch__copy">
-      <div>
-        <p class="valuation-eyebrow">正式計算</p>
-        <h2 id="calculation-launch-title">計算與檢核</h2>
-        <p>系統會使用已確認的比準地地價估計表資料執行公式計算，再依檢核規則檢查缺漏與一致性；若有問題會直接指出修正位置。</p>
+  <section class="calculation-stage" data-testid="calculation-launch" aria-labelledby="calculation-launch-title">
+    <div class="calculation-stage__heading">
+      <div class="calculation-stage__title">
+        <span class="calculation-stage__icon" aria-hidden="true">
+          <Calculator :size="22" weight="duotone" />
+        </span>
+        <div>
+          <p>正式計算</p>
+          <h2 id="calculation-launch-title">計算與檢核</h2>
+        </div>
       </div>
-      <div class="calculation-launch__readiness">
-        <span :data-state="hasF03 ? 'ready' : 'blocked'">{{ hasF03 ? '比準地地價估計表已建立' : '尚未建立比準地地價估計表' }}</span>
-        <span v-if="preCalculationIssueCount" data-state="blocked">前置資料尚有 {{ preCalculationIssueCount }} 項</span>
-        <span :data-state="dirty ? 'attention' : 'ready'">{{ dirty ? '有尚未儲存的修改' : '資料已同步' }}</span>
-      </div>
+      <span class="calculation-stage__engine">
+        <ShieldCheck :size="16" weight="fill" aria-hidden="true" />
+        系統規則引擎
+      </span>
     </div>
-    <button
-      class="solid-button solid-button--primary calculation-launch__button"
-      type="button"
-      data-testid="run-valuation"
-      :disabled="running || saving || !canRunValuation"
-      :title="!canRunValuation ? '請先完成待處理前置資料' : dirty ? '會先儲存尚未儲存的比準地地價估計表修改，再執行計算與檢核' : '執行正式計算與檢核'"
-      @click="emit('run')"
-    >
-      {{ running ? '計算與檢核中…' : dirty ? '儲存修改並執行計算與檢核' : '執行計算與檢核' }}
-    </button>
+
+    <p class="calculation-stage__description">
+      系統會使用已確認的比準地地價估計表資料執行公式計算，再依檢核規則檢查缺漏與一致性；若有問題會直接指出修正位置。AI 僅協助說明，不參與正式數值計算。
+    </p>
+
+    <div class="calculation-stage__readiness" aria-label="計算前置條件">
+      <article :data-state="hasF03 ? 'ready' : 'blocked'">
+        <Database :size="18" weight="duotone" aria-hidden="true" />
+        <div>
+          <span>比準地地價估計表</span>
+          <strong>{{ hasF03 ? '已建立' : '尚未建立' }}</strong>
+        </div>
+      </article>
+      <article :data-state="preCalculationIssueCount ? 'blocked' : 'ready'">
+        <WarningCircle v-if="preCalculationIssueCount" :size="18" weight="fill" aria-hidden="true" />
+        <CheckCircle v-else :size="18" weight="fill" aria-hidden="true" />
+        <div>
+          <span>前置資料</span>
+          <strong>{{ preCalculationIssueCount ? `尚有 ${preCalculationIssueCount} 項待處理` : '已完成必要資料' }}</strong>
+        </div>
+      </article>
+      <article :data-state="dirty ? 'attention' : 'ready'">
+        <WarningCircle v-if="dirty" :size="18" weight="fill" aria-hidden="true" />
+        <CheckCircle v-else :size="18" weight="fill" aria-hidden="true" />
+        <div>
+          <span>資料同步</span>
+          <strong>{{ dirty ? '有尚未儲存的修改' : '資料已同步' }}</strong>
+        </div>
+      </article>
+    </div>
+
+    <div class="calculation-stage__action-row">
+      <p v-if="!canRunValuation">
+        <WarningCircle :size="16" weight="fill" aria-hidden="true" />
+        請先完成待處理前置資料，再執行正式計算。
+      </p>
+      <p v-else>
+        <CheckCircle :size="16" weight="fill" aria-hidden="true" />
+        前置條件已符合，可以執行正式計算與檢核。
+      </p>
+      <button
+        class="calculation-stage__run"
+        type="button"
+        data-testid="run-valuation"
+        :disabled="running || saving || !canRunValuation"
+        :title="!canRunValuation ? '請先完成待處理前置資料' : dirty ? '會先儲存尚未儲存的比準地地價估計表修改，再執行計算與檢核' : '執行正式計算與檢核'"
+        @click="emit('run')"
+      >
+        <Calculator v-if="!running" :size="17" weight="bold" aria-hidden="true" />
+        <span>{{ running ? '計算與檢核中…' : dirty ? '儲存修改並執行計算與檢核' : '執行計算與檢核' }}</span>
+      </button>
+    </div>
   </section>
 
-  <section v-if="validation" class="valuation-surface validation-results" data-testid="validation-results" aria-labelledby="validation-title">
-    <div class="surface-heading">
-      <div>
-        <p class="valuation-eyebrow">檢核結果</p>
-        <h2 id="validation-title">計算與資料檢核</h2>
+  <section
+    v-if="validation"
+    class="validation-results"
+    data-testid="validation-results"
+    aria-labelledby="validation-title"
+  >
+    <div class="validation-results__heading">
+      <div class="validation-results__title">
+        <span class="validation-results__icon" aria-hidden="true">
+          <ShieldCheck :size="21" weight="duotone" />
+        </span>
+        <div>
+          <p>檢核結果</p>
+          <h2 id="validation-title">計算與資料檢核</h2>
+        </div>
       </div>
-      <span class="value-kind" :data-validation-state="validation.canGenerateReport ? 'ready' : 'blocked'">{{ validation.canGenerateReport ? '可產生比準地地價估計表單表' : '仍有待修正項目' }}</span>
+      <span
+        class="validation-results__state"
+        :data-validation-state="validation.canGenerateReport ? 'ready' : 'blocked'"
+      >
+        <CheckCircle v-if="validation.canGenerateReport" :size="16" weight="fill" aria-hidden="true" />
+        <WarningCircle v-else :size="16" weight="fill" aria-hidden="true" />
+        {{ validation.canGenerateReport ? '可產生比準地地價估計表單表' : '仍有待修正項目' }}
+      </span>
     </div>
-    <div class="validation-counts">
-      <span>通過 {{ validation.passedCount }}</span>
-      <span>警示 {{ validation.warningCount }}</span>
-      <span>錯誤 {{ validation.failedCount }}</span>
+
+    <div class="validation-results__counts" aria-label="檢核統計">
+      <span data-state="passed"><CheckCircle :size="16" weight="fill" aria-hidden="true" />通過 {{ validation.passedCount }}</span>
+      <span data-state="warning"><WarningCircle :size="16" weight="fill" aria-hidden="true" />警示 {{ validation.warningCount }}</span>
+      <span data-state="error"><XCircle :size="16" weight="fill" aria-hidden="true" />錯誤 {{ validation.failedCount }}</span>
     </div>
-    <ul v-if="validation.findings.length" class="finding-list">
-      <li v-for="finding in validation.findings" :key="finding.findingId" :data-severity="finding.severity">
-        <strong>{{ finding.severity === 'ERROR' ? '需要修正' : '請確認' }}｜{{ findingLocationLabel(finding) }}</strong>
+
+    <ul v-if="validation.findings.length" class="validation-results__findings">
+      <li
+        v-for="finding in validation.findings"
+        :key="finding.findingId"
+        :data-severity="finding.severity"
+      >
+        <div class="validation-results__finding-title">
+          <XCircle v-if="finding.severity === 'ERROR'" :size="17" weight="fill" aria-hidden="true" />
+          <WarningCircle v-else :size="17" weight="fill" aria-hidden="true" />
+          <strong>{{ finding.severity === 'ERROR' ? '需要修正' : '請確認' }}｜{{ findingLocationLabel(finding) }}</strong>
+        </div>
         <span>{{ finding.message }}</span>
-        <small>實際值：{{ finding.actualValue ?? '—' }}</small>
-        <small>預期值：{{ finding.expectedValue ?? '—' }}</small>
-        <small><b>建議修正：</b>{{ findingCorrectionHint(finding) }}</small>
-        <button class="finding-action" type="button" :data-testid="`fix-finding-${finding.findingId}`" @click="emit('fixFinding', finding)">前往修正</button>
+        <div class="validation-results__values">
+          <small>實際值：{{ finding.actualValue ?? '—' }}</small>
+          <small>預期值：{{ finding.expectedValue ?? '—' }}</small>
+        </div>
+        <small class="validation-results__hint"><b>建議修正：</b>{{ findingCorrectionHint(finding) }}</small>
+        <button
+          class="validation-results__fix"
+          type="button"
+          :data-testid="`fix-finding-${finding.findingId}`"
+          @click="emit('fix-finding', finding)"
+        >
+          <Wrench :size="15" weight="bold" aria-hidden="true" />
+          <span>前往修正</span>
+        </button>
       </li>
     </ul>
-    <p v-else class="empty-copy">目前沒有其他需要處理的檢核項目。</p>
-    <div v-if="validation.correctionHints.length" class="correction-hints">
-      <strong>建議修正方式</strong>
+    <p v-else class="validation-results__empty">
+      <CheckCircle :size="17" weight="fill" aria-hidden="true" />
+      目前沒有其他需要處理的檢核項目。
+    </p>
+
+    <div v-if="validation.correctionHints.length" class="validation-results__correction-hints">
+      <strong><Wrench :size="16" weight="bold" aria-hidden="true" />建議修正方式</strong>
       <ul><li v-for="hint in validation.correctionHints" :key="hint">{{ hint }}</li></ul>
     </div>
 
-    <div v-if="calculation" class="calculation-result" data-testid="calculation-result" data-source-kind="calculated">
-      <span>正式計算結果</span>
-      <strong>{{ calculation.result }} {{ calculation.currencyCode }}</strong>
-      <small>公式版本：{{ calculation.formulaVersion }}</small>
+    <div class="validation-results__outputs">
+      <article v-if="calculation" class="validation-results__output" data-testid="calculation-result" data-source-kind="calculated">
+        <Calculator :size="20" weight="duotone" aria-hidden="true" />
+        <div>
+          <span>正式計算結果</span>
+          <strong>{{ calculation.result }} {{ calculation.currencyCode }}</strong>
+          <small>公式版本：{{ calculation.formulaVersion }}</small>
+        </div>
+      </article>
+      <article v-if="report" class="validation-results__output" data-testid="report-result">
+        <FileText :size="20" weight="duotone" aria-hidden="true" />
+        <div>
+          <span>比準地地價估計表單表輸出</span>
+          <strong>{{ report.filename }}</strong>
+          <small>第 {{ report.versionNo }} 版｜檔案大小 {{ Math.max(1, Math.round(report.fileSizeBytes / 1024)) }} KB</small>
+        </div>
+      </article>
     </div>
-    <div v-if="report" class="report-result" data-testid="report-result">
-      <span>比準地地價估計表單表輸出</span>
-      <strong>{{ report.filename }}</strong>
-      <small>第 {{ report.versionNo }} 版｜檔案大小 {{ Math.max(1, Math.round(report.fileSizeBytes / 1024)) }} KB</small>
+
+    <div class="validation-results__next">
+      <p>
+        {{ canProceedToSubmit ? '檢核已達送審條件，可進入查估書確認。' : '必須先修正阻擋項目並重新執行檢核。' }}
+      </p>
+      <button
+        class="validation-results__submit"
+        type="button"
+        data-testid="go-to-submit"
+        :disabled="!canProceedToSubmit"
+        :title="canProceedToSubmit ? '前往輸出預覽與送審' : '必須先修正阻擋項目並通過檢核'"
+        @click="emit('go-submit')"
+      >
+        <span>{{ canProceedToSubmit ? '前往輸出預覽與送審' : '請先完成阻擋項目' }}</span>
+        <ArrowRight v-if="canProceedToSubmit" :size="16" weight="bold" aria-hidden="true" />
+      </button>
     </div>
-    <button class="solid-button solid-button--primary" type="button" data-testid="go-to-submit" :disabled="!canProceedToSubmit" :title="canProceedToSubmit ? '前往輸出預覽與送審' : '必須先修正阻擋項目並通過檢核'" @click="emit('goSubmit')">{{ canProceedToSubmit ? '前往輸出預覽與送審' : '請先完成阻擋項目' }}</button>
   </section>
 </template>
 
 <style scoped>
-.valuation-surface{padding:22px;border:1px solid var(--app-line);border-radius:var(--app-radius-md);background:var(--app-paper-strong);box-shadow:var(--app-shadow-soft)}.surface-heading,.calculation-result,.report-result{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.surface-heading{margin-bottom:18px}.surface-heading h2{margin:0;color:var(--app-ink);font-family:var(--app-font-display);font-size:24px;font-weight:600;letter-spacing:-.04em}.valuation-eyebrow{margin:0 0 6px;color:var(--app-accent-deep);font-size:11px;font-weight:800;letter-spacing:.12em}.value-kind{display:inline-flex;min-height:30px;align-items:center;padding:5px 10px;border:1px solid var(--app-line);border-radius:var(--app-radius-pill);color:var(--app-ink-soft);background:#f7f8fb;font-size:11px;font-weight:800;white-space:nowrap}.calculation-launch{display:grid;gap:14px;border-color:rgba(46,89,132,.24);background:#f8fbff}.calculation-launch__copy{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}.calculation-launch__copy h2{margin:0;color:var(--app-ink);font-family:var(--app-font-display);font-size:24px}.calculation-launch__copy p:last-child{max-width:720px;margin:7px 0 0;color:var(--app-ink-soft);font-size:12px;line-height:1.7}.calculation-launch__readiness{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px}.calculation-launch__readiness span{padding:6px 9px;border-radius:999px;font-size:10px;font-weight:850}.calculation-launch__readiness [data-state="ready"]{color:#2f745b;background:#edf8f3}.calculation-launch__readiness [data-state="attention"]{color:#925421;background:#fff0df}.calculation-launch__readiness [data-state="blocked"]{color:#9a4435;background:#fff0ed}.calculation-launch__button{justify-self:start;min-width:200px}.solid-button{min-height:44px;padding:10px 16px;border:1px solid var(--app-line);border-radius:9px;color:var(--app-ink-soft);background:var(--app-paper-strong);cursor:pointer;font-size:13px;font-weight:800}.solid-button--primary{border-color:var(--app-accent);color:#fff;background:var(--app-accent)}.solid-button:disabled{cursor:not-allowed;opacity:.55}.validation-counts{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}.validation-counts span{padding:8px 11px;border-radius:8px;color:var(--app-ink-soft);background:#f5f7fb;font-size:12px;font-weight:800}.finding-list{display:grid;gap:8px;margin:0;padding:0;list-style:none}.finding-list li{display:grid;gap:4px;padding:12px 14px;border-left:4px solid #d6a63e;background:#fffaf0;color:var(--app-ink-soft);font-size:13px}.finding-list li[data-severity="ERROR"]{border-left-color:#c85b43;background:#fff3f0}.finding-list strong{color:var(--app-ink);font-size:12px}.finding-list b{color:var(--app-ink)}.finding-action{justify-self:start;min-height:36px;margin-top:5px;padding:6px 11px;border:1px solid rgba(200,91,67,.26);border-radius:8px;color:var(--app-accent-deep);background:#fff;cursor:pointer;font-size:11px;font-weight:900}.correction-hints{display:grid;gap:7px;margin-top:14px;padding:12px 14px;border:1px solid rgba(214,166,62,.26);border-radius:var(--app-radius-sm);background:#fffaf0}.correction-hints>strong{color:var(--app-ink);font-size:12px}.correction-hints ul{display:grid;gap:4px;margin:0;padding-left:20px;color:var(--app-ink-soft);font-size:12px}.empty-copy{margin:0;color:var(--app-muted);font-size:13px}.calculation-result,.report-result{align-items:center;margin-top:14px;padding:14px;border:1px solid var(--app-line);border-radius:var(--app-radius-sm);background:#fbfcfe}.calculation-result span,.report-result span{color:var(--app-muted);font-size:11px;font-weight:800}.calculation-result strong,.report-result strong{margin-left:auto;color:var(--app-ink);font-size:14px}.calculation-result small,.report-result small{color:var(--app-muted);font-size:11px}.validation-results>.solid-button{margin-top:18px}@media(max-width:760px){.valuation-surface{padding:16px}.surface-heading,.calculation-result,.report-result,.calculation-launch__copy{align-items:stretch;flex-direction:column}.solid-button{width:100%}.calculation-result strong,.report-result strong{margin-left:0}}
+.calculation-stage,
+.validation-results {
+  padding: 22px;
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-md);
+  background: #fff;
+}
+.calculation-stage { border-color: rgba(46, 89, 132, .22); }
+.calculation-stage__heading,
+.validation-results__heading,
+.calculation-stage__title,
+.validation-results__title,
+.calculation-stage__action-row,
+.validation-results__finding-title,
+.validation-results__counts span,
+.validation-results__empty,
+.validation-results__correction-hints strong,
+.validation-results__next,
+.validation-results__output {
+  display: flex;
+  align-items: center;
+}
+.calculation-stage__heading,
+.validation-results__heading,
+.validation-results__next {
+  justify-content: space-between;
+  gap: 16px;
+}
+.calculation-stage__title,
+.validation-results__title { gap: 11px; }
+.calculation-stage__icon,
+.validation-results__icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 9px;
+  color: var(--app-accent-deep);
+  background: #edf4fb;
+}
+.calculation-stage__title p,
+.validation-results__title p { margin: 0 0 4px; color: var(--app-accent-deep); font-size: 11px; font-weight: 800; letter-spacing: .12em; }
+.calculation-stage__title h2,
+.validation-results__title h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 22px; font-weight: 650; letter-spacing: -.035em; }
+.calculation-stage__engine,
+.validation-results__state {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid rgba(46, 89, 132, .22);
+  border-radius: var(--app-radius-pill);
+  color: var(--app-accent-deep);
+  background: #edf4fb;
+  font-size: 11px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+.calculation-stage__description { max-width: 830px; margin: 13px 0 16px; color: var(--app-ink-soft); font-size: 12px; line-height: 1.75; }
+.calculation-stage__readiness { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.calculation-stage__readiness article { display: flex; min-width: 0; align-items: center; gap: 9px; padding: 12px 13px; border: 1px solid var(--app-line); border-radius: 9px; color: #2f7456; background: #fbfcfe; }
+.calculation-stage__readiness article[data-state="blocked"] { border-color: rgba(193, 92, 65, .20); color: #a44334; background: #fff6f3; }
+.calculation-stage__readiness article[data-state="attention"] { border-color: rgba(188, 133, 37, .22); color: #946d16; background: #fff9ec; }
+.calculation-stage__readiness article > div { display: grid; min-width: 0; gap: 3px; }
+.calculation-stage__readiness span { color: var(--app-muted); font-size: 10px; font-weight: 800; }
+.calculation-stage__readiness strong { color: currentColor; font-size: 12px; line-height: 1.4; }
+.calculation-stage__action-row { justify-content: space-between; gap: 16px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--app-line); }
+.calculation-stage__action-row p { display: inline-flex; align-items: center; gap: 6px; margin: 0; color: var(--app-ink-soft); font-size: 12px; }
+.calculation-stage__run,
+.validation-results__submit,
+.validation-results__fix {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 850;
+}
+.calculation-stage__run,
+.validation-results__submit { padding: 9px 15px; border: 1px solid var(--app-accent); color: #fff; background: var(--app-accent); }
+.calculation-stage__run:disabled,
+.validation-results__submit:disabled { cursor: not-allowed; opacity: .5; }
+
+.validation-results__heading { align-items: flex-start; margin-bottom: 14px; }
+.validation-results__state { border-color: rgba(57, 123, 92, .22); color: #2f7456; background: #edf8f2; }
+.validation-results__state[data-validation-state="blocked"] { border-color: rgba(193, 92, 65, .22); color: #a44334; background: #fff3f0; }
+.validation-results__counts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.validation-results__counts span { gap: 6px; padding: 8px 11px; border-radius: 8px; font-size: 12px; font-weight: 800; }
+.validation-results__counts [data-state="passed"] { color: #2f7456; background: #edf8f2; }
+.validation-results__counts [data-state="warning"] { color: #946d16; background: #fff8e8; }
+.validation-results__counts [data-state="error"] { color: #a44334; background: #fff3f0; }
+.validation-results__findings { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
+.validation-results__findings li { display: grid; gap: 7px; padding: 13px 14px; border-left: 4px solid #d6a63e; border-radius: 0 8px 8px 0; color: var(--app-ink-soft); background: #fffaf0; font-size: 13px; }
+.validation-results__findings li[data-severity="ERROR"] { border-left-color: #c85b43; background: #fff3f0; }
+.validation-results__finding-title { gap: 6px; color: #946d16; }
+.validation-results__findings li[data-severity="ERROR"] .validation-results__finding-title { color: #a44334; }
+.validation-results__finding-title strong { color: currentColor; font-size: 12px; }
+.validation-results__values { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--app-muted); }
+.validation-results__hint b { color: var(--app-ink); }
+.validation-results__fix { justify-self: start; min-height: 36px; padding: 6px 11px; border: 1px solid rgba(46, 89, 132, .24); color: var(--app-accent-deep); background: #fff; }
+.validation-results__empty { gap: 7px; margin: 0; color: #2f7456; font-size: 13px; }
+.validation-results__correction-hints { display: grid; gap: 7px; margin-top: 14px; padding: 12px 14px; border: 1px solid rgba(214, 166, 62, .26); border-radius: 9px; background: #fffaf0; }
+.validation-results__correction-hints strong { gap: 6px; color: var(--app-ink); font-size: 12px; }
+.validation-results__correction-hints ul { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: var(--app-ink-soft); font-size: 12px; }
+.validation-results__outputs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 15px; }
+.validation-results__output { min-width: 0; gap: 10px; padding: 13px; border: 1px solid var(--app-line); border-radius: 9px; color: var(--app-accent-deep); background: #fbfcfe; }
+.validation-results__output > div { display: grid; min-width: 0; gap: 3px; }
+.validation-results__output span { color: var(--app-muted); font-size: 10px; font-weight: 800; }
+.validation-results__output strong { color: var(--app-ink); font-size: 14px; overflow-wrap: anywhere; }
+.validation-results__output small { color: var(--app-muted); font-size: 11px; }
+.validation-results__next { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--app-line); }
+.validation-results__next p { margin: 0; color: var(--app-ink-soft); font-size: 12px; }
+
+@media (max-width: 820px) {
+  .calculation-stage__readiness { grid-template-columns: 1fr; }
+  .validation-results__outputs { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 640px) {
+  .calculation-stage,
+  .validation-results { padding: 16px; }
+  .calculation-stage__heading,
+  .validation-results__heading,
+  .calculation-stage__action-row,
+  .validation-results__next { align-items: stretch; flex-direction: column; }
+  .calculation-stage__run,
+  .validation-results__submit { width: 100%; }
+}
 </style>
