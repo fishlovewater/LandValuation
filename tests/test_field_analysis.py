@@ -13,6 +13,7 @@ from app.valuation.extraction.field_analysis import (
     _detected_source_form_codes,
     AnalyzedFieldCandidate,
     BedrockFieldAnalysisProvider,
+    BedrockFieldAnalysisRouter,
     FieldAnalysisResult,
     FieldAnalysisService,
     FIELD_ANALYSIS_FIELDS,
@@ -276,6 +277,89 @@ async def test_bedrock_field_analysis_uses_forced_structured_tool() -> None:
         "field_name"
     ]
     assert field_schema["enum"] == ["transaction_no"]
+
+
+def test_fable_field_analysis_omits_unsupported_temperature_parameter() -> None:
+    settings = bedrock_settings().model_copy(
+        update={"bedrock_model_id": "global.anthropic.claude-fable-5-1"}
+    )
+    provider = BedrockFieldAnalysisProvider(settings, client=FakeBedrockClient({}))
+    assert provider._inference_config() == {"maxTokens": settings.bedrock_max_tokens}
+
+
+@pytest.mark.asyncio
+async def test_bedrock_router_sends_missing_and_low_confidence_fields_to_fallback() -> None:
+    class Stub:
+        def __init__(self, result):
+            self.result = result
+            self.calls = []
+            self.model_id = result.model_id
+            self.prompt_version = result.prompt_version
+
+        async def analyze(self, extracted_text, form_code, allowed_fields):
+            self.calls.append((extracted_text, form_code, allowed_fields))
+            return self.result
+
+    primary = Stub(
+        FieldAnalysisResult(
+            candidates=(
+                AnalyzedFieldCandidate(
+                    field_name="transaction_no",
+                    extracted_value="2",
+                    confidence=Decimal("0.70"),
+                    source_text="實例編號：2",
+                ),
+            ),
+            provider="BEDROCK",
+            model_id="global.anthropic.claude-fable-5-1",
+            prompt_version="test",
+        )
+    )
+    fallback = Stub(
+        FieldAnalysisResult(
+            candidates=(
+                AnalyzedFieldCandidate(
+                    field_name="transaction_no",
+                    extracted_value="2",
+                    confidence=Decimal("0.99"),
+                    source_text="實例編號：2",
+                ),
+                AnalyzedFieldCandidate(
+                    field_name="transaction_date",
+                    extracted_value="114年5月28日",
+                    confidence=Decimal("0.98"),
+                    source_text="交易日期：114年5月28日",
+                ),
+            ),
+            provider="BEDROCK",
+            model_id="global.anthropic.claude-opus-5",
+            prompt_version="test",
+        )
+    )
+    settings = bedrock_settings().model_copy(
+        update={
+            "bedrock_fallback_model_id": "global.anthropic.claude-opus-5",
+            "bedrock_fallback_confidence_threshold": 0.85,
+        }
+    )
+    router = BedrockFieldAnalysisRouter(settings, primary=primary, fallback=fallback)
+
+    routed = await router.analyze_with_routing(
+        "實例編號：2\n交易日期：114年5月28日",
+        "F01",
+        {
+            "transaction_no": "實例編號",
+            "transaction_date": "交易日期",
+        },
+    )
+
+    assert len(routed) == 1
+    assert routed[0][1] == {
+        "transaction_no": "實例編號",
+        "transaction_date": "交易日期",
+    }
+    assert fallback.calls[0][2] == routed[0][1]
+
 
 
 @pytest.mark.asyncio
@@ -593,7 +677,7 @@ def test_field_analysis_prompt_includes_shared_markdown_and_selected_form_rules(
     )
 
     assert "field_rules_markdown" in prompt
-    assert "field-rules-md-v1" in prompt
+    assert "field-rules-md-v2" in prompt
     assert "| `land_area` |" in prompt
     assert "## F01" in prompt
     assert "\n## F02\n" not in prompt

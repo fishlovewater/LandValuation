@@ -97,6 +97,7 @@ class ExtractionService:
             extraction.provider = result.provider
             extraction.page_count = result.page_count
             extraction.extracted_text = result.text
+            extraction.extraction_metadata = result.metadata
             extraction.completed_at = datetime.now(UTC)
             if not result.text.strip():
                 extraction.extraction_status = "FAILED"
@@ -121,6 +122,7 @@ class ExtractionService:
                 ExtractedFieldRecord(
                     case_id=case_id,
                     extraction_id=extraction.extraction_id,
+                    location_id=document.location_id,
                     document_id=document_id,
                     form_code=item.form_code,
                     field_name=item.field_name,

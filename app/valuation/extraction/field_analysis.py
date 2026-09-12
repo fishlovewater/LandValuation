@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.models import User
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AppError, ResourceNotFoundError
+from app.storage.service import StorageService
+from app.valuation.documents.repository import DocumentRepository
 from app.valuation.extraction.field_catalog import (
     F01_FIELD_ANALYSIS_FIELDS,
     F02_FIELD_ANALYSIS_FIELDS,
@@ -33,6 +36,9 @@ from app.valuation.extraction.schemas import (
 )
 from app.valuation.models import DocumentExtractionRecord, ExtractedFieldRecord
 from app.valuation.service import ValuationService
+
+
+logger = logging.getLogger(__name__)
 
 
 FIELD_ANALYSIS_FIELDS: dict[str, dict[str, str]] = {
@@ -58,23 +64,23 @@ FIELD_ANALYSIS_FIELDS: dict[str, dict[str, str]] = {
         "mass_transit_proximity": "接近大型車站/捷運站/客運站之程度 (如：國光客運金山站 距離300公尺、300M、L1-L5)",
         "station_proximity": "公車站牌/公車亭之接近程度或密集程度 (如：金山區公所站、站牌密集、本區段內、L1-L5)",
         "interchange_proximity": "交流道之有無及接近程度 (如：無、無交流道、有交流道、L1-L5)",
-        "road_plan": "區段內道路規劃及闢建程度 (如：已完全開發、闢建完成、規劃良好、L1-L5)",
+        "road_plan": "區段內道路規劃及開闢程度 (如：已完全開發、開闢完成、規劃良好、L1-L5)",
         "drainage": "排水之良否/排水狀況 (如：有排水系統、不易淹水、排水良好、一般、L1-L5)",
         "terrain": "地勢狀況/地形/高程 (如：平坦、平地、地形平整、緩坡、低窪、L1-L5)",
-        "market_proximity": "接近市場之程度（傳統市場、超級市場、超大型購物中心） (如：金山市場 92公尺、鄰近市場、L1-L5)",
-        "park_proximity": "接近公園（里鄰公園、一般公園）、廣場、徒步區之程度 (如：中山溫泉公園 200公尺、鄰近公園、L1-L5)",
+        "market_proximity": "接近傳統市場/公有市場之程度 (如：金山市場 92公尺、鄰近市場、L1-L5)",
+        "park_proximity": "接近公園/廣場之程度 (如：中山溫泉公園 200公尺、鄰近公園、L1-L5)",
         "tourist_facility_proximity": "接近觀光遊憩設施/老街/景點之程度 (如：金包里老街 本區段內、老街商圈、L1-L5)",
         "parking_convenience": "停車場地/停車便利程度 (如：金包里老街停車場 距離120公尺、可路邊停車、不可路邊停車、L1-L5)",
-        "power_gas_facility": "電業設施及公用氣體燃料設施之有無及接近程度 (如：金山變電所 距離700公尺、無、L1-L5)",
-        "funeral_facility": "殯葬設施/墓地/殯儀館/火葬場/納骨塔之有無及距離 (如：金山第一公墓 距離80公尺、無、L1-L5)",
+        "power_gas_facility": "電業設施/變電所/高壓鐵塔/氣體燃料設施 (如：金山變電所 距離700公尺、無、L1-L5)",
+        "funeral_facility": "殮葬設施/墓地/殯儀館/火葬場/納骨塔之有無及距離 (如：金山第一公墓 距離80公尺、無、L1-L5)",
         "waste_facility": "廢棄物處理設施/垃圾場之有無及距離 (如：無、未發現顯著設施、有、L1-L5)",
-        "environmental_pollution": "水污染、噪音污染、廢氣污染、廢棄物污染等之有無及接近程度 (如：未發現顯著污染、無污染、L1-L5)",
+        "environmental_pollution": "水、噪音、廢氣及廢棄物污染狀況 (如：未發現顯著污染、無污染、L1-L5)",
         "department_store": "百貨公司/商場之有無及接近程度 (如：無、鄰近無百貨公司、L1-L5)",
         "financial_institution": "金融機構/銀行/郵局之有無及數量 (如：鄰近範圍內有金融服務設施、有、L1-L5)",
         "entertainment_facility": "娛樂設施之有無及數量 (如：數量較少、無、L1-L5)",
-        "exhibition_hotel": "大型展示中心或觀光飯店之有無、數量、接近程度 (如：非區段主要價格因素、無、L1-L5)",
+        "exhibition_hotel": "大型展示中心或觀光飯店之接近程度 (如：非區段主要價格因素、無、L1-L5)",
         "pedestrian_flow": "顧客通行量/人流量 (如：老街及中山路沿線人流較多、人流多、L1-L5)",
-        "vacancy_rate": "店舖之毗連狀態 (如：店舖連續程度高、毗連程度高、L1-L5)",
+        "vacancy_rate": "店舖之歇業/毗連狀態 (如：店舖連續程度高、歇業少、L1-L5)",
         "other": "其他影響因素等級 (L1-L5)",
     },
     "F03": {
@@ -420,7 +426,7 @@ def field_analysis_prompt(
                 "2. 證據出處 (source_text)：必須是 ocr_text 中真實存在的連續或近乎連續之原始文字段落（保留該行或該句的原始標點與換行），絕不可自創不存在的段落。",
                 "3. 擷取數值 (extracted_value)：",
                 "   - 一般欄位（如日期、地號、區段號、單價、面積等）：擷取 source_text 中所包含的核心數值或原始文字（如 '114年9月1日'、'金美段489地號'、'P002-00'）。",
-                "   - 區域因素欄位（F02-RF）：可回傳文件中的自然語言描述（如 '都市計畫內'、'第二種商業區'、'平坦'、'70%'、'無'）或標準等級代碼（'L1'~'L5'），系統會依據自動進行標準等級轉譯。",
+                "   - 區域因素欄位（F02-RF）：可回傳文件中的自然語言描述（如 '都市計畫內'、'第二種商業區'、'平坦'、'70%'、'無'）或標準等級代碼（'L1'~'L7'）。若 field_rules_markdown 的住宅計分規則適用範圍已由案件或原文確認，且原文可無歧義落入指定級距，得依規則計算後回傳 L 等級；此時 source_text 仍必須保留實際觀察原文。若用途、行政區、單位、距離或級距不明，必須回傳原文觀察值，不可猜測等級。",
                 "   - extracted_value 必須是 source_text 中可直接找到的連續原文片段，不可自行改寫，也不可合併不同儲存格或不連續位置的文字。若完整資訊分散在多個儲存格，請選擇最能代表該欄位且連續存在的單一原文片段。",
                 "4. 零虛構原則：若文件內容完全未提及該欄位（例如未包含任何廢棄物設施資訊），請勿回傳該欄位；絕不可自創資料、UUID 或非憑據數據。",
                 "5. 僅回傳 allowed_fields 白名單內定義的 field_name，並再次對照 field_rules_markdown 的欄位代碼表。",
@@ -438,41 +444,6 @@ def field_analysis_prompt(
             "ocr_text": extracted_text,
         },
         ensure_ascii=False,
-    )
-
-
-def ollama_field_analysis_prompt(
-    extracted_text: str,
-    form_code: str,
-    allowed_fields: dict[str, str],
-) -> str:
-    """Build a plain-text extraction prompt for local Ollama models.
-
-    The OCR payload is intentionally not wrapped in JSON.  Some local models
-    otherwise try to validate the *input* as JSON instead of treating it as
-    noisy source text, especially when the OCR contains tables or mojibake.
-    The response shape is still constrained separately by Ollama's `format`
-    JSON schema and verified again against the original OCR before persistence.
-    """
-    field_lines = "\n".join(
-        f"- {name}: {description}" for name, description in allowed_fields.items()
-    )
-    return (
-        "任務：從 OCR 原文中找出可直接由原文證明的土地估價表單欄位候選。\n"
-        f"目標表單：{form_code}\n\n"
-        "重要規則：\n"
-        "1. OCR 原文是一般文字，不是 JSON；即使有亂碼、表格殘片或不完整行，也不要回覆 Invalid JSON。\n"
-        "2. 只可使用下方允許欄位，不得建立其他 field_name。\n"
-        "3. 每個 field_name 最多回傳一筆；同欄位有多處時選擇證據最直接的一處。\n"
-        "4. source_text 必須逐字來自 OCR 原文，extracted_value 也必須是 source_text 中可直接找到的連續片段。\n"
-        "5. 不可推算、補值、改寫、正規化日期或自行組合不同位置的文字。\n"
-        "6. 沒有足夠原文證據的欄位不要回傳；完全沒有時回傳 candidates 空陣列。\n"
-        "7. 只輸出系統指定 JSON schema 的內容，不要輸出 error、message、說明文字或 Markdown。\n\n"
-        "【允許欄位】\n"
-        f"{field_lines}\n\n"
-        "【OCR 原文開始】\n"
-        f"{extracted_text}\n"
-        "【OCR 原文結束】"
     )
 
 
@@ -497,13 +468,12 @@ def field_analysis_output_schema(
     allowed_fields: tuple[str, ...],
     max_candidates: int,
 ) -> dict[str, Any]:
-    candidate_limit = min(max_candidates, len(allowed_fields))
     return {
         "type": "object",
         "properties": {
             "candidates": {
                 "type": "array",
-                "maxItems": candidate_limit,
+                "maxItems": max_candidates,
                 "items": {
                     "type": "object",
                     "properties": {
@@ -583,13 +553,23 @@ class FieldAnalysisProvider(Protocol):
         extracted_text: str,
         form_code: str,
         allowed_fields: dict[str, str],
+        *,
+        document_bytes: bytes | None = None,
+        document_name: str | None = None,
+        document_mime_type: str | None = None,
     ) -> FieldAnalysisResult: ...
 
 
 class BedrockFieldAnalysisProvider:
     provider_name = "BEDROCK"
 
-    def __init__(self, settings: Settings, client: Any | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: Any | None = None,
+        *,
+        model_id: str | None = None,
+    ) -> None:
         if not settings.bedrock_region or not settings.bedrock_model_id:
             raise AppError(
                 "BEDROCK_FIELD_ANALYSIS_NOT_CONFIGURED",
@@ -597,7 +577,7 @@ class BedrockFieldAnalysisProvider:
                 503,
             )
         self.settings = settings
-        self.model_id = settings.bedrock_model_id
+        self.model_id = model_id or settings.bedrock_model_id
         self.prompt_version = settings.ai_field_analysis_prompt_version
         if client is not None:
             self.client = client
@@ -626,6 +606,10 @@ class BedrockFieldAnalysisProvider:
         extracted_text: str,
         form_code: str,
         allowed_fields: dict[str, str],
+        *,
+        document_bytes: bytes | None = None,
+        document_name: str | None = None,
+        document_mime_type: str | None = None,
     ) -> FieldAnalysisResult:
         tool_name = "submit_field_candidates"
         tool = self._tool_spec(
@@ -634,15 +618,27 @@ class BedrockFieldAnalysisProvider:
             self.settings.ai_field_analysis_max_candidates,
         )
         prompt = field_analysis_prompt(extracted_text, form_code, allowed_fields)
+        content: list[dict[str, Any]] = []
+        if document_bytes:
+            content.append(
+                {
+                    "document": {
+                        "format": _bedrock_document_format(document_mime_type, document_name),
+                        "name": _bedrock_document_name(document_name),
+                        "source": {"bytes": document_bytes},
+                    }
+                }
+            )
+        content.append({"text": prompt})
         try:
             result = await run_in_threadpool(
                 self.client.converse,
                 modelId=self.model_id,
-                messages=[{"role": "user", "content": [{"text": prompt}]}],
+                messages=[{"role": "user", "content": content}],
                 system=[
                     {
                         "text": (
-                            "你是土地估價文件欄位辨識器。只可提交有逐字原文證據的"
+                            "你是土地估價文件欄位辨識器。只可提交有原始文件或 OCR 原文證據的"
                             "候選值，不得補值、推算、改寫日期或執行正式資料寫入。"
                         )
                     }
@@ -651,9 +647,17 @@ class BedrockFieldAnalysisProvider:
                     "tools": [tool],
                     "toolChoice": {"tool": {"name": tool_name}},
                 },
-                inferenceConfig={"temperature": 0, "maxTokens": 1200},
+                inferenceConfig=self._inference_config(),
             )
         except Exception as exc:
+            detail = str(exc)
+            if "aws-marketplace:" in detail:
+                raise AppError(
+                    "BEDROCK_MODEL_ACCESS_REQUIRES_MARKETPLACE",
+                    "AWS 尚未授權此 Anthropic 模型的 Marketplace 使用權；請先授予 ViewSubscriptions 與 Subscribe 後重試",
+                    503,
+                ) from exc
+            logger.exception("Bedrock field analysis request failed")
             raise AppError(
                 "BEDROCK_UNAVAILABLE",
                 "Bedrock 欄位辨識暫時無法使用",
@@ -698,6 +702,18 @@ class BedrockFieldAnalysisProvider:
             prompt_version=self.prompt_version,
         )
 
+    def _inference_config(self) -> dict[str, Any]:
+        config: dict[str, Any] = {
+            "maxTokens": self.settings.bedrock_max_tokens,
+        }
+        # Claude Fable 5.1 requires temperature=1.0 or an omitted sampling
+        # parameter.  Omitting it also lets the model use its adaptive thinking
+        # defaults.  Older/test models retain the configured deterministic
+        # temperature.
+        if "claude-fable-5-1" not in self.model_id:
+            config["temperature"] = self.settings.bedrock_temperature
+        return config
+
     @staticmethod
     def _tool_spec(
         name: str,
@@ -718,9 +734,171 @@ class BedrockFieldAnalysisProvider:
         }
 
 
+class BedrockFieldAnalysisRouter:
+    """Run Fable as the primary model and route uncertain fields to Opus."""
+
+    provider_name = "BEDROCK"
+
+    def __init__(
+        self,
+        settings: Settings,
+        primary: BedrockFieldAnalysisProvider | None = None,
+        fallback: BedrockFieldAnalysisProvider | None = None,
+    ) -> None:
+        self.settings = settings
+        self.primary = primary or BedrockFieldAnalysisProvider(settings)
+        fallback_model_id = settings.bedrock_fallback_model_id
+        self.fallback = fallback or (
+            BedrockFieldAnalysisProvider(
+                settings,
+                model_id=fallback_model_id,
+            )
+            if fallback_model_id
+            else None
+        )
+        self.model_id = self.primary.model_id
+        self.prompt_version = self.primary.prompt_version
+
+    async def analyze(
+        self,
+        extracted_text: str,
+        form_code: str,
+        allowed_fields: dict[str, str],
+        *,
+        document_bytes: bytes | None = None,
+        document_name: str | None = None,
+        document_mime_type: str | None = None,
+    ) -> FieldAnalysisResult:
+        routed = await self.analyze_with_routing(
+            extracted_text,
+            form_code,
+            allowed_fields,
+            document_bytes=document_bytes,
+            document_name=document_name,
+            document_mime_type=document_mime_type,
+        )
+        candidates = tuple(
+            candidate
+            for result, _fields in routed
+            for candidate in result.candidates
+        )
+        return FieldAnalysisResult(
+            candidates=candidates,
+            provider=self.provider_name,
+            model_id=self.model_id,
+            prompt_version=self.prompt_version,
+        )
+
+    async def analyze_with_routing(
+        self,
+        extracted_text: str,
+        form_code: str,
+        allowed_fields: dict[str, str],
+        *,
+        document_bytes: bytes | None = None,
+        document_name: str | None = None,
+        document_mime_type: str | None = None,
+    ) -> tuple[tuple[FieldAnalysisResult, dict[str, str]], ...]:
+        document_kwargs = (
+            {
+                "document_bytes": document_bytes,
+                "document_name": document_name,
+                "document_mime_type": document_mime_type,
+            }
+            if document_bytes is not None
+            else {}
+        )
+        primary_result = await self.primary.analyze(
+            extracted_text,
+            form_code,
+            allowed_fields,
+            **document_kwargs,
+        )
+        fallback_fields = self._fallback_fields(
+            form_code,
+            allowed_fields,
+            primary_result,
+        )
+        if self.fallback is None or not fallback_fields:
+            return ((primary_result, allowed_fields),)
+
+        primary_fields = {
+            name: description
+            for name, description in allowed_fields.items()
+            if name not in fallback_fields
+        }
+        routed: list[tuple[FieldAnalysisResult, dict[str, str]]] = []
+        if primary_fields:
+            routed.append((primary_result, primary_fields))
+        fallback_result = await self.fallback.analyze(
+            extracted_text,
+            form_code,
+            fallback_fields,
+            **document_kwargs,
+        )
+        routed.append((fallback_result, fallback_fields))
+        return tuple(routed)
+
+    def _fallback_fields(
+        self,
+        form_code: str,
+        allowed_fields: dict[str, str],
+        result: FieldAnalysisResult,
+    ) -> dict[str, str]:
+        by_field = {candidate.field_name: candidate for candidate in result.candidates}
+        threshold = Decimal(str(self.settings.bedrock_fallback_confidence_threshold))
+        selected: dict[str, str] = {}
+        for field_name, description in allowed_fields.items():
+            candidate = by_field.get(field_name)
+            if candidate is None:
+                selected[field_name] = description
+                continue
+            if candidate.confidence < threshold or _candidate_rule_conflict(
+                form_code,
+                field_name,
+                description,
+                candidate.extracted_value,
+            ):
+                selected[field_name] = description
+        return selected
+
+
+def _candidate_rule_conflict(
+    form_code: str,
+    field_name: str,
+    description: str,
+    value: str,
+) -> bool:
+    """Find obvious conflicts before formal Python validation.
+
+    This is only a routing signal.  The authoritative field schema and
+    published rule-pack calculation still run after user confirmation.
+    """
+    normalized = value.strip().upper()
+    if re.search(r"\bL(?:0|[89]|\d{2,})\b", normalized):
+        return True
+    if form_code == "F02-RF" and field_name == "other" and not normalized:
+        return True
+
+    numeric_hints = (
+        "\u65e5\u671f",
+        "\u9762\u7a4d",
+        "\u5bec\u5ea6",
+        "\u8ddd\u96e2",
+        "\u6578\u91cf",
+        "\u6bd4\u4f8b",
+        "\u7387",
+        "\u50f9\u683c",
+        "\u91d1\u984d",
+    )
+    expects_number = any(hint in description for hint in numeric_hints)
+    if expects_number and not re.search(r"\d", value) and not re.fullmatch(r"L[1-7]", normalized):
+        return True
+    return False
+
+
 class OllamaFieldAnalysisProvider:
     provider_name = "OLLAMA"
-    batch_size = 2
 
     def __init__(self, settings: Settings, client: Any | None = None) -> None:
         self.settings = settings
@@ -733,7 +911,12 @@ class OllamaFieldAnalysisProvider:
         extracted_text: str,
         form_code: str,
         allowed_fields: dict[str, str],
+        *,
+        document_bytes: bytes | None = None,
+        document_name: str | None = None,
+        document_mime_type: str | None = None,
     ) -> FieldAnalysisResult:
+        del document_bytes, document_name, document_mime_type
         schema = field_analysis_output_schema(
             tuple(allowed_fields),
             self.settings.ai_field_analysis_max_candidates,
@@ -746,28 +929,19 @@ class OllamaFieldAnalysisProvider:
                     "content": (
                         "你是土地估價文件欄位辨識器。只可根據使用者提供的 OCR 原文"
                         "輸出候選欄位，不得補值、推算、改寫原始證據或執行正式資料寫入。"
-                        "必須使用 submit_field_candidates 工具回傳結果，不要輸出說明文字。"
+                        "回覆必須完全符合指定 JSON schema。"
                     ),
                 },
                 {
                     "role": "user",
-                    "content": ollama_field_analysis_prompt(
+                    "content": field_analysis_prompt(
                         extracted_text,
                         form_code,
                         allowed_fields,
                     ),
                 },
             ],
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "submit_field_candidates",
-                        "description": "提交具 OCR 原文證據的表單候選欄位",
-                        "parameters": schema,
-                    },
-                }
-            ],
+            "format": schema,
             "stream": False,
             "think": False,
             "options": {"temperature": 0},
@@ -789,14 +963,14 @@ class OllamaFieldAnalysisProvider:
         except httpx.RequestError as exc:
             raise AppError(
                 "OLLAMA_FIELD_ANALYSIS_UNAVAILABLE",
-                "文件辨識目前無法連線到本機 AI 服務，請稍後再試。",
+                "無法連線到本機 Ollama，請確認 Ollama 已啟動且模型可用",
                 503,
             ) from exc
 
         if response.status_code == 404:
             raise AppError(
                 "OLLAMA_FIELD_ANALYSIS_MODEL_NOT_FOUND",
-                "目前設定的本機 AI 模型尚未準備完成，請聯絡系統管理者。",
+                f"Ollama 找不到模型 {self.model_id}，請先下載模型",
                 503,
             )
         try:
@@ -804,35 +978,24 @@ class OllamaFieldAnalysisProvider:
         except httpx.HTTPStatusError as exc:
             raise AppError(
                 "OLLAMA_FIELD_ANALYSIS_UNAVAILABLE",
-                "文件辨識目前無法使用，請稍後再試。",
+                "Ollama 欄位辨識暫時無法使用",
                 503,
             ) from exc
 
         try:
             body = response.json()
-            message = body["message"]
-            tool_calls = message.get("tool_calls") or []
-            matching_calls = [
-                call
-                for call in tool_calls
-                if call.get("function", {}).get("name") == "submit_field_candidates"
-            ]
-            if matching_calls:
-                arguments = matching_calls[0]["function"]["arguments"]
-                payload_raw = json.loads(arguments) if isinstance(arguments, str) else arguments
+            content = body["message"]["content"]
+            if isinstance(content, str):
+                payload_raw = json.loads(content)
+            elif isinstance(content, dict):
+                payload_raw = content
             else:
-                content = message.get("content")
-                if isinstance(content, str) and content.strip():
-                    payload_raw = json.loads(content)
-                elif isinstance(content, dict):
-                    payload_raw = content
-                else:
-                    payload_raw = {"candidates": []}
+                raise TypeError("message.content must be JSON text or object")
             payload = _ToolPayload.model_validate(payload_raw)
         except (ValueError, KeyError, TypeError, ValidationError, json.JSONDecodeError) as exc:
             raise AppError(
                 "OLLAMA_FIELD_ANALYSIS_INVALID_RESPONSE",
-                "文件辨識這次沒有產生可採用的結果，請重新執行辨識。",
+                "Ollama 欄位辨識回應不符合受控格式",
                 502,
             ) from exc
 
@@ -868,14 +1031,38 @@ class OllamaFieldAnalysisProvider:
 
 def build_field_analysis_provider(settings: Settings) -> FieldAnalysisProvider:
     if settings.ai_provider == "bedrock":
-        return BedrockFieldAnalysisProvider(settings)
+        primary = BedrockFieldAnalysisProvider(settings)
+        if (
+            settings.bedrock_fallback_model_id
+            and settings.bedrock_fallback_model_id != primary.model_id
+        ):
+            return BedrockFieldAnalysisRouter(settings, primary=primary)
+        return primary
     if settings.ai_provider == "ollama":
         return OllamaFieldAnalysisProvider(settings)
     raise AppError(
         "FIELD_ANALYSIS_PROVIDER_NOT_CONFIGURED",
-        "文件辨識服務目前尚未完成設定，請聯絡系統管理者。",
+        "文件 AI 欄位辨識目前僅支援 Ollama 或 Bedrock",
         503,
     )
+
+
+def _source_page_for_candidate(
+    extraction: DocumentExtractionRecord,
+    source_text: str,
+) -> int | None:
+    metadata = getattr(extraction, "extraction_metadata", None) or {}
+    normalized = _evidence_key(source_text)
+    for item in metadata.get("pages", []):
+        page_text = str(item.get("text", ""))
+        if source_text in page_text or (
+            normalized and normalized in _evidence_key(page_text)
+        ):
+            try:
+                return max(int(item.get("page", 1)), 1)
+            except (TypeError, ValueError):
+                continue
+    return 1 if extraction.page_count == 1 else None
 
 
 def _evidence_key(value: str) -> str:
@@ -894,6 +1081,31 @@ def _candidate_semantically_valid(form_code: str, field_name: str, value: str) -
         return "段" in normalized
     return True
 
+def _bedrock_document_format(mime_type: str | None, name: str | None) -> str:
+    """Map uploaded document types to Converse document content formats."""
+    formats = {
+        "application/pdf": "pdf",
+        "text/plain": "txt",
+        "text/csv": "csv",
+        "text/markdown": "md",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+        "application/msword": "doc",
+        "application/vnd.ms-excel": "xls",
+        "text/html": "html",
+    }
+    if mime_type and mime_type.lower() in formats:
+        return formats[mime_type.lower()]
+    suffix = Path(name or "source.pdf").suffix.lower().lstrip(".")
+    return suffix if suffix in {"pdf", "txt", "csv", "md", "doc", "docx", "xls", "xlsx", "html"} else "pdf"
+
+
+def _bedrock_document_name(name: str | None) -> str:
+    """Return a safe document name accepted by Bedrock Converse."""
+    stem = Path(name or "source-document").stem
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "-", stem).strip("-_")
+    return (safe or "source-document")[:80]
+
 
 def _map_f02_rf_level(field_name: str, value: str, source_text: str) -> str | None:
     # Natural-language values are deliberately preserved here.  Their formal
@@ -902,7 +1114,7 @@ def _map_f02_rf_level(field_name: str, value: str, source_text: str) -> str | No
     # may pass through at extraction time.
     del field_name, source_text
     norm_val = value.strip().upper()
-    if re.fullmatch(r"L[1-5]", norm_val):
+    if re.fullmatch(r"L[1-7]", norm_val):
         return norm_val
     return None
 
@@ -915,11 +1127,14 @@ class FieldAnalysisService:
         repository: ExtractionRepository | None = None,
         provider: FieldAnalysisProvider | None = None,
         settings: Settings | None = None,
+        storage: StorageService | None = None,
     ) -> None:
         self.session = session
         self.repository = repository or ExtractionRepository(session)
         self.provider = provider
         self.settings = settings or get_settings()
+        self.storage = storage
+        self.documents = DocumentRepository(session)
         self.valuation = ValuationService(session)
 
     async def analyze(
@@ -930,11 +1145,28 @@ class FieldAnalysisService:
         user: User,
     ) -> tuple[DocumentExtractionRecord, list[ExtractedFieldRecord]]:
         form_code = payload.form_code.value
-        extraction, extracted_text, remaining_fields = await self._analysis_context(
+        (
+            extraction,
+            extracted_text,
+            remaining_fields,
+            document_bytes,
+            document_name,
+            document_mime_type,
+        ) = await self._analysis_context(
             case_id,
             document_id,
             form_code,
             user,
+        )
+        document = await self.documents.get(case_id, document_id)
+        document_kwargs = (
+            {
+                "document_bytes": document_bytes,
+                "document_name": document_name,
+                "document_mime_type": document_mime_type,
+            }
+            if document_bytes is not None
+            else {}
         )
         if not remaining_fields:
             return extraction, await self.repository.list_candidates(
@@ -943,45 +1175,49 @@ class FieldAnalysisService:
 
         provider = self.provider or build_field_analysis_provider(self.settings)
         records: list[ExtractedFieldRecord] = []
-        batch_size = (
-            provider.batch_size
-            if isinstance(provider, OllamaFieldAnalysisProvider)
-            else self.settings.ai_field_analysis_max_candidates
-        )
-        for allowed_fields in self._field_batches(remaining_fields, size=batch_size):
-            result = await provider.analyze(
-                extracted_text,
-                form_code,
-                allowed_fields,
-            )
-            records.extend(
-                self._candidate_records(
-                    extraction,
+        for allowed_fields in self._field_batches(remaining_fields):
+            if isinstance(provider, BedrockFieldAnalysisRouter):
+                routed_results = await provider.analyze_with_routing(
+                    extracted_text,
                     form_code,
-                    result,
                     allowed_fields,
-                    evidence_text=extracted_text,
-                    drop_invalid_evidence=result.provider == "OLLAMA",
+                    **document_kwargs,
                 )
-            )
+            else:
+                routed_results = (
+                    (
+                        await provider.analyze(
+                            extracted_text,
+                            form_code,
+                            allowed_fields,
+                            **document_kwargs,
+                        ),
+                        allowed_fields,
+                    ),
+                )
+            for result, result_fields in routed_results:
+                records.extend(
+                    self._candidate_records(
+                        extraction,
+                        form_code,
+                        result,
+                        result_fields,
+                        location_id=document.location_id,
+                        evidence_text=extracted_text,
+                        allow_visual_evidence=document_bytes is not None,
+                        drop_invalid_evidence=result.provider == "OLLAMA",
+                    )
+                )
         if records:
             await self.repository.add_candidates(records)
         return extraction, await self.repository.list_candidates(
             extraction.extraction_id
         )
 
-    def _field_batches(
-        self,
-        fields: dict[str, str],
-        *,
-        size: int | None = None,
-    ) -> tuple[dict[str, str], ...]:
+    def _field_batches(self, fields: dict[str, str]) -> tuple[dict[str, str], ...]:
         items = list(fields.items())
-        batch_size = size or self.settings.ai_field_analysis_max_candidates
-        return tuple(
-            dict(items[index:index + batch_size])
-            for index in range(0, len(items), batch_size)
-        )
+        size = self.settings.ai_field_analysis_max_candidates
+        return tuple(dict(items[index:index + size]) for index in range(0, len(items), size))
 
     async def prepare_codex_package(
         self,
@@ -991,7 +1227,7 @@ class FieldAnalysisService:
         user: User,
     ) -> CodexAnalysisPackageResponse:
         form_code = payload.form_code.value
-        _, extracted_text, remaining_fields = await self._analysis_context(
+        _, extracted_text, remaining_fields, _, _, _ = await self._analysis_context(
             case_id,
             document_id,
             form_code,
@@ -1019,7 +1255,14 @@ class FieldAnalysisService:
         user: User,
     ) -> tuple[DocumentExtractionRecord, list[ExtractedFieldRecord]]:
         form_code = payload.form_code.value
-        extraction, analysis_text, remaining_fields = await self._analysis_context(
+        (
+            extraction,
+            analysis_text,
+            remaining_fields,
+            document_bytes,
+            _,
+            _,
+        ) = await self._analysis_context(
             case_id,
             document_id,
             form_code,
@@ -1050,10 +1293,12 @@ class FieldAnalysisService:
             form_code,
             result,
             remaining_fields,
+            location_id=(await self.documents.get(case_id, document_id)).location_id,
             error_prefix="CODEX",
             source_label="Codex",
             error_status=422,
             evidence_text=analysis_text,
+            allow_visual_evidence=document_bytes is not None,
         )
         if records:
             await self.repository.add_candidates(records)
@@ -1067,7 +1312,14 @@ class FieldAnalysisService:
         document_id: UUID,
         form_code: str,
         user: User,
-    ) -> tuple[DocumentExtractionRecord, str, dict[str, str]]:
+    ) -> tuple[
+        DocumentExtractionRecord,
+        str,
+        dict[str, str],
+        bytes | None,
+        str | None,
+        str | None,
+    ]:
         await self.valuation._owned_editable_case(case_id, user)
         extraction = await self.repository.latest_for_document(case_id, document_id)
         if extraction is None or extraction.extraction_status != "COMPLETED":
@@ -1079,7 +1331,28 @@ class FieldAnalysisService:
                 "文件沒有可供 AI 分析的擷取文字",
                 422,
             )
+
+        document_bytes: bytes | None = None
+        document_name: str | None = None
+        document_mime_type: str | None = None
+        document = await self.documents.get(case_id, document_id)
+        if self.storage is not None and document is not None and document.is_active:
+            response = await self.storage.download(document.object_key)
+            try:
+                document_bytes = await run_in_threadpool(response.read)
+            finally:
+                response.close()
+                response.release_conn()
+            document_name = document.original_filename
+            document_mime_type = document.mime_type
+
+        visual_source_available = bool(document_bytes)
         analysis_text = _analysis_source_text(extracted_text, form_code)
+        # Scanned forms often have unusable OCR headings.  When the original
+        # document is attached, Bedrock can inspect the page itself, so use the
+        # complete OCR as auxiliary context instead of rejecting the request.
+        if not analysis_text and visual_source_available:
+            analysis_text = extracted_text
         if form_code == "F01" and not analysis_text:
             raise AppError(
                 "F01_SOURCE_SCOPE_NOT_FOUND",
@@ -1092,13 +1365,18 @@ class FieldAnalysisService:
                 "擷取文字超過 AI 欄位辨識單次處理上限",
                 422,
             )
+        detected_source_forms = (
+            frozenset()
+            if visual_source_available
+            else _detected_source_form_codes(extracted_text)
+        )
         allowed_fields = _allowed_fields_for_detected_sources(
             form_code,
             _ai_extractable_fields(FIELD_ANALYSIS_FIELDS[form_code]),
-            _detected_source_form_codes(extracted_text),
+            detected_source_forms,
         )
         if not analysis_text:
-            return extraction, "", {}
+            return extraction, "", {}, document_bytes, document_name, document_mime_type
         existing_names = await self.repository.candidate_field_names(
             extraction.extraction_id, form_code
         )
@@ -1107,8 +1385,14 @@ class FieldAnalysisService:
             for name, description in allowed_fields.items()
             if name not in existing_names
         }
-        return extraction, analysis_text, remaining_fields
-
+        return (
+            extraction,
+            analysis_text,
+            remaining_fields,
+            document_bytes,
+            document_name,
+            document_mime_type,
+        )
     @staticmethod
     def _candidate_records(
         extraction: DocumentExtractionRecord,
@@ -1116,10 +1400,12 @@ class FieldAnalysisService:
         result: FieldAnalysisResult,
         allowed_fields: dict[str, str],
         *,
+        location_id: UUID | None = None,
         error_prefix: str = "BEDROCK",
         source_label: str = "Bedrock",
         error_status: int = 502,
         evidence_text: str | None = None,
+        allow_visual_evidence: bool = False,
         drop_invalid_evidence: bool = False,
     ) -> list[ExtractedFieldRecord]:
         records: list[ExtractedFieldRecord] = []
@@ -1152,7 +1438,7 @@ class FieldAnalysisService:
             # Verification Phase 1: source_text must exist in full OCR text
             source_grounded = (source_text in evidence_text) or (
                 bool(norm_source) and norm_source in norm_full_ocr
-            )
+            ) or (allow_visual_evidence and bool(norm_source))
 
             # Verification Phase 2: extracted_value must be grounded in source_text
             extracted_val = candidate.extracted_value.strip()
@@ -1160,12 +1446,6 @@ class FieldAnalysisService:
             val_grounded = bool(norm_val) and norm_val in norm_source
 
             final_val = extracted_val
-
-            semantic_valid = _candidate_semantically_valid(
-                form_code,
-                candidate.field_name,
-                final_val,
-            )
 
             if form_code == "F02-RF":
                 mapped_level = _map_f02_rf_level(
@@ -1175,6 +1455,11 @@ class FieldAnalysisService:
                     final_val = mapped_level
                     val_grounded = True
 
+            semantic_valid = _candidate_semantically_valid(
+                form_code,
+                candidate.field_name,
+                final_val,
+            )
             if not source_grounded or not val_grounded or not semantic_valid:
                 if drop_invalid_evidence:
                     continue
@@ -1190,12 +1475,13 @@ class FieldAnalysisService:
                 ExtractedFieldRecord(
                     case_id=extraction.case_id,
                     extraction_id=extraction.extraction_id,
+                    location_id=location_id,
                     document_id=extraction.document_id,
                     form_code=form_code,
                     field_name=candidate.field_name,
                     extracted_value=final_val,
                     confidence=candidate.confidence,
-                    source_page=1 if extraction.page_count == 1 else None,
+                    source_page=_source_page_for_candidate(extraction, source_text),
                     source_text=source_text,
                     analysis_provider=result.provider,
                     model_id=result.model_id,

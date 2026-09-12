@@ -118,6 +118,8 @@ class Settings(BaseSettings):
     ollama_timeout_seconds: int = Field(default=120, ge=1, le=900)
     bedrock_region: str | None = None
     bedrock_model_id: str | None = None
+    bedrock_fallback_model_id: str | None = None
+    bedrock_fallback_confidence_threshold: float = Field(default=0.85, ge=0, le=1)
     aws_access_key_id: SecretStr | None = None
     gemini_api_key: SecretStr | None = None
     google_maps_api_key: SecretStr | None = None

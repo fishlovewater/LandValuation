@@ -147,6 +147,20 @@ class ReviewSubmissionRecord(Base):
     request_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True))
 
 
+
+
+class ValuationLocationRecord(Base):
+    __tablename__ = 'valuation_locations'
+    __table_args__ = (UniqueConstraint('case_id', 'display_order', name='uq_valuation_locations_case_order'), {'schema': 'valuation'})
+    location_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    case_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey('valuation.cases.case_id'))
+    display_order: Mapped[int] = mapped_column(Integer)
+    label: Mapped[str] = mapped_column(String(120))
+    address: Mapped[str | None] = mapped_column(String(300))
+    is_benchmark_location: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 class ParcelRecord(Base):
     __tablename__ = "parcels"
     __table_args__ = {"schema": "valuation"}
@@ -157,6 +171,7 @@ class ParcelRecord(Base):
     case_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("valuation.cases.case_id")
     )
+    location_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("valuation.valuation_locations.location_id"))
     district_code: Mapped[str] = mapped_column(String(20))
     section_name: Mapped[str] = mapped_column(String(100))
     subsection_name: Mapped[str] = mapped_column(String(100), default="")
@@ -185,6 +200,7 @@ class FormInstanceRecord(Base):
     case_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("valuation.cases.case_id")
     )
+    location_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("valuation.valuation_locations.location_id"))
     form_code: Mapped[str] = mapped_column(String(10))
     version_no: Mapped[int] = mapped_column(default=1)
     form_status: Mapped[str] = mapped_column(String(30), default="DRAFT")
@@ -212,6 +228,7 @@ class DocumentRecord(Base):
     case_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("valuation.cases.case_id")
     )
+    location_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("valuation.valuation_locations.location_id"))
     document_type: Mapped[str] = mapped_column(String(50))
     original_filename: Mapped[str] = mapped_column(String(255))
     mime_type: Mapped[str] = mapped_column(String(100))
@@ -463,6 +480,9 @@ class DocumentExtractionRecord(Base):
     provider: Mapped[str] = mapped_column(String(30))
     extraction_status: Mapped[str] = mapped_column(String(20), default="PENDING")
     extracted_text: Mapped[str | None] = mapped_column(Text)
+    extraction_metadata: Mapped[dict] = mapped_column(
+        "metadata", JSONB, default=dict, server_default=text("'{}'::jsonb")
+    )
     page_count: Mapped[int | None] = mapped_column(Integer)
     error_message: Mapped[str | None] = mapped_column(Text)
     created_by_user_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True))
@@ -484,6 +504,7 @@ class ExtractedFieldRecord(Base):
     )
     case_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True))
     extraction_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True))
+    location_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("valuation.valuation_locations.location_id"))
     document_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True))
     form_code: Mapped[str] = mapped_column(String(10))
     field_name: Mapped[str] = mapped_column(String(100))

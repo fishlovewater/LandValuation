@@ -72,6 +72,12 @@ class BedrockKnowledgeProvider:
                     retries={"max_attempts": 2, "mode": "standard"},
                 ),
             )
+            inference_config = {
+                "maxTokens": self.settings.bedrock_max_tokens,
+            }
+            # Fable 5.1 requires temperature=1.0 or an omitted parameter.
+            if "claude-fable-5-1" not in (self.settings.bedrock_model_id or ""):
+                inference_config["temperature"] = self.settings.bedrock_temperature
             return client.converse(
                 modelId=self.settings.bedrock_model_id,
                 system=[
@@ -82,10 +88,7 @@ class BedrockKnowledgeProvider:
                     }
                 ],
                 messages=[{"role": "user", "content": [{"text": answer_prompt(question, packet)}]}],
-                inferenceConfig={
-                    "maxTokens": self.settings.bedrock_max_tokens,
-                    "temperature": self.settings.bedrock_temperature,
-                },
+                inferenceConfig=inference_config,
             )
 
         try:

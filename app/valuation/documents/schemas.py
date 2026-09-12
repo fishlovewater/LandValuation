@@ -24,6 +24,7 @@ class DocumentResponse(BaseModel):
     document_id: UUID
     document_group_id: UUID
     case_id: UUID
+    location_id: UUID | None
     document_type: str
     original_filename: str
     mime_type: str

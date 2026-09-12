@@ -1,6 +1,6 @@
 # 估價表單 AI 欄位辨識規則
 
-> 規則版本：`field-rules-md-v1`
+> 規則版本：`field-rules-md-v2`
 >
 > 本文件由目前專案採用的 6 份表單／欄位規格 Excel 整理而成，供 OCR 後的 AI 欄位辨識與 Codex 候選匯入共同使用。
 
@@ -10,7 +10,7 @@
 |---|---|---|
 | F01 | 買賣實例調查估價表_建物全部層數_AI_Coding欄位規格.xlsx | 實例資料、輸出欄位、技術欄位與建物全層數計算規則 |
 | F02 | 比較法調查估價表.xlsx | 比較法調查估價表欄位與比較價格計算流程 |
-| F02-RF | 影響地價區域因素分析明細表_商業用地.xlsx | 商業用地區域因素、分類、來源項目與法規／手冊依據 |
+| F02-RF | 影響地價區域因素分析明細表_商業用地.xlsx、計分表.pdf（新北市樹林區普通住宅用地） | 區域因素原文、住宅用地分級與後續比較法調整依據 |
 | F03 | 比準地地價估計表.xlsx | 比準地地價估計表欄位、比準地價格與輸出規則 |
 | F04 | 徵收土地宗地市價估計表.xlsx | 徵收土地宗地市價估計表、比準地與宗地欄位 |
 | S01 | 地價區段勘查表.xlsx | 地價區段勘查欄位、選項、單位與區段資料來源 |
@@ -30,7 +30,7 @@
 9. `confidence` 必須介於 0 與 1；信心分數不得取代原文證據。
 10. 百分比、金額、面積、距離、日期與地號保留原文單位和格式；標準化或正式計算由後端依規則處理。
 11. F01 僅接受明確屬於買賣實例調查估價表、比較標的或比較實例的來源段落；不可使用徵收宗地、比準地、區域因素或其他表單資料。
-12. F02-RF 可回傳自然語言觀察值或明確的 `L1`～`L5` 等級；自然語言到等級的轉換必須依發布中的規則版本處理。
+12. F02-RF 可回傳自然語言觀察值或明確的 `L1`～`L7` 等級；自然語言到等級的轉換必須依發布中的規則版本處理。只有適用範圍、因素、單位與級距都能由來源原文直接確認時，才可依計分表導出等級；來源原文必須完整保留在 `source_text`，不可把推導等級當作 OCR 原文。
 13. 輸出只能是合法 JSON：`{"candidates": [...]}`，不得輸出 Markdown、解釋文字或未列出的欄位。
 
 ## 跨表單資料角色
@@ -39,7 +39,7 @@
 |---|---|---|
 | 買賣實例／比較標的 | F01 | 提供交易、土地、建物、成本、折舊與正常買賣價格的原始證據；F01 不得引用其他表單的宗地或比準地資料。 |
 | 比較法計算 | F02 | 引用比較標的的正常單價、日期、區段及調整資料；精確計算由後端完成。 |
-| 區域因素 | F02-RF | 使用商業用地區域因素明細及其分類；保留觀察原文，正式等級／調整率由規則版本處理。 |
+| 區域因素 | F02-RF | 使用商業或住宅用地的適用區域因素規則；保留觀察原文，正式等級／調整率由規則版本處理。 |
 | 比準地 | F03 | 引用比準地資料、比較法結果及版本關聯；不可自行創造比準地價格。 |
 | 徵收宗地 | F04 | 引用宗地、比準地及個別因素資料；差異率與市價由後端或人工確認。 |
 | 地價區段勘查 | S01 | 引用行政、道路、公共設施、環境與特殊設施觀察；選項、距離、百分比及空白狀態依欄位說明處理。 |
@@ -194,6 +194,48 @@ F02-RF 的實際 AI `field_name` 由系統依 `TEMPLATE_FACTORS` 與本章來源
 | 27 | `C7_05` | `pedestrian_flow` |
 | 28 | `C7_06` | `vacancy_rate` |
 | 29 | `C8_01` | `other` |
+
+
+### 住宅用地計分規則：新北市樹林區普通住宅用地
+
+來源：計分表.pdf，頁碼 4-26 至 4-34，標題為「新北市樹林區普通住宅用地影響地價區域因素評價基準明細表」。本節只適用於 **案件土地用途為住宅用地**，且案件或來源原文可確認為 **新北市樹林區** 的普通住宅用地。不得將本節套用至商業用地、其他行政區或用途／地區未明的文件。
+
+1. AI 先擷取可逐字核對的觀察原文、距離、百分比或設施名稱；source_text 不得含有 AI 改寫的級別或算式。
+2. 僅當原文能無歧義落入下列級距時，F02-RF 候選的 extracted_value 可回傳推導等級。五級因素使用：L1=優、L2=稍優、L3=普通、L4=稍劣、L5=劣。二級因素使用 L1=優、L5=劣；三級因素使用 L1=優、L3=普通、L5=劣。七級「其他影響因素」使用 L1=極優 至 L7=極劣。
+3. 若原文只說「附近」、「便利」、「良好」而未提供可比對的距離、數量、百分比或明確級別，不可推導 L 等級，須回傳原文觀察值並保留待人工確認。
+4. 正式區域因素修正率以同一發布規則版本的「目標區段」與「比準／比較區段」等級矩陣計算；不得把單一區段的等級直接當作百分比。五級矩陣的相鄰級距依各因素規定之步距累加；正式計算由後端在比準地與比較標的均已確認後執行。
+
+| F02-RF field_name | 對應 S01 觀察欄位 | 優／稍優／普通／稍劣／劣級距 | 相鄰級距（百分點） |
+|---|---|---|---:|
+| urban_plan_status | urban_plan_scope | 都市計畫內／都市計畫外（兩級） | 20 |
+| land_use_zone | land_use_zone_category | 商業區、捷運用地（聯開）／住宅區、市場用地／甲建、乙建、特定專用區、多目標使用之其他公共設施用地／工業區、丙建、丁建／其他可建築用地 | 5 |
+| building_coverage_rate | building_coverage_ratio | ≥80%／70%–<80%／60%–<70%／50%–<60%／<50% | 2.5 |
+| floor_area_ratio | floor_area_ratio | ≥460%／360%–<460%／260%–<360%／180%–<260%／<180% | 6.25 |
+| prohibited_building | building_prohibition_status | 無禁止建築／有禁止建築（兩級） | 50 |
+| restricted_building | building_restriction_status、building_restriction_details | 無限制建築／部分限制（如高度或面積）／限制整體開發 | 25 |
+| main_road_width | main_road_width_m | ≥28m／20–<28m／12–<20m／8–<12m／<8m | 3.75 |
+| average_road_width | average_internal_road_width_m | ≥20m／15–<20m／10–<15m／8–<10m／<8m | 3 |
+| mass_transit_proximity | major_station_location_scope、major_station_distance_m | 區段內或<500m／500–<1000m／1000–<1500m／1500–<2000m／≥2000m或無 | 2.5 |
+| station_proximity | bus_stop_comparison_mode、bus_stop_location_scope、bus_stop_distance_m、bus_stop_density_level | 接近程度：區段內或<200m／200–<400m／400–<600m／600–<800m／≥800m或無；密集程度須依同案選定方式另行人工確認 | 1 |
+| interchange_proximity | interchange_location_scope、interchange_distance_m | 區段內或<1000m／1000–<2000m／2000–<3000m／3000–<4000m／≥4000m或無 | 1 |
+| road_plan | road_planning_development_level | 全部規劃及開闢／大部分規劃及開闢／部分規劃及開闢／砂石路／全無規劃及開闢 | 2.5 |
+| drainage | drainage_level | 極完善／非常完善／普通完善／不良／極不良 | 2.5 |
+| terrain | terrain_level | 極平坦堅硬／平坦／緩傾斜地／低地、濕地／地勢孤兀地 | 2.5 |
+| market_proximity | public_facility_type、public_facility_location_scope、public_facility_distance_m | 區段內或<300m／300–<500m／500–<800m／800–<1000m／≥1000m或無 | 2 |
+| park_proximity | public_facility_type、public_facility_location_scope、public_facility_distance_m | 區段內或<300m／300–<500m／500–<800m／800–<1000m／≥1000m或無 | 2 |
+| tourist_facility_proximity | public_facility_type、public_facility_location_scope、public_facility_distance_m | 區段內或<500m／500–<1000m／1000–<1500m／1500–<2000m／≥2000m或無 | 1.5 |
+| parking_convenience | public_facility_type、public_facility_location_scope、public_facility_distance_m | 區段內或<200m／200–<400m／400–<600m／600–<1000m／≥1000m或無 | 1.5 |
+| power_gas_facility | special_facility_type、special_facility_location_scope、special_facility_distance_m | ≥2000m或無／1500–<2000m／1000–<1500m／500–<1000m／區段內或<500m | 2.5 |
+| funeral_facility | special_facility_type、special_facility_location_scope、special_facility_distance_m | ≥2000m或無／1500–<2000m／1000–<1500m／500–<1000m／區段內或<500m | 2.5 |
+| waste_facility | special_facility_type、special_facility_location_scope、special_facility_distance_m | ≥2000m或無／1500–<2000m／1000–<1500m／500–<1000m／區段內或<500m | 3.75 |
+| environmental_pollution | pollution_type、pollution_location_scope、pollution_distance_m | ≥2000m或無／1500–<2000m／1000–<1500m／500–<1000m／區段內或<500m | 5 |
+| other | other_factor_name、other_factor_description | 極優／優／稍優／普通／稍劣／劣／極劣；須具體說明因素、方向與依據 | 3.33 |
+
+下列計分表因素目前尚未有獨立 F02-RF canonical field_name，AI 不得為它們創造欄位代碼；應先保留在相對應的 S01 原始觀察欄位，待住宅用地 F02-RF 範本欄位擴充後再納入正式區域因素計算：日照、景觀、傾斜度、建築基地改良、農地改良、學校接近程度、服務性設施接近程度、電力資源、產業用水及設施、污廢水及廢棄物處理設施、顧客通行量、店鋪毗連狀態、建築密度、建築型態與土地利用現況。
+
+### 個別因素計分規則（F02，住宅用地）
+
+計分表.pdf 第 4-31 至 4-34 另列宗地個別因素。AI 對 F02 只可擷取宗地／比較標的原文條件，正式差異率必須在比準地與比較標的均有確認值後依同一矩陣計算。主要級距如下：面積（≥600、400–<600、200–<400、50–<200、<50 平方公尺）；寬度（≥20、15–<20、8–<15、4–<8、<4 公尺）；深度（14–<30、30–<40、7–<14 或 40–<50、50–<60、<7 或 ≥60 公尺）；形狀（方形／梯形、不規則形／長條形）；臨街（≥3面、路角、雙面、單面、未臨街）；道路種類（主要道路、次要道路、巷道、農路、無）；面前道路寬度（≥20、12–<20、8–<12、5–<8、<5或無公尺）；接近校園、傳統市場、公園廣場、車站、商圈及嫌惡設施均依 PDF 指定距離區間；使用分區、建蔽率、容積率、禁限建與其他應依本節上方相同的住宅用地級距或 PDF 第 4-33、4-34 的個別因素矩陣判定。
 
 ## F03
 

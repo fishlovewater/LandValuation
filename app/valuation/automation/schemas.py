@@ -117,6 +117,9 @@ class ManualFieldValuesRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # S01/F01/F04 facts are tied to one valuation location.  Shared pages
+    # (F02, F02-RF and F03) deliberately omit this value.
+    location_id: UUID | None = None
     values: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
@@ -165,3 +168,4 @@ class AutomatedWorkflowResponse(BaseModel):
     manual_fields_ignored: list[str] = Field(default_factory=list)
     manual_field_errors: dict[str, str] = Field(default_factory=dict)
     manual_field_values: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    manual_field_values_by_location: dict[str, dict[str, dict[str, Any]]] = Field(default_factory=dict)

@@ -44,6 +44,7 @@ from app.valuation.report_packages.formal_schemas import (
     FormalReportResponse,
     FormalValidationResponse,
     FormalWorkflowStatusResponse,
+    TemplateExportResponse,
 )
 from app.valuation.report_packages.formal_service import FormalReportService
 from app.valuation.report_packages.formal_xlsx_builder import XLSX_MIME_TYPE
@@ -411,6 +412,25 @@ async def validate_complete_report(
 ) -> FormalValidationResponse:
     return await FormalReportService(session, storage).validate(
         case_id, report_id, user, request_uuid(request)
+    )
+
+
+
+@router.post(
+    "/cases/{case_id}/reports/{report_id}/template-exports",
+    response_model=list[TemplateExportResponse],
+    status_code=status.HTTP_201_CREATED,
+    summary="產生三份正式 Excel 範本成果",
+)
+async def generate_template_exports(
+    case_id: UUID,
+    report_id: UUID,
+    session: DbSession,
+    storage: Storage,
+    user: ValuationEditor,
+) -> list[TemplateExportResponse]:
+    return await FormalReportService(session, storage).generate_template_exports(
+        case_id, report_id, user
     )
 
 

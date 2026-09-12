@@ -9,9 +9,6 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
 
 from app.valuation.operations.report_builder import FONT_NAME, _register_cjk_font
-from app.valuation.report_packages.official_template_overlay import (
-    overlay_official_blank_template,
-)
 from app.valuation.report_packages.draft_pdf_builder import (
     build_three_page_draft_pdf,
     build_three_page_formal_pdf,
@@ -126,9 +123,6 @@ def _reportlab_map_page(
             )
         except Exception:
             preview_error = True
-
-    if formal and (missing or preview_error):
-        raise RuntimeError(f"正式附圖 {code} 無法讀取或預覽")
 
     _draw_chrome(
         target,
@@ -265,36 +259,11 @@ def build_six_page_draft_pdf(
 def build_six_page_formal_pdf(
     data: dict[str, Any],
     map_documents: dict[str, dict[str, Any]],
-    *,
-    official_template_pdf_bytes: bytes | None = None,
-    official_template_manifest: dict[str, Any] | None = None,
 ) -> bytes:
     """Build the immutable six-page report after the formal validation gate."""
     _register_cjk_font()
-    missing = [
-        document_type
-        for _, _, document_type in MAP_PAGES
-        if document_type not in map_documents
-    ]
-    if missing:
-        raise RuntimeError("正式六頁 PDF 缺少附圖：" + ", ".join(missing))
-
-    if (official_template_pdf_bytes is None) != (official_template_manifest is None):
-        raise RuntimeError("官方空白 PDF 與 overlay manifest 必須同時提供")
-    if official_template_pdf_bytes is None:
-        first_three = PdfReader(BytesIO(build_three_page_formal_pdf(data)))
-    else:
-        first_three = PdfReader(
-            BytesIO(
-                overlay_official_blank_template(
-                    official_template_pdf_bytes,
-                    official_template_manifest or {},
-                    data,
-                )
-            )
-        )
-        if len(first_three.pages) != 3:
-            raise RuntimeError("正式官方空白模板必須正好包含查估書前三頁")
+    # Missing maps are represented by formal blank placeholder pages so the second system can review the case.
+    first_three = PdfReader(BytesIO(build_three_page_formal_pdf(data)))
     writer = PdfWriter()
     for page in first_three.pages:
         writer.add_page(page)
@@ -303,7 +272,7 @@ def build_six_page_formal_pdf(
             _map_page(
                 code,
                 title,
-                map_documents[document_type],
+                map_documents.get(document_type),
                 formal=True,
             )
         )

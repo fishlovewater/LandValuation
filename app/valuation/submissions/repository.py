@@ -43,6 +43,7 @@ class SubmissionInputs:
     authoritative_report_form: FormInstanceRecord | None
     source_validation_run: ValidationRun | None
     source_report_document: DocumentRecord | None
+    source_template_documents: list[DocumentRecord]
     report_form: FormInstanceRecord | None
     applied_fields: list[dict]
     calculations: dict
@@ -96,14 +97,26 @@ class SubmissionRepository:
                 ValidationRun.validation_run_id == command.source_validation_run_id,
             )
         )
-        report_document = await self.session.scalar(
-            select(DocumentRecord).where(
-                DocumentRecord.case_id == case_id,
-                DocumentRecord.document_id == command.source_report_document_id,
-                DocumentRecord.document_type == "complete-valuation-report",
-                DocumentRecord.is_active.is_(True),
+        source_document_ids = list(dict.fromkeys(command.source_template_document_ids))
+        if source_document_ids:
+            report_document = await self.session.scalar(
+                select(DocumentRecord).where(
+                    DocumentRecord.case_id == case_id,
+                    DocumentRecord.document_id == command.source_report_document_id,
+                    DocumentRecord.document_type == "generated-template-xlsx",
+                    DocumentRecord.is_active.is_(True),
+                )
             )
-        )
+        else:
+            report_document = await self.session.scalar(
+                select(DocumentRecord).where(
+                    DocumentRecord.case_id == case_id,
+                    DocumentRecord.document_id == command.source_report_document_id,
+                    DocumentRecord.document_type == "complete-valuation-report",
+                    DocumentRecord.is_active.is_(True),
+                )
+            )
+
         report_form = None
         if report_document is not None:
             statement = select(FormInstanceRecord).where(
@@ -123,6 +136,21 @@ class SubmissionRepository:
             ).limit(1)
             report_form = await self.session.scalar(statement)
 
+        source_template_documents: list[DocumentRecord] = []
+        if source_document_ids:
+            source_template_documents = list(
+                (
+                    await self.session.scalars(
+                        select(DocumentRecord).where(
+                            DocumentRecord.case_id == case_id,
+                            DocumentRecord.document_id.in_(source_document_ids),
+                            DocumentRecord.document_type == "generated-template-xlsx",
+                            DocumentRecord.is_active.is_(True),
+                        )
+                    )
+                ).all()
+            )
+
         authoritative_report_form = await self.session.scalar(
             select(FormInstanceRecord)
             .where(
@@ -138,6 +166,13 @@ class SubmissionRepository:
             )
             .limit(1)
         )
+
+        if source_document_ids:
+            if report_document is None and source_template_documents:
+                report_document = source_template_documents[0]
+            # Excel handoff uses the authoritative form only as case/version
+            # context; it deliberately does not require F02 FINAL or a PDF.
+            report_form = authoritative_report_form
 
         active_document_rows = list(
             (
@@ -264,6 +299,7 @@ class SubmissionRepository:
         }
         if report_document is not None:
             document_ids.add(report_document.document_id)
+        document_ids.update(source_document_ids)
         referenced_documents = []
         if document_ids:
             referenced_documents = [
@@ -326,6 +362,7 @@ class SubmissionRepository:
             report_document=report_document,
             report_form=report_form,
             authoritative_report_form=authoritative_report_form,
+            source_template_documents=source_template_documents,
         )
         return SubmissionInputs(
             case_version=(
@@ -336,6 +373,7 @@ class SubmissionRepository:
             authoritative_report_form=authoritative_report_form,
             source_validation_run=validation_run,
             source_report_document=report_document,
+            source_template_documents=source_template_documents,
             report_form=report_form,
             applied_fields=applied_fields,
             calculations=calculations,
@@ -352,6 +390,7 @@ class SubmissionRepository:
         report_document: DocumentRecord | None,
         report_form: FormInstanceRecord | None,
         authoritative_report_form: FormInstanceRecord | None,
+        source_template_documents: list[DocumentRecord] | None = None,
     ) -> dict | None:
         """Freeze the minimum Valuation context needed by Review execution.
 
@@ -359,6 +398,13 @@ class SubmissionRepository:
         server-side handoff boundary: all Review rule inputs are selected and
         copied while the caller still holds the case lock.
         """
+        if source_template_documents:
+            return {
+                "schema_version": "excel-template-handoff-v1",
+                "source_document_ids": [str(item.document_id) for item in source_template_documents],
+                "form_instance_id": None if authoritative_report_form is None else str(authoritative_report_form.form_instance_id),
+            }
+
         if (
             validation_run is None
             or report_document is None

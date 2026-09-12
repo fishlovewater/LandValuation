@@ -57,6 +57,7 @@ class SubmissionService:
 
         locked_review = await self.repository.lock_review_for_case(case_id)
         inputs = await self.repository.load_submission_inputs(case_id, command)
+        excel_only = bool(command.source_template_document_ids)
         self._validate_readiness(inputs, command)
 
         latest_submission = (
@@ -143,12 +144,13 @@ class SubmissionService:
                 "review_id": str(review.review_id),
                 "source_validation_run_id": str(command.source_validation_run_id),
                 "source_report_document_id": str(command.source_report_document_id),
+                "source_template_document_ids": [str(item) for item in command.source_template_document_ids],
                 "input_fingerprint": fingerprint,
                 "submitted_by_user_id": str(actor.user_id),
             },
         )
         await self.repository.session.flush()
-        if was_revision:
+        if was_revision and not excel_only:
             registrar = self.revision_registrar or self._build_revision_registrar()
             from app.review.schemas import CorrectionResubmissionCreate
 
@@ -198,6 +200,24 @@ class SubmissionService:
 
     @staticmethod
     def _validate_readiness(inputs, command: SubmitForReviewCommand) -> None:
+        if command.source_template_document_ids:
+            expected_ids = set(command.source_template_document_ids)
+            actual_ids = {item.document_id for item in inputs.source_template_documents}
+            if not inputs.source_template_documents or actual_ids != expected_ids:
+                raise ResourceNotFoundError("六份 Excel 送審附件")
+            if inputs.source_report_document is None:
+                raise ResourceNotFoundError("Excel 送審主附件")
+            if inputs.case_version != command.expected_case_version:
+                raise AppError("CASE_VERSION_CONFLICT", "案件版本已變更", 409)
+            if inputs.source_validation_run is None:
+                raise ResourceNotFoundError("送審檢核結果")
+            if inputs.source_validation_run.run_status != "COMPLETED":
+                raise AppError("SUBMISSION_VALIDATION_NOT_COMPLETED", "送審前檢核批次尚未完成", 422)
+            # Excel-only handoff intentionally allows blank values, warnings,
+            # non-FINAL F02 forms, and no generated PDF. Review performs the
+            # substantive second-system checks.
+            return
+
         if inputs.authoritative_report_form is None:
             raise ResourceNotFoundError("完整估價報告")
         if inputs.case_version != command.expected_case_version:

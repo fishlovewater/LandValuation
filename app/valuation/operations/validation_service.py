@@ -227,6 +227,21 @@ class ValidationService:
                 "必要文件目前無法讀取：" + "、".join(missing_objects),
             )
 
+        # F03 calculation inputs are optional in this system. They may be
+        # completed and reviewed by the second review system instead, so they
+        # never block Excel-template output here.
+        optional_f03_codes = {
+            "F03_REQUIRED_FIELDS",
+            "F03_WEIGHT_SUM",
+            "F03_METHOD_INPUTS",
+            "F03_PRICE_RANGE",
+            "F03_CASE_CONSISTENCY",
+            "F03_CALCULATION_MATCH",
+        }
+        failures = [
+            failure for failure in failures
+            if failure[0] not in optional_f03_codes
+        ]
         ruleset_snapshot = {
             "rule_set_code": version.rule_set_code,
             "version_no": version.version_no,
@@ -274,9 +289,12 @@ class ValidationService:
         if finding_records:
             await self.repository.add_validation_findings(finding_records)
         run.run_status = "COMPLETED"
-        run.failed_count = len(finding_records)
-        run.warning_count = 0
+        run.warning_count = sum(
+            record.severity in {"LOW", "MEDIUM"} for record in finding_records
+        )
+        run.failed_count = len(finding_records) - run.warning_count
         run.passed_count = len(rules) - len(finding_records)
+        run.ruleset_snapshot = ruleset_snapshot
         run.completed_at = datetime.now(timezone.utc)
         await self.repository.save_validation_run(run)
         await self.repository.create_event(

@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from io import BytesIO, StringIO
@@ -61,6 +61,7 @@ class ExtractionResult:
     page_count: int
     candidates: tuple[CandidateValue, ...]
     provider: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class DocumentExtractionProvider:
@@ -823,31 +824,38 @@ class TextractPdfExtractionProvider(DocumentExtractionProvider):
                     ) from exc
 
     def _detect_text(self, object_key: str) -> ExtractionResult:
-        started = self.textract.start_document_text_detection(
-            DocumentLocation={
-                "S3Object": {
-                    "Bucket": self.settings.textract_s3_bucket,
-                    "Name": object_key,
+        use_analysis = hasattr(self.textract, "start_document_analysis")
+        if use_analysis:
+            started = self.textract.start_document_analysis(
+                DocumentLocation={
+                    "S3Object": {
+                        "Bucket": self.settings.textract_s3_bucket,
+                        "Name": object_key,
+                    }
+                },
+                FeatureTypes=["FORMS", "TABLES", "LAYOUT"],
+            )
+            getter = self.textract.get_document_analysis
+        else:
+            started = self.textract.start_document_text_detection(
+                DocumentLocation={
+                    "S3Object": {
+                        "Bucket": self.settings.textract_s3_bucket,
+                        "Name": object_key,
+                    }
                 }
-            }
-        )
+            )
+            getter = self.textract.get_document_text_detection
+
         job_id = started["JobId"]
         deadline = self.monotonic() + self.settings.textract_timeout_seconds
-
         while True:
-            response = self.textract.get_document_text_detection(
-                JobId=job_id,
-                MaxResults=1000,
-            )
+            response = getter(JobId=job_id, MaxResults=1000)
             status = response.get("JobStatus")
             if status == "IN_PROGRESS":
                 now = self.monotonic()
                 if now >= deadline:
-                    raise AppError(
-                        "TEXTRACT_TIMEOUT",
-                        "Textract 處理逾時，請稍後重試",
-                        503,
-                    )
+                    raise AppError("TEXTRACT_TIMEOUT", "Textract \u8655\u7406\u903e\u6642\uff0c\u8acb\u7a0d\u5f8c\u91cd\u8a66", 503)
                 self.sleep(
                     min(
                         self.settings.textract_poll_interval_seconds,
@@ -856,76 +864,177 @@ class TextractPdfExtractionProvider(DocumentExtractionProvider):
                 )
                 continue
             if status == "FAILED":
-                raise AppError(
-                    "TEXTRACT_FAILED",
-                    "Textract 無法完成文件擷取",
-                    503,
-                )
+                raise AppError("TEXTRACT_FAILED", "Textract \u7121\u6cd5\u5b8c\u6210\u6587\u4ef6\u64f7\u53d6", 503)
             if status == "PARTIAL_SUCCESS":
-                raise AppError(
-                    "TEXTRACT_PARTIAL_SUCCESS",
-                    "Textract 只完成部分頁面，未建立不完整擷取結果",
-                    503,
-                )
+                raise AppError("TEXTRACT_PARTIAL_SUCCESS", "Textract \u53ea\u5b8c\u6210\u90e8\u5206\u9801\u9762\uff0c\u672a\u5efa\u7acb\u4e0d\u5b8c\u6574\u64f7\u53d6\u7d50\u679c", 503)
             if status != "SUCCEEDED":
-                raise AppError(
-                    "TEXTRACT_INVALID_STATUS",
-                    "Textract 回傳未知處理狀態",
-                    503,
-                )
+                raise AppError("TEXTRACT_INVALID_STATUS", "Textract \u56de\u50b3\u672a\u77e5\u8655\u7406\u72c0\u614b", 503)
             break
 
         responses = [response]
         next_token = response.get("NextToken")
         while next_token:
-            response = self.textract.get_document_text_detection(
-                JobId=job_id,
-                MaxResults=1000,
-                NextToken=next_token,
-            )
+            response = getter(JobId=job_id, MaxResults=1000, NextToken=next_token)
             if response.get("JobStatus") != "SUCCEEDED":
-                raise AppError(
-                    "TEXTRACT_RESULT_INCOMPLETE",
-                    "Textract 分頁結果不完整",
-                    503,
-                )
+                raise AppError("TEXTRACT_RESULT_INCOMPLETE", "Textract \u5206\u9801\u7d50\u679c\u4e0d\u5b8c\u6574", 503)
             responses.append(response)
             next_token = response.get("NextToken")
-        return self._build_result(responses)
+        return self._build_result(responses, structured=use_analysis)
 
-    def _build_result(self, responses: list[dict[str, Any]]) -> ExtractionResult:
+    @staticmethod
+    def _block_text(block: dict[str, Any], blocks_by_id: dict[str, dict[str, Any]]) -> str:
+        values: list[str] = []
+        for relationship in block.get("Relationships", []):
+            if relationship.get("Type") != "CHILD":
+                continue
+            for child_id in relationship.get("Ids", []):
+                child = blocks_by_id.get(child_id, {})
+                if child.get("BlockType") == "WORD":
+                    value = str(child.get("Text", "")).strip()
+                    if value:
+                        values.append(value)
+                elif child.get("BlockType") == "SELECTION_ELEMENT":
+                    if str(child.get("SelectionStatus", "")).upper() == "SELECTED":
+                        values.append("\u5df2\u52fe\u9078")
+        return " ".join(values)
+
+    def _build_result(
+        self,
+        responses: list[dict[str, Any]],
+        *,
+        structured: bool = False,
+    ) -> ExtractionResult:
         page_count = 0
         page_lines: dict[int, list[tuple[str, Decimal]]] = {}
+        all_blocks: list[dict[str, Any]] = []
         for response in responses:
-            page_count = max(
-                page_count,
-                int(response.get("DocumentMetadata", {}).get("Pages", 0)),
-            )
-            for block in response.get("Blocks", []):
+            page_count = max(page_count, int(response.get("DocumentMetadata", {}).get("Pages", 0)))
+            all_blocks.extend(response.get("Blocks", []))
+
+        if not structured:
+            for block in all_blocks:
                 if block.get("BlockType") != "LINE":
                     continue
                 text = str(block.get("Text", "")).strip()
                 if not text:
                     continue
                 page_number = max(int(block.get("Page", 1)), 1)
-                raw_confidence = Decimal(str(block.get("Confidence", 0))) / Decimal(
-                    "100"
-                )
-                confidence = min(max(raw_confidence, Decimal("0")), Decimal("1"))
-                page_lines.setdefault(page_number, []).append(
-                    (text, confidence.quantize(Decimal("0.0001")))
-                )
+                confidence = min(
+                    max(Decimal(str(block.get("Confidence", 0))) / Decimal("100"), Decimal("0")),
+                    Decimal("1"),
+                ).quantize(Decimal("0.0001"))
+                page_lines.setdefault(page_number, []).append((text, confidence))
                 page_count = max(page_count, page_number)
+            pages = [
+                "\n".join(text for text, _confidence in page_lines.get(page, []))
+                for page in range(1, page_count + 1)
+            ]
+            return ExtractionResult(
+                text="\n\n".join(text for text in pages if text),
+                page_count=page_count,
+                candidates=_candidate_values(pages, page_lines=page_lines),
+                provider=self.provider_name,
+            )
 
-        pages = [
-            "\n".join(text for text, _confidence in page_lines.get(page, []))
-            for page in range(1, page_count + 1)
-        ]
+        blocks_by_id = {str(block.get("Id")): block for block in all_blocks if block.get("Id")}
+        page_extras: dict[int, list[str]] = {}
+        metadata_blocks: list[dict[str, Any]] = []
+        for block in all_blocks:
+            block_type = block.get("BlockType")
+            page_number = max(int(block.get("Page", 1)), 1)
+            page_count = max(page_count, page_number)
+            if block_type not in {"LINE", "TABLE", "CELL", "KEY_VALUE_SET", "SELECTION_ELEMENT"}:
+                continue
+            confidence = None
+            if block.get("Confidence") is not None:
+                confidence = float(
+                    min(
+                        max(Decimal(str(block["Confidence"])) / Decimal("100"), Decimal("0")),
+                        Decimal("1"),
+                    )
+                )
+            metadata_blocks.append({
+                "id": block.get("Id"),
+                "type": block_type,
+                "page": page_number,
+                "text": block.get("Text") or self._block_text(block, blocks_by_id),
+                "confidence": confidence,
+                "geometry": block.get("Geometry"),
+            })
+            if block_type == "LINE":
+                text = str(block.get("Text", "")).strip()
+                if text:
+                    line_confidence = min(
+                        max(Decimal(str(block.get("Confidence", 0))) / Decimal("100"), Decimal("0")),
+                        Decimal("1"),
+                    ).quantize(Decimal("0.0001"))
+                    page_lines.setdefault(page_number, []).append((text, line_confidence))
+            elif block_type == "KEY_VALUE_SET":
+                entities = {str(item).upper() for item in block.get("EntityTypes", [])}
+                if "KEY" not in entities:
+                    continue
+                key_text = self._block_text(block, blocks_by_id)
+                value_text = ""
+                for relationship in block.get("Relationships", []):
+                    if relationship.get("Type") != "VALUE":
+                        continue
+                    for value_id in relationship.get("Ids", []):
+                        value_text = self._block_text(blocks_by_id.get(value_id, {}), blocks_by_id)
+                        if value_text:
+                            break
+                if key_text and value_text:
+                    page_extras.setdefault(page_number, []).append(
+                        f"\u8868\u55ae\u6b04\u4f4d\uff1a{key_text}\uff1a{value_text}"
+                    )
+
+        table_by_cell: dict[str, str] = {}
+        for block in all_blocks:
+            if block.get("BlockType") != "TABLE":
+                continue
+            for relationship in block.get("Relationships", []):
+                if relationship.get("Type") == "CHILD":
+                    for cell_id in relationship.get("Ids", []):
+                        table_by_cell[str(cell_id)] = str(block.get("Id", ""))
+        for block in all_blocks:
+            if block.get("BlockType") != "CELL":
+                continue
+            text = self._block_text(block, blocks_by_id)
+            if not text:
+                continue
+            page_number = max(int(block.get("Page", 1)), 1)
+            row = block.get("RowIndex", "?")
+            col = block.get("ColumnIndex", "?")
+            page_extras.setdefault(page_number, []).append(
+                f"\u8868\u683c{table_by_cell.get(str(block.get('Id', '')), '')} \u7b2c{row}\u5217\u7b2c{col}\u6b04\uff1a{text}"
+            )
+
+        pages: list[str] = []
+        page_metadata: list[dict[str, Any]] = []
+        for page in range(1, page_count + 1):
+            lines = [text for text, _confidence in page_lines.get(page, [])]
+            extras = list(dict.fromkeys(page_extras.get(page, [])))
+            page_text = "\n".join([f"[\u7b2c {page} \u9801]", *lines, *extras]).strip()
+            pages.append(page_text)
+            page_metadata.append({
+                "page": page,
+                "text": page_text,
+                "lines": [
+                    {"text": text, "confidence": str(confidence)}
+                    for text, confidence in page_lines.get(page, [])
+                ],
+            })
         return ExtractionResult(
             text="\n\n".join(text for text in pages if text),
             page_count=page_count,
             candidates=_candidate_values(pages, page_lines=page_lines),
             provider=self.provider_name,
+            metadata={
+                "provider": "TEXTRACT",
+                "analysis_mode": "FORMS_TABLES_LAYOUT",
+                "feature_types": ["FORMS", "TABLES", "LAYOUT"],
+                "pages": page_metadata,
+                "blocks": metadata_blocks,
+            },
         )
 
 
@@ -943,15 +1052,22 @@ class AutoPdfExtractionProvider(DocumentExtractionProvider):
         self.textract_provider = textract_provider
 
     async def extract(self, content: bytes) -> ExtractionResult:
+        # When AWS is configured, Textract is the canonical first pass because
+        # it preserves forms, tables, page coordinates, and confidence.
+        # Local PDF/OCR remains a deterministic fallback for outages or blank
+        # Textract results.
+        if self.textract_provider is not None:
+            textract_result = await self.textract_provider.extract(content)
+            if textract_result.text.strip():
+                return textract_result
+
         local_result = await self.local_provider.extract(content)
         if local_result.text.strip():
             return local_result
-        if self.textract_provider is not None:
-            textract_result = await self.textract_provider.extract(content)
-            if textract_result.text.strip() or self.local_ocr_provider is None:
-                return textract_result
         if self.local_ocr_provider is not None:
             return await self.local_ocr_provider.extract(content)
+        if self.textract_provider is not None:
+            return textract_result
         return local_result
 
 

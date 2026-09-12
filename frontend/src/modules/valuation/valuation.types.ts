@@ -64,6 +64,7 @@ export interface CaseWorkspaceUpdateDto {
 export interface ParcelResponseDto {
   parcel_id: string
   case_id: string
+  location_id: string | null
   district_code: string
   section_name: string
   subsection_name: string
@@ -89,6 +90,7 @@ export interface ParcelCreateDto {
   ownership_numerator?: string | null
   ownership_denominator?: string | null
   source_document_id?: string | null
+  location_id?: string | null
 }
 
 export type ParcelUpdateDto = Partial<ParcelCreateDto>
@@ -202,6 +204,7 @@ export interface DocumentResponseDto {
   document_id: string
   document_group_id: string
   case_id: string
+  location_id: string | null
   document_type: string
   original_filename: string
   mime_type: string
@@ -311,9 +314,11 @@ export interface AutomatedWorkflowResponseDto {
   manual_fields_ignored: string[]
   manual_field_errors: Record<string, string>
   manual_field_values: Record<string, Record<string, unknown>>
+  manual_field_values_by_location: Record<string, Record<string, Record<string, unknown>>>
 }
 
 export interface ManualFieldValuesRequestDto {
+  location_id?: string | null
   values: Record<string, Record<string, unknown>>
 }
 
@@ -370,6 +375,7 @@ export type ExtractionCandidateDecision = 'CONFIRM' | 'REJECT'
 export interface ExtractedFieldResponseDto {
   extracted_field_id: string
   extraction_id: string
+  location_id: string | null
   document_id: string
   form_code: string
   field_name: string
@@ -518,9 +524,21 @@ export interface FormalReportResponseDto {
   request_id: string | null
 }
 
+export interface TemplateExportResponseDto {
+  form_code: string
+  title: string
+  document_id: string
+  filename: string
+  mime_type: string
+  version_no: number
+  file_size_bytes: number
+  download_path: string
+}
+
 export interface FormalWorkflowStatusResponseDto {
   validation: FormalValidationResponseDto | null
   report: FormalReportResponseDto | null
+  template_exports: TemplateExportResponseDto[]
   requires_revalidation_for_submission: boolean
 }
 
@@ -662,6 +680,7 @@ export interface SubmitForReviewCommandDto {
   expected_case_version: number
   source_validation_run_id: string
   source_report_document_id: string
+  source_template_document_ids?: string[]
 }
 
 export interface SubmitForReviewResultDto {
@@ -803,6 +822,7 @@ export interface DocumentArtifactModel {
   documentId: string
   documentGroupId: string
   caseId: string
+  locationId: string | null
   documentType: string
   filename: string
   mimeType: string
@@ -845,6 +865,17 @@ export interface FormalReportModel {
   downloadPath: string
 }
 
+export interface TemplateExportModel {
+  formCode: string
+  title: string
+  documentId: string
+  filename: string
+  mimeType: string
+  versionNo: number
+  fileSizeBytes: number
+  downloadPath: string
+}
+
 export interface SubmissionModel {
   submissionId: string
   submissionNo: number
@@ -867,6 +898,7 @@ export interface ValuationFlowState {
   report: ReportArtifactModel | null
   formalValidation: FormalValidationModel | null
   formalReport: FormalReportModel | null
+  templateExports: TemplateExportModel[]
   submission: SubmissionModel | null
 }
 
@@ -885,6 +917,7 @@ function initialFlowState(): ValuationFlowState {
     report: null,
     formalValidation: null,
     formalReport: null,
+    templateExports: [],
     submission: null,
   }
 }
@@ -896,3 +929,5 @@ export function resetValuationFlow(): void {
 }
 
 export type ValuationCaseIdentity = CaseIdentity
+
+export interface ValuationLocationDto { location_id: string; case_id: string; display_order: number; label: string; address: string | null; is_benchmark_location: boolean; is_active: boolean; created_at: string; updated_at: string }

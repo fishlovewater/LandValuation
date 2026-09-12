@@ -81,9 +81,10 @@ async def analyze_document_fields(
     document_id: UUID,
     payload: FieldAnalysisRequest,
     session: DbSession,
+    storage: Storage,
     user: ExtractionEditor,
 ) -> ExtractionResponse:
-    record, candidates = await FieldAnalysisService(session).analyze(
+    record, candidates = await FieldAnalysisService(session, storage=storage).analyze(
         case_id,
         document_id,
         payload,

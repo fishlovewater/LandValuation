@@ -11,8 +11,8 @@ class SubmitForReviewCommand(BaseModel):
     expected_case_version: int = Field(ge=1)
     source_validation_run_id: UUID
     source_report_document_id: UUID
-
-
+    # Optional Excel-only handoff; legacy PDF source fields remain supported.
+    source_template_document_ids: list[UUID] = Field(default_factory=list, max_length=12)
 class SubmitForReviewResult(BaseModel):
     submission_id: UUID
     submission_no: int

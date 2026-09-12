@@ -55,6 +55,7 @@ from app.valuation.models import (
     CaseRecord,
     DocumentRecord,
     ExtractedFieldRecord,
+    ValuationLocationRecord,
 )
 from app.valuation.report_packages.draft_pdf_builder import (
     build_three_page_draft_pdf,
@@ -63,6 +64,8 @@ from app.valuation.report_packages.draft_pdf_builder import (
 from app.valuation.pdf_errors import build_pdf_safely
 from app.valuation.report_packages.page_service import ReportPageService
 from app.valuation.report_packages.page_schemas import (
+    F02DraftUpdate,
+    F02RFDraftUpdate,
     S01DraftUpdate,
     S01Observation,
 )
@@ -517,7 +520,17 @@ class AutomatedWorkflowService:
         user: User,
     ) -> AutomatedWorkflowResponse:
         """Persist non-empty workbench values without requiring a full form."""
-        await self.valuation._owned_editable_case(case_id, user)
+        case = await self.valuation._owned_editable_case(case_id, user)
+        if payload.location_id is not None:
+            location = await self.session.scalar(
+                select(ValuationLocationRecord).where(
+                    ValuationLocationRecord.case_id == case_id,
+                    ValuationLocationRecord.location_id == payload.location_id,
+                    ValuationLocationRecord.is_active.is_(True),
+                )
+            )
+            if location is None:
+                raise AppError("VALUATION_LOCATION_NOT_FOUND", "指定的估價地點不存在或已封存", 422)
         forms = await self.valuation.list_forms(case_id, user)
         forms_by_code: dict[str, object] = {}
         for form in forms:
@@ -544,6 +557,7 @@ class AutomatedWorkflowService:
             forms.append(created)
             forms_by_code[code] = created
 
+        requested_report_codes = requested_codes.intersection({"S01", "F02-RF", "F02"})
         report_root = next(
             (
                 form for form in forms
@@ -553,6 +567,28 @@ class AutomatedWorkflowService:
             ),
             None,
         )
+        # Older cases can have only F01/F03/F04.  Lazily create the commercial
+        # three-page draft when a report-page value is actually submitted;
+        # previously S01/F02/F02-RF values were silently ignored.
+        if requested_report_codes and report_root is None:
+            normalized_land_use = str(case.land_use_type or "").strip().upper()
+            if normalized_land_use in {"COMMERCIAL", "商業用地"}:
+                package = await self.report_packages.create(
+                    case_id,
+                    ReportPackageCreate(
+                        report_type=ReportType.REPORT_COMPARISON_COMMERCIAL,
+                        prepared_date=case.valuation_base_date,
+                    ),
+                    user,
+                )
+                report_root = await self.valuation.repository.get_form(
+                    case_id, package.report_id
+                )
+                forms = await self.valuation.list_forms(case_id, user)
+
+        forms_by_code = {}
+        for form in forms:
+            forms_by_code.setdefault(str(form.form_code), form)
         # A new manual value supersedes the previous value.  If a formal
         # report was already generated, reopen its three report pages so the
         # new value can be written into the formal S01 page and recalculated.
@@ -606,7 +642,6 @@ class AutomatedWorkflowService:
             }
             if not non_empty:
                 continue
-            saved.extend(f"{form_code}.{name}" for name in non_empty)
             accepted = {
                 name: value
                 for name, value in non_empty.items()
@@ -618,13 +653,27 @@ class AutomatedWorkflowService:
             # Keep every accepted catalogue value, including fields that are
             # not yet represented by a formal page schema, for audit/export.
             content = dict(form.form_content or {})
-            overrides = dict(content.get("manual_overrides") or {})
-            overrides.update(non_empty)
-            content["manual_overrides"] = overrides
+            if payload.location_id is None:
+                overrides = dict(content.get("manual_overrides") or {})
+                overrides.update(non_empty)
+                content["manual_overrides"] = overrides
+            else:
+                all_location_overrides = dict(content.get("manual_overrides_by_location") or {})
+                location_key = str(payload.location_id)
+                overrides = dict(all_location_overrides.get(location_key) or {})
+                overrides.update(non_empty)
+                all_location_overrides[location_key] = overrides
+                content["manual_overrides_by_location"] = all_location_overrides
             form.form_content = content
             form.updated_by_user_id = user.user_id
             await self.valuation.repository.save_form(form)
+            saved.extend(f"{form_code}.{name}" for name in non_empty)
 
+        # Location-scoped values are retained separately until their own S01/
+        # F01/F04 pages are generated.  They must never overwrite a shared
+        # formal page belonging to another location.
+        if payload.location_id is not None:
+            direct_updates = {code: {} for code in direct_updates}
         for form_code, values in direct_updates.items():
             if not values:
                 continue
@@ -652,6 +701,54 @@ class AutomatedWorkflowService:
                 for name in values:
                     errors[f"{form_code}.{name}"] = message
 
+        # F02 and F02-RF are report-package pages rather than standalone
+        # drafts.  Write schema fields through the page service so they remain
+        # visible in the formal template after reload.
+        report_page_updates = {
+            "F02": {
+                name: value
+                for name, value in (payload.values or {}).get("F02", {}).items()
+                if name in F02DraftUpdate.model_fields
+                and value is not None
+                and str(value).strip() != ""
+            },
+            "F02-RF": {
+                name: value
+                for name, value in (payload.values or {}).get("F02-RF", {}).items()
+                if name in F02RFDraftUpdate.model_fields
+                and value is not None
+                and str(value).strip() != ""
+            },
+        }
+        if payload.location_id is not None:
+            report_page_updates = {"F02": {}, "F02-RF": {}}
+        if report_root is not None:
+            for form_code, values in report_page_updates.items():
+                if not values:
+                    continue
+                try:
+                    if form_code == "F02":
+                        await self.pages.update_f02(
+                            case_id,
+                            report_root.form_instance_id,
+                            F02DraftUpdate.model_validate(values),
+                            user,
+                        )
+                    else:
+                        await self.pages.update_f02_rf(
+                            case_id,
+                            report_root.form_instance_id,
+                            F02RFDraftUpdate.model_validate(values),
+                            user,
+                        )
+                except Exception as exc:
+                    message = getattr(exc, "message", str(exc))
+                    for name in values:
+                        errors[f"{form_code}.{name}"] = message
+        elif any(report_page_updates.values()):
+            for form_code, values in report_page_updates.items():
+                for name in values:
+                    errors[f"{form_code}.{name}"] = "尚未建立對應的三頁查估書草稿，正式頁面未寫入"
         # The AI catalogue uses descriptive field codes while the formal S01
         # page stores a smaller set of direct fields plus observation rows.
         # Translate the user-entered catalogue values before formal checking;
@@ -661,7 +758,7 @@ class AutomatedWorkflowService:
             for name, value in (payload.values or {}).get("S01", {}).items()
             if value is not None and str(value).strip() != ""
         }
-        if s01_values and report_root is not None:
+        if s01_values and report_root is not None and payload.location_id is None:
             try:
                 current_page = await self.pages.get_s01(
                     case_id, report_root.form_instance_id, user
@@ -804,14 +901,9 @@ class AutomatedWorkflowService:
         response.manual_fields_saved = saved
         response.manual_fields_ignored = ignored
         response.manual_field_errors = errors
-        response.manual_field_values = {
-            str(form.form_code): dict(
-                (form.form_content or {}).get("manual_overrides") or {}
-            )
-            for form in await self.valuation.list_forms(case_id, user)
-            if isinstance(form.form_content, dict)
-            and isinstance(form.form_content.get("manual_overrides"), dict)
-        }
+        response.manual_field_values, response.manual_field_values_by_location = self._manual_values_by_scope(
+            await self.valuation.list_forms(case_id, user)
+        )
         return response
 
     async def _save_confirmation_export(
@@ -1541,8 +1633,27 @@ class AutomatedWorkflowService:
             completed = {
                 name for name, value in values.items() if value not in (None, "", [], {})
             }
-            if code == FormCode.F03.value and "benchmark_land_no" in confirmed:
-                completed.add("benchmark_land_id")
+            if code == FormCode.F03.value:
+                # F03 is stored in benchmark_valuations rather than
+                # form_content.data.  Looking only at form_content made a
+                # persisted benchmark/date appear blank after the user left
+                # and re-entered the workflow, which then incorrectly locked
+                # the calculation step.
+                try:
+                    f03_draft = await self.f03.get_draft(
+                        case_id,
+                        form.form_instance_id,
+                        user,
+                    ) if form is not None else None
+                except AppError:
+                    f03_draft = None
+                if f03_draft is not None:
+                    if f03_draft.benchmark_land_id is not None:
+                        completed.add("benchmark_land_id")
+                    if f03_draft.valuation_base_date is not None:
+                        completed.add("valuation_base_date")
+                if "benchmark_land_no" in confirmed:
+                    completed.add("benchmark_land_id")
             completed.update(confirmed)
             required = set(definition.required_fields)
             missing = required - completed
@@ -1610,14 +1721,9 @@ class AutomatedWorkflowService:
             if result.extraction is not None
             for candidate in result.extraction.candidates
         ]
-        manual_field_values = {
-            str(form.form_code): dict(
-                (form.form_content or {}).get("manual_overrides") or {}
-            )
-            for form in await self.valuation.list_forms(case_id, user)
-            if isinstance(form.form_content, dict)
-            and isinstance(form.form_content.get("manual_overrides"), dict)
-        }
+        manual_field_values, manual_field_values_by_location = self._manual_values_by_scope(
+            await self.valuation.list_forms(case_id, user)
+        )
         pending = sum(item.field_status == "NEEDS_CONFIRMATION" for item in candidates)
         draft_1_3 = None
         draft_1_6 = None
@@ -1644,10 +1750,22 @@ class AutomatedWorkflowService:
                 user,
             )
             readiness_blockers = readiness.blocking_errors
+        has_selected_benchmark_location = (
+            await self.session.scalar(
+                select(ValuationLocationRecord.location_id).where(
+                    ValuationLocationRecord.case_id == case_id,
+                    ValuationLocationRecord.is_active.is_(True),
+                    ValuationLocationRecord.is_benchmark_location.is_(True),
+                )
+            )
+        ) is not None
         missing_items = self._workflow_missing_items(
             pending=pending,
             has_parcels=bool(parcels),
-            has_benchmarks=bool(benchmarks),
+            # The multi-location workflow selects its benchmark in step two.
+            # A legacy BenchmarkLandRecord is only needed for formal F03 work,
+            # not for normal case progress or document review.
+            has_benchmarks=bool(benchmarks) or has_selected_benchmark_location,
             has_report=report_id is not None,
             land_use_type=case.land_use_type,
             readiness_blockers=readiness_blockers,
@@ -1696,7 +1814,29 @@ class AutomatedWorkflowService:
                 )
             ),
             manual_field_values=manual_field_values,
+            manual_field_values_by_location=manual_field_values_by_location,
         )
+    @staticmethod
+    def _manual_values_by_scope(forms: list[object]) -> tuple[
+        dict[str, dict[str, object]], dict[str, dict[str, dict[str, object]]]
+    ]:
+        shared: dict[str, dict[str, object]] = {}
+        by_location: dict[str, dict[str, dict[str, object]]] = {}
+        for form in forms:
+            content = getattr(form, "form_content", None)
+            if not isinstance(content, dict):
+                continue
+            form_code = str(getattr(form, "form_code", ""))
+            overrides = content.get("manual_overrides")
+            if isinstance(overrides, dict):
+                shared[form_code] = dict(overrides)
+            scoped = content.get("manual_overrides_by_location")
+            if not isinstance(scoped, dict):
+                continue
+            for location_id, values in scoped.items():
+                if isinstance(values, dict):
+                    by_location.setdefault(str(location_id), {})[form_code] = dict(values)
+        return shared, by_location
     @staticmethod
     def _workflow_missing_items(
         *,

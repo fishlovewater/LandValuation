@@ -249,7 +249,7 @@ def _draw_page_three_landscape(
         if x is not None:
             _draw_fitted(
                 target,
-                f"ID {str(item['comparison_target_id'])[:8]}",
+                item.get("comparison_target_label") or f"ID {str(item['comparison_target_id'])[:8]}",
                 x,
                 545,
                 65,

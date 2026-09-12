@@ -241,7 +241,7 @@ def test_explicit_benchmark_land_number_label_can_be_extracted() -> None:
 
 
 @pytest.mark.asyncio
-async def test_auto_provider_keeps_local_result_when_pdf_has_text() -> None:
+async def test_auto_provider_prefers_textract_when_configured() -> None:
     local = StubProvider(
         ExtractionResult(
             text="文字型 PDF",
@@ -273,10 +273,10 @@ async def test_auto_provider_keeps_local_result_when_pdf_has_text() -> None:
         textract_provider=textract,
     ).extract(b"pdf")
 
-    assert result.provider == "LOCAL_PDF"
-    assert local.calls == 1
+    assert result.provider == "TEXTRACT"
+    assert local.calls == 0
     assert local_ocr.calls == 0
-    assert textract.calls == 0
+    assert textract.calls == 1
 
 
 @pytest.mark.asyncio
@@ -313,7 +313,7 @@ async def test_auto_provider_uses_textract_when_local_pdf_has_no_text() -> None:
     ).extract(b"pdf")
 
     assert result.provider == "TEXTRACT"
-    assert local.calls == 1
+    assert local.calls == 0
     assert local_ocr.calls == 0
     assert textract.calls == 1
 
@@ -482,6 +482,79 @@ async def test_textract_extracts_paginated_lines_and_cleans_temporary_s3() -> No
     assert len(s3.uploads) == 1
     assert len(s3.deletes) == 1
     assert s3.uploads[0]["Key"] == s3.deletes[0]["Key"]
+
+
+def test_textract_structured_analysis_preserves_pages_blocks_geometry_and_confidence() -> None:
+    provider = TextractPdfExtractionProvider.__new__(TextractPdfExtractionProvider)
+    responses = [
+        {
+            "JobStatus": "SUCCEEDED",
+            "DocumentMetadata": {"Pages": 1},
+            "Blocks": [
+                {
+                    "Id": "line-1",
+                    "BlockType": "LINE",
+                    "Page": 1,
+                    "Text": "行政區：金山區",
+                    "Confidence": 99.0,
+                    "Geometry": {"BoundingBox": {"Left": 0.1}},
+                },
+                {
+                    "Id": "table-1",
+                    "BlockType": "TABLE",
+                    "Page": 1,
+                    "Confidence": 96.0,
+                    "Geometry": {"BoundingBox": {"Top": 0.2}},
+                    "Relationships": [
+                        {"Type": "CHILD", "Ids": ["cell-1"]}
+                    ],
+                },
+                {
+                    "Id": "word-1",
+                    "BlockType": "WORD",
+                    "Page": 1,
+                    "Text": "地號",
+                    "Confidence": 98.0,
+                },
+                {
+                    "Id": "word-2",
+                    "BlockType": "WORD",
+                    "Page": 1,
+                    "Text": "218",
+                    "Confidence": 98.0,
+                },
+                {
+                    "Id": "cell-1",
+                    "BlockType": "CELL",
+                    "Page": 1,
+                    "RowIndex": 1,
+                    "ColumnIndex": 1,
+                    "Confidence": 95.0,
+                    "Relationships": [
+                        {"Type": "CHILD", "Ids": ["word-1", "word-2"]}
+                    ],
+                },
+            ],
+        }
+    ]
+
+    result = provider._build_result(responses, structured=True)
+
+    assert result.provider == "TEXTRACT"
+    assert result.page_count == 1
+    assert "[第 1 頁]" in result.text
+    assert "表格table-1 第1列第1欄：地號 218" in result.text
+    assert result.metadata["analysis_mode"] == "FORMS_TABLES_LAYOUT"
+    assert result.metadata["pages"][0]["lines"][0] == {
+        "text": "行政區：金山區",
+        "confidence": "0.9900",
+    }
+    table_block = next(
+        block for block in result.metadata["blocks"] if block["id"] == "table-1"
+    )
+    assert table_block["geometry"]["BoundingBox"]["Top"] == 0.2
+    assert table_block["confidence"] == 0.96
+
 
 
 @pytest.mark.asyncio

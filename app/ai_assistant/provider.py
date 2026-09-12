@@ -71,7 +71,7 @@ class BedrockConverseProvider:
                 "modelId": self.settings.bedrock_model_id,
                 "messages": messages,
                 "system": [{"text": self.system_prompt}],
-                "inferenceConfig": {"temperature": 0, "maxTokens": 800},
+                "inferenceConfig": self._inference_config(),
             }
             if self.tools:
                 request["toolConfig"] = {"tools": self.tools}
@@ -98,6 +98,17 @@ class BedrockConverseProvider:
             tool_calls=calls,
             stop_reason=result.get("stopReason", "end_turn"),
         )
+
+
+    def _inference_config(self) -> dict[str, Any]:
+        model_id = self.settings.bedrock_model_id or ""
+        config: dict[str, Any] = {
+            "maxTokens": getattr(self.settings, "bedrock_max_tokens", 800),
+        }
+        # Some Bedrock models reject explicit temperature values outside their supported range.
+        if "claude-fable-5-1" not in model_id:
+            config["temperature"] = getattr(self.settings, "bedrock_temperature", 0)
+        return config
 
 
 class OllamaChatProvider:

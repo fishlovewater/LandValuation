@@ -27,6 +27,7 @@ import type {
   FormalCalculationResponseDto,
   FormalWorkflowStatusResponseDto,
   FormalValidationResponseDto,
+  TemplateExportResponseDto,
   FormRequirementResponseDto,
   FormCreateDto,
   FormResponseDto,
@@ -50,6 +51,7 @@ import type {
   ValuationReviewHandoffDto,
   ValidationRequestDto,
   ValidationResponseDto,
+  ValuationLocationDto,
 } from './valuation.types'
 
 export interface ListCasesParams {
@@ -261,6 +263,26 @@ export const valuationApi = {
     return response.data
   },
 
+  async listLocations(caseId: string): Promise<ValuationLocationDto[]> {
+    const response = await http.get<ValuationLocationDto[]>(`/valuation/cases/${caseId}/locations`)
+    return response.data
+  },
+
+  async createLocation(caseId: string, payload: { label: string; address?: string | null }): Promise<ValuationLocationDto> {
+    const response = await http.post<ValuationLocationDto>(`/valuation/cases/${caseId}/locations`, payload)
+    return response.data
+  },
+
+  async setBenchmarkLocation(caseId: string, locationId: string): Promise<ValuationLocationDto> {
+    const response = await http.post<ValuationLocationDto>(`/valuation/cases/${caseId}/locations/${locationId}/set-benchmark`)
+    return response.data
+  },
+
+  async archiveLocation(caseId: string, locationId: string): Promise<ValuationLocationDto> {
+    const response = await http.post<ValuationLocationDto>(`/valuation/cases/${caseId}/locations/${locationId}/archive`)
+    return response.data
+  },
+
   async listDocuments(caseId: string): Promise<DocumentResponseDto[]> {
     const response = await http.get<DocumentResponseDto[]>(
       `/valuation/cases/${caseId}/documents`,
@@ -272,10 +294,12 @@ export const valuationApi = {
     caseId: string,
     category: DocumentCategory,
     file: File,
+    locationId?: string | null,
   ): Promise<DocumentResponseDto> {
     const body = new FormData()
     body.append('category', category)
     body.append('file', file)
+    if (locationId) body.append('location_id', locationId)
     const response = await http.post<DocumentResponseDto>(`/valuation/cases/${caseId}/documents`, body, {
       headers: { 'Content-Type': undefined },
     })
@@ -457,6 +481,13 @@ export const valuationApi = {
   async formalValidate(caseId: string, reportId: string): Promise<FormalValidationResponseDto> {
     const response = await http.post<FormalValidationResponseDto>(
       `/valuation/cases/${caseId}/reports/${reportId}/formal-validation`,
+    )
+    return response.data
+  },
+
+  async generateTemplateExports(caseId: string, reportId: string): Promise<TemplateExportResponseDto[]> {
+    const response = await http.post<TemplateExportResponseDto[]>(
+      `/valuation/cases/${caseId}/reports/${reportId}/template-exports`,
     )
     return response.data
   },

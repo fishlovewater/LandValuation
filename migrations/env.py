@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -6,6 +7,13 @@ from sqlalchemy import pool
 from sqlalchemy.engine import URL
 
 from alembic import context
+from dotenv import load_dotenv
+
+# Local Alembic runs should use the checked-out .env even if an old
+# DATABASE_URL remains in a parent PowerShell session. Compose supplies
+# POSTGRES_HOST=db, so container credentials continue to take precedence.
+if not os.getenv("POSTGRES_HOST"):
+    load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=True)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
