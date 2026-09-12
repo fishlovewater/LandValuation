@@ -77,7 +77,7 @@ onBeforeUnmount(clearPreview)
     <EmptyState
       v-else-if="!document"
       title="尚未選取證據"
-      description="選取右側疑點後，這裡會開啟同一份授權文件。"
+      description="開啟「疑點內容」並選取一筆疑點後，這裡會顯示對應的授權來源文件。"
     />
     <div v-else class="evidence-viewer__surface">
       <div class="evidence-viewer__meta">

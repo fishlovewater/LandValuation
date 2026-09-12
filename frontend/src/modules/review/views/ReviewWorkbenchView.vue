@@ -749,7 +749,7 @@ onBeforeUnmount(() => {
             <span
               v-if="inputVersionLabel"
               data-testid="review-input-provenance"
-              :title="inputVersionFingerprint ? `輸入指紋 ${inputVersionFingerprint}` : undefined"
+              :title="inputVersionFingerprint ? `版本驗證碼 ${inputVersionFingerprint}` : undefined"
             >
               <b>{{ inputVersionLabel }}</b>
             </span>
@@ -976,7 +976,7 @@ onBeforeUnmount(() => {
                 <div><dt>資料來源</dt><dd>{{ detail.caseSourceLabel }}</dd></div>
                 <div><dt>凍結版本</dt><dd>{{ inputVersionLabel }}</dd></div>
                 <div v-if="inputVersionFrozenAt"><dt>凍結時間</dt><dd>{{ new Date(inputVersionFrozenAt).toLocaleString('zh-TW') }}</dd></div>
-                <div v-if="inputVersionFingerprint"><dt>內容指紋</dt><dd class="review-workbench__fingerprint">{{ inputVersionFingerprint }}</dd></div>
+                <div v-if="inputVersionFingerprint"><dt>版本驗證碼</dt><dd class="review-workbench__fingerprint">{{ inputVersionFingerprint }}</dd></div>
               </dl>
               <p class="review-workbench__muted">本次檢核與審查結果綁定此凍結版本；後續案件或文件變更不會回寫到既有審查依據。</p>
             </section>

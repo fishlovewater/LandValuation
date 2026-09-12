@@ -165,8 +165,8 @@ onMounted(load)
           <strong>{{ reviewStatusLabel(detail.reviewStatusCode) }}</strong>
         </div>
         <div>
-          <span>最新執行</span>
-          <strong>{{ runId ? '已連結' : '尚無執行' }}</strong>
+          <span>最新檢核</span>
+          <strong>{{ latestRun?.runStatusLabel ?? '尚無檢核紀錄' }}</strong>
         </div>
         <div>
           <span>疑點</span>
@@ -179,7 +179,7 @@ onMounted(load)
         <div class="review-result__heading">
           <div>
             <p class="review-result__eyebrow">審查報告</p>
-            <h2 id="review-report-title">結構化審查報告</h2>
+            <h2 id="review-report-title">正式審查報告</h2>
           </div>
           <div class="review-result__actions">
             <button type="button" data-testid="generate-review-pdf" :disabled="!canUseReport || busy" :title="reportActionReason" @click="generatePdf">
@@ -218,7 +218,7 @@ onMounted(load)
             <span>審查依據</span>
             <strong>{{ reportInputLabel }}</strong>
             <small v-if="report?.input_provenance?.frozen_at">凍結於 {{ new Date(report.input_provenance.frozen_at).toLocaleString('zh-TW') }}</small>
-            <small v-if="report?.input_provenance?.fingerprint" class="review-result__fingerprint">指紋 {{ report.input_provenance.fingerprint }}</small>
+            <small v-if="report?.input_provenance?.fingerprint" class="review-result__fingerprint">版本驗證碼 {{ report.input_provenance.fingerprint }}</small>
           </article>
           <article v-if="reportDocument" class="review-result__card review-result__card--file">
             <span>可下載文件</span>
