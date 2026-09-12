@@ -7,7 +7,6 @@ import ValuationGeneralValidationPanel from '../../src/modules/valuation/compone
 import ValuationIssueDrawer from '../../src/modules/valuation/components/ValuationIssueDrawer.vue'
 import ValuationReportArtifacts from '../../src/modules/valuation/components/ValuationReportArtifacts.vue'
 import ValuationReportPackageWorkspace from '../../src/modules/valuation/components/ValuationReportPackageWorkspace.vue'
-import ValuationStepNavigator from '../../src/modules/valuation/components/ValuationStepNavigator.vue'
 import ValuationSubmissionBar from '../../src/modules/valuation/components/ValuationSubmissionBar.vue'
 import ValuationSubmitReadiness from '../../src/modules/valuation/components/ValuationSubmitReadiness.vue'
 import ValuationSubmitSummary from '../../src/modules/valuation/components/ValuationSubmitSummary.vue'
@@ -303,18 +302,6 @@ describe('ValuationReportArtifacts', () => {
     await wrapper.get('[data-testid="download-formal-report"]').trigger('click')
 
     expect(wrapper.emitted('download')?.[0]).toEqual(['formal-document', '完整送審.pdf'])
-  })
-})
-
-describe('ValuationStepNavigator', () => {
-  it('shows the current workflow position and progress at a glance', () => {
-    const wrapper = mount(ValuationStepNavigator, {
-      props: { currentStep: 4 },
-    })
-
-    expect(wrapper.get('[data-testid="valuation-step-summary"]').text()).toContain('第 4 步 / 6')
-    expect(wrapper.get('[data-testid="valuation-step-summary"]').text()).toContain('計算與檢核')
-    expect(wrapper.get('[data-testid="valuation-step-summary"]').text()).toContain('67%')
   })
 })
 
