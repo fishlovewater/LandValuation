@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import {
   PhCheckCircle as CheckCircle,
+  PhLockKey as LockKey,
   PhPaperPlaneTilt as PaperPlaneTilt,
+  PhShieldCheck as ShieldCheck,
 } from '@phosphor-icons/vue'
 import { statusLabel } from '../../../utils/enumLabels'
 import { formatDateZhTw } from '../../../utils/formatters'
@@ -20,11 +22,23 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <section class="submission-bar" aria-label="送審操作">
+  <section
+    class="submission-bar"
+    :data-state="submission ? 'submitted' : canSubmit ? 'ready' : 'blocked'"
+    aria-label="送審操作"
+  >
+    <div class="submission-bar__status-icon" aria-hidden="true">
+      <CheckCircle v-if="submission" :size="22" weight="fill" />
+      <ShieldCheck v-else-if="canSubmit" :size="22" weight="duotone" />
+      <LockKey v-else :size="21" weight="duotone" />
+    </div>
+
     <div class="submission-bar__copy">
+      <span>{{ submission ? '送審完成' : canSubmit ? '已符合送審條件' : '送審條件尚未完成' }}</span>
       <strong>{{ submission ? '案件已送出審查' : readinessMessage }}</strong>
       <p v-if="submission">送審時間：{{ formatDateZhTw(submission.submittedAt) }}</p>
-      <p v-else>完成必要檢核與完整送審 PDF 後即可送出審查。</p>
+      <p v-else-if="canSubmit">完整送審 PDF 與正式檢核皆已完成，可以送出本次審查。</p>
+      <p v-else>完成前述查估書確認、正式檢核與完整送審 PDF 後即可送出審查。</p>
     </div>
 
     <button
@@ -59,18 +73,27 @@ const emit = defineEmits<{
   position: sticky;
   z-index: 12;
   bottom: 14px;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 18px 20px;
+  gap: 14px;
+  padding: 17px 18px;
   border: 1px solid #d9e2ec;
   border-radius: var(--app-radius-md);
   background: #fff;
   box-shadow: 0 10px 28px rgba(30, 52, 78, .12);
 }
-.submission-bar__copy strong { color: var(--app-ink); font-size: 15px; }
-.submission-bar__copy p { margin: 5px 0 0; color: var(--app-ink-soft); font-size: 12px; }
+.submission-bar[data-state="ready"] { border-color: #bfd0e2; background: #f9fbfd; }
+.submission-bar[data-state="submitted"] { border-color: #cfe4da; background: #f8fcfa; }
+.submission-bar__status-icon { display: grid; width: 40px; height: 40px; place-items: center; border-radius: 10px; color: #6c7d8f; background: #f0f3f6; }
+.submission-bar[data-state="ready"] .submission-bar__status-icon { color: #2e5984; background: #e8f1fa; }
+.submission-bar[data-state="submitted"] .submission-bar__status-icon { color: #2f7456; background: #e8f5ee; }
+.submission-bar__copy { display: grid; gap: 3px; min-width: 0; }
+.submission-bar__copy > span { color: var(--app-muted); font-size: 9px; font-weight: 900; letter-spacing: .08em; }
+.submission-bar[data-state="ready"] .submission-bar__copy > span { color: #2e5984; }
+.submission-bar[data-state="submitted"] .submission-bar__copy > span { color: #2f7456; }
+.submission-bar__copy strong { color: var(--app-ink); font-size: 14px; line-height: 1.4; }
+.submission-bar__copy p { margin: 1px 0 0; color: var(--app-ink-soft); font-size: 11px; line-height: 1.5; }
 .submission-bar__submit {
   display: inline-flex;
   min-height: 44px;
@@ -101,7 +124,10 @@ const emit = defineEmits<{
 .submission-bar__complete span { color: var(--app-ink-soft); font-size: 12px; }
 
 @media (max-width: 640px) {
-  .submission-bar { position: static; align-items: stretch; flex-direction: column; box-shadow: 0 8px 22px rgba(30, 52, 78, .10); }
-  .submission-bar__submit { width: 100%; }
+  .submission-bar { position: static; grid-template-columns: 1fr; align-items: stretch; box-shadow: 0 8px 22px rgba(30, 52, 78, .10); }
+  .submission-bar__status-icon { display: none; }
+  .submission-bar__submit,
+  .submission-bar__complete { width: 100%; }
+  .submission-bar__complete { justify-content: center; }
 }
 </style>
