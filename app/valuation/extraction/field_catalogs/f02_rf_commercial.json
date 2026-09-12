@@ -1,0 +1,263 @@
+[
+  {
+    "sequence": 1,
+    "category_no": 1,
+    "category": "土地使用管制",
+    "item_no": 1,
+    "source_item_code": "C1_01",
+    "label": "都市計畫（內、外）",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 2,
+    "category_no": 1,
+    "category": "土地使用管制",
+    "item_no": 2,
+    "source_item_code": "C1_02",
+    "label": "使用分區（使用地類別）",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 3,
+    "category_no": 1,
+    "category": "土地使用管制",
+    "item_no": 3,
+    "source_item_code": "C1_03",
+    "label": "建蔽率",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 4,
+    "category_no": 1,
+    "category": "土地使用管制",
+    "item_no": 4,
+    "source_item_code": "C1_04",
+    "label": "容積率",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 5,
+    "category_no": 1,
+    "category": "土地使用管制",
+    "item_no": 5,
+    "source_item_code": "C1_05",
+    "label": "有無禁止建築",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 6,
+    "category_no": 1,
+    "category": "土地使用管制",
+    "item_no": 6,
+    "source_item_code": "C1_06",
+    "label": "有無限制建築（整體開發、面積限制、高度限制……等）",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 7,
+    "category_no": 2,
+    "category": "交通運輸",
+    "item_no": 1,
+    "source_item_code": "C2_01",
+    "label": "主要道路寬度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 8,
+    "category_no": 2,
+    "category": "交通運輸",
+    "item_no": 2,
+    "source_item_code": "C2_02",
+    "label": "區段內道路平均寬度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 9,
+    "category_no": 2,
+    "category": "交通運輸",
+    "item_no": 3,
+    "source_item_code": "C2_03",
+    "label": "接近大型車站之程度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 10,
+    "category_no": 2,
+    "category": "交通運輸",
+    "item_no": 4,
+    "source_item_code": "C2_04",
+    "label": "站牌之接近程度或密集程度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 11,
+    "category_no": 2,
+    "category": "交通運輸",
+    "item_no": 5,
+    "source_item_code": "C2_05",
+    "label": "交流道之有無及接近交流道之程度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 12,
+    "category_no": 2,
+    "category": "交通運輸",
+    "item_no": 6,
+    "source_item_code": "C2_06",
+    "label": "區段內道路規劃及闢建程度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 13,
+    "category_no": 3,
+    "category": "自然條件",
+    "item_no": 1,
+    "source_item_code": "C3_01",
+    "label": "排水之良否",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 14,
+    "category_no": 3,
+    "category": "自然條件",
+    "item_no": 2,
+    "source_item_code": "C3_02",
+    "label": "地勢",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 15,
+    "category_no": 4,
+    "category": "公共建設",
+    "item_no": 1,
+    "source_item_code": "C4_01",
+    "label": "接近市場之程度（傳統市場、超級市場、超大型購物中心）",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 16,
+    "category_no": 4,
+    "category": "公共建設",
+    "item_no": 2,
+    "source_item_code": "C4_02",
+    "label": "接近公園（里鄰公園、一般公園）、廣場、徒步區之程度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 17,
+    "category_no": 4,
+    "category": "公共建設",
+    "item_no": 3,
+    "source_item_code": "C4_03",
+    "label": "接近觀光遊憩設施之程度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 18,
+    "category_no": 4,
+    "category": "公共建設",
+    "item_no": 4,
+    "source_item_code": "C4_04",
+    "label": "停車場地之便利程度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 19,
+    "category_no": 5,
+    "category": "特殊設施",
+    "item_no": 1,
+    "source_item_code": "C5_01",
+    "label": "電業設施及公用氣體燃料設施之有無及接近程度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 20,
+    "category_no": 5,
+    "category": "特殊設施",
+    "item_no": 2,
+    "source_item_code": "C5_02",
+    "label": "殯葬設施之有無及接近程度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 21,
+    "category_no": 5,
+    "category": "特殊設施",
+    "item_no": 3,
+    "source_item_code": "C5_03",
+    "label": "廢棄物處理設施之有無及接近程度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 22,
+    "category_no": 6,
+    "category": "環境污染",
+    "item_no": 1,
+    "source_item_code": "C6_01",
+    "label": "水污染、噪音污染、廢氣污染、廢棄物污染等之有無及接近程度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 23,
+    "category_no": 7,
+    "category": "工商活動",
+    "item_no": 1,
+    "source_item_code": "C7_01",
+    "label": "百貨公司之有無、數量、接近程度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 24,
+    "category_no": 7,
+    "category": "工商活動",
+    "item_no": 2,
+    "source_item_code": "C7_02",
+    "label": "金融機構之有無、數量、接近程度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 25,
+    "category_no": 7,
+    "category": "工商活動",
+    "item_no": 3,
+    "source_item_code": "C7_03",
+    "label": "娛樂設施之有無、數量、接近程度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 26,
+    "category_no": 7,
+    "category": "工商活動",
+    "item_no": 4,
+    "source_item_code": "C7_04",
+    "label": "大型展示中心或觀光飯店之有無、數量、接近程度",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 27,
+    "category_no": 7,
+    "category": "工商活動",
+    "item_no": 5,
+    "source_item_code": "C7_05",
+    "label": "顧客通行量之多寡",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 28,
+    "category_no": 7,
+    "category": "工商活動",
+    "item_no": 6,
+    "source_item_code": "C7_06",
+    "label": "店舖之毗連狀態",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  },
+  {
+    "sequence": 29,
+    "category_no": 8,
+    "category": "其他影響因素",
+    "item_no": 1,
+    "source_item_code": "C8_01",
+    "label": "其他影響因素",
+    "basis": "土地徵收補償市價查估作業手冊／伍、五（手冊頁41-45、修正操作說明）；表5-2商業用地範本"
+  }
+]

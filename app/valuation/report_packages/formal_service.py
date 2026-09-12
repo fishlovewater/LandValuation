@@ -1,0 +1,1367 @@
+from datetime import UTC, datetime
+from decimal import Decimal
+from hashlib import sha256
+from io import BytesIO
+import json
+from uuid import UUID, uuid4
+
+from fastapi.concurrency import run_in_threadpool
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth.models import User
+from app.core.config import get_settings
+from app.core.exceptions import AppError, ResourceNotFoundError
+from app.storage.paths import build_generated_report_object_key
+from app.storage.service import StorageService
+from app.valuation.documents.repository import DocumentRepository
+from app.valuation.documents.service import safe_filename
+from app.valuation.models import (
+    CaseEventRecord,
+    ComparisonFactorValueRecord,
+    DocumentRecord,
+    ValidationRunRecord,
+)
+from app.valuation.report_packages.complete_draft_pdf_builder import (
+    build_six_page_formal_pdf,
+)
+from app.valuation.pdf_errors import build_pdf_safely
+from app.valuation.report_packages.factor_catalog import (
+    INDIVIDUAL_FACTOR_CODES,
+    TEMPLATE_FACTOR_CODES,
+)
+from app.valuation.report_packages.formal_calculation import (
+    FactorAdjustment,
+    LevelValue,
+    TargetPriceInput,
+    calculate_benchmark_comparison_price,
+    calculate_level_adjustment,
+    calculate_target_price,
+    sum_absolute_adjustments,
+    sum_adjustments,
+)
+from app.valuation.report_packages.formal_schemas import (
+    FormalCalculationResponse,
+    FormalReportResponse,
+    FormalTargetCalculationResponse,
+    FormalValidationFinding,
+    FormalValidationResponse,
+    FormalWorkflowStatusResponse,
+)
+from app.valuation.report_packages.page_schemas import (
+    F02DraftData,
+    F02RFDraftData,
+    S01DraftData,
+)
+from app.valuation.report_packages.page_service import ReportPageService
+from app.valuation.report_packages.repository import ReportPackageRepository
+from app.valuation.rule_packs.coverage import (
+    NEW_TAIPEI_CITYWIDE_SCOPE,
+    NEW_TAIPEI_DISTRICT_CODES,
+)
+from app.valuation.schemas import FormStatus
+
+
+FORMAL_FORMULA_CODE = "NTPC_COMPARISON_V1"
+FORMAL_ROUNDING_CODE = "NTPC_LAND_PRICE_V1"
+MAP_MIME_TYPES = {"application/pdf", "image/png", "image/jpeg"}
+MAX_OFFICIAL_TEMPLATE_BYTES = 30 * 1024 * 1024
+MAX_OFFICIAL_TEMPLATE_MANIFEST_BYTES = 1024 * 1024
+LAND_USE_ALIASES = {
+    "住宅用地": "RESIDENTIAL",
+    "商業用地": "COMMERCIAL",
+    "工業用地": "INDUSTRIAL",
+    "農業用地": "AGRICULTURAL",
+    "其他": "OTHER",
+}
+
+
+def _read_and_close(response) -> bytes:
+    try:
+        return response.read()
+    finally:
+        response.close()
+        release = getattr(response, "release_conn", None)
+        if callable(release):
+            release()
+
+
+async def _optional_official_template_assets(
+    storage: StorageService,
+) -> tuple[bytes | None, dict | None]:
+    settings = get_settings()
+    template_key = settings.official_report_blank_template_object_key
+    manifest_key = settings.official_report_blank_template_manifest_object_key
+    if template_key is None:
+        return None, None
+    template_response = await storage.download(template_key)
+    manifest_response = await storage.download(manifest_key or "")
+    template_bytes = await run_in_threadpool(_read_and_close, template_response)
+    manifest_bytes = await run_in_threadpool(_read_and_close, manifest_response)
+    if len(template_bytes) > MAX_OFFICIAL_TEMPLATE_BYTES:
+        raise AppError(
+            "OFFICIAL_TEMPLATE_TOO_LARGE",
+            "官方空白 PDF 超過 30 MB 上限",
+            500,
+        )
+    if len(manifest_bytes) > MAX_OFFICIAL_TEMPLATE_MANIFEST_BYTES:
+        raise AppError(
+            "OFFICIAL_TEMPLATE_MANIFEST_TOO_LARGE",
+            "官方模板 manifest 超過 1 MB 上限",
+            500,
+        )
+    try:
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AppError(
+            "OFFICIAL_TEMPLATE_MANIFEST_INVALID",
+            "官方模板 manifest 不是有效的 UTF-8 JSON",
+            500,
+        ) from exc
+    if not isinstance(manifest, dict):
+        raise AppError(
+            "OFFICIAL_TEMPLATE_MANIFEST_INVALID",
+            "官方模板 manifest 根節點必須為 JSON object",
+            500,
+        )
+    return template_bytes, manifest
+
+
+class FormalReportService:
+    def __init__(
+        self,
+        session: AsyncSession,
+        storage: StorageService | None = None,
+        repository: ReportPackageRepository | None = None,
+        pages: ReportPageService | None = None,
+        documents: DocumentRepository | None = None,
+    ) -> None:
+        self.session = session
+        self.storage = storage
+        self.repository = repository or ReportPackageRepository(session)
+        self.pages = pages or ReportPageService(
+            session,
+            repository=self.repository,
+        )
+        self.documents = documents or DocumentRepository(session)
+
+    async def calculate(
+        self,
+        case_id: UUID,
+        report_id: UUID,
+        user: User,
+    ) -> FormalCalculationResponse:
+        case, records = await self.pages._editable_records(case_id, report_id, user)
+        regional = self.pages._read_data(records["F02-RF"], F02RFDraftData)
+        comparison = self.pages._read_data(records["F02"], F02DraftData)
+        if not comparison.comparison_workflow_enabled:
+            return await self._calculate_without_comparison(
+                case_id=case_id,
+                report_id=report_id,
+                case=case,
+                records=records,
+                regional=regional,
+                comparison=comparison,
+                user=user,
+            )
+        self.pages._validate_cross_page_ids(regional, comparison)
+        regional = await self.pages._ensure_default_formal_rule(
+            case, records["F02-RF"], regional, user
+        )
+        if regional.benchmark_land_id is None or regional.comparison_analysis_id is None:
+            raise AppError(
+                "COMPARISON_ANALYSIS_REQUIRED",
+                "正式計算前必須指定比準地與比較分析",
+                422,
+            )
+        if not 1 <= len(comparison.comparison_targets) <= 3:
+            raise AppError("COMPARISON_TARGET_COUNT", "比較標的必須為 1 至 3 筆", 422)
+
+        analysis = await self.repository.get_comparison_analysis(
+            case_id, regional.comparison_analysis_id
+        )
+        if analysis is None:
+            raise ResourceNotFoundError("比較分析")
+        db_targets = await self.repository.list_comparison_targets(
+            case_id, regional.comparison_analysis_id
+        )
+        db_target_by_id = {item.comparison_target_id: item for item in db_targets}
+        selected_ids = {
+            item.comparison_target_id for item in comparison.comparison_targets
+        }
+        if not selected_ids.issubset(db_target_by_id):
+            raise AppError(
+                "CROSS_CASE_REFERENCE",
+                "F02 比較標的不存在或不屬於指定比較分析",
+                422,
+            )
+
+        rule, level_lookup = await self._formal_rule_and_levels(
+            case,
+            regional.rule_version_id,
+            TEMPLATE_FACTOR_CODES | INDIVIDUAL_FACTOR_CODES,
+        )
+        regional_codes = {item.factor_code for item in regional.factor_rows}
+        if regional_codes != TEMPLATE_FACTOR_CODES:
+            missing = sorted(TEMPLATE_FACTOR_CODES - regional_codes)
+            extra = sorted(regional_codes - TEMPLATE_FACTOR_CODES)
+            raise AppError(
+                "F02_RF_FACTOR_COVERAGE_INCOMPLETE",
+                "F02-RF 必須完整包含範本的正式區域因素",
+                422,
+                {"missing": missing, "extra": extra},
+            )
+
+        target_regional: dict[UUID, list[FactorAdjustment]] = {
+            target_id: [] for target_id in selected_ids
+        }
+        factor_value_records: list[ComparisonFactorValueRecord] = []
+        for row in regional.factor_rows:
+            benchmark_level = (
+                self._resolve_level(
+                    level_lookup, row.factor_code, row.benchmark_confirmed_level
+                )
+                if row.benchmark_confirmed_level
+                else None
+            )
+            row_target_by_id = {
+                item.comparison_target_id: item for item in row.targets
+            }
+            for target_id, target_draft in row_target_by_id.items():
+                comparable_level = (
+                    self._resolve_level(
+                        level_lookup, row.factor_code, target_draft.confirmed_level
+                    )
+                    if target_draft.confirmed_level
+                    else None
+                )
+                if benchmark_level and comparable_level:
+                    adjustment = calculate_level_adjustment(
+                        benchmark_level, comparable_level
+                    )
+                else:
+                    adjustment = FactorAdjustment(
+                        benchmark=benchmark_level or self._dummy_level(row.factor_code),
+                        comparable=comparable_level or self._dummy_level(row.factor_code),
+                        adjustment_rate=Decimal("0"),
+                        maximum_impact_rate=Decimal("0"),
+                    )
+                target_draft.calculated_adjustment_rate = adjustment.adjustment_rate
+                target_regional[target_id].append(adjustment)
+                factor_value_records.append(
+                    self._factor_value_record(
+                        target_id,
+                        adjustment,
+                        target_draft.source_notes or row.source_notes,
+                    )
+                )
+
+        target_results = []
+        response_targets = []
+        regional.regional_adjustment_rates = {}
+        for selected in sorted(
+            comparison.comparison_targets, key=lambda item: item.display_order
+        ):
+            db_target = db_target_by_id[selected.comparison_target_id]
+            individual_adjustments: list[FactorAdjustment] = []
+            for factor in selected.individual_factors:
+                benchmark_level = (
+                    self._resolve_level(
+                        level_lookup,
+                        factor.factor_code,
+                        factor.benchmark_confirmed_level,
+                    )
+                    if factor.benchmark_confirmed_level
+                    else None
+                )
+                comparable_level = (
+                    self._resolve_level(
+                        level_lookup,
+                        factor.factor_code,
+                        factor.comparable_confirmed_level,
+                    )
+                    if factor.comparable_confirmed_level
+                    else None
+                )
+                if benchmark_level and comparable_level:
+                    adjustment = calculate_level_adjustment(
+                        benchmark_level, comparable_level
+                    )
+                else:
+                    adjustment = FactorAdjustment(
+                        benchmark=benchmark_level or self._dummy_level(factor.factor_code),
+                        comparable=comparable_level or self._dummy_level(factor.factor_code),
+                        adjustment_rate=Decimal("0"),
+                        maximum_impact_rate=Decimal("0"),
+                    )
+                factor.calculated_adjustment_rate = adjustment.adjustment_rate
+                individual_adjustments.append(adjustment)
+                factor_value_records.append(
+                    self._factor_value_record(
+                        selected.comparison_target_id,
+                        adjustment,
+                        factor.source_notes,
+                    )
+                )
+            if selected.weight is None:
+                selected.weight = Decimal("1")
+
+
+            regional_adjustments = target_regional[selected.comparison_target_id]
+            regional_rate = sum_adjustments(regional_adjustments)
+            individual_rate = sum_adjustments(individual_adjustments)
+            result = calculate_target_price(
+                TargetPriceInput(
+                    comparison_target_id=selected.comparison_target_id,
+                    normal_unit_price=db_target.normal_unit_price_snapshot,
+                    time_adjustment_rate=selected.time_adjustment_rate,
+                    regional_adjustment_rate=regional_rate,
+                    individual_adjustment_rate=individual_rate,
+                    regional_absolute_total=sum_absolute_adjustments(
+                        regional_adjustments
+                    ),
+                    individual_absolute_total=sum_absolute_adjustments(
+                        individual_adjustments
+                    ),
+                    weight=selected.weight,
+                )
+            )
+            selected.regional_adjustment_rate = regional_rate
+            selected.individual_adjustment_rate = individual_rate
+            selected.total_adjustment_absolute = result.total_adjustment_absolute
+            selected.trial_price = result.trial_price
+            selected.normal_unit_price_snapshot = db_target.normal_unit_price_snapshot
+            selected.transaction_date_snapshot = db_target.transaction_date_snapshot
+            selected.date_adjusted_price = result.date_adjusted_price
+            selected.regional_adjusted_price = result.regional_adjusted_price
+            regional.regional_adjustment_rates[
+                str(selected.comparison_target_id)
+            ] = regional_rate
+            db_target.time_adjustment_rate = selected.time_adjustment_rate
+            db_target.regional_adjustment_rate = regional_rate
+            db_target.total_adjustment_absolute = result.total_adjustment_absolute
+            db_target.trial_price = result.trial_price
+            db_target.weight = selected.weight
+            db_target.condition_notes = selected.individual_condition_notes or None
+            target_results.append(result)
+            response_targets.append(
+                FormalTargetCalculationResponse(
+                    comparison_target_id=selected.comparison_target_id,
+                    regional_adjustment_rate=regional_rate,
+                    individual_adjustment_rate=individual_rate,
+                    total_adjustment_absolute=result.total_adjustment_absolute,
+                    date_adjusted_price=result.date_adjusted_price,
+                    regional_adjusted_price=result.regional_adjusted_price,
+                    trial_price=result.trial_price,
+                    weight=result.weight,
+                )
+            )
+
+        benchmark_price = calculate_benchmark_comparison_price(target_results)
+        now = datetime.now(UTC)
+        input_snapshot = self._input_snapshot(
+            case, regional, comparison, db_target_by_id
+        )
+        fingerprint = self._fingerprint(input_snapshot)
+        calculation_snapshot = {
+            "formula_code": rule.formula_code,
+            "rounding_code": rule.rounding_code,
+            "rule_version_id": str(rule.rule_version_id),
+            "rule_version_no": rule.version_no,
+            "input_fingerprint": fingerprint,
+            "inputs": input_snapshot,
+            "targets": [item.model_dump(mode="json") for item in response_targets],
+            "benchmark_comparison_price": format(benchmark_price, "f"),
+        }
+        regional.calculation_status = "CALCULATED"
+        regional.calculation_snapshot = calculation_snapshot
+        regional.calculated_at = now
+        regional.calculated_by_user_id = user.user_id
+        comparison.benchmark_comparison_price = benchmark_price
+        comparison.calculation_status = "CALCULATED"
+        comparison.calculation_snapshot = calculation_snapshot
+        comparison.calculated_at = now
+        comparison.calculated_by_user_id = user.user_id
+
+        analysis.rule_version_id = rule.rule_version_id
+        analysis.benchmark_comparison_price = benchmark_price
+        analysis.calculation_snapshot = calculation_snapshot
+        analysis.calculated_by_user_id = user.user_id
+        analysis.calculated_at = now
+        analysis.analysis_status = "READY"
+        await self.repository.replace_factor_values(
+            selected_ids, factor_value_records
+        )
+        await self.repository.save_comparison_targets(
+            [db_target_by_id[target_id] for target_id in selected_ids]
+        )
+        await self.repository.save_comparison_analysis(analysis)
+        await self.pages._save_data(records["F02-RF"], regional, user)
+        await self.pages._save_data(records["F02"], comparison, user)
+
+        return FormalCalculationResponse(
+            case_id=case_id,
+            report_id=report_id,
+            comparison_analysis_id=analysis.comparison_analysis_id,
+            rule_version_id=rule.rule_version_id,
+            formula_code=rule.formula_code,
+            rounding_code=rule.rounding_code,
+            benchmark_comparison_price=benchmark_price,
+            targets=response_targets,
+            input_fingerprint=fingerprint,
+            calculated_at=now,
+        )
+
+    async def _calculate_without_comparison(
+        self,
+        *,
+        case_id: UUID,
+        report_id: UUID,
+        case,
+        records: dict[str, object],
+        regional: F02RFDraftData,
+        comparison: F02DraftData,
+        user: User,
+    ) -> FormalCalculationResponse:
+        """Complete the formal-calculation step when comparison is optional.
+
+        The report still uses the published formal rule for auditability, but
+        it does not require a benchmark, comparison analysis, targets, or a
+        fabricated comparison price.
+        """
+        regional = await self.pages._ensure_default_formal_rule(
+            case, records["F02-RF"], regional, user
+        )
+        rule = await self.repository.get_rule_version(regional.rule_version_id)
+        if rule is None:
+            raise AppError(
+                "FORMAL_RULE_VERSION_REQUIRED",
+                "正式計算前必須套用已發布且可用的正式規則版本",
+                422,
+            )
+        self._validate_rule(case, rule)
+        now = datetime.now(UTC)
+        input_snapshot = self._input_snapshot(case, regional, comparison, {})
+        fingerprint = self._fingerprint(input_snapshot)
+        calculation_snapshot = {
+            "formula_code": rule.formula_code,
+            "rounding_code": rule.rounding_code,
+            "rule_version_id": str(rule.rule_version_id),
+            "rule_version_no": rule.version_no,
+            "comparison_workflow_enabled": False,
+            "input_fingerprint": fingerprint,
+            "inputs": input_snapshot,
+            "targets": [],
+            "benchmark_comparison_price": None,
+        }
+        regional.calculation_status = "CALCULATED"
+        regional.calculation_snapshot = calculation_snapshot
+        regional.calculated_at = now
+        regional.calculated_by_user_id = user.user_id
+        comparison.benchmark_comparison_price = None
+        comparison.calculation_status = "CALCULATED"
+        comparison.calculation_snapshot = calculation_snapshot
+        comparison.calculated_at = now
+        comparison.calculated_by_user_id = user.user_id
+        await self.pages._save_data(records["F02-RF"], regional, user)
+        await self.pages._save_data(records["F02"], comparison, user)
+        return FormalCalculationResponse(
+            case_id=case_id,
+            report_id=report_id,
+            comparison_analysis_id=None,
+            rule_version_id=rule.rule_version_id,
+            formula_code=rule.formula_code,
+            rounding_code=rule.rounding_code,
+            benchmark_comparison_price=None,
+            targets=[],
+            input_fingerprint=fingerprint,
+            calculated_at=now,
+        )
+
+    async def validate(
+        self,
+        case_id: UUID,
+        report_id: UUID,
+        user: User,
+        request_id: UUID | None,
+    ) -> FormalValidationResponse:
+        if request_id is not None:
+            existing = await self.repository.validation_for_request(
+                case_id, report_id, request_id
+            )
+            if existing is not None:
+                return self._validation_response(existing, report_id)
+        # Validation creates a run and may transition all report forms to
+        # CHECKED; acquire the shared Case writer lock before reading them.
+        case, records = await self.pages._read_records(
+            case_id, report_id, user, for_update=True
+        )
+        if request_id is not None:
+            existing = await self.repository.validation_for_request(
+                case_id, report_id, request_id
+            )
+            if existing is not None:
+                return self._validation_response(existing, report_id)
+        regional = self.pages._read_data(records["F02-RF"], F02RFDraftData)
+        comparison = self.pages._read_data(records["F02"], F02DraftData)
+        s01 = self.pages._read_data(records["S01"], S01DraftData)
+        findings: list[FormalValidationFinding] = []
+
+        def error(code: str, message: str, field: str | None = None) -> None:
+            findings.append(
+                FormalValidationFinding(
+                    code=code, severity="ERROR", message=message, field_code=field
+                )
+            )
+
+        def warning(code: str, message: str, field: str | None = None) -> None:
+            findings.append(
+                FormalValidationFinding(
+                    code=code, severity="WARNING", message=message, field_code=field
+                )
+            )
+
+        if not s01.district_name or not s01.district_boundary or s01.survey_date is None:
+            warning("S01_REQUIRED_FIELDS", "S01 缺少行政區名稱、區段範圍或勘查日期（尚未填寫，暫時留空）")
+        if not s01.observations:
+            warning("S01_OBSERVATIONS_REQUIRED", "S01 尚未包含勘查因素（暫時留空）")
+        elif any(not item.confirmed_by_user for item in s01.observations):
+            warning("S01_UNCONFIRMED_OBSERVATION", "S01 含有未經使用者確認的勘查因素")
+        if comparison.comparison_workflow_enabled and regional.calculation_status != "CALCULATED":
+            warning("F02_RF_CALCULATION_REQUIRED", "F02-RF 尚未完成計算")
+        if comparison.comparison_workflow_enabled and comparison.calculation_status != "CALCULATED":
+            warning("F02_CALCULATION_REQUIRED", "F02 尚未完成計算")
+        if comparison.comparison_workflow_enabled and not comparison.comparison_targets:
+            warning("F02_TARGETS_REQUIRED", "F02 缺少比較標的")
+        if comparison.comparison_workflow_enabled and not comparison.benchmark_notes:
+            warning("F02_BENCHMARK_NOTES_MISSING", "F02 尚未填寫比較價格決定說明")
+        if not s01.appraiser_name and not regional.appraiser_name and not comparison.appraiser_name:
+            warning("APPRAISER_NAME_MISSING", "查估書尚未填寫不動產估價師")
+
+        documents = await self.pages.draft_map_documents(case_id, report_id, user)
+        for document_type in (
+            "map-section-sketch",
+            "map-zoning",
+            "map-land-value-section",
+        ):
+            document = documents.get(document_type)
+            if document is None:
+                warning("FORMAL_MAP_MISSING", f"未附正式附圖：{document_type}")
+                continue
+            if document.mime_type.lower() not in MAP_MIME_TYPES:
+                warning("FORMAL_MAP_MIME_INVALID", f"附圖格式不支援：{document_type}")
+            if self.storage is None or not await self.storage.object_exists(
+                document.object_key
+            ):
+                warning("FORMAL_MAP_OBJECT_MISSING", f"附圖目前無法讀取：{document_type}")
+
+
+        fingerprint = None
+        input_snapshot = None
+        if comparison.comparison_workflow_enabled and (
+            regional.comparison_analysis_id is not None
+            and regional.rule_version_id is not None
+        ):
+            db_targets = await self.repository.list_comparison_targets(
+                case_id, regional.comparison_analysis_id
+            )
+            db_target_by_id = {
+                item.comparison_target_id: item for item in db_targets
+            }
+            input_snapshot = self._input_snapshot(
+                case, regional, comparison, db_target_by_id
+            )
+            fingerprint = self._fingerprint(input_snapshot)
+            saved_fingerprint = comparison.calculation_snapshot.get(
+                "input_fingerprint"
+            )
+            if saved_fingerprint != fingerprint:
+                error(
+                    "FORMAL_CALCULATION_STALE",
+                    "表單或比較標資料已在最後一次計算後變更，請重新計算",
+                )
+            rule = await self.repository.get_rule_version(regional.rule_version_id)
+            if rule is None:
+                error("FORMAL_RULE_VERSION_INVALID", "正式規則版本不存在或未發布")
+            else:
+                try:
+                    self._validate_rule(case, rule)
+                except AppError as exc:
+                    error(exc.code, exc.message)
+        elif comparison.comparison_workflow_enabled:
+            error("FORMAL_REFERENCES_REQUIRED", "缺少正式規則版本或比較分析")
+
+        if not comparison.comparison_workflow_enabled:
+            input_snapshot = self._input_snapshot(case, regional, comparison, {})
+            fingerprint = self._fingerprint(input_snapshot)
+            saved_fingerprint = comparison.calculation_snapshot.get(
+                "input_fingerprint"
+            )
+            if saved_fingerprint != fingerprint:
+                error(
+                    "FORMAL_CALCULATION_STALE",
+                    "表單資料已在最後一次計算後變更，請重新計算",
+                )
+            if regional.rule_version_id is None:
+                error("FORMAL_RULE_VERSION_REQUIRED", "缺少正式規則版本")
+            else:
+                rule = await self.repository.get_rule_version(regional.rule_version_id)
+                if rule is None:
+                    error("FORMAL_RULE_VERSION_INVALID", "正式規則版本不存在或未發布")
+                else:
+                    try:
+                        self._validate_rule(case, rule)
+                    except AppError as exc:
+                        error(exc.code, exc.message)
+
+        failed_count = sum(item.severity == "ERROR" for item in findings)
+        warning_count = sum(item.severity == "WARNING" for item in findings)
+        checklist_count = 12
+        passed_count = max(
+            0,
+            checklist_count
+            - len({item.code for item in findings if item.severity == "ERROR"}),
+        )
+        now = datetime.now(UTC)
+        snapshot = {
+            "ruleset_code": "COMPLETE_REPORT_VALIDATION_V1",
+            "input_fingerprint": fingerprint,
+            "calculation_fingerprint": comparison.calculation_snapshot.get(
+                "input_fingerprint"
+            ),
+            "findings": [item.model_dump(mode="json") for item in findings],
+            "map_document_ids": {
+                key: str(value.document_id) for key, value in documents.items()
+            },
+        }
+        run = await self.repository.create_validation_run(
+            ValidationRunRecord(
+                case_id=case_id,
+                form_instance_id=report_id,
+                run_status="COMPLETED",
+                passed_count=passed_count,
+                warning_count=warning_count,
+                failed_count=failed_count,
+                completed_at=now,
+                triggered_by_user_id=user.user_id,
+                rule_version_id=regional.rule_version_id,
+                input_snapshot=self._validation_input_snapshot(
+                    case=case,
+                    report_id=report_id,
+                    records=records,
+                    s01=s01,
+                    regional=regional,
+                    comparison=comparison,
+                    documents=documents,
+                    fingerprint=fingerprint,
+                ),
+                ruleset_snapshot=snapshot,
+                request_id=request_id,
+            )
+        )
+        if failed_count == 0:
+            for record in records.values():
+                record.form_status = FormStatus.CHECKED.value
+                record.updated_by_user_id = user.user_id
+                await self.repository.save_form(record)
+        await self.repository.create_event(
+            CaseEventRecord(
+                case_id=case_id,
+                event_type="COMPLETE_REPORT_VALIDATION_COMPLETED",
+                event_data={
+                    "report_id": str(report_id),
+                    "validation_run_id": str(run.validation_run_id),
+                    "failed_count": failed_count,
+                    "warning_count": warning_count,
+                    "input_fingerprint": fingerprint,
+                },
+                occurred_by_user_id=user.user_id,
+                request_id=request_id,
+            )
+        )
+        return FormalValidationResponse(
+            validation_run_id=run.validation_run_id,
+            case_id=case_id,
+            report_id=report_id,
+            passed_count=passed_count,
+            warning_count=warning_count,
+            failed_count=failed_count,
+            can_generate_formal_report=failed_count == 0,
+            input_fingerprint=fingerprint,
+            findings=findings,
+            completed_at=now,
+        )
+
+    async def generate(
+        self,
+        case_id: UUID,
+        report_id: UUID,
+        acknowledged_warning_codes: set[str],
+        user: User,
+        request_id: UUID | None,
+    ) -> FormalReportResponse:
+        if self.storage is None:
+            raise RuntimeError("Formal report generation requires storage")
+        await self.pages.valuation._owned_editable_case(case_id, user)
+        if request_id is not None:
+            event = await self.repository.event_for_request(
+                case_id, "COMPLETE_REPORT_GENERATED", request_id
+            )
+            if event is not None:
+                document = await self.documents.get(
+                    case_id, UUID(event.event_data["document_id"])
+                )
+                if document is not None:
+                    return self._report_response(
+                        document,
+                        report_id,
+                        UUID(event.event_data["validation_run_id"]),
+                        request_id,
+                    )
+
+        case, records = await self.pages._read_records(case_id, report_id, user)
+        validation = await self.repository.latest_report_validation(case_id, report_id)
+        if validation is None or validation.failed_count > 0:
+            raise AppError(
+                "FORMAL_VALIDATION_REQUIRED",
+                "必須先完成且通過整份六頁檢核",
+                409,
+            )
+        validation_snapshot = validation.ruleset_snapshot or {}
+        warnings = {
+            item["code"]
+            for item in validation_snapshot.get("findings", [])
+            if item.get("severity") == "WARNING"
+        }
+        if warnings - acknowledged_warning_codes:
+            raise AppError(
+                "FORMAL_WARNINGS_NOT_ACKNOWLEDGED",
+                "正式產出前必須明確確認所有 WARNING",
+                422,
+                {"unacknowledged_warning_codes": sorted(warnings - acknowledged_warning_codes)},
+            )
+
+        data = await self.pages.draft_pdf_data(case_id, report_id, user)
+        regional = self.pages._read_data(records["F02-RF"], F02RFDraftData)
+        comparison = self.pages._read_data(records["F02"], F02DraftData)
+        if not comparison.comparison_workflow_enabled:
+            # Do not leak stale comparison references from an earlier enabled
+            # run into a report generated after the section was disabled.
+            data["f02"] = dict(data["f02"])
+            data["f02"]["benchmark_land_id"] = None
+            data["f02"]["comparison_analysis_id"] = None
+            data["f02"]["comparison_targets"] = []
+            data["f02"]["benchmark_comparison_price"] = None
+            data["f02_rf"] = dict(data["f02_rf"])
+            data["f02_rf"]["benchmark_land_id"] = None
+            data["f02_rf"]["comparison_analysis_id"] = None
+        db_targets = []
+        if comparison.comparison_workflow_enabled and regional.comparison_analysis_id is None:
+            raise AppError("FORMAL_REFERENCES_REQUIRED", "缺少比較分析", 409)
+        if comparison.comparison_workflow_enabled:
+            db_targets = await self.repository.list_comparison_targets(
+                case_id, regional.comparison_analysis_id
+            )
+        current_fingerprint = self._fingerprint(
+            self._input_snapshot(
+                case,
+                regional,
+                comparison,
+                {item.comparison_target_id: item for item in db_targets},
+            )
+        )
+        if validation_snapshot.get("input_fingerprint") != current_fingerprint:
+            raise AppError(
+                "FORMAL_VALIDATION_STALE",
+                "資料已在最後一次檢核後變更，請重新計算及檢核",
+                409,
+            )
+
+        map_records = await self.pages.draft_map_documents(case_id, report_id, user)
+        expected_map_ids = validation_snapshot.get("map_document_ids") or {}
+        current_map_ids = {
+            key: str(value.document_id) for key, value in map_records.items()
+        }
+        if current_map_ids != expected_map_ids:
+            raise AppError(
+                "FORMAL_VALIDATION_STALE",
+                "正式附圖已在最後一次檢核後變更，請重新檢核",
+                409,
+            )
+        map_documents = {}
+        for document_type, record in map_records.items():
+            response = await self.storage.download(record.object_key)
+            content = await run_in_threadpool(_read_and_close, response)
+            map_documents[document_type] = {
+                "filename": record.original_filename,
+                "mime_type": record.mime_type,
+                "uploaded_at": record.uploaded_at.isoformat(),
+                "content": content,
+            }
+        official_template_pdf_bytes, official_template_manifest = (
+            await _optional_official_template_assets(self.storage)
+        )
+        report_template_metadata = {"mode": "STRUCTURED_REDRAWN"}
+        if official_template_pdf_bytes is not None:
+            manifest_for_metadata = official_template_manifest or {}
+            report_template_metadata = {
+                "mode": "OFFICIAL_BLANK_OVERLAY",
+                "template_sha256": sha256(official_template_pdf_bytes).hexdigest(),
+                "manifest_version": manifest_for_metadata.get("manifest_version"),
+                "template_name": manifest_for_metadata.get("template_name"),
+            }
+        pdf_bytes = await run_in_threadpool(
+            build_pdf_safely,
+            build_six_page_formal_pdf,
+            data,
+            map_documents,
+            official_template_pdf_bytes=official_template_pdf_bytes,
+            official_template_manifest=official_template_manifest,
+        )
+        identical_document = await self.documents.get_by_checksum(
+            case_id, sha256(pdf_bytes).hexdigest()
+        )
+        if (
+            identical_document is not None
+            and identical_document.document_type == "complete-valuation-report"
+        ):
+            await self._finalize_report_document(
+                case_id=case_id,
+                report_id=report_id,
+                records=records,
+                document=identical_document,
+                validation_run_id=validation.validation_run_id,
+                acknowledged_warning_codes=acknowledged_warning_codes,
+                user=user,
+                request_id=request_id,
+                reused_existing_document=True,
+                report_template_metadata=report_template_metadata,
+            )
+            return self._report_response(
+                identical_document,
+                report_id,
+                validation.validation_run_id,
+                request_id,
+            )
+
+        existing_output = (
+            None
+            if records["F02"].output_document_id is None
+            else await self.documents.get(
+                case_id, records["F02"].output_document_id
+            )
+        )
+        group_id = (
+            existing_output.document_group_id if existing_output else uuid4()
+        )
+        version_no = await self.documents.next_version(case_id, group_id)
+        document_id = uuid4()
+        filename = safe_filename(
+            f"complete_valuation_report_{case.case_no}_v{version_no}.pdf"
+        )
+        object_key = build_generated_report_object_key(
+            case_id, group_id, document_id, version_no, filename
+        )
+        uploaded = await self.storage.upload(
+            object_key,
+            BytesIO(pdf_bytes),
+            len(pdf_bytes),
+            content_type="application/pdf",
+        )
+        try:
+            await self.documents.deactivate_group(case_id, group_id)
+            document = await self.documents.create(
+                DocumentRecord(
+                    document_id=document_id,
+                    document_group_id=group_id,
+                    case_id=case_id,
+                    document_type="complete-valuation-report",
+                    original_filename=filename,
+                    mime_type="application/pdf",
+                    bucket_name=str(uploaded["bucket_name"]),
+                    object_key=str(uploaded["object_key"]),
+                    checksum_sha256=str(uploaded["checksum_sha256"]),
+                    file_size_bytes=int(uploaded["file_size_bytes"]),
+                    storage_etag=str(uploaded["etag"]),
+                    version_no=version_no,
+                    uploaded_by_user_id=user.user_id,
+                    is_active=True,
+                )
+            )
+            await self._finalize_report_document(
+                case_id=case_id,
+                report_id=report_id,
+                records=records,
+                document=document,
+                validation_run_id=validation.validation_run_id,
+                acknowledged_warning_codes=acknowledged_warning_codes,
+                user=user,
+                request_id=request_id,
+                report_template_metadata=report_template_metadata,
+            )
+        except Exception:
+            await self.storage.delete(object_key)
+            raise
+        return self._report_response(
+            document, report_id, validation.validation_run_id, request_id
+        )
+
+    async def _finalize_report_document(
+        self,
+        *,
+        case_id: UUID,
+        report_id: UUID,
+        records: dict[str, object],
+        document: DocumentRecord,
+        validation_run_id: UUID,
+        acknowledged_warning_codes: set[str],
+        user: User,
+        request_id: UUID | None,
+        reused_existing_document: bool = False,
+        report_template_metadata: dict | None = None,
+    ) -> None:
+        for record in records.values():
+            record.form_status = FormStatus.FINAL.value
+            record.output_document_id = document.document_id
+            record.updated_by_user_id = user.user_id
+            await self.repository.save_form(record)
+        await self.repository.create_event(
+            CaseEventRecord(
+                case_id=case_id,
+                event_type="COMPLETE_REPORT_GENERATED",
+                event_data={
+                    "report_id": str(report_id),
+                    "document_id": str(document.document_id),
+                    "validation_run_id": str(validation_run_id),
+                    "object_key": document.object_key,
+                    "version_no": document.version_no,
+                    "reused_existing_document": reused_existing_document,
+                    "acknowledged_warning_codes": sorted(acknowledged_warning_codes),
+                    "report_template": report_template_metadata
+                    or {"mode": "STRUCTURED_REDRAWN"},
+                },
+                occurred_by_user_id=user.user_id,
+                request_id=request_id,
+            )
+        )
+
+    async def get_generated_document(
+        self, case_id: UUID, document_id: UUID, user: User
+    ) -> DocumentRecord:
+        await self.pages.valuation.get_case(case_id, user)
+        document = await self.documents.get(case_id, document_id)
+        if document is None or document.document_type != "complete-valuation-report":
+            raise ResourceNotFoundError("完整六頁查估書 PDF")
+        return document
+
+    async def status(
+        self, case_id: UUID, report_id: UUID, user: User
+    ) -> FormalWorkflowStatusResponse:
+        _, records = await self.pages._read_records(case_id, report_id, user)
+        validation = await self.repository.latest_report_validation(case_id, report_id)
+        validation_response = (
+            None
+            if validation is None
+            else self._validation_response(validation, report_id)
+        )
+        document = None
+        output_document_id = records["F02"].output_document_id
+        if output_document_id is not None:
+            candidate = await self.documents.get(case_id, output_document_id)
+            if (
+                candidate is not None
+                and candidate.is_active
+                and candidate.document_type == "complete-valuation-report"
+            ):
+                document = candidate
+        report = (
+            None
+            if document is None or validation is None
+            else self._report_response(
+                document, report_id, validation.validation_run_id, None
+            )
+        )
+        return FormalWorkflowStatusResponse(
+            validation=validation_response,
+            report=report,
+            requires_revalidation_for_submission=(
+                validation is not None
+                and not bool(validation.input_snapshot)
+            ),
+        )
+
+    async def _formal_rule_and_levels(self, case, rule_version_id, factor_codes):
+        rule = await self.repository.get_rule_version(rule_version_id)
+        if rule is None:
+            raise AppError(
+                "FORMAL_RULE_VERSION_INVALID",
+                "規則版本不存在或尚未發布",
+                422,
+            )
+        land_use = self._validate_rule(case, rule)
+        rows = await self.repository.list_factor_levels(
+            rule.rule_version_id, land_use, set(factor_codes)
+        )
+        level_lookup: dict[str, list[LevelValue]] = {}
+        for definition, level in rows:
+            level_lookup.setdefault(definition.factor_code, []).append(
+                LevelValue(
+                    factor_definition_id=definition.factor_definition_id,
+                    factor_level_id=level.factor_level_id,
+                    factor_code=definition.factor_code,
+                    level_code=level.level_code,
+                    level_name=level.level_name,
+                    suggested_rate=level.suggested_rate,
+                    maximum_impact_rate=level.maximum_impact_rate,
+                )
+            )
+        missing = sorted(set(factor_codes) - set(level_lookup))
+        if missing:
+            raise AppError(
+                "FORMAL_RULE_LEVELS_INCOMPLETE",
+                "正式規則版本缺少本查估書所需因素級距",
+                409,
+                {"missing_factor_codes": missing},
+            )
+        for factor_code, levels in level_lookup.items():
+            if len(levels) < 2:
+                raise AppError(
+                    "FORMAL_RULE_LEVELS_INCOMPLETE",
+                    f"正式因素 {factor_code} 至少需要兩個級距",
+                    409,
+                )
+            bounds = {item.maximum_impact_rate for item in levels}
+            if len(bounds) != 1:
+                raise AppError(
+                    "RULE_FACTOR_BOUND_INCONSISTENT",
+                    f"正式因素 {factor_code} 的最大影響範圍不一致",
+                    409,
+                )
+            scores = [item.suggested_rate for item in levels]
+            if max(scores) - min(scores) > next(iter(bounds)):
+                raise AppError(
+                    "RULE_FACTOR_SPAN_OUT_OF_RANGE",
+                    f"正式因素 {factor_code} 的級距修正跨度超出最大影響範圍",
+                    409,
+                )
+        return rule, level_lookup
+
+    @staticmethod
+    def _validate_rule(case, rule) -> str:
+        if (
+            rule.status != "PUBLISHED"
+            or rule.import_status != "VERIFIED"
+            or rule.verified_at is None
+            or rule.source_document_id is None
+            or not rule.source_checksum_sha256
+        ):
+            raise AppError(
+                "FORMAL_RULE_AUDIT_FAILED",
+                "規則版本尚未完成來源、匯入及人工發布稽核",
+                409,
+            )
+        if rule.formula_code != FORMAL_FORMULA_CODE:
+            raise AppError("FORMAL_FORMULA_INVALID", "規則版本公式代碼不支援", 409)
+        if rule.rounding_code != FORMAL_ROUNDING_CODE:
+            raise AppError("FORMAL_ROUNDING_INVALID", "規則版本尾數規則不支援", 409)
+        if (
+            rule.effective_from is None
+            or rule.effective_from > case.valuation_base_date
+            or (
+                rule.effective_to is not None
+                and rule.effective_to < case.valuation_base_date
+            )
+        ):
+            raise AppError(
+                "FORMAL_RULE_DATE_NOT_APPLICABLE",
+                "規則版本不適用案件估價基準日",
+                409,
+            )
+        land_use = LAND_USE_ALIASES.get(
+            str(case.land_use_type or "").strip(),
+            str(case.land_use_type or "").strip().upper(),
+        )
+        if land_use != "COMMERCIAL":
+            raise AppError(
+                "FORMAL_REPORT_TEMPLATE_LAND_USE_UNSUPPORTED",
+                "目前正式六頁版型為商業用地查估書；其他用途須使用對應正式版型，不得誤套",
+                409,
+            )
+        if land_use not in set(rule.land_use_types or []):
+            raise AppError(
+                "FORMAL_RULE_LAND_USE_NOT_APPLICABLE",
+                "規則版本不適用案件土地用途",
+                409,
+            )
+        if case.district_code not in NEW_TAIPEI_DISTRICT_CODES:
+            raise AppError(
+                "FORMAL_RULE_DISTRICT_NOT_APPLICABLE",
+                "案件行政區不在新北市 29 區範圍",
+                409,
+            )
+        if rule.district_scope != NEW_TAIPEI_CITYWIDE_SCOPE:
+            raise AppError(
+                "FORMAL_RULE_SCOPE_NOT_CITYWIDE",
+                "正式六頁產出只接受已確認適用新北市 29 區的全市共同規則",
+                409,
+            )
+        return land_use
+
+    @staticmethod
+    def _validation_response(
+        run: ValidationRunRecord, report_id: UUID
+    ) -> FormalValidationResponse:
+        snapshot = run.ruleset_snapshot or {}
+        findings = [
+            FormalValidationFinding.model_validate(item)
+            for item in snapshot.get("findings", [])
+        ]
+        return FormalValidationResponse(
+            validation_run_id=run.validation_run_id,
+            case_id=run.case_id,
+            report_id=report_id,
+            passed_count=run.passed_count,
+            warning_count=run.warning_count,
+            failed_count=run.failed_count,
+            can_generate_formal_report=run.failed_count == 0,
+            input_fingerprint=snapshot.get("input_fingerprint"),
+            findings=findings,
+            completed_at=run.completed_at,
+        )
+
+    @staticmethod
+    def _validation_input_snapshot(
+        *,
+        case,
+        report_id: UUID,
+        records: dict[str, object],
+        s01: S01DraftData,
+        regional: F02RFDraftData,
+        comparison: F02DraftData,
+        documents: dict[str, DocumentRecord],
+        fingerprint: str | None,
+    ) -> dict:
+        """Freeze all inputs used by a formal validation before review handoff."""
+        form_data = {
+            "S01": s01.model_dump(mode="json"),
+            "F02-RF": regional.model_dump(mode="json"),
+            "F02": comparison.model_dump(mode="json"),
+        }
+        form_versions = {
+            code: {
+                "form_instance_id": str(record.form_instance_id),
+                "version_no": record.version_no,
+                "form_status": record.form_status,
+            }
+            for code, record in records.items()
+        }
+        map_documents = {
+            document_type: {
+                "document_id": str(document.document_id),
+                "document_group_id": str(document.document_group_id),
+                "version_no": document.version_no,
+                "checksum_sha256": document.checksum_sha256,
+                "original_filename": document.original_filename,
+                "mime_type": document.mime_type,
+            }
+            for document_type, document in documents.items()
+        }
+        return {
+            "schema_version": "complete-report-validation-input-v1",
+            "case_version": records["F02"].version_no,
+            "case": {
+                "case_id": str(case.case_id),
+                "case_no": case.case_no,
+                "case_title": case.case_title,
+                "case_type": case.case_type,
+                "valuation_base_date": case.valuation_base_date.isoformat(),
+                "city_code": case.city_code,
+                "district_code": case.district_code,
+                "land_use_type": case.land_use_type,
+            },
+            "report": {
+                "report_id": str(report_id),
+                "forms": form_versions,
+                "data": form_data,
+            },
+            "formal_calculation": comparison.calculation_snapshot,
+            "map_documents": map_documents,
+            "input_fingerprint": fingerprint,
+        }
+
+    @staticmethod
+    def _resolve_level(level_lookup, factor_code: str, supplied: str) -> LevelValue:
+        matches = [
+            item
+            for item in level_lookup.get(factor_code, [])
+            if supplied in {item.level_code, item.level_name}
+        ]
+        if len(matches) != 1:
+            raise AppError(
+                "FORMAL_FACTOR_LEVEL_INVALID",
+                f"因素 {factor_code} 的確認等級不存在或不唯一：{supplied}",
+                422,
+            )
+        return matches[0]
+
+    @staticmethod
+    def _dummy_level(factor_code: str) -> LevelValue:
+        return LevelValue(
+            factor_definition_id=uuid4(),
+            factor_level_id=uuid4(),
+            factor_code=factor_code,
+            level_code="NONE",
+            level_name="未選擇",
+            suggested_rate=Decimal("0"),
+            maximum_impact_rate=Decimal("0"),
+        )
+
+    @staticmethod
+    def _factor_value_record(
+
+        target_id: UUID,
+        adjustment: FactorAdjustment,
+        reason: str | None,
+    ) -> ComparisonFactorValueRecord:
+        return ComparisonFactorValueRecord(
+            comparison_target_id=target_id,
+            factor_definition_id=adjustment.benchmark.factor_definition_id,
+            factor_level_id=adjustment.comparable.factor_level_id,
+            benchmark_factor_level_id=adjustment.benchmark.factor_level_id,
+            comparable_factor_level_id=adjustment.comparable.factor_level_id,
+            benchmark_text=adjustment.benchmark.level_name,
+            comparable_text=adjustment.comparable.level_name,
+            suggested_rate=adjustment.adjustment_rate,
+            adopted_rate=adjustment.adjustment_rate,
+            adjustment_reason=reason,
+        )
+
+    @staticmethod
+    def _input_snapshot(case, regional, comparison, db_target_by_id) -> dict:
+        return {
+            "case": {
+                "case_id": str(case.case_id),
+                "valuation_base_date": case.valuation_base_date.isoformat(),
+                "district_code": case.district_code,
+                "land_use_type": case.land_use_type,
+            },
+            "rule_version_id": (
+                None
+                if regional.rule_version_id is None
+                else str(regional.rule_version_id)
+            ),
+            "benchmark_land_id": (
+                None
+                if regional.benchmark_land_id is None
+                else str(regional.benchmark_land_id)
+            ),
+            "comparison_analysis_id": (
+                None
+                if regional.comparison_analysis_id is None
+                else str(regional.comparison_analysis_id)
+            ),
+            "regional_factors": [
+                {
+                    "factor_code": row.factor_code,
+                    "benchmark_level": row.benchmark_confirmed_level,
+                    "confirmed": row.confirmed_by_user,
+                    "source_notes": row.source_notes,
+                    "targets": [
+                        {
+                            "comparison_target_id": str(item.comparison_target_id),
+                            "level": item.confirmed_level,
+                            "confirmed": item.confirmed_by_user,
+                            "source_notes": item.source_notes,
+                        }
+                        for item in sorted(
+                            row.targets, key=lambda target: target.display_order
+                        )
+                    ],
+                }
+                for row in sorted(
+                    regional.factor_rows, key=lambda factor: factor.factor_code
+                )
+            ],
+            "comparison_targets": [
+                {
+                    "comparison_target_id": str(item.comparison_target_id),
+                    "display_order": item.display_order,
+                    "normal_unit_price_snapshot": (
+                        None
+                        if item.comparison_target_id not in db_target_by_id
+                        else format(
+                            db_target_by_id[
+                                item.comparison_target_id
+                            ].normal_unit_price_snapshot,
+                            "f",
+                        )
+                    ),
+                    "transaction_date_snapshot": (
+                        None
+                        if item.comparison_target_id not in db_target_by_id
+                        else db_target_by_id[
+                            item.comparison_target_id
+                        ].transaction_date_snapshot.isoformat()
+                    ),
+                    "time_adjustment_rate": format(
+                        item.time_adjustment_rate, "f"
+                    ),
+                    "time_adjustment_confirmed": item.time_adjustment_confirmed_by_user,
+                    "time_adjustment_source_notes": item.time_adjustment_source_notes,
+                    "weight": None if item.weight is None else format(item.weight, "f"),
+                    "weight_confirmed": item.weight_confirmed_by_user,
+                    "weight_reason": item.weight_reason,
+                    "individual_factors": [
+                        {
+                            "factor_code": factor.factor_code,
+                            "benchmark_level": factor.benchmark_confirmed_level,
+                            "comparable_level": factor.comparable_confirmed_level,
+                            "confirmed": factor.confirmed_by_user,
+                            "source_notes": factor.source_notes,
+                        }
+                        for factor in sorted(
+                            item.individual_factors,
+                            key=lambda factor: factor.factor_code,
+                        )
+                    ],
+                }
+                for item in sorted(
+                    comparison.comparison_targets,
+                    key=lambda target: target.display_order,
+                )
+            ],
+        }
+
+    @staticmethod
+    def _fingerprint(snapshot: dict) -> str:
+        payload = json.dumps(
+            snapshot,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+        return sha256(payload).hexdigest()
+
+    @staticmethod
+    def _report_response(
+        document: DocumentRecord,
+        report_id: UUID,
+        validation_run_id: UUID,
+        request_id: UUID | None,
+    ) -> FormalReportResponse:
+        return FormalReportResponse(
+            document_id=document.document_id,
+            case_id=document.case_id,
+            report_id=report_id,
+            validation_run_id=validation_run_id,
+            filename=document.original_filename,
+            version_no=document.version_no,
+            bucket_name=document.bucket_name,
+            object_key=document.object_key,
+            checksum_sha256=document.checksum_sha256,
+            file_size_bytes=document.file_size_bytes,
+            download_path=(
+                f"/api/v1/valuation/cases/{document.case_id}/complete-reports/"
+                f"{document.document_id}/download"
+            ),
+            request_id=request_id,
+        )
