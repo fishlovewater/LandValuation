@@ -93,7 +93,10 @@ const hasVersionHistory = computed(() => Boolean(
 ))
 const currentDocumentCount = computed(() => {
   const documents = detail.value?.documents ?? []
-  return new Set(documents.map((document) => document.documentGroupId || document.documentId)).size
+  return new Set(documents.map((document) => {
+    const logicalDocument = document.documentGroupId || `${document.documentType}:${document.fileName}`
+    return `${document.sourceModule}:${logicalDocument}`
+  })).size
 })
 const documentSummary = computed(() => {
   const totalVersions = detail.value?.documents.length ?? 0
