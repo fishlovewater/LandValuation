@@ -28,7 +28,7 @@ test('valuation modal and document workspace stay within their visual columns', 
   } else {
     const targetRow = page.getByRole('row').filter({ hasText: caseNo })
     await expect(targetRow).toBeVisible()
-    await targetRow.getByRole('button', { name: '繼續估價' }).click()
+    await targetRow.getByRole('button', { name: '估價' }).click()
     await expect(page).toHaveURL(/\/app\/valuation\/cases\/[^/]+(?:\/(?:documents|ai-review|data|calculation|report))?$/)
     await page.getByTestId('valuation-step-2').click()
     await expect(page).toHaveURL(/\/app\/valuation\/cases\/[^/]+\/documents$/)

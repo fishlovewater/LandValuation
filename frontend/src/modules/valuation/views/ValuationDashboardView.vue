@@ -2,9 +2,11 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  PhArrowRight as ArrowRight,
   PhCalendarBlank as CalendarBlank,
+  PhCalculator as Calculator,
   PhClockCountdown as ClockCountdown,
+  PhEye as Eye,
+  PhFilePlus as FilePlus,
   PhFileText as FileText,
   PhMagnifyingGlass as MagnifyingGlass,
   PhPlus as Plus,
@@ -104,16 +106,19 @@ function caseStatusTone(row: ValuationCaseModel): 'neutral' | 'active' | 'warnin
   return 'active'
 }
 
+type CaseActionKind = 'supplement' | 'valuation' | 'view'
+
+function caseActionKind(row: ValuationCaseModel): CaseActionKind {
+  if (['CORRECTION', 'REVISION_REQUIRED'].includes(row.status)) return 'supplement'
+  if (['IN_REVIEW', 'REVIEWING', 'COMPLETED', 'REVIEW_COMPLETED', 'ARCHIVED'].includes(row.status)) return 'view'
+  return 'valuation'
+}
+
 function caseNextAction(row: ValuationCaseModel): string {
-  if (!row.basicInfoConfirmedAt) return '確認案件資料'
-  if (['CORRECTION', 'REVISION_REQUIRED'].includes(row.status)) return '處理補正'
-  if (['IN_REVIEW', 'REVIEWING'].includes(row.status)) return '查看送審狀態'
-  if (['COMPLETED', 'REVIEW_COMPLETED', 'ARCHIVED'].includes(row.status)) return '查看案件'
-  if (row.lastWorkspaceStage === 'documents' || row.lastWorkspaceStage === 'ai-review') return '整理來源資料'
-  if (row.lastWorkspaceStage === 'data') return '補齊估價資料'
-  if (row.lastWorkspaceStage === 'calculation') return '完成計算與檢核'
-  if (row.lastWorkspaceStage === 'report') return '完成查估書與送審'
-  return '繼續估價'
+  const kind = caseActionKind(row)
+  if (kind === 'supplement') return '補件'
+  if (kind === 'view') return '查看'
+  return '估價'
 }
 
 function caseNextDetail(row: ValuationCaseModel): string {
@@ -246,8 +251,18 @@ onMounted(() => {
             </template>
             <span v-else>未設定作業期限</span>
           </div>
-          <button class="case-action-button" type="button" :data-testid="`case-open-${row.caseId}`" @click="openCase(row.caseId)">
-            <span>{{ caseNextAction(row) }}</span><ArrowRight :size="16" weight="bold" aria-hidden="true" />
+          <button
+            class="case-action-button"
+            type="button"
+            :data-tone="caseActionKind(row)"
+            :title="caseNextDetail(row)"
+            :data-testid="`case-open-${row.caseId}`"
+            @click="openCase(row.caseId)"
+          >
+            <FilePlus v-if="caseActionKind(row) === 'supplement'" :size="17" weight="duotone" aria-hidden="true" />
+            <Calculator v-else-if="caseActionKind(row) === 'valuation'" :size="17" weight="duotone" aria-hidden="true" />
+            <Eye v-else :size="17" weight="duotone" aria-hidden="true" />
+            <span>{{ caseNextAction(row) }}</span>
           </button>
         </article>
       </div>
@@ -392,8 +407,15 @@ onMounted(() => {
 .case-card__next { display:flex; align-items:flex-start; gap:6px; margin:0; color:#66798d; font-size:11px; line-height:1.55; }
 .case-card__next > svg { flex:0 0 auto; margin-top:1px; }
 .case-card__deadline { display:flex; align-items:center; justify-content:flex-end; gap:5px; color:#687b8f; font-size:10px; font-weight:800; white-space:nowrap; }
-.case-action-button { display:inline-flex; min-height:38px; align-items:center; justify-content:center; gap:6px; padding:7px 12px; border:1px solid #2e5984; border-radius:8px; color:#fff; background:#2e5984; cursor:pointer; font-size:10px; font-weight:900; white-space:nowrap; }
-.case-action-button:hover { background:#244d73; }
+.case-action-button { display:inline-flex; min-width:86px; min-height:40px; align-items:center; justify-content:center; gap:7px; padding:8px 13px; border:1px solid transparent; border-radius:8px; cursor:pointer; font-size:12px; font-weight:900; letter-spacing:.04em; white-space:nowrap; transition:background-color .16s ease,border-color .16s ease,box-shadow .16s ease,transform .16s ease; }
+.case-action-button > svg { flex:0 0 auto; }
+.case-action-button[data-tone="valuation"] { border-color:#2e5984; color:#fff; background:#2e5984; }
+.case-action-button[data-tone="valuation"]:hover { background:#244d73; box-shadow:0 4px 12px rgba(36,77,115,.16); }
+.case-action-button[data-tone="supplement"] { border-color:#d98a2f; color:#fff; background:#d98a2f; }
+.case-action-button[data-tone="supplement"]:hover { background:#bd7120; box-shadow:0 4px 12px rgba(189,113,32,.16); }
+.case-action-button[data-tone="view"] { border-color:#cfd9e3; color:#40566e; background:#f7f9fb; }
+.case-action-button[data-tone="view"]:hover { border-color:#b9c7d5; color:#244d73; background:#eef3f7; }
+.case-action-button:active { transform:translateY(1px); }
 .sr-only { position:absolute!important; width:1px!important; height:1px!important; padding:0!important; margin:-1px!important; overflow:hidden!important; clip:rect(0,0,0,0)!important; white-space:nowrap!important; border:0!important; }
 
 .dashboard-notice,
