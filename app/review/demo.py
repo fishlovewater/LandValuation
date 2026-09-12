@@ -506,7 +506,7 @@ def seed_demo() -> dict[str, Any]:
                             applicable_case_type, applicable_district_code, selection_priority
                         ) VALUES (%s, %s, 1, 'Review Demo Rules v1', CURRENT_DATE,
                                   'PUBLISHED', %s, %s, 'Owned by app.review.demo',
-                                  %s, 'EXTERNAL_REVIEW', %s, 100)
+                                  %s, 'EXTERNAL_REVIEW', NULL, 100)
                         """,
                         (
                             rule_version_id,
@@ -514,7 +514,6 @@ def seed_demo() -> dict[str, Any]:
                             DEMO_KNOWLEDGE_CODE,
                             knowledge_upload["checksum_sha256"],
                             knowledge_document_id,
-                            DEMO_DISTRICT_CODE,
                         ),
                     )
                     for rule_code, field_code, severity, expression in (

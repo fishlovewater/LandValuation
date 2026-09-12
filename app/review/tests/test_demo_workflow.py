@@ -33,6 +33,14 @@ def test_demo_seed_is_idempotent_and_real_api_workflow_completes(postgres_connec
         assert cursor.fetchone() == ("EXTERNAL_REVIEW", "IN_REVIEW")
         cursor.execute(
             """
+            SELECT applicable_case_type, applicable_district_code
+            FROM valuation.rule_versions
+            WHERE rule_set_code = 'DEMO-REVIEW-RULES'
+            """
+        )
+        assert cursor.fetchone() == ("EXTERNAL_REVIEW", None)
+        cursor.execute(
+            """
             SELECT extraction_status, document_id
             FROM valuation.document_extractions
             WHERE case_id = %s
