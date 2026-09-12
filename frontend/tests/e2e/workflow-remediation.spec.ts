@@ -28,11 +28,11 @@ test.describe('valuation remediation workflow', () => {
 
   test('turns a real validation blocker into a guided field correction, then permits the next step', async ({ page }, testInfo) => {
     await loginAs(page, 'APPRAISER', demo.appraiser, testInfo)
-    await page.goto(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/prepare`)
+    await page.goto(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/data`)
 
-    await expect(page.locator('#case-summary-title')).toContainText(demo.caseNo)
-    await expect(page.getByTestId('valuation-workflow-guide')).toContainText('第 1 步 / 6')
-    await page.getByTestId('valuation-step-3').click()
+    await expect(page.getByTestId('case-context')).toContainText(demo.caseNo)
+    await expect(page.getByTestId('valuation-step-3')).toHaveAttribute('aria-current', 'step')
+    await expect(page.getByTestId('valuation-workflow-guide')).toContainText('流程 3 / 5')
     await page.getByTestId('data-section-f03').click()
 
     const valuationDate = page.locator('#f03-valuation-base-date')
@@ -52,9 +52,8 @@ test.describe('valuation remediation workflow', () => {
     const blockedValidation = await blockedValidationResponse
     expect(blockedValidation.status()).toBe(201)
 
-    const consistencyFinding = page.locator('.finding-list li').filter({ hasText: 'F03_CASE_CONSISTENCY' })
+    const consistencyFinding = page.locator('.validation-results__findings li').filter({ hasText: '估價基準日' })
     await expect(consistencyFinding).toBeVisible()
-    await expect(consistencyFinding).toContainText('問題位置：')
     await expect(consistencyFinding).toContainText('估價基準日')
     await expect(consistencyFinding.getByRole('button', { name: '前往修正' })).toBeVisible()
     await expect(page.getByTestId('go-to-submit')).toBeDisabled()
@@ -75,13 +74,13 @@ test.describe('valuation remediation workflow', () => {
     const passingValidation = await passingValidationResponse
     expect(passingValidation.status()).toBe(201)
 
-    await expect(page.getByText('已完成計算、檢核、F03 確認與單表輸出。')).toBeVisible()
+    await expect(page.getByText('已完成計算、檢核、比準地地價估計表確認與單表輸出。')).toBeVisible()
     await expect(page.getByTestId('go-to-submit')).toBeEnabled()
-    await expect(page.getByTestId('valuation-workflow-guide')).toContainText('第 4 步 / 6')
+    await expect(page.getByTestId('valuation-workflow-guide')).toContainText('流程 4 / 5')
     await Promise.all([
-      page.waitForURL(new RegExp(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/submit$`)),
-      page.getByTestId('wizard-next').click(),
+      page.waitForURL(new RegExp(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/report$`)),
+      page.getByTestId('go-to-submit').click(),
     ])
-    await expect(page.locator('[aria-current="step"]')).toContainText('5')
+    await expect(page.getByTestId('valuation-step-5')).toHaveAttribute('aria-current', 'step')
   })
 })
