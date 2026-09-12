@@ -96,6 +96,11 @@ class SubmissionService:
             execution_context=getattr(inputs, "execution_context", None),
         )
         fingerprint = snapshot_fingerprint(snapshot)
+        source_report_document_id = (
+            inputs.source_report_document.document_id
+            if excel_only
+            else command.source_report_document_id
+        )
 
         if locked_review is None:
             locked_review = await self.repository.create_review(case_id, actor.user_id)
@@ -111,7 +116,7 @@ class SubmissionService:
             submitted_by_user_id=actor.user_id,
             submitted_at=datetime.now(UTC),
             source_validation_run_id=command.source_validation_run_id,
-            source_report_document_id=command.source_report_document_id,
+            source_report_document_id=source_report_document_id,
             input_snapshot=snapshot,
             input_fingerprint=fingerprint,
             supersedes_submission_id=(
@@ -127,12 +132,32 @@ class SubmissionService:
         # Bind the Valuation-produced source run to this immutable handoff so
         # any Review workflow pointer to that run remains current.
         inputs.source_validation_run.submission_id = submission.submission_id
+        # A revision response must be registered while Review is still in the
+        # RETURNED_FOR_REVISION state. Only after the correction lineage is
+        # validated do we attach the new immutable Submission.  The Review
+        # itself stays RETURNED_FOR_REVISION until the reviewer explicitly
+        # starts recheck; only the case returns to IN_REVIEW at resubmission.
+        # This ordering also keeps a failed lineage check in the same
+        # transaction, so callers can roll back the new Submission atomically.
+        if was_revision:
+            registrar = self.revision_registrar or self._build_revision_registrar()
+            from app.review.schemas import CorrectionResubmissionCreate
+
+            await registrar.register_latest_resubmission(
+                review.review_id,
+                CorrectionResubmissionCreate(
+                    document_id=source_report_document_id,
+                    document_version=inputs.source_report_document.version_no,
+                ),
+                actor.user_id,
+            )
         # Keep the scalar and relationship values synchronized after the row is
         # present; assigning this FK before the first flush would violate the
         # Review-to-submission cycle.
         review.latest_submission_id = submission.submission_id
         review.latest_submission = submission
-        review.review_status = "RECEIVED"
+        if not was_revision:
+            review.review_status = "RECEIVED"
         case.case_status = "IN_REVIEW"
         await self.repository.record_case_event(
             case_id,
@@ -143,25 +168,13 @@ class SubmissionService:
                 "submission_no": submission.submission_no,
                 "review_id": str(review.review_id),
                 "source_validation_run_id": str(command.source_validation_run_id),
-                "source_report_document_id": str(command.source_report_document_id),
+                "source_report_document_id": str(source_report_document_id),
                 "source_template_document_ids": [str(item) for item in command.source_template_document_ids],
                 "input_fingerprint": fingerprint,
                 "submitted_by_user_id": str(actor.user_id),
             },
         )
         await self.repository.session.flush()
-        if was_revision and not excel_only:
-            registrar = self.revision_registrar or self._build_revision_registrar()
-            from app.review.schemas import CorrectionResubmissionCreate
-
-            await registrar.register_latest_resubmission(
-                review.review_id,
-                CorrectionResubmissionCreate(
-                    document_id=command.source_report_document_id,
-                    document_version=inputs.source_report_document.version_no,
-                ),
-                actor.user_id,
-            )
         return self._result(submission, case.case_status)
 
     def _build_revision_registrar(self):
@@ -202,6 +215,12 @@ class SubmissionService:
     def _validate_readiness(inputs, command: SubmitForReviewCommand) -> None:
         if command.source_template_document_ids:
             expected_ids = set(command.source_template_document_ids)
+            if command.source_report_document_id not in expected_ids:
+                raise AppError(
+                    "SUBMISSION_MAIN_TEMPLATE_REQUIRED",
+                    "Excel 送審主附件必須包含在正式 Excel 送審附件中",
+                    422,
+                )
             actual_ids = {item.document_id for item in inputs.source_template_documents}
             if not inputs.source_template_documents or actual_ids != expected_ids:
                 raise ResourceNotFoundError("六份 Excel 送審附件")

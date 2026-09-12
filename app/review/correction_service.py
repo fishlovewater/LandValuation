@@ -40,6 +40,47 @@ class CorrectionService:
         self.corrections = correction_repository
         self._review_service = review_service
 
+    @staticmethod
+    def _submission_base_document(provenance: dict | None) -> dict | None:
+        """Project the correction base document from the immutable submission.
+
+        ``get_submission_provenance_by_id`` returns submission-level metadata,
+        not a document row. The correction lineage must therefore use the
+        matching document version frozen inside the submission snapshot.
+        """
+        if not isinstance(provenance, dict):
+            return None
+        source_document_id = provenance.get("source_report_document_id")
+        snapshot = provenance.get("input_snapshot")
+        documents = snapshot.get("documents") if isinstance(snapshot, dict) else None
+        if source_document_id is None or not isinstance(documents, list):
+            return None
+        try:
+            normalized_source_id = UUID(str(source_document_id))
+        except (TypeError, ValueError):
+            return None
+        for document in documents:
+            if not isinstance(document, dict):
+                continue
+            try:
+                document_id = UUID(str(document.get("document_id")))
+            except (TypeError, ValueError):
+                continue
+            if document_id != normalized_source_id:
+                continue
+            version_no = document.get("version_no")
+            if (
+                isinstance(version_no, bool)
+                or not isinstance(version_no, int)
+                or version_no < 1
+            ):
+                return None
+            return {
+                "document_id": normalized_source_id,
+                "version_no": version_no,
+            }
+        return None
+
     async def _gate_inputs(self, review) -> tuple[CorrectionGateSummary, list]:
         run = (
             await self.review_repository.get_run(review.latest_validation_run_id)
@@ -82,13 +123,12 @@ class CorrectionService:
 
         latest_submission_id = getattr(review, "latest_submission_id", None)
         if latest_submission_id is not None:
-            base_document = (
-                await self.review_repository.get_submission_provenance_by_id(
-                    latest_submission_id,
-                    review_id=review.review_id,
-                    case_id=review.case_id,
-                )
+            provenance = await self.review_repository.get_submission_provenance_by_id(
+                latest_submission_id,
+                review_id=review.review_id,
+                case_id=review.case_id,
             )
+            base_document = self._submission_base_document(provenance)
             if base_document is None:
                 raise AppError(
                     "CORRECTION_BASE_DOCUMENT_SUBMISSION_INVALID",

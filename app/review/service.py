@@ -72,6 +72,8 @@ from app.valuation.submissions.snapshot import (
 
 _MISSING_FINGERPRINT = object()
 _EXECUTION_CONTEXT_SCHEMA_VERSION = "valuation-review-execution-v1"
+_EXCEL_EXECUTION_CONTEXT_SCHEMA_VERSION = "excel-template-handoff-v2"
+_LEGACY_EXCEL_EXECUTION_CONTEXT_SCHEMA_VERSION = "excel-template-handoff-v1"
 _EXTERNAL_REVIEW_INPUT_SCHEMA_VERSION = "external-review-input-v1"
 
 
@@ -406,14 +408,19 @@ class ReviewService:
             raise invalid()
         if not valid_json_value(snapshot["validation"]):
             raise invalid()
-        if "execution_context" in snapshot:
-            execution_context = snapshot["execution_context"]
-            if (
-                not isinstance(execution_context, dict)
-                or execution_context.get("schema_version")
-                != _EXECUTION_CONTEXT_SCHEMA_VERSION
-                or not valid_json_value(execution_context)
+        execution_context = snapshot.get("execution_context")
+        execution_schema = None
+        if execution_context is not None:
+            if not isinstance(execution_context, dict) or not valid_json_value(
+                execution_context
             ):
+                raise invalid()
+            execution_schema = execution_context.get("schema_version")
+            if execution_schema not in {
+                _EXECUTION_CONTEXT_SCHEMA_VERSION,
+                _EXCEL_EXECUTION_CONTEXT_SCHEMA_VERSION,
+                _LEGACY_EXCEL_EXECUTION_CONTEXT_SCHEMA_VERSION,
+            }:
                 raise invalid()
 
         if input_fingerprint is not _MISSING_FINGERPRINT:
@@ -430,7 +437,13 @@ class ReviewService:
 
         applied_fields = snapshot.get("applied_fields")
         documents = snapshot.get("documents")
-        if not isinstance(applied_fields, list) or not applied_fields:
+        excel_handoff = execution_schema in {
+            _EXCEL_EXECUTION_CONTEXT_SCHEMA_VERSION,
+            _LEGACY_EXCEL_EXECUTION_CONTEXT_SCHEMA_VERSION,
+        }
+        if not isinstance(applied_fields, list) or (
+            not applied_fields and not excel_handoff
+        ):
             raise invalid()
         if not isinstance(documents, list) or not documents:
             raise invalid()
@@ -548,7 +561,21 @@ class ReviewService:
             field_ids.add(extracted_field_id)
             trusted_fields.append(cls._trusted_field_from_submission(item))
 
-        document = dict(documents_by_id[applied_fields[0]["document_id"]])
+        if applied_fields:
+            primary_document_id = applied_fields[0]["document_id"]
+        elif execution_schema == _EXCEL_EXECUTION_CONTEXT_SCHEMA_VERSION:
+            report_context = execution_context.get("report")
+            if not isinstance(report_context, dict):
+                raise invalid()
+            primary_document_id = report_context.get("primary_document_id")
+        else:
+            source_document_ids = execution_context.get("source_document_ids")
+            if not isinstance(source_document_ids, list) or not source_document_ids:
+                raise invalid()
+            primary_document_id = source_document_ids[0]
+        if primary_document_id not in documents_by_id:
+            raise invalid()
+        document = dict(documents_by_id[primary_document_id])
         return document, tuple(trusted_fields)
 
     @classmethod
@@ -570,6 +597,14 @@ class ReviewService:
         context = snapshot.get("execution_context")
         if not isinstance(context, dict):
             raise invalid()
+        context_schema = context.get("schema_version")
+        if context_schema == _LEGACY_EXCEL_EXECUTION_CONTEXT_SCHEMA_VERSION:
+            raise AppError(
+                "SUBMISSION_EXECUTION_CONTEXT_INCOMPLETE",
+                "這筆送審資料使用舊版 Excel 交接格式，缺少可執行的凍結審查上下文，請重新送審。",
+                409,
+            )
+        excel_handoff = context_schema == _EXCEL_EXECUTION_CONTEXT_SCHEMA_VERSION
         context_keys = {
             "schema_version",
             "case",
@@ -577,7 +612,10 @@ class ReviewService:
             "report",
             "rule_selection",
         }
-        if set(context) != context_keys or context.get("schema_version") != _EXECUTION_CONTEXT_SCHEMA_VERSION:
+        if set(context) != context_keys or context_schema not in {
+            _EXECUTION_CONTEXT_SCHEMA_VERSION,
+            _EXCEL_EXECUTION_CONTEXT_SCHEMA_VERSION,
+        }:
             raise invalid()
 
         def require_dict(parent: dict, key: str, keys: set[str]) -> dict:
@@ -680,7 +718,7 @@ class ReviewService:
             raise invalid()
         for key in ("passed_count", "warning_count", "failed_count"):
             require_int(source_run[key])
-        if source_run["failed_count"] != 0:
+        if source_run["failed_count"] != 0 and not excel_handoff:
             raise invalid()
         if not isinstance(source_run["input_snapshot"], dict) or not source_run["input_snapshot"]:
             raise invalid()
@@ -689,7 +727,9 @@ class ReviewService:
         require_timestamp(source_run["completed_at"], allow_none=False)
         source_rule_version_id = require_uuid(source_run["rule_version_id"])
 
-        report = require_dict(context, "report", {"form", "authoritative_form", "document"})
+        report = context.get("report")
+        if not isinstance(report, dict):
+            raise invalid()
         form_keys = {
             "form_instance_id",
             "case_id",
@@ -700,16 +740,27 @@ class ReviewService:
             "form_content",
         }
 
-        def validate_form(value: dict) -> dict:
-            form = require_dict(report, value, form_keys)
+        def validate_form_snapshot(
+            form: dict,
+            *,
+            require_final: bool,
+            require_output: bool,
+        ) -> dict:
+            if not isinstance(form, dict) or set(form) != form_keys:
+                raise invalid()
             form_id = require_uuid(form["form_instance_id"])
             if require_uuid(form["case_id"]) != str(review.case_id):
                 raise invalid()
             require_text(form["form_code"])
             require_int(form["version_no"], minimum=1)
-            if form["form_status"] != "FINAL":
+            require_text(form["form_status"])
+            if require_final and form["form_status"] != "FINAL":
                 raise invalid()
-            output_document_id = require_uuid(form["output_document_id"])
+            output_document_id = form["output_document_id"]
+            if require_output:
+                output_document_id = require_uuid(output_document_id)
+            elif output_document_id is not None:
+                output_document_id = require_uuid(output_document_id)
             if not isinstance(form["form_content"], dict):
                 raise invalid()
             return {
@@ -718,53 +769,6 @@ class ReviewService:
                 "case_id": str(review.case_id),
                 "output_document_id": output_document_id,
             }
-
-        report_form = validate_form("form")
-        authoritative_form = validate_form("authoritative_form")
-        if (
-            report_form["form_instance_id"] != authoritative_form["form_instance_id"]
-            or report_form["version_no"] != authoritative_form["version_no"]
-            or report_form["form_code"] != authoritative_form["form_code"]
-            or report_form["output_document_id"]
-            != authoritative_form["output_document_id"]
-            or source_form_id != report_form["form_instance_id"]
-        ):
-            raise invalid()
-
-        report_document = require_dict(
-            report,
-            "document",
-            {
-                "document_id",
-                "case_id",
-                "document_type",
-                "original_filename",
-                "mime_type",
-                "version_no",
-                "document_group_id",
-                "checksum_sha256",
-                "file_size_bytes",
-                "uploaded_at",
-                "is_active",
-            },
-        )
-        report_document_id = require_uuid(report_document["document_id"])
-        if require_uuid(report_document["case_id"]) != str(review.case_id):
-            raise invalid()
-        for key in ("document_type", "original_filename", "mime_type"):
-            require_text(report_document[key])
-        require_int(report_document["version_no"], minimum=1)
-        require_uuid(report_document["document_group_id"])
-        if not isinstance(report_document["checksum_sha256"], str) or not re.fullmatch(
-            r"[0-9a-f]{64}", report_document["checksum_sha256"]
-        ):
-            raise invalid()
-        require_int(report_document["file_size_bytes"])
-        require_timestamp(report_document["uploaded_at"], allow_none=False)
-        if not isinstance(report_document["is_active"], bool) or not report_document["is_active"]:
-            raise invalid()
-        if report_form["output_document_id"] != report_document_id:
-            raise invalid()
 
         documents = {
             str(item["document_id"]): dict(item) for item in snapshot["documents"]
@@ -780,12 +784,104 @@ class ReviewService:
             "uploaded_at",
             "is_active",
         )
-        snapshot_document = documents.get(report_document_id)
-        if snapshot_document is None or any(
-            snapshot_document[key] != report_document[key]
-            for key in immutable_document_keys
-        ):
-            raise invalid()
+        document_keys = {
+            "document_id",
+            "case_id",
+            "document_type",
+            "original_filename",
+            "mime_type",
+            "version_no",
+            "document_group_id",
+            "checksum_sha256",
+            "file_size_bytes",
+            "uploaded_at",
+            "is_active",
+        }
+
+        def validate_document_snapshot(document: dict) -> tuple[str, dict]:
+            if not isinstance(document, dict) or set(document) != document_keys:
+                raise invalid()
+            document_id = require_uuid(document["document_id"])
+            if require_uuid(document["case_id"]) != str(review.case_id):
+                raise invalid()
+            for key in ("document_type", "original_filename", "mime_type"):
+                require_text(document[key])
+            require_int(document["version_no"], minimum=1)
+            require_uuid(document["document_group_id"])
+            if not isinstance(document["checksum_sha256"], str) or not re.fullmatch(
+                r"[0-9a-f]{64}", document["checksum_sha256"]
+            ):
+                raise invalid()
+            require_int(document["file_size_bytes"])
+            require_timestamp(document["uploaded_at"], allow_none=False)
+            if not isinstance(document["is_active"], bool) or not document["is_active"]:
+                raise invalid()
+            snapshot_document = documents.get(document_id)
+            if snapshot_document is None or any(
+                snapshot_document[key] != document[key]
+                for key in immutable_document_keys
+            ):
+                raise invalid()
+            return document_id, snapshot_document
+
+        if excel_handoff:
+            if set(report) != {
+                "authoritative_form",
+                "primary_document_id",
+                "template_documents",
+            }:
+                raise invalid()
+            authoritative_form = validate_form_snapshot(
+                report["authoritative_form"],
+                require_final=False,
+                require_output=False,
+            )
+            report_form = authoritative_form
+            if source_form_id != report_form["form_instance_id"]:
+                raise invalid()
+            primary_document_id = require_uuid(report["primary_document_id"])
+            template_documents = report["template_documents"]
+            if not isinstance(template_documents, list) or not template_documents:
+                raise invalid()
+            template_ids = set()
+            for template_document in template_documents:
+                template_id, _snapshot_template = validate_document_snapshot(
+                    template_document
+                )
+                if (
+                    template_document["document_type"] != "generated-template-xlsx"
+                    or template_id in template_ids
+                ):
+                    raise invalid()
+                template_ids.add(template_id)
+            if primary_document_id not in template_ids:
+                raise invalid()
+            snapshot_document = documents[primary_document_id]
+        else:
+            if set(report) != {"form", "authoritative_form", "document"}:
+                raise invalid()
+            report_form = validate_form_snapshot(
+                report["form"], require_final=True, require_output=True
+            )
+            authoritative_form = validate_form_snapshot(
+                report["authoritative_form"], require_final=True, require_output=True
+            )
+            if (
+                report_form["form_instance_id"]
+                != authoritative_form["form_instance_id"]
+                or report_form["version_no"] != authoritative_form["version_no"]
+                or report_form["form_code"] != authoritative_form["form_code"]
+                or report_form["output_document_id"]
+                != authoritative_form["output_document_id"]
+                or source_form_id != report_form["form_instance_id"]
+            ):
+                raise invalid()
+            report_document_id, snapshot_document = validate_document_snapshot(
+                report["document"]
+            )
+            if report_form["output_document_id"] != report_document_id:
+                raise invalid()
+
         for item in official_fields:
             if item.document_id is None or str(item.document_id) not in documents:
                 raise invalid()

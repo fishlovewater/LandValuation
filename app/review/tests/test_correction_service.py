@@ -57,6 +57,41 @@ def test_snapshot_never_contains_formal_value_or_selection_source():
     assert "value" not in snapshot
 
 
+def test_submission_base_document_uses_frozen_snapshot_version():
+    document_id = uuid4()
+    provenance = {
+        "source_report_document_id": document_id,
+        "input_snapshot": {
+            "documents": [
+                {
+                    "document_id": str(document_id),
+                    "version_no": 3,
+                }
+            ]
+        },
+    }
+
+    projected = CorrectionService._submission_base_document(provenance)
+
+    assert projected == {"document_id": document_id, "version_no": 3}
+
+
+def test_submission_base_document_rejects_source_missing_from_frozen_snapshot():
+    provenance = {
+        "source_report_document_id": uuid4(),
+        "input_snapshot": {
+            "documents": [
+                {
+                    "document_id": str(uuid4()),
+                    "version_no": 1,
+                }
+            ]
+        },
+    }
+
+    assert CorrectionService._submission_base_document(provenance) is None
+
+
 def _external_resubmission_fixture(extraction_state):
     case_id = uuid4()
     review_id = uuid4()

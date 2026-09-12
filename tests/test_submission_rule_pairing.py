@@ -1,3 +1,4 @@
+from copy import deepcopy
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -198,6 +199,48 @@ def _paired_submission_snapshot():
     return SimpleNamespace(case_id=case_id), snapshot
 
 
+def _excel_submission_snapshot():
+    review, snapshot = _paired_submission_snapshot()
+    snapshot = deepcopy(snapshot)
+    template_document_id = uuid4()
+    template_document_group_id = uuid4()
+    template_document = {
+        "document_id": str(template_document_id),
+        "document_type": "generated-template-xlsx",
+        "original_filename": "review-handoff.xlsx",
+        "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "version_no": 1,
+        "document_group_id": str(template_document_group_id),
+        "checksum_sha256": "d" * 64,
+        "file_size_bytes": 256,
+        "uploaded_at": "2026-09-10T00:02:00+00:00",
+        "is_active": True,
+    }
+    authoritative_form = deepcopy(
+        snapshot["execution_context"]["report"]["authoritative_form"]
+    )
+    authoritative_form["form_status"] = "DRAFT"
+    authoritative_form["output_document_id"] = None
+    source_run = deepcopy(snapshot["execution_context"]["source_validation_run"])
+    source_run["failed_count"] = 1
+    snapshot["applied_fields"] = []
+    snapshot["documents"] = [template_document]
+    snapshot["execution_context"] = {
+        "schema_version": "excel-template-handoff-v2",
+        "case": deepcopy(snapshot["execution_context"]["case"]),
+        "source_validation_run": source_run,
+        "report": {
+            "authoritative_form": authoritative_form,
+            "primary_document_id": str(template_document_id),
+            "template_documents": [
+                {"case_id": str(review.case_id), **template_document}
+            ],
+        },
+        "rule_selection": deepcopy(snapshot["execution_context"]["rule_selection"]),
+    }
+    return review, snapshot
+
+
 def test_review_snapshot_accepts_reciprocally_paired_rule_versions():
     review, snapshot = _paired_submission_snapshot()
     _document, fields = ReviewService._snapshot_trusted_inputs(snapshot)
@@ -219,3 +262,55 @@ def test_review_snapshot_rejects_one_way_rule_pairing():
         ReviewService._snapshot_trusted_run_context(review, snapshot, fields)
 
     assert raised.value.code == "SUBMISSION_SNAPSHOT_INVALID"
+
+
+def test_excel_handoff_accepts_empty_applied_fields_as_structurally_valid():
+    _review, snapshot = _excel_submission_snapshot()
+
+    document, fields = ReviewService._snapshot_trusted_inputs(snapshot)
+
+    assert document["document_type"] == "generated-template-xlsx"
+    assert fields == ()
+
+
+def test_excel_handoff_missing_rule_input_is_preflight_problem_not_corrupt_snapshot():
+    review, snapshot = _excel_submission_snapshot()
+    _document, fields = ReviewService._snapshot_trusted_inputs(snapshot)
+
+    with pytest.raises(AppError) as raised:
+        ReviewService._snapshot_trusted_run_context(review, snapshot, fields)
+
+    assert raised.value.code == "TRUSTED_INPUT_UNVERIFIED"
+    assert raised.value.details == {"field_code": "adjustment_rate"}
+
+
+def test_excel_handoff_allows_zero_extra_review_rules():
+    review, snapshot = _excel_submission_snapshot()
+    snapshot["execution_context"]["rule_selection"]["validation_rules"] = []
+    _document, fields = ReviewService._snapshot_trusted_inputs(snapshot)
+
+    context = ReviewService._snapshot_trusted_run_context(review, snapshot, fields)
+
+    assert context.prepared_rules == ()
+    assert context.official_fields == ()
+    assert context.document["document_type"] == "generated-template-xlsx"
+
+
+def test_legacy_excel_handoff_is_readable_but_requires_resubmission_for_review_run():
+    review, snapshot = _excel_submission_snapshot()
+    template_document_id = snapshot["documents"][0]["document_id"]
+    form_instance_id = snapshot["validation"]["form_instance_id"]
+    snapshot["execution_context"] = {
+        "schema_version": "excel-template-handoff-v1",
+        "source_document_ids": [template_document_id],
+        "form_instance_id": form_instance_id,
+    }
+
+    document, fields = ReviewService._snapshot_trusted_inputs(snapshot)
+    assert document["document_id"] == template_document_id
+    assert fields == ()
+
+    with pytest.raises(AppError) as raised:
+        ReviewService._snapshot_trusted_run_context(review, snapshot, fields)
+
+    assert raised.value.code == "SUBMISSION_EXECUTION_CONTEXT_INCOMPLETE"

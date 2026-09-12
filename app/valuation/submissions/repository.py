@@ -168,8 +168,6 @@ class SubmissionRepository:
         )
 
         if source_document_ids:
-            if report_document is None and source_template_documents:
-                report_document = source_template_documents[0]
             # Excel handoff uses the authoritative form only as case/version
             # context; it deliberately does not require F02 FINAL or a PDF.
             report_form = authoritative_report_form
@@ -398,20 +396,27 @@ class SubmissionRepository:
         server-side handoff boundary: all Review rule inputs are selected and
         copied while the caller still holds the case lock.
         """
-        if source_template_documents:
-            return {
-                "schema_version": "excel-template-handoff-v1",
-                "source_document_ids": [str(item.document_id) for item in source_template_documents],
-                "form_instance_id": None if authoritative_report_form is None else str(authoritative_report_form.form_instance_id),
-            }
-
+        excel_handoff = bool(source_template_documents)
         if (
             validation_run is None
-            or report_document is None
-            or report_form is None
             or authoritative_report_form is None
+            or (
+                not excel_handoff
+                and (report_document is None or report_form is None)
+            )
         ):
             return None
+
+        if excel_handoff:
+            source_template_documents = sorted(
+                source_template_documents,
+                key=lambda item: (item.original_filename, str(item.document_id)),
+            )
+            if report_document is None or report_document.document_id not in {
+                item.document_id for item in source_template_documents
+            }:
+                report_document = source_template_documents[0]
+            report_form = authoritative_report_form
 
         if not isinstance(validation_run.input_snapshot, dict) or not validation_run.input_snapshot:
             raise AppError(
@@ -520,8 +525,7 @@ class SubmissionRepository:
                 "is_active": document.is_active,
             }
 
-        return {
-            "schema_version": "valuation-review-execution-v1",
+        base_context = {
             "case": {
                 "case_id": case_id,
                 "case_no": case_context["case_no"],
@@ -544,16 +548,35 @@ class SubmissionRepository:
                 "ruleset_snapshot": validation_run.ruleset_snapshot,
                 "completed_at": validation_run.completed_at,
             },
-            "report": {
-                "form": form_snapshot(report_form),
-                "authoritative_form": form_snapshot(authoritative_report_form),
-                "document": document_snapshot(report_document),
-            },
             "rule_selection": {
                 "source_rule_version": source_rule_version,
                 "rule_version": rule_version,
                 "rule_source": rule_source,
                 "validation_rules": validation_rules,
+            },
+        }
+
+        if excel_handoff:
+            return {
+                "schema_version": "excel-template-handoff-v2",
+                **base_context,
+                "report": {
+                    "authoritative_form": form_snapshot(authoritative_report_form),
+                    "primary_document_id": str(report_document.document_id),
+                    "template_documents": [
+                        document_snapshot(document)
+                        for document in source_template_documents
+                    ],
+                },
+            }
+
+        return {
+            "schema_version": "valuation-review-execution-v1",
+            **base_context,
+            "report": {
+                "form": form_snapshot(report_form),
+                "authoritative_form": form_snapshot(authoritative_report_form),
+                "document": document_snapshot(report_document),
             },
         }
 

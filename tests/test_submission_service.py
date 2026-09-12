@@ -335,6 +335,7 @@ def setup_service(command_value=None, *, owner=None):
 
 def prepare_newer_revision(state, first_command):
     state.case.case_status = "REVISION_REQUIRED"
+    state.review.review_status = "RETURNED_FOR_REVISION"
     newer = command(
         request_id=uuid4(),
         case_version=first_command.expected_case_version + 1,
@@ -537,6 +538,36 @@ async def test_submit_requires_applied_values() -> None:
     assert raised.value.status_code == 422
 
 
+def test_excel_submit_requires_primary_document_to_be_one_of_template_documents() -> None:
+    _service, state, _owner, command_value = setup_service()
+    template_id = uuid4()
+    command_value = command_value.model_copy(
+        update={"source_template_document_ids": [template_id]}
+    )
+    state.inputs.source_template_documents = [SimpleNamespace(document_id=template_id)]
+
+    with pytest.raises(AppError) as raised:
+        SubmissionService._validate_readiness(state.inputs, command_value)
+
+    assert raised.value.code == "SUBMISSION_MAIN_TEMPLATE_REQUIRED"
+    assert raised.value.status_code == 422
+
+
+def test_excel_submit_allows_missing_applied_fields_and_failed_formal_checks() -> None:
+    template_id = uuid4()
+    command_value = command(document_id=template_id).model_copy(
+        update={"source_template_document_ids": [template_id]}
+    )
+    _service, state, _owner, _ = setup_service(command_value)
+    state.inputs.source_template_documents = [SimpleNamespace(document_id=template_id)]
+    state.inputs.source_report_document = SimpleNamespace(document_id=template_id)
+    state.inputs.applied_fields = []
+    state.inputs.source_validation_run.failed_count = 2
+    state.inputs.report_form.form_status = "DRAFT"
+
+    SubmissionService._validate_readiness(state.inputs, command_value)
+
+
 @pytest.mark.asyncio
 async def test_submit_rejects_any_applied_field_without_confirmed_value() -> None:
     service, state, owner, command_value = setup_service()
@@ -634,6 +665,8 @@ async def test_revision_submission_registers_active_correction_response_once() -
     assert payload.document_id == newer.source_report_document_id
     assert payload.document_version == 2
     assert actor_id == owner.user_id
+    assert state.review.review_status == "RETURNED_FOR_REVISION"
+    assert state.case.case_status == "IN_REVIEW"
 
 
 @pytest.mark.asyncio
