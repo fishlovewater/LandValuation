@@ -275,23 +275,13 @@ export function safeReviewErrorMessage(error: unknown): string {
   }
   if (isAxiosError(error) && error.response?.status === 409) {
     const code = error.response.data?.error?.code
-    if (code === 'REVIEW_OCR_CONFIRMATION_REQUIRED') {
-      const details = error.response.data?.error?.details
-      const pendingCount = details && typeof details === 'object'
-        ? (details as Record<string, unknown>).pending_external_field_count
-        : undefined
-      const countCopy = typeof pendingCount === 'number' && pendingCount > 0
-        ? `案件仍有 ${pendingCount} 筆辨識欄位尚未完成確認並填表或排除。`
-        : '案件仍有辨識欄位尚未完成確認並填表或排除。'
-      return `${countCopy}請檢查案件全部有效文件後再開始智慧審查。`
-    }
     const knownMessages: Record<string, string> = {
       REVIEW_STATE_CONFLICT: '案件狀態已變更，請重新整理後再試。',
       FINDING_DECISION_CONFLICT: '此疑點已被其他流程更新，請重新整理後確認目前狀態。',
       REVIEW_COMPLETION_BLOCKED: '案件仍有未完成的審查項目，請先處理阻擋項目。',
       REVIEW_ALREADY_COMPLETED: '此案件已完成審查，畫面已切換為唯讀。',
       REVIEW_SUBMISSION_STALE: '目前檢核不是最新送審版本，請重新執行最新版本檢核。',
-      REVIEW_REPORT_NOT_AVAILABLE: '審查報告須在案件完成且最新檢核完成後產生。',
+      REVIEW_REPORT_NOT_AVAILABLE: '審查報告僅能使用最新一次已完成的智慧審查結果產生。',
       CORRECTION_REQUEST_BLOCKED: '目前無法送出修正通知，請先完成疑點判定或前一筆修正通知。',
       CORRECTION_REQUEST_STATE_CONFLICT: '修正通知狀態已變更，請重新整理後再試。',
       CORRECTION_REQUEST_STALE: '修正通知不是基於最新審查結果，請重新整理案件。',

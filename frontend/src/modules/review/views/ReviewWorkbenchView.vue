@@ -315,11 +315,10 @@ const showStartReview = computed(() => Boolean(
 const canStartReview = computed(() => Boolean(showStartReview.value && canExecute.value && !mutating.value))
 const canGenerateReport = computed(() => Boolean(
   canExecute.value
-    && detail.value?.reviewStatusCode === 'REVIEW_COMPLETED'
     && latestRun.value?.runStatusCode === 'COMPLETED'
     && latestRunIdForDetail(detail.value) === latestRun.value?.validationRunId,
 ))
-const reportActionReason = computed(() => canGenerateReport.value ? '' : '案件完成且最新檢核完成後，才可產生審查報告。')
+const reportActionReason = computed(() => canGenerateReport.value ? '' : '最新一次智慧審查完成後，即可查看與輸出審查報告。')
 
 function stringQuery(name: string, fallback = ''): string {
   const value = route.query[name]
@@ -590,6 +589,7 @@ async function startReview(): Promise<void> {
       throw new Error('review start did not return a completed run')
     }
     await refreshAfterMutation()
+    openResult()
   } catch (caught: unknown) {
     actionError.value = safeReviewErrorMessage(caught)
   } finally {
@@ -799,7 +799,7 @@ onBeforeRouteUpdate((to) => {
           <div class="review-workbench__source-stats" aria-label="案件摘要">
             <span><b>{{ detail.documents.length }}</b> 份文件</span>
             <span><b>{{ detail.findings.length }}</b> 項疑點</span>
-            <span><b>{{ unresolvedMissingItems.length }}</b> 項待補資料</span>
+            <span><b>{{ unresolvedMissingItems.length }}</b> 項資料缺口</span>
             <span
               v-if="inputVersionLabel"
               data-testid="review-input-provenance"
@@ -858,7 +858,7 @@ onBeforeRouteUpdate((to) => {
         <div v-if="showStartReview" class="review-workbench__start-panel" data-testid="review-start-panel">
           <div>
             <strong>尚未開始智慧審查</strong>
-            <p>先執行資料完整性與規則檢核，完成後才能處理疑點並完成審查。</p>
+            <p>執行後會直接開啟審查報告。資料不足的規則會標示為未執行，不會被視為通過；人工疑點處理可在報告後再進行。</p>
           </div>
           <button
             type="button"
@@ -914,8 +914,8 @@ onBeforeRouteUpdate((to) => {
         >
           <div class="review-workbench__supplement-heading">
             <div>
-              <span>資料完整性</span>
-              <strong id="review-missing-items-title">{{ detail.demoAdvisory ? 'Demo 缺件提示（不強制補件）' : '缺件與補件要求' }}</strong>
+              <span>進階處理</span>
+              <strong id="review-missing-items-title">資料缺口與補件</strong>
             </div>
             <button
               v-if="canRequestSupplement"
@@ -927,8 +927,8 @@ onBeforeRouteUpdate((to) => {
               {{ supplementActionLabel }}
             </button>
           </div>
-          <p v-if="detail.demoAdvisory" class="review-workbench__supplement-note">Demo：謄本、地籍圖與宗地面積缺少時仍可繼續審查與展示結案；資料不足的檢核會標示未執行，不代表正式通過。</p>
-          <p v-else-if="requestableMissingItems.length" class="review-workbench__supplement-note">
+          <p class="review-workbench__supplement-note">資料缺口不等於檢核通過。智慧審查會先執行可用規則，缺少必要資料的規則會在報告標示「未執行」；需要時再由審查人員進一步要求補件。</p>
+          <p v-if="requestableMissingItems.length" class="review-workbench__supplement-note">
             有 {{ requestableMissingItems.length }} 項完整性缺件尚未通知{{ correctionRecipientLabel }}；設定期限後可一次正式提出補件要求。
           </p>
           <p v-else-if="requestedMissingItems.length" class="review-workbench__supplement-note">

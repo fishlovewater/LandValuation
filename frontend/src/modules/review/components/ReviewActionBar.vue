@@ -49,7 +49,7 @@ const props = withDefaults(
     unresolvedFindingCount: 0,
     latestRunId: null,
     reportDocument: null,
-    reportActionReason: '案件完成且最新檢核完成後，才可產生審查報告。',
+    reportActionReason: '最新一次智慧審查完成後，即可查看與輸出審查報告。',
     finalizeActionReason: '最新檢核完成且所有阻擋項目處理後，才可完成審查。',
     busy: false,
   },
@@ -73,7 +73,8 @@ const awaitingCorrectionTitle = computed(() => externalCase.value
   ? '修正通知已記錄為對外通知，等待外部廠商回傳新版文件。'
   : '已退回估價端，等待較新的正式版本重新送審。')
 const correctionActionIsPrimary = computed(() => ['DRAFT', 'RESUBMITTED'].includes(props.correctionStatus ?? ''))
-const finalizeIsPrimary = computed(() => !finalState.value && !correctionActionIsPrimary.value)
+const reportIsPrimary = computed(() => Boolean(props.latestRunId && props.canGenerateReport))
+const finalizeIsPrimary = computed(() => !finalState.value && !correctionActionIsPrimary.value && !reportIsPrimary.value)
 const resolvedFindingCount = computed(() => Math.max(0, props.totalFindingCount - props.unresolvedFindingCount))
 const findingProgress = computed(() => props.totalFindingCount > 0
   ? Math.round((resolvedFindingCount.value / props.totalFindingCount) * 100)
@@ -84,7 +85,7 @@ const findingProgress = computed(() => props.totalFindingCount > 0
   <div class="review-action-bar" data-testid="review-action-bar">
     <div class="review-action-bar__status">
       <span>目前狀態</span>
-      <strong>{{ finalState ? '已完成審查' : '可接續處理' }}</strong>
+      <strong>{{ finalState ? '已完成審查' : reportIsPrimary ? '智慧審查已完成，可先查看報告' : '可接續處理' }}</strong>
       <div v-if="totalFindingCount > 0" class="review-action-bar__progress-copy">
         <small>疑點已處理 {{ resolvedFindingCount }} / {{ totalFindingCount }}</small>
         <small v-if="unresolvedFindingCount > 0">尚有 {{ unresolvedFindingCount }} 個未處理</small>
@@ -102,6 +103,29 @@ const findingProgress = computed(() => props.totalFindingCount > 0
       </div>
     </div>
     <div class="review-action-bar__actions">
+      <button
+        v-if="latestRunId"
+        type="button"
+        :class="{ 'is-primary': reportIsPrimary }"
+        data-testid="open-review-result"
+        :disabled="!canGenerateReport || busy"
+        :title="reportActionReason"
+        @click="emit('open-result')"
+      >
+        <Eye :size="16" weight="bold" aria-hidden="true" />
+        <span>查看審查報告</span>
+      </button>
+      <button
+        v-if="latestRunId"
+        type="button"
+        data-testid="generate-review-report"
+        :disabled="!canGenerateReport || busy"
+        :title="reportActionReason"
+        @click="emit('generate-report')"
+      >
+        <FileText :size="16" weight="bold" aria-hidden="true" />
+        <span>快速產生 PDF</span>
+      </button>
       <button
         v-if="!correctionStatus || correctionStatus === 'RECHECKED'"
         type="button"
@@ -166,27 +190,6 @@ const findingProgress = computed(() => props.totalFindingCount > 0
       >
         <CheckCircle :size="16" weight="bold" aria-hidden="true" />
         <span>完成審查</span>
-      </button>
-      <button
-        v-if="latestRunId"
-        type="button"
-        data-testid="generate-review-report"
-        :disabled="!canGenerateReport || busy"
-        :title="reportActionReason"
-        @click="emit('generate-report')"
-      >
-        <FileText :size="16" weight="bold" aria-hidden="true" />
-        <span>產生審查報告</span>
-      </button>
-      <button
-        v-if="reportDocument"
-        type="button"
-        data-testid="open-review-result"
-        :disabled="busy"
-        @click="emit('open-result')"
-      >
-        <Eye :size="16" weight="bold" aria-hidden="true" />
-        <span>查看報告</span>
       </button>
       <small v-if="latestRunId && !canGenerateReport" class="review-action-bar__hint" data-testid="report-action-reason">
         {{ reportActionReason }}

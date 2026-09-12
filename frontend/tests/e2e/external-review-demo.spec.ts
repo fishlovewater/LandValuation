@@ -52,7 +52,8 @@ test.describe('real External Review demo', () => {
     expect(payload.run?.external_input_snapshot_no).toBe(1)
     expect(payload.run?.external_input_fingerprint).toMatch(/^[0-9a-f]{64}$/)
 
-    await expect(page.getByTestId('review-input-provenance')).toContainText('v1')
-    await expect(page.getByTestId('review-input-provenance')).toContainText('審查輸入已凍結')
+    await expect(page).toHaveURL(new RegExp(`/app/review/result/${reviewId}`))
+    await expect(page.getByTestId('review-report-ready-note')).toContainText('報告現在即可查看與輸出')
+    await expect(page.getByTestId('review-report-provenance')).toContainText('外部案件 v1')
   })
 })

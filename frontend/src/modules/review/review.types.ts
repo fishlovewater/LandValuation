@@ -366,6 +366,20 @@ export interface ReviewReportDto {
   missing_item_count: number
   findings: unknown[]
   risk_summary: Record<string, unknown>
+  review_coverage?: {
+    total_rule_count: number
+    executed_rule_count: number
+    skipped_rule_count: number
+    skipped_rules: Array<{
+      validation_rule_id: string
+      rule_code: string
+      rule_name: string
+      reason_code: string
+      reason: string
+      missing_field_codes: string[]
+      status: 'SKIPPED'
+    }>
+  } | null
   case_decisions: unknown[]
   urgency?: Record<string, unknown> | null
   correction_requests?: unknown[]

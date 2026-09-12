@@ -537,7 +537,7 @@ describe('review demo flow', () => {
     wrapper.unmount()
   })
 
-  it('starts a received Review through preflight and a completed run before finalization', async () => {
+  it('starts a received Review, opens the report immediately, then allows optional human finalization', async () => {
     const requests: string[] = []
     const receivedDetail = {
       ...structuredClone(detailBase),
@@ -554,6 +554,24 @@ describe('review demo flow', () => {
     http.defaults.adapter = vi.fn(async (config) => {
       requests.push(`${config.method} ${config.url}`)
       if (config.method === 'get' && config.url === `/review/workbench/cases/${idsWithDetail.review}`) return response(detailDto, config)
+      if (config.method === 'get' && config.url === `/review/runs/${idsWithDetail.run}/report`) {
+        return response({
+          case: { case_no: detailDto.case.case_no, case_title: detailDto.case.case_title },
+          run: {},
+          review_status: 'REVIEW_REQUIRED',
+          missing_item_count: 0,
+          findings: [],
+          risk_summary: {},
+          review_coverage: {
+            total_rule_count: 1,
+            executed_rule_count: 1,
+            skipped_rule_count: 0,
+            skipped_rules: [],
+          },
+          case_decisions: [],
+          input_provenance: null,
+        }, config)
+      }
       if (config.method === 'get' && config.url === '/review/workbench/summary') return response(summaryDto, config)
       if (config.method === 'get' && config.url === '/review/workbench/cases') return response({ items: [queueItemDto], total: 1, limit: 20, offset: 0 }, config)
       if (config.method === 'post' && config.url === `/review/workbench/cases/${idsWithDetail.review}/start/preflight`) {
@@ -611,11 +629,16 @@ describe('review demo flow', () => {
     await vi.waitFor(() => expect(wrapper.get('[data-testid="start-review"]').isVisible()).toBe(true))
 
     await wrapper.get('[data-testid="start-review"]').trigger('click')
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="start-review"]').exists()).toBe(false))
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('review-result'))
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="review-report-ready-note"]').text()).toContain('報告現在即可查看與輸出'))
+    expect(wrapper.get('[data-testid="review-report-coverage"]').text()).toContain('1 / 1 項已執行')
     expect(requests.filter((request) => request.includes('/start'))).toEqual([
       `post /review/workbench/cases/${idsWithDetail.review}/start/preflight`,
       `post /review/workbench/cases/${idsWithDetail.review}/start`,
     ])
+
+    await wrapper.get('[data-testid="result-back-to-workbench"]').trigger('click')
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('review-workbench'))
     expect(wrapper.get('[data-testid="finalize-review"]').attributes('disabled')).toBeUndefined()
     await wrapper.get('[data-testid="finalize-review"]').trigger('click')
     await wrapper.get('[data-confirm]').trigger('click')
@@ -1305,13 +1328,36 @@ describe('review demo flow', () => {
     wrapper.unmount()
   })
 
-  it('keeps report actions disabled before review completion when the report endpoint would return 409', async () => {
+  it('makes the latest completed smart-review report available before human review completion', async () => {
     const incompleteDetail = structuredClone(detailBase)
     incompleteDetail.review.review_status = 'REVIEW_REQUIRED'
     http.defaults.adapter = vi.fn(async (config) => {
       if (config.method === 'get' && config.url === `/review/workbench/cases/${idsWithDetail.review}`) return response(incompleteDetail, config)
       if (config.method === 'get' && config.url === `/review/runs/${idsWithDetail.run}/report`) {
-        throw { isAxiosError: true, response: { status: 409, data: { error: { code: 'REVIEW_REPORT_NOT_AVAILABLE' } } } }
+        return response({
+          case: { case_no: incompleteDetail.case.case_no, case_title: incompleteDetail.case.case_title },
+          run: {},
+          review_status: 'REVIEW_REQUIRED',
+          missing_item_count: 1,
+          findings: [],
+          risk_summary: {},
+          review_coverage: {
+            total_rule_count: 2,
+            executed_rule_count: 1,
+            skipped_rule_count: 1,
+            skipped_rules: [{
+              validation_rule_id: '12121212-1212-4212-8212-121212121212',
+              rule_code: 'LAND_REGISTER_CROSSCHECK',
+              rule_name: '土地登記資料交叉檢核',
+              reason_code: 'MISSING_REQUIRED_FIELDS',
+              reason: '缺少可供交叉檢核的土地登記資料',
+              missing_field_codes: ['LAND_REGISTER_AREA'],
+              status: 'SKIPPED',
+            }],
+          },
+          case_decisions: [],
+          input_provenance: null,
+        }, config)
       }
       throw new Error(`Unexpected request ${config.method} ${config.url}`)
     }) as unknown as typeof originalAdapter
@@ -1320,11 +1366,15 @@ describe('review demo flow', () => {
     await router.push(`/app/review/result/${idsWithDetail.review}?runId=${idsWithDetail.run}`)
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('審查結果'))
-    await vi.waitFor(() => expect(wrapper.text()).toContain('案件完成且最新檢核完成後'))
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="review-report-ready-note"]').text()).toContain('人工疑點判定'))
+    expect(wrapper.get('[data-testid="review-report-coverage"]').text()).toContain('1 / 2 項已執行')
+    expect(wrapper.get('[data-testid="review-report-skipped-rules"]').text()).toContain('未執行不代表通過')
+    expect(wrapper.get('[data-testid="review-report-skipped-rules"]').text()).toContain('土地登記資料交叉檢核')
 
-    for (const testId of ['generate-review-pdf', 'generate-review-xlsx', 'generate-review-docx', 'download-review-report']) {
-      expect(wrapper.get(`[data-testid="${testId}"]`).attributes('disabled')).toBeDefined()
+    for (const testId of ['generate-review-pdf', 'generate-review-xlsx', 'generate-review-docx']) {
+      expect(wrapper.get(`[data-testid="${testId}"]`).attributes('disabled')).toBeUndefined()
     }
+    expect(wrapper.get('[data-testid="download-review-report"]').attributes('disabled')).toBeDefined()
     expect(wrapper.text()).not.toContain('REVIEW_REPORT_NOT_AVAILABLE')
     wrapper.unmount()
   })

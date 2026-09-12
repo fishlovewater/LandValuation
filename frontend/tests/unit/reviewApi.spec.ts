@@ -27,11 +27,11 @@ describe('review API error messages', () => {
       .toBe('案件狀態不允許此操作，請重新整理後確認。')
   })
 
-  it('explains whole-case OCR blockers with the pending field count', () => {
+  it('does not preserve the removed OCR confirmation hard-gate message', () => {
     expect(safeReviewErrorMessage(conflictError(
       'REVIEW_OCR_CONFIRMATION_REQUIRED',
       { pending_external_field_count: 3 },
-    ))).toBe('案件仍有 3 筆辨識欄位尚未完成確認並填表或排除。請檢查案件全部有效文件後再開始智慧審查。')
+    ))).toBe('案件狀態不允許此操作，請重新整理後確認。')
   })
 
   it('submits the supplement due date through the existing completeness endpoint', async () => {

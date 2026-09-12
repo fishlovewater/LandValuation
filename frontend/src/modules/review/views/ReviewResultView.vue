@@ -38,13 +38,12 @@ const latestRun = computed(() => {
     )
 })
 const canUseReport = computed(() => Boolean(
-  detail.value?.reviewStatusCode === 'REVIEW_COMPLETED'
-    && latestRun.value?.runStatusCode === 'COMPLETED'
+  latestRun.value?.runStatusCode === 'COMPLETED'
     && runId.value === latestRun.value?.validationRunId,
 ))
 const reportActionReason = computed(() => canUseReport.value
   ? ''
-  : '案件完成且最新檢核完成後，才可產生或下載審查報告。')
+  : '請先完成最新一次智慧審查；報告只能使用最新完成的檢核結果。')
 const reportDocument = computed(() => generated.value ?? detail.value?.reportDocument ?? (detail.value ? latestGeneratedReport(detail.value.generatedReports) : null))
 const reportInputLabel = computed(() => {
   const provenance = report.value?.input_provenance
@@ -56,6 +55,11 @@ const reportInputLabel = computed(() => {
   }[provenance.source] ?? '審查輸入'
   return provenance.version_no === null ? source : `${source} v${provenance.version_no}`
 })
+const coverage = computed(() => report.value?.review_coverage ?? null)
+const skippedRules = computed(() => coverage.value?.skipped_rules ?? [])
+const reportReadyBeforeClosure = computed(() => Boolean(
+  canUseReport.value && detail.value?.reviewStatusCode !== 'REVIEW_COMPLETED',
+))
 
 function textField(value: unknown, fallback = '—'): string {
   return typeof value === 'string' && value.trim() ? value : fallback
@@ -184,8 +188,8 @@ onMounted(load)
       <section class="review-result__report" aria-labelledby="review-report-title">
         <div class="review-result__heading">
           <div>
-            <p class="review-result__eyebrow">審查報告</p>
-            <h2 id="review-report-title">正式審查報告</h2>
+            <p class="review-result__eyebrow">智慧審查輸出</p>
+            <h2 id="review-report-title">審查報告</h2>
           </div>
           <div class="review-result__actions">
             <button type="button" data-testid="generate-review-pdf" :disabled="!canUseReport || busy" :title="reportActionReason" @click="generatePdf">
@@ -209,6 +213,9 @@ onMounted(load)
         <p v-if="!canUseReport" class="review-result__disabled-reason" data-testid="review-report-disabled-reason">
           {{ reportActionReason }}
         </p>
+        <p v-else-if="reportReadyBeforeClosure" class="review-result__ready-note" data-testid="review-report-ready-note">
+          智慧審查已完成，報告現在即可查看與輸出。人工疑點判定、要求修正與案件結案屬後續處理，不會阻擋本次智慧審查報告。
+        </p>
         <div class="review-result__grid">
           <article class="review-result__card">
             <span>案件</span>
@@ -217,8 +224,14 @@ onMounted(load)
           </article>
           <article class="review-result__card">
             <span>報告狀態</span>
-            <strong>{{ report ? reviewStatusLabel(report.review_status) : '尚未載入' }}</strong>
-            <small>未處理項目 {{ report?.missing_item_count ?? detail.missingItems.length }} 件</small>
+            <strong>{{ latestRun?.runStatusCode === 'COMPLETED' ? '智慧審查已完成' : '尚未完成' }}</strong>
+            <small>人工流程：{{ report ? reviewStatusLabel(report.review_status) : reviewStatusLabel(detail.reviewStatusCode) }}</small>
+          </article>
+          <article class="review-result__card" data-testid="review-report-coverage">
+            <span>檢核覆蓋</span>
+            <strong v-if="coverage">{{ coverage.executed_rule_count }} / {{ coverage.total_rule_count }} 項已執行</strong>
+            <strong v-else>尚未載入</strong>
+            <small v-if="coverage">{{ coverage.skipped_rule_count }} 項未執行；未執行不代表通過</small>
           </article>
           <article class="review-result__card" data-testid="review-report-provenance">
             <span>審查依據</span>
@@ -236,6 +249,25 @@ onMounted(load)
             <strong>尚未產生</strong>
             <small>先產生一份報告，再使用授權下載。</small>
           </article>
+        </div>
+        <div v-if="skippedRules.length" class="review-result__skipped" data-testid="review-report-skipped-rules">
+          <div class="review-result__skipped-heading">
+            <div>
+              <span>檢核覆蓋說明</span>
+              <strong>{{ skippedRules.length }} 項規則未執行</strong>
+            </div>
+            <small>資料不足的規則會保留在此；未執行不代表通過。</small>
+          </div>
+          <ul>
+            <li v-for="item in skippedRules" :key="item.validation_rule_id">
+              <div>
+                <strong>{{ item.rule_name }}</strong>
+                <code>{{ item.rule_code }}</code>
+              </div>
+              <p>{{ item.reason }}</p>
+              <small v-if="item.missing_field_codes.length">缺少資料：{{ item.missing_field_codes.join('、') }}</small>
+            </li>
+          </ul>
         </div>
       </section>
 
@@ -276,12 +308,26 @@ onMounted(load)
 .review-result__actions .review-result__download { border-color: var(--app-accent); color: #fff; background: var(--app-accent); }
 .review-result__actions .review-result__download:hover:not(:disabled) { color: #fff; background: var(--app-accent-deep); }
 .review-result__disabled-reason { margin: 14px 0 0; color: var(--app-muted); font-size: 12px; line-height: 1.6; }
-.review-result__grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+.review-result__ready-note { margin: 14px 0 0; padding: 10px 12px; border: 1px solid #c9ddcf; border-radius: 8px; color: #355c42; background: #f4faf6; font-size: 12px; line-height: 1.65; }
+.review-result__grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
 .review-result__card { display: grid; min-height: 104px; align-content: start; gap: 6px; padding: 14px; border: 1px solid var(--app-line); border-radius: 8px; background: #fbfcfe; }
 .review-result__card strong { color: var(--app-ink); font-size: 15px; overflow-wrap: anywhere; }
 .review-result__card small { color: var(--app-ink-soft); line-height: 1.5; }
 .review-result__fingerprint { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; }
 .review-result__card--file { border-color: #b8d0c0; background: #f4faf6; }
+.review-result__skipped { margin-top: 14px; padding: 14px; border: 1px solid #ead8b6; border-radius: 8px; background: #fffaf1; }
+.review-result__skipped-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.review-result__skipped-heading > div { display: grid; gap: 3px; }
+.review-result__skipped-heading span,
+.review-result__skipped-heading small { color: var(--app-muted); font-size: 11px; }
+.review-result__skipped-heading strong { color: var(--app-ink); font-size: 14px; }
+.review-result__skipped ul { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
+.review-result__skipped li { display: grid; gap: 5px; padding: 11px 12px; border: 1px solid rgba(159, 119, 47, .2); border-radius: 7px; background: #fff; }
+.review-result__skipped li > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.review-result__skipped li strong { color: var(--app-ink); font-size: 13px; }
+.review-result__skipped code { color: var(--app-muted); font-size: 10px; }
+.review-result__skipped p { margin: 0; color: var(--app-ink-soft); font-size: 12px; line-height: 1.55; }
+.review-result__skipped li small { color: #80622d; font-size: 11px; }
 .review-result__findings ul { display: grid; gap: 8px; margin: 18px 0 0; padding: 0; list-style: none; }
 .review-result__findings li { display: grid; gap: 6px; padding: 14px; border: 1px solid var(--app-line); border-radius: 8px; background: #fbfcfe; }
 .review-result__findings li > div { display: flex; justify-content: space-between; gap: 12px; }
@@ -300,6 +346,7 @@ onMounted(load)
 @media (max-width: 640px) {
   .review-result { padding-inline: 14px; }
   .review-result__toolbar, .review-result__grid { grid-template-columns: 1fr; }
+  .review-result__skipped-heading, .review-result__skipped li > div { flex-direction: column; }
   .review-result__report, .review-result__findings { padding: 14px; }
   .review-result__findings li > div { align-items: flex-start; flex-direction: column; }
 }
