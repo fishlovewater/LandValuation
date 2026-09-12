@@ -347,7 +347,7 @@ onBeforeUnmount(() => {
           @click="openCreateCase"
         >
           <Plus :size="17" weight="bold" aria-hidden="true" />
-          建立審查案件
+          建立外部案件
         </button>
       </template>
     </PageHeader>
