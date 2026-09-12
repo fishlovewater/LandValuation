@@ -15,6 +15,12 @@ from app.review.correction_repository import CorrectionRepository
 from app.review.repository import ReviewRepository
 from app.review.schemas import CorrectionResubmissionCreate
 from app.review.service import ensure_transition
+from app.review.status_policy import (
+    REVIEW_COMPLETION_STATUSES,
+    REVIEW_CORRECTION_RECHECK_STATUSES,
+    REVIEW_CORRECTION_REQUEST_STATUSES,
+    ensure_review_status_allowed,
+)
 
 
 # Finding statuses that block a correction request from being sent.
@@ -64,6 +70,11 @@ class CorrectionService:
         review = await self.review_repository.get(review_id, for_update=True)
         if review is None:
             raise ResourceNotFoundError("審查案件")
+        ensure_review_status_allowed(
+            review.review_status,
+            REVIEW_CORRECTION_REQUEST_STATUSES,
+            action="建立修正通知",
+        )
         if payload.due_at <= datetime.now(payload.due_at.tzinfo):
             raise AppError("CORRECTION_DUE_AT_INVALID", "修正期限必須晚於目前時間", 422)
         summary, confirmed = await self._gate_inputs(review)
@@ -137,6 +148,11 @@ class CorrectionService:
                 "修正通知與審查案件關聯已變更",
                 409,
             )
+        ensure_review_status_allowed(
+            review.review_status,
+            REVIEW_CORRECTION_REQUEST_STATUSES,
+            action="送出修正通知",
+        )
         if request.status != "DRAFT":
             raise AppError("CORRECTION_REQUEST_STATE_CONFLICT", "只有草稿可送出", 409)
         if request.based_on_validation_run_id != review.latest_validation_run_id:
@@ -189,7 +205,7 @@ class CorrectionService:
         payload: CorrectionResubmissionCreate,
         actor_id: UUID,
     ):
-        _case, review = await self._lock_review_context(review_id)
+        case, review = await self._lock_review_context(review_id)
         request = await self.corrections.active_for_review(
             review_id, for_update=True
         )
@@ -206,13 +222,13 @@ class CorrectionService:
                 409,
             )
         return await self._register_locked_resubmission(
-            request, payload, actor_id, review=review
+            request, payload, actor_id, case=case, review=review
         )
 
     async def register_resubmission(self, request_id, payload, actor_id):
-        _case, review, request = await self._lock_request_context(request_id)
+        case, review, request = await self._lock_request_context(request_id)
         return await self._register_locked_resubmission(
-            request, payload, actor_id, review=review
+            request, payload, actor_id, case=case, review=review
         )
 
     async def _lock_review_context(self, review_id: UUID):
@@ -257,6 +273,7 @@ class CorrectionService:
         payload: CorrectionResubmissionCreate,
         actor_id: UUID,
         *,
+        case=None,
         review=None,
     ):
         if request.status != "SENT":
@@ -269,6 +286,15 @@ class CorrectionService:
             review = await self.review_repository.get(request.review_id)
             if review is None:
                 raise ResourceNotFoundError("審查案件")
+        ensure_review_status_allowed(
+            review.review_status,
+            REVIEW_CORRECTION_RECHECK_STATUSES,
+            action="登記修正版回件",
+        )
+        if case is None:
+            case = await self.review_repository.get_case(review.case_id)
+            if case is None:
+                raise ResourceNotFoundError("估價案件")
         document = await self.corrections.valid_resubmission_document(
             case_id=review.case_id,
             base_document_id=request.base_document_id,
@@ -282,6 +308,23 @@ class CorrectionService:
                 "回件文件必須屬於同一案件、版本更新且沿革一致",
                 409,
             )
+        if getattr(case, "case_type", None) == "EXTERNAL_REVIEW":
+            extraction = await self.corrections.external_resubmission_extraction_state(
+                review.case_id,
+                document["document_id"],
+            )
+            if extraction is None or extraction["extraction_status"] != "COMPLETED":
+                raise AppError(
+                    "EXTERNAL_RESUBMISSION_EXTRACTION_REQUIRED",
+                    "外部修正版必須先完成 OCR／文字擷取，才能登記為正式回件",
+                    409,
+                )
+            if int(extraction["pending_candidate_count"] or 0) > 0:
+                raise AppError(
+                    "EXTERNAL_RESUBMISSION_CONFIRMATION_REQUIRED",
+                    "外部修正版仍有待確認欄位，請完成欄位確認後再登記回件",
+                    409,
+                )
         request.response_document_id = document["document_id"]
         request.response_document_version = document["version_no"]
         request.resubmitted_by_user_id = actor_id
@@ -292,6 +335,11 @@ class CorrectionService:
 
     async def recheck(self, request_id, actor_id):
         _case, review, request = await self._lock_request_context(request_id)
+        ensure_review_status_allowed(
+            review.review_status,
+            REVIEW_CORRECTION_RECHECK_STATUSES,
+            action="執行新版重檢",
+        )
         if request.status != "RESUBMITTED":
             raise AppError(
                 "CORRECTION_RECHECK_INVALID",
@@ -454,6 +502,11 @@ class CorrectionService:
                 "審查案件已完成，不可重複核定",
                 409,
             )
+        ensure_review_status_allowed(
+            review.review_status,
+            REVIEW_COMPLETION_STATUSES,
+            action="完成審查",
+        )
         run = (
             await self.review_repository.get_run(review.latest_validation_run_id)
             if review.latest_validation_run_id

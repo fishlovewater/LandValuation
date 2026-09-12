@@ -1,6 +1,6 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -23,6 +23,26 @@ class ReportRun(BaseModel):
     prompt_version: str | None = None
     started_at: datetime
     completed_at: datetime | None = None
+
+
+class ReportInputDocument(BaseModel):
+    document_id: UUID
+    document_group_id: UUID | None = None
+    document_type: str
+    version_no: int
+    checksum_sha256: str
+    original_filename: str | None = None
+
+
+class ReportInputProvenance(BaseModel):
+    source: Literal["PLATFORM", "EXTERNAL", "LEGACY"]
+    version_no: int | None = None
+    frozen_at: datetime | None = None
+    fingerprint: str | None = None
+    schema_version: str | None = None
+    submission_id: UUID | None = None
+    external_input_snapshot_id: UUID | None = None
+    documents: list[ReportInputDocument] = Field(default_factory=list)
 
 
 class ReportDecision(BaseModel):
@@ -129,6 +149,7 @@ class ReviewReportInput(BaseModel):
     urgency: ReportUrgency | None = None
     correction_requests: list[ReportCorrectionRequest] = Field(default_factory=list)
     history: list[ReportHistoryEvent] = Field(default_factory=list)
+    input_provenance: ReportInputProvenance | None = None
 
 
 class ReviewReport(BaseModel):
@@ -142,6 +163,7 @@ class ReviewReport(BaseModel):
     urgency: ReportUrgency | None = None
     correction_requests: list[ReportCorrectionRequest] = Field(default_factory=list)
     history: list[ReportHistoryEvent] = Field(default_factory=list)
+    input_provenance: ReportInputProvenance | None = None
 
 
 def build_review_report(data: ReviewReportInput) -> ReviewReport:
@@ -187,4 +209,5 @@ def build_review_report(data: ReviewReportInput) -> ReviewReport:
         urgency=data.urgency,
         correction_requests=data.correction_requests,
         history=data.history,
+        input_provenance=data.input_provenance,
     )

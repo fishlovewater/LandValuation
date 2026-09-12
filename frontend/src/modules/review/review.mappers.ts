@@ -206,6 +206,10 @@ export function statusGroupLabel(value: string | null | undefined): string {
   return label(value, STATUS_GROUP_LABELS, '其他案件群組')
 }
 
+export function caseSourceLabel(value: string | null | undefined): string {
+  return label(value, { PLATFORM: '平台送審', EXTERNAL: '外部案件' }, '外部案件')
+}
+
 export function documentTypeLabel(value: string | null | undefined): string {
   return label(value, DOCUMENT_TYPE_LABELS, '其他文件')
 }
@@ -264,6 +268,7 @@ export function mapWorkbenchSummary(dto: WorkbenchSummaryDto): ReviewSummaryMode
 export function mapWorkbenchCase(dto: WorkbenchCaseListItemDto): ReviewQueueItemModel {
   const reviewStatusCode = dto.review_status
   const riskLevelCode = dto.current_risk_level
+  const caseSourceCode = dto.case_source ?? 'EXTERNAL'
   return {
     caseId: dto.case_id,
     reviewId: dto.review_id,
@@ -272,6 +277,8 @@ export function mapWorkbenchCase(dto: WorkbenchCaseListItemDto): ReviewQueueItem
     district: dto.district_code,
     status: reviewStatusCode,
     updatedAt: dto.received_at,
+    caseSourceCode,
+    caseSourceLabel: caseSourceLabel(caseSourceCode),
     reviewStatusCode,
     reviewStatusLabel: reviewStatusLabel(reviewStatusCode),
     latestValidationRunId: dto.latest_run?.validation_run_id ?? null,
@@ -294,6 +301,7 @@ export function mapWorkbenchCase(dto: WorkbenchCaseListItemDto): ReviewQueueItem
 export function mapDocument(dto: WorkbenchCaseDetailDto['documents'][number]): ReviewDocumentModel {
   return {
     documentId: dto.document_id,
+    documentGroupId: dto.document_group_id ?? null,
     documentType: dto.document_type,
     documentTypeLabel: documentTypeLabel(dto.document_type),
     filename: dto.original_filename,
@@ -317,6 +325,10 @@ export function mapRun(dto: WorkbenchCaseDetailDto['runs'][number]): ReviewRunMo
     failedCount: dto.failed_count,
     startedAt: dto.started_at,
     completedAt: dto.completed_at,
+    externalInputSnapshotId: dto.external_input_snapshot_id ?? null,
+    externalInputSnapshotNo: dto.external_input_snapshot_no ?? null,
+    externalInputSnapshotCreatedAt: dto.external_input_snapshot_created_at ?? null,
+    externalInputFingerprint: dto.external_input_fingerprint ?? null,
   }
 }
 
@@ -512,6 +524,7 @@ function isUnresolvedFinding(finding: ReviewFindingModel): boolean {
 
 export function mapWorkbenchDetail(dto: WorkbenchCaseDetailDto): ReviewDetailModel {
   const findings = dto.findings.map(mapFinding)
+  const caseSourceCode = dto.case_source ?? (dto.submission_id ? 'PLATFORM' : 'EXTERNAL')
   return {
     caseId: dto.case.case_id,
     caseNo: dto.case.case_no,
@@ -521,6 +534,12 @@ export function mapWorkbenchDetail(dto: WorkbenchCaseDetailDto): ReviewDetailMod
     caseStatusCode: dto.case.case_status,
     caseStatusLabel: reviewStatusLabel(dto.case.case_status),
     reviewId: dto.review.review_id,
+    caseSourceCode,
+    caseSourceLabel: caseSourceLabel(caseSourceCode),
+    submissionId: dto.submission_id,
+    submissionNo: dto.submission_no,
+    submittedAt: dto.submitted_at,
+    inputFingerprint: dto.input_fingerprint,
     reviewStatusCode: dto.review.review_status,
     reviewStatusLabel: reviewStatusLabel(dto.review.review_status),
     latestValidationRunId: dto.review.latest_validation_run_id,

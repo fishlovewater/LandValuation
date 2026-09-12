@@ -4,8 +4,10 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai_assistant.chat_service import answer_general_chat
 from app.ai_assistant.provider import BedrockConverseProvider, OllamaChatProvider
 from app.ai_assistant.repository import AssistantRepository
+from app.ai_assistant.routing import AssistantAnswerRoute, route_assistant_question
 from app.ai_assistant.schemas import (
     AssistantClaim,
     AssistantCitation,
@@ -164,34 +166,156 @@ class AssistantService:
             for item in existing
             if item.role in {"USER", "ASSISTANT"}
         ]
+        previous_route = self._previous_answer_route(existing)
         await self._add_message(
             record,
             role="USER",
             content=payload.question,
         )
-        request = KnowledgeSearchRequest(
-            question=payload.question,
-            case_id=record.case_id,
-            as_of_date=payload.as_of_date,
-            document_types=payload.document_types,
-            limit=payload.limit,
+        route = route_assistant_question(
+            payload.question,
+            has_case_context=True,
+            previous_route=previous_route,
         )
-        result = await answer_knowledge_question(
-            session=self.session,
-            storage=storage,
-            user=user,
-            request=request,
-            conversation_history=history,
-        )
-        response = self._question_response(record, result)
+
+        if route == AssistantAnswerRoute.CHAT:
+            answer, model_id = await answer_general_chat(
+                payload.question,
+                conversation_history=history,
+            )
+            response = AssistantQuestionResponse(
+                assistant_session_id=record.assistant_session_id,
+                answer_status=KnowledgeAnswerStatus.SUPPORTED,
+                answer=answer,
+                answer_route=route,
+                generation_mode="CHAT",
+                next_action="CONTINUE_CONVERSATION",
+            )
+            response_model_id = model_id or record.model_id
+        elif route == AssistantAnswerRoute.CASE:
+            answer = await self._answer_case_question(record, payload.question, user)
+            response = AssistantQuestionResponse(
+                assistant_session_id=record.assistant_session_id,
+                answer_status=KnowledgeAnswerStatus.SUPPORTED,
+                answer=answer,
+                answer_route=route,
+                generation_mode="STRUCTURED_CASE_DATA",
+                next_action="REVIEW_CASE",
+            )
+            response_model_id = record.model_id
+        else:
+            if "knowledge.read" not in permission_codes(user):
+                raise PermissionDeniedError("沒有查看法規知識的權限")
+            request = KnowledgeSearchRequest(
+                question=payload.question,
+                case_id=(record.case_id if route == AssistantAnswerRoute.HYBRID else None),
+                as_of_date=payload.as_of_date,
+                document_types=payload.document_types,
+                limit=payload.limit,
+            )
+            result = (
+                await answer_knowledge_question(
+                    session=self.session,
+                    storage=storage,
+                    user=user,
+                    request=request,
+                    conversation_history=history,
+                )
+            ).model_copy(update={"answer_route": route.value})
+            if route == AssistantAnswerRoute.HYBRID:
+                case_answer = await self._answer_case_question(record, payload.question, user)
+                result = result.model_copy(
+                    update={"answer": f"{case_answer}\n\n{result.answer}"}
+                )
+            response = self._question_response(record, result)
+            response_model_id = result.model_id or record.model_id
         await self._add_message(
             record,
             role="ASSISTANT",
             content=response.answer,
-            model_id=result.model_id or record.model_id,
+            model_id=response_model_id,
             response_payload=response.model_dump(mode="json"),
         )
         return response
+
+    @staticmethod
+    def _previous_answer_route(
+        records: list[AssistantMessageRecord],
+    ) -> AssistantAnswerRoute | None:
+        for item in reversed(records):
+            if item.role != "ASSISTANT" or not isinstance(item.response_payload, dict):
+                continue
+            raw = item.response_payload.get("answer_route")
+            try:
+                return AssistantAnswerRoute(raw)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    async def _answer_case_question(
+        self,
+        record: AssistantSessionRecord,
+        question: str,
+        user: User,
+    ) -> str:
+        """Answer common case questions from permission-checked structured data."""
+
+        self._require_tool_permissions(user, "get_case_summary")
+        summary = await self._execute_tool(
+            "get_case_summary",
+            record,
+            AssistantMessageRequest(content=question),
+            user,
+        )
+        progress = await self.refresh_progress(record)
+        normalized = question.lower()
+
+        if any(term in normalized for term in ("缺件", "缺少", "待補", "還缺")):
+            missing: list[str] = []
+            if progress.missing_fields:
+                missing.append("缺少欄位：" + "、".join(progress.missing_fields))
+            if progress.missing_documents:
+                missing.append("缺少文件：" + "、".join(progress.missing_documents))
+            if not missing:
+                return "目前系統沒有記錄尚未補齊的必要欄位或文件。"
+            return "；".join(missing) + "。"
+
+        if any(term in normalized for term in ("ocr", "辨識", "擷取欄位", "欄位辨識")):
+            self._require_tool_permissions(user, "get_extracted_fields")
+            candidates = await self.repository.list_candidate_summaries(record.case_id)
+            pending = [
+                item
+                for item in candidates
+                if item.get("status") in {"EXTRACTED", "NEEDS_CONFIRMATION"}
+            ]
+            confirmed = [
+                item
+                for item in candidates
+                if item.get("status") in {"CONFIRMED", "APPLIED"}
+            ]
+            return (
+                f"目前共有 {len(candidates)} 筆辨識欄位，其中已確認 {len(confirmed)} 筆，"
+                f"待確認 {len(pending)} 筆。"
+            )
+
+        if any(term in normalized for term in ("必填", "需要哪些資料", "需要哪些文件")):
+            requirement = FORM_REQUIREMENTS["F03"]
+            return (
+                "目前 F03 的必要欄位為："
+                + "、".join(requirement.required_fields)
+                + "；必要文件為："
+                + "、".join(requirement.required_documents)
+                + "。"
+            )
+
+        case_no = str(summary.get("case_no") or "目前案件")
+        status = str(summary.get("case_status") or "狀態待確認")
+        valuation_date = str(summary.get("valuation_base_date") or "未設定")
+        parcel_count = int(summary.get("parcel_count") or 0)
+        return (
+            f"案件 {case_no} 目前狀態為 {status}，估價基準日為 {valuation_date}，"
+            f"系統記錄 {parcel_count} 筆宗地資料。"
+        )
 
     @classmethod
     def _question_response(
@@ -204,6 +328,7 @@ class AssistantService:
                 assistant_session_id=record.assistant_session_id,
                 answer_status=result.answer_status,
                 answer=cls._UNSUPPORTED_QUESTION_COPY,
+                answer_route=AssistantAnswerRoute(result.answer_route),
                 generation_mode=result.generation_mode,
                 next_action=result.next_action,
                 clarification_question=result.clarification_question,
@@ -268,6 +393,7 @@ class AssistantService:
                 assistant_session_id=record.assistant_session_id,
                 answer_status=KnowledgeAnswerStatus.EVIDENCE_ONLY,
                 answer=cls._UNSUPPORTED_QUESTION_COPY,
+                answer_route=AssistantAnswerRoute(result.answer_route),
                 generation_mode=result.generation_mode,
                 next_action=result.next_action,
                 clarification_question=result.clarification_question,
@@ -277,6 +403,7 @@ class AssistantService:
             assistant_session_id=record.assistant_session_id,
             answer_status=result.answer_status,
             answer=result.answer,
+            answer_route=AssistantAnswerRoute(result.answer_route),
             generation_mode=result.generation_mode,
             next_action=result.next_action,
             clarification_question=result.clarification_question,

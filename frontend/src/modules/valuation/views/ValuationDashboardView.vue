@@ -6,7 +6,7 @@ import CaseTable from '../../../components/common/CaseTable.vue'
 import GlassModal from '../../../components/glass/GlassModal.vue'
 import { useAuthStore } from '../../../stores/auth.store'
 import { safeValuationErrorMessage, valuationApi } from '../valuation.api'
-import { LAND_USE_OPTIONS } from '../valuation.labels'
+import { LAND_USE_OPTIONS, VALUATION_CASE_TYPE, valuationCaseTypeLabel } from '../valuation.labels'
 import { mapCaseResponse } from '../valuation.mappers'
 import { valuationStageRoute } from '../valuation.navigation'
 import { NEW_TAIPEI_CITY_CODE, NEW_TAIPEI_DISTRICTS } from '../newTaipei'
@@ -27,7 +27,6 @@ const canCreate = computed(() => auth.permissions.includes('case.create') && aut
 const createDraft = reactive({
   caseNo: '',
   title: '',
-  caseType: '',
   requestingAgency: '',
   valuationBaseDate: '',
   valuationDueDate: '',
@@ -77,7 +76,7 @@ async function loadCases(): Promise<void> {
 
 function resetCreateDraft(): void {
   Object.assign(createDraft, {
-    caseNo: '', title: '', caseType: '', requestingAgency: '', valuationBaseDate: '',
+    caseNo: '', title: '', requestingAgency: '', valuationBaseDate: '',
     valuationDueDate: '', districtCode: '', landUseType: '',
   })
 }
@@ -96,7 +95,7 @@ async function createCase(): Promise<void> {
     const { case: created } = await valuationApi.bootstrapCase({
       case_no: createDraft.caseNo,
       case_title: createDraft.title,
-      case_type: createDraft.caseType,
+      case_type: VALUATION_CASE_TYPE,
       requesting_agency: createDraft.requestingAgency || null,
       valuation_base_date: createDraft.valuationBaseDate,
       valuation_due_date: createDraft.valuationDueDate || null,
@@ -195,7 +194,11 @@ onMounted(() => {
         <div class="create-case-grid">
           <label><span>案件編號 *</span><input id="valuation-case-no" v-model.trim="createDraft.caseNo" required maxlength="50" /></label>
           <label><span>案件名稱 *</span><input v-model.trim="createDraft.title" required maxlength="200" /></label>
-          <label><span>案件類型 *</span><input v-model.trim="createDraft.caseType" required maxlength="50" placeholder="例如：徵收補償市價查估" /></label>
+          <div class="create-case-fixed-field" data-testid="create-case-type-fixed">
+            <span>案件類型</span>
+            <strong>{{ valuationCaseTypeLabel(VALUATION_CASE_TYPE) }}</strong>
+            <small>本系統目前固定辦理土地徵收補償市價查估，不需另外輸入案件類型。</small>
+          </div>
           <label><span>估價基準日 *</span><input v-model="createDraft.valuationBaseDate" type="date" required /></label>
           <label><span>估價作業期限</span><input v-model="createDraft.valuationDueDate" type="date" /></label>
           <label><span>申請機關</span><input v-model.trim="createDraft.requestingAgency" maxlength="200" /></label>
@@ -328,6 +331,10 @@ onMounted(() => {
 .create-case-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
 .create-case-grid label { display: grid; gap: 6px; color: var(--app-ink-soft); font-size: 12px; font-weight: 800; }
 .create-case-grid label small { color: var(--app-muted); font-size: 11px; font-weight: 500; line-height: 1.45; }
+.create-case-fixed-field { display: grid; gap: 5px; padding: 10px 11px; border: 1px solid #dce4ed; border-radius: 10px; background: #f7f9fc; }
+.create-case-fixed-field > span { color: var(--app-ink-soft); font-size: 12px; font-weight: 800; }
+.create-case-fixed-field > strong { color: var(--app-ink); font-size: 13px; }
+.create-case-fixed-field > small { color: var(--app-muted); font-size: 10px; line-height: 1.5; }
 .create-case-grid__wide { grid-column: 1 / -1; }
 .create-case-grid input,
 .create-case-grid select { min-height: 44px; padding: 9px 11px; border: 1px solid var(--app-line); border-radius: 10px; color: var(--app-ink); background: rgba(255,255,255,.8); font: inherit; }

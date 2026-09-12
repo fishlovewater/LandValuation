@@ -65,6 +65,13 @@ class CaseRecord(Base):
     district_code: Mapped[str] = mapped_column(String(20))
     land_use_type: Mapped[str | None] = mapped_column(String(100))
     case_status: Mapped[str] = mapped_column(String(30), default="DRAFT")
+    basic_info_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    basic_info_confirmed_by_user_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("auth.users.user_id")
+    )
+    last_workspace_stage: Mapped[str] = mapped_column(
+        String(30), default="case", server_default="case"
+    )
     created_by_user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     updated_by_user_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(

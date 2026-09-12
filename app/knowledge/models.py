@@ -72,6 +72,10 @@ class KnowledgeConversationRecord(Base):
     user_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("auth.users.user_id")
     )
+    case_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    review_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    finding_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+    workspace: Mapped[str | None] = mapped_column(String(30))
     title: Mapped[str] = mapped_column(String(160), default="新對話")
     provider: Mapped[str] = mapped_column(String(30), default="evidence_only")
     model_id: Mapped[str | None] = mapped_column(String(200))

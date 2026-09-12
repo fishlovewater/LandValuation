@@ -40,6 +40,7 @@ export interface WorkbenchCaseListItemDto {
   case_no: string
   case_title: string
   district_code: string
+  case_source?: 'PLATFORM' | 'EXTERNAL' | string
   review_status: string
   current_risk_level: string | null
   missing_item_count: number
@@ -67,9 +68,28 @@ export interface WorkbenchCaseSummaryDto {
   case_id: string
   case_no: string
   case_title: string
+  case_type?: string
   district_code: string
   valuation_base_date: string
   case_status: string
+}
+
+export interface ExternalReviewCaseCreateDto {
+  case_no?: string | null
+  case_title: string
+  source_organization?: string | null
+  district_code: string
+  valuation_base_date: string
+  received_at?: string | null
+  due_at?: string | null
+}
+
+export interface ExternalReviewCaseCreatedDto {
+  review_id: string
+  case_id: string
+  case_no: string
+  case_source: 'EXTERNAL'
+  review_status: string
 }
 
 export interface ReviewDto {
@@ -96,6 +116,7 @@ export interface ReviewDto {
 
 export interface WorkbenchDocumentDto {
   document_id: string
+  document_group_id?: string | null
   document_type: string
   original_filename: string
   mime_type: string
@@ -142,6 +163,10 @@ export interface WorkbenchRunDto {
   submission_no?: number | null
   submitted_at?: string | null
   input_fingerprint?: string | null
+  external_input_snapshot_id?: string | null
+  external_input_snapshot_no?: number | null
+  external_input_snapshot_created_at?: string | null
+  external_input_fingerprint?: string | null
 }
 
 export interface FindingDto {
@@ -297,6 +322,7 @@ export interface FieldVersionDiffDto {
 export interface WorkbenchCaseDetailDto {
   case: WorkbenchCaseSummaryDto
   review: ReviewDto
+  case_source?: 'PLATFORM' | 'EXTERNAL' | string
   submission_id: string | null
   submission_no: number | null
   submitted_at: string | null
@@ -343,6 +369,23 @@ export interface ReviewReportDto {
   urgency?: Record<string, unknown> | null
   correction_requests?: unknown[]
   history?: unknown[]
+  input_provenance?: {
+    source: 'PLATFORM' | 'EXTERNAL' | 'LEGACY'
+    version_no: number | null
+    frozen_at: string | null
+    fingerprint: string | null
+    schema_version: string | null
+    submission_id: string | null
+    external_input_snapshot_id: string | null
+    documents: Array<{
+      document_id: string
+      document_group_id: string | null
+      document_type: string
+      version_no: number
+      checksum_sha256: string
+      original_filename: string | null
+    }>
+  } | null
 }
 
 export interface ReviewSummaryModel {
@@ -354,6 +397,8 @@ export interface ReviewSummaryModel {
 
 export interface ReviewQueueItemModel extends CaseSummary {
   reviewId: string
+  caseSourceCode: 'PLATFORM' | 'EXTERNAL' | string
+  caseSourceLabel: string
   reviewStatusCode: string
   reviewStatusLabel: string
   latestValidationRunId: string | null
@@ -374,6 +419,7 @@ export interface ReviewQueueItemModel extends CaseSummary {
 
 export interface ReviewDocumentModel {
   documentId: string
+  documentGroupId: string | null
   documentType: string
   documentTypeLabel: string
   filename: string
@@ -395,6 +441,10 @@ export interface ReviewRunModel {
   failedCount: number
   startedAt: string
   completedAt: string | null
+  externalInputSnapshotId: string | null
+  externalInputSnapshotNo: number | null
+  externalInputSnapshotCreatedAt: string | null
+  externalInputFingerprint: string | null
 }
 
 export interface ReviewReferenceModel {
@@ -475,6 +525,12 @@ export interface ReviewDetailModel {
   caseStatusCode: string
   caseStatusLabel: string
   reviewId: string
+  caseSourceCode: 'PLATFORM' | 'EXTERNAL' | string
+  caseSourceLabel: string
+  submissionId: string | null
+  submissionNo: number | null
+  submittedAt: string | null
+  inputFingerprint: string | null
   reviewStatusCode: string
   reviewStatusLabel: string
   latestValidationRunId: string | null

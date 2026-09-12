@@ -72,11 +72,27 @@ def test_xlsx_has_required_sheets_and_no_macros(report_fixture):
     workbook = load_workbook(BytesIO(content), data_only=False)
     assert workbook.sheetnames == [
         "案件摘要",
+        "審查依據版本",
         "疑點與修正要求",
         "新版重檢結果",
         "審查歷程",
     ]
     assert workbook.vba_archive is None
+
+
+def test_xlsx_contains_review_input_provenance(report_fixture):
+    workbook = load_workbook(BytesIO(build_review_xlsx(report_fixture)))
+    text = "\n".join(
+        str(cell.value)
+        for row in workbook["審查依據版本"].iter_rows()
+        for cell in row
+        if cell.value is not None
+    )
+    assert "外部案件" in text
+    assert "v2" in text
+    assert "external-report-v2.pdf" in text
+    assert "a" * 64 in text
+    assert "b" * 64 in text
 
 
 def test_xlsx_finding_rows_contain_evidence_not_formal_value(report_fixture):

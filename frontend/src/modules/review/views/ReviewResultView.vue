@@ -41,6 +41,16 @@ const reportActionReason = computed(() => canUseReport.value
   ? ''
   : '案件完成且最新檢核完成後，才可產生或下載審查報告。')
 const reportDocument = computed(() => generated.value ?? detail.value?.reportDocument ?? (detail.value ? latestGeneratedReport(detail.value.generatedReports) : null))
+const reportInputLabel = computed(() => {
+  const provenance = report.value?.input_provenance
+  if (!provenance) return '尚未載入'
+  const source = {
+    PLATFORM: '平台送審',
+    EXTERNAL: '外部案件',
+    LEGACY: '舊版相容資料',
+  }[provenance.source] ?? '審查輸入'
+  return provenance.version_no === null ? source : `${source} v${provenance.version_no}`
+})
 
 function textField(value: unknown, fallback = '—'): string {
   return typeof value === 'string' && value.trim() ? value : fallback
@@ -188,6 +198,12 @@ onMounted(load)
             <strong>{{ report ? reviewStatusLabel(report.review_status) : '尚未載入' }}</strong>
             <small>未處理項目 {{ report?.missing_item_count ?? detail.missingItems.length }} 件</small>
           </article>
+          <article class="review-result__card" data-testid="review-report-provenance">
+            <span>審查依據</span>
+            <strong>{{ reportInputLabel }}</strong>
+            <small v-if="report?.input_provenance?.frozen_at">凍結於 {{ new Date(report.input_provenance.frozen_at).toLocaleString('zh-TW') }}</small>
+            <small v-if="report?.input_provenance?.fingerprint" class="review-result__fingerprint">指紋 {{ report.input_provenance.fingerprint }}</small>
+          </article>
           <article v-if="reportDocument" class="review-result__card review-result__card--file">
             <span>可下載文件</span>
             <strong>{{ reportDocument.original_filename }}</strong>
@@ -234,10 +250,11 @@ onMounted(load)
 .review-result__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .review-result__actions :deep(.lg-btn) { min-height: 42px; padding-inline: 12px; font-size: 12px; }
 .review-result__disabled-reason { margin: 14px 0 0; color: var(--app-muted); font-size: 12px; line-height: 1.6; }
-.review-result__grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+.review-result__grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
 .review-result__card { display: grid; min-height: 104px; align-content: start; gap: 6px; padding: 14px; border: 1px solid var(--app-line); border-radius: 8px; background: #fbfcfe; }
 .review-result__card strong { color: var(--app-ink); font-size: 15px; overflow-wrap: anywhere; }
 .review-result__card small { color: var(--app-ink-soft); line-height: 1.5; }
+.review-result__fingerprint { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; }
 .review-result__card--file { border-color: #b8d0c0; background: #f4faf6; }
 .review-result__findings ul { display: grid; gap: 8px; margin: 18px 0 0; padding: 0; list-style: none; }
 .review-result__findings li { display: grid; gap: 6px; padding: 14px; border: 1px solid var(--app-line); border-radius: 8px; background: #fbfcfe; }

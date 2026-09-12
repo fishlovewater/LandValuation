@@ -128,8 +128,11 @@ describe('history demo flow', () => {
     const caseRow = wrapper.get('[data-testid="history-case-row-71000000-0000-4000-8000-000000000001"]')
     expect(caseRow.text()).toContain('新北市 板橋區')
     expect(caseRow.text()).not.toContain('3101')
-    expect(caseRow.text()).toContain('有案件資料')
-    expect(caseRow.text()).toContain('尚無附件')
+    expect(caseRow.text()).toContain('基準日')
+    expect(caseRow.text()).toContain('更新')
+    expect(caseRow.text()).not.toContain('有案件資料')
+    expect(caseRow.text()).not.toContain('尚無附件')
+    expect(wrapper.get('button[aria-label="移除篩選：板橋區"]').text()).toContain('板橋區')
 
     await wrapper.get('[data-testid="history-keyword"]').setValue('HIST-REV-001')
     expect((wrapper.get('[data-testid="history-keyword"]').element as HTMLInputElement).value).toBe('HIST-REV-001')
@@ -178,6 +181,45 @@ describe('history demo flow', () => {
     expect(requests).toHaveLength(1)
     expect(router.currentRoute.value.query.dateFrom).toBeUndefined()
     expect(router.currentRoute.value.query.dateTo).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('distinguishes the initial empty state from a no-match search and offers a clear recovery action', async () => {
+    useAuthStore().user = appraiser
+    http.defaults.adapter = vi.fn(async (config) => response({
+      items: [],
+      total: 0,
+      offset: 0,
+      limit: 20,
+      permissions: { can_view_valuation: true, can_view_review: false },
+    }, config)) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/app/history/search')
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => {
+      const empty = wrapper.find('.page-state--empty')
+      expect(empty.exists()).toBe(true)
+      expect(empty.text()).toContain('輸入案件編號、案件名稱或地號開始查詢')
+    })
+    expect(wrapper.findAll('button').filter((button) => button.text() === '清除搜尋條件')).toHaveLength(0)
+
+    await wrapper.get('[data-testid="history-keyword"]').setValue('不存在案件')
+    await wrapper.get('[data-testid="history-search-submit"]').trigger('click')
+    await flushPromises()
+
+    await vi.waitFor(() => {
+      const empty = wrapper.find('.page-state--empty')
+      expect(empty.exists()).toBe(true)
+      expect(empty.text()).toContain('找不到符合條件的案件')
+    })
+    const clear = wrapper.findAll('button').find((button) => button.text() === '清除搜尋條件')
+    expect(clear).toBeDefined()
+    await clear!.trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.query.keyword).toBeUndefined()
+    expect(wrapper.text()).toContain('輸入案件編號、案件名稱或地號開始查詢')
     wrapper.unmount()
   })
 
@@ -288,6 +330,12 @@ describe('history demo flow', () => {
               { review_id: '75000000-0000-4000-8000-000000000001', review_type: 'SMART_REVIEW', review_status: 'COMPLETED', received_at: '2026-08-19T09:00:00+08:00', started_at: '2026-08-20T10:00:00+08:00', completed_at: '2026-08-20T12:00:00+08:00' },
               { review_id: '75000000-0000-4000-8000-000000000004', review_type: 'FUTURE_REVIEW_KIND', review_status: 'FUTURE_REVIEW_STATUS', received_at: '2026-08-21T09:00:00+08:00' },
             ],
+            validation_runs: [
+              { validation_run_id: '75000000-0000-4000-8000-000000000012', review_id: '75000000-0000-4000-8000-000000000001', run_no: 2, run_status: 'COMPLETED', passed_count: 8, warning_count: 1, failed_count: 0, started_at: '2026-08-20T10:30:00+08:00', completed_at: '2026-08-20T10:45:00+08:00', external_input_snapshot_id: '75000000-0000-4000-8000-000000000013' },
+            ],
+            input_snapshots: [
+              { source: 'EXTERNAL', review_id: '75000000-0000-4000-8000-000000000001', external_input_snapshot_id: '75000000-0000-4000-8000-000000000013', input_version: 2, frozen_at: '2026-08-20T10:25:00+08:00', fingerprint: 'a'.repeat(64), document_count: 2 },
+            ],
             findings: [
               { finding_id: '75000000-0000-4000-8000-000000000005', finding_code: 'GRADE_MISMATCH', finding_type: 'AI', severity: 'HIGH', status: 'REQUIRES_SUPPLEMENT', title: '比較等級需補件', created_at: '2026-08-20T11:00:00+08:00' },
               { finding_id: '75000000-0000-4000-8000-000000000006', finding_code: 'FUTURE_FINDING_CODE', finding_type: 'FUTURE_FINDING_TYPE', severity: 'FUTURE_SEVERITY', status: 'FUTURE_FINDING_STATUS', title: '未來疑點', created_at: '2026-08-21T11:00:00+08:00' },
@@ -330,7 +378,7 @@ describe('history demo flow', () => {
     expect(wrapper.text()).toContain('審查資料')
     expect(wrapper.text()).toContain('土地徵收補償市價查估案件')
     expect(wrapper.text()).not.toContain('LAND')
-    expect(wrapper.get('[data-testid="history-tab-review"]').text()).toContain('11')
+    expect(wrapper.get('[data-testid="history-tab-review"]').text()).toContain('13')
     expect(wrapper.text()).not.toContain('估價資料')
     expect(wrapper.text()).not.toContain('object_key')
     expect(wrapper.text()).not.toContain('cases/')
@@ -340,6 +388,8 @@ describe('history demo flow', () => {
     expect(timelineSection.get('[data-testid="history-timeline-filter-all"]').text()).toContain('全部')
     expect(timelineSection.find('[data-testid="history-timeline-filter-review"]').exists()).toBe(true)
     await timelineSection.get('[data-testid="history-timeline-filter-review"]').trigger('click')
+    expect(timelineSection.text()).toContain('外部案件 v2 已凍結作為檢核依據')
+    expect(timelineSection.text()).toContain('檢核批次 #2')
     expect(timelineSection.text()).toContain('風險等級：高風險')
     expect(timelineSection.text()).toContain('決定：接受系統結果')
     expect(timelineSection.text()).not.toContain('風險等級：HIGH')
@@ -349,6 +399,10 @@ describe('history demo flow', () => {
     await wrapper.get('[data-testid="history-tab-review"]').trigger('click')
     const reviewSection = wrapper.get('[data-testid="history-review-section"]')
     expect(reviewSection.text()).toContain('智慧審查')
+    expect(reviewSection.text()).toContain('外部案件')
+    expect(reviewSection.text()).toContain('審查輸入版本')
+    expect(reviewSection.text()).toContain('檢核批次')
+    expect(reviewSection.text()).toContain('a'.repeat(64))
     expect(reviewSection.text()).toContain('部分接受')
     expect(reviewSection.text()).toContain('要求補件')
     expect(reviewSection.text()).toContain('轉交專家審查')

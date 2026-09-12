@@ -50,9 +50,15 @@ class ExtractionService:
         self.provider = provider
 
     async def start(
-        self, case_id: UUID, document_id: UUID, user: User
+        self,
+        case_id: UUID,
+        document_id: UUID,
+        user: User,
+        *,
+        _skip_case_access: bool = False,
     ) -> tuple[DocumentExtractionRecord, list[ExtractedFieldRecord]]:
-        await self.valuation._owned_editable_case(case_id, user)
+        if not _skip_case_access:
+            await self.valuation._owned_editable_case(case_id, user)
         document = await self.documents.get(case_id, document_id)
         if document is None or not document.is_active:
             raise ResourceNotFoundError("啟用中的案件文件")
@@ -232,9 +238,15 @@ class ExtractionService:
         return tuple(normalized)
 
     async def get_latest(
-        self, case_id: UUID, document_id: UUID, user: User
+        self,
+        case_id: UUID,
+        document_id: UUID,
+        user: User,
+        *,
+        _skip_case_access: bool = False,
     ) -> tuple[DocumentExtractionRecord, list[ExtractedFieldRecord]]:
-        await self.valuation.get_case(case_id, user)
+        if not _skip_case_access:
+            await self.valuation.get_case(case_id, user)
         extraction = await self.repository.latest_for_document(case_id, document_id)
         if extraction is None:
             raise ResourceNotFoundError("文件擷取結果")
@@ -248,8 +260,12 @@ class ExtractionService:
         document_id: UUID,
         payload: ExtractionConfirmRequest,
         user: User,
+        *,
+        _skip_case_access: bool = False,
+        _apply_for_review: bool = False,
     ) -> tuple[DocumentExtractionRecord, list[ExtractedFieldRecord]]:
-        await self.valuation._owned_editable_case(case_id, user)
+        if not _skip_case_access:
+            await self.valuation._owned_editable_case(case_id, user)
         extraction = await self.repository.latest_for_document(case_id, document_id)
         if extraction is None or extraction.extraction_status != "COMPLETED":
             raise ResourceNotFoundError("可確認的文件擷取結果")
@@ -280,7 +296,7 @@ class ExtractionService:
                 candidate.field_status = "REJECTED"
                 candidate.confirmed_value = None
             else:
-                candidate.field_status = "CONFIRMED"
+                candidate.field_status = "APPLIED" if _apply_for_review else "CONFIRMED"
                 candidate.confirmed_value = self._confirmed_value(
                     candidate.extracted_value,
                     item.corrected_value,

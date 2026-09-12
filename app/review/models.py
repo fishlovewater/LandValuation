@@ -75,6 +75,42 @@ class Review(Base):
     )
 
 
+class ExternalReviewInputSnapshot(Base):
+    """Immutable evidence package captured immediately before an external Review run."""
+
+    __tablename__ = "external_input_snapshots"
+    __table_args__ = (
+        UniqueConstraint("review_id", "snapshot_no", name="uq_external_input_snapshots_review_no"),
+        {"schema": "review"},
+    )
+
+    external_input_snapshot_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    review_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("review.reviews.review_id"),
+        nullable=False,
+    )
+    case_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("valuation.cases.case_id"),
+        nullable=False,
+    )
+    snapshot_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    snapshot_schema_version: Mapped[str] = mapped_column(String(60), nullable=False)
+    input_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("auth.users.user_id"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=text("now()")
+    )
+
+
 class MissingItem(Base):
     __tablename__ = "missing_items"
     __table_args__ = {"schema": "review"}
@@ -134,6 +170,10 @@ class ValidationRun(Base):
     submission_id: Mapped[UUID | None] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("valuation.review_submissions.submission_id"),
+    )
+    external_input_snapshot_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("review.external_input_snapshots.external_input_snapshot_id"),
     )
 
 

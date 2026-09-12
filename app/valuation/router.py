@@ -17,6 +17,7 @@ from app.valuation.schemas import (
     CaseResponse,
     CaseStatus,
     CaseUpdate,
+    CaseWorkspaceUpdate,
     FormCode,
     FormCreate,
     FormDraftUpdate,
@@ -73,6 +74,10 @@ CaseBootstrapCreator = Annotated[
     Depends(require_permissions("case.create", "valuation.update")),
 ]
 CaseEditor = Annotated[User, Depends(require_permissions("case.update"))]
+CaseWorkflowEditor = Annotated[
+    User,
+    Depends(require_permissions("case.read", "valuation.update")),
+]
 ValuationReader = Annotated[User, Depends(require_permissions("valuation.read"))]
 ValuationEditor = Annotated[User, Depends(require_permissions("valuation.update"))]
 
@@ -241,6 +246,17 @@ async def update_case(
     user: CaseEditor,
 ) -> CaseResponse:
     record = await ValuationService(session).update_case(case_id, payload, user)
+    return CaseResponse.model_validate(record)
+
+
+@router.patch("/cases/{case_id}/workspace", response_model=CaseResponse)
+async def update_case_workspace(
+    case_id: UUID,
+    payload: CaseWorkspaceUpdate,
+    session: DbSession,
+    user: CaseWorkflowEditor,
+) -> CaseResponse:
+    record = await ValuationService(session).update_case_workspace(case_id, payload, user)
     return CaseResponse.model_validate(record)
 
 

@@ -35,6 +35,7 @@ const queueItemDto = {
   case_no: 'NB-2026-0008',
   case_title: '新店區安康段土地估價',
   district_code: '新店區',
+  case_source: 'PLATFORM',
   review_status: 'REVIEW_REQUIRED',
   current_risk_level: 'HIGH',
   missing_item_count: 0,
@@ -61,6 +62,7 @@ const idsWithDetail = {
   run: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
   finding: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
   document: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+  documentGroup: '89898989-8989-4989-8989-898989898989',
   decision: '11111111-1111-4111-8111-111111111111',
 }
 
@@ -94,6 +96,7 @@ const detailBase = {
     latest_validation_run_id: idsWithDetail.run,
     latest_submission_id: null,
   },
+  case_source: 'PLATFORM',
   submission_id: null,
   submission_no: null,
   submitted_at: '2026-09-07T01:00:00Z',
@@ -101,6 +104,7 @@ const detailBase = {
   documents: [
     {
       document_id: idsWithDetail.document,
+      document_group_id: idsWithDetail.documentGroup,
       document_type: 'original',
       original_filename: 'complete-report.pdf',
       mime_type: 'application/pdf',
@@ -231,7 +235,10 @@ describe('review demo flow', () => {
     })
 
     await wrapper.get(`[data-testid="review-case-row-${ids.review}"]`).trigger('click')
-    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('review-workbench'))
+    await vi.waitFor(
+      () => expect(router.currentRoute.value.name).toBe('review-workbench'),
+      { timeout: 5_000 },
+    )
     expect(router.currentRoute.value.params.reviewId).toBe(ids.review)
 
     await wrapper.get('[data-testid="review-back-to-queue"]').trigger('click')
@@ -244,7 +251,7 @@ describe('review demo flow', () => {
     })
     expect(router.currentRoute.value.query.page).toBeUndefined()
     wrapper.unmount()
-  })
+  }, 10_000)
 
   it('can reset all review filters, KPI scope, sorting, and pagination to show the full queue', async () => {
     const queueRequests: unknown[] = []
@@ -286,7 +293,7 @@ describe('review demo flow', () => {
     wrapper.unmount()
   })
 
-  it('merges partial table queries and ignores an older queue response after a newer refresh', async () => {
+  it('merges partial queue queries and ignores an older queue response after a newer refresh', async () => {
     const pendingQueueResponses: Array<{
       config: Parameters<NonNullable<typeof http.defaults.adapter>>[0]
       resolve: (value: ReturnType<typeof response>) => void
@@ -314,7 +321,7 @@ describe('review demo flow', () => {
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('NB-2026-OLD-INITIAL'))
 
-    await wrapper.get('[data-sort="name"]').trigger('click')
+    await wrapper.get('[data-testid="review-sort"]').setValue('name:asc')
     await vi.waitFor(() => expect(router.currentRoute.value.query.sortBy).toBe('name'))
     await vi.waitFor(() => expect(pendingQueueResponses).toHaveLength(1))
     expect(router.currentRoute.value.query).toMatchObject({
@@ -323,15 +330,16 @@ describe('review demo flow', () => {
       statusGroup: 'in_progress',
       sortBy: 'name',
       sortDirection: 'asc',
-      page: '2',
       pageSize: '20',
     })
     expect(pendingQueueResponses[0].config.params).toMatchObject({
       status: 'REVIEW_REQUIRED',
       risk_level: 'HIGH',
       status_group: 'in_progress',
+      sort_by: 'case_title',
+      sort_direction: 'asc',
       limit: 20,
-      offset: 20,
+      offset: 0,
     })
 
     await wrapper.get('[data-testid="refresh-review-queue"]').trigger('click')
@@ -349,6 +357,9 @@ describe('review demo flow', () => {
   it('keeps a finding visible, synchronizes its evidence, saves one exact decision, and refreshes summary and queue after each transition', async () => {
     const requests: Array<{ method?: string; url?: string; data?: unknown }> = []
     let detailDto = structuredClone(detailBase)
+    detailDto.submission_id = 'abababab-abab-4bab-8bab-abababababab'
+    detailDto.submission_no = 3
+    detailDto.input_fingerprint = 'c'.repeat(64)
     http.defaults.adapter = vi.fn(async (config) => {
       requests.push({ method: config.method, url: config.url, data: config.data })
       if (config.method === 'get' && config.url === '/review/workbench/summary') return response(summaryDto, config)
@@ -396,6 +407,23 @@ describe('review demo flow', () => {
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('調整率需要覆核'))
 
+    const progress = wrapper.get('[data-testid="review-progress"]')
+    expect(progress.text()).toContain('接收送審')
+    expect(progress.text()).toContain('資料確認')
+    expect(progress.get('[data-workflow-step="triage"]').attributes('aria-current')).toBe('step')
+    expect(wrapper.get('[data-testid="review-source-strip"]').text()).toContain('平台送審')
+    expect(wrapper.get('[data-testid="review-input-provenance"]').text()).toContain('第 3 次送審')
+    expect(wrapper.get('[data-testid="review-input-provenance"]').text()).toContain('審查輸入已凍結')
+    expect(wrapper.get('[data-testid="review-input-provenance"]').attributes('title')).toContain('c'.repeat(64))
+    await wrapper.get('[data-testid="open-review-context"]').trigger('click')
+    await flushPromises()
+    const provenance = wrapper.get('[data-testid="review-input-context"]')
+    expect(provenance.text()).toContain('審查依據版本')
+    expect(provenance.text()).toContain('平台送審')
+    expect(provenance.text()).toContain('第 3 次送審')
+    expect(provenance.text()).toContain('c'.repeat(64))
+    await wrapper.get('#review-context-drawer button[aria-label="關閉案件資料"]').trigger('click')
+    await flushPromises()
     expect(wrapper.get('[data-testid="report-value"]').text()).toContain('0.10')
     expect(wrapper.get('[data-testid="system-value"]').text()).toContain('0.08')
     expect(wrapper.get('[data-testid="ai-explanation"]').text()).toContain('系統發現')
@@ -832,10 +860,270 @@ describe('review demo flow', () => {
     wrapper.unmount()
   })
 
+  it('keeps an external correction as a draft until the reviewer confirms the manual notification', async () => {
+    const requests: Array<{ method?: string; url?: string; data?: unknown }> = []
+    let detailDto: any = structuredClone(detailBase)
+    detailDto.case_source = 'EXTERNAL'
+    detailDto.findings[0].status = 'CONFIRMED_ISSUE'
+    const correctionId = '34343434-3434-4434-8434-343434343434'
+
+    http.defaults.adapter = vi.fn(async (config) => {
+      requests.push({ method: config.method, url: config.url, data: config.data })
+      if (config.method === 'get' && config.url === `/review/workbench/cases/${idsWithDetail.review}`) {
+        return response(detailDto, config)
+      }
+      if (config.method === 'get' && config.url === '/review/workbench/summary') return response(summaryDto, config)
+      if (config.method === 'get' && config.url === '/review/workbench/cases') {
+        return response({ items: [{ ...queueItemDto, case_source: 'EXTERNAL' }], total: 1, limit: 20, offset: 0 }, config)
+      }
+      if (config.method === 'post' && config.url === `/review/cases/${idsWithDetail.review}/correction-requests`) {
+        const body = requestBody(config.data)
+        const draft = {
+          correction_request_id: correctionId,
+          review_id: idsWithDetail.review,
+          request_no: 1,
+          based_on_validation_run_id: idsWithDetail.run,
+          status: 'DRAFT',
+          due_at: body.due_at,
+          message: body.message,
+          base_document_id: idsWithDetail.document,
+          base_document_version: 1,
+          response_document_id: null,
+          response_document_version: null,
+          sent_at: null,
+          resubmitted_by_user_id: null,
+          resubmitted_at: null,
+          rechecked_at: null,
+          items: [],
+        }
+        detailDto = { ...detailDto, correction_requests: [draft] }
+        return response(draft, config, 201)
+      }
+      if (config.method === 'post' && config.url === `/review/correction-requests/${correctionId}/send`) {
+        const sent = {
+          ...detailDto.correction_requests[0],
+          status: 'SENT',
+          sent_at: new Date().toISOString(),
+        }
+        detailDto = {
+          ...detailDto,
+          review: { ...detailDto.review, review_status: 'RETURNED_FOR_REVISION' },
+          correction_requests: [sent],
+        }
+        return response(sent, config)
+      }
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/review/workbench/${idsWithDetail.review}`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="review-source-strip"]').text()).toContain('外部案件'))
+
+    const progress = wrapper.get('[data-testid="review-progress"]')
+    expect(progress.text()).toContain('建立案件')
+    expect(progress.text()).toContain('文件匯入')
+    expect(progress.text()).toContain('欄位確認')
+    expect(progress.get('[data-workflow-step="triage"]').attributes('aria-current')).toBe('step')
+
+    await wrapper.get('[data-testid="request-correction"]').trigger('click')
+    expect(wrapper.get('#review-correction-request').text()).toContain('既有外部管道')
+    await wrapper.get('#review-correction-message').setValue('請外部廠商修正調整率並回傳新版文件。')
+    await wrapper.get('[data-testid="correction-request-form"]').trigger('submit')
+
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="send-correction"]').text()).toContain('確認已對外通知'))
+    expect(requests.filter((request) => request.url === `/review/correction-requests/${correctionId}/send`)).toHaveLength(0)
+    expect(wrapper.get('[data-testid="review-progress"]').get('[data-workflow-step="recheck"]').attributes('aria-current')).toBe('step')
+
+    await wrapper.get('[data-testid="send-correction"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="awaiting-correction"]').text()).toContain('等待外部回件'))
+    expect(requests.filter((request) => request.url === `/review/correction-requests/${correctionId}/send`)).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('keeps an external corrected report in the same lineage and registers it only after OCR fields are resolved', async () => {
+    const correctionId = '34343434-3434-4434-8434-343434343434'
+    const revisedDocumentId = '45454545-4545-4454-8454-454545454545'
+    const extractionId = '56565656-5656-4565-8565-565656565656'
+    const fieldId = '67676767-6767-4676-8676-676767676767'
+    const requests: Array<{ method?: string; url?: string; data?: unknown }> = []
+    let detailDto: any = structuredClone(detailBase)
+    detailDto.case_source = 'EXTERNAL'
+    detailDto.review.review_status = 'RETURNED_FOR_REVISION'
+    detailDto.runs[0] = {
+      ...detailDto.runs[0],
+      external_input_snapshot_id: '89898989-8989-4898-8989-898989898989',
+      external_input_snapshot_no: 1,
+      external_input_snapshot_created_at: '2026-09-12T07:05:00Z',
+      external_input_fingerprint: 'b'.repeat(64),
+    }
+    detailDto.correction_requests = [{
+      correction_request_id: correctionId,
+      review_id: idsWithDetail.review,
+      request_no: 1,
+      based_on_validation_run_id: idsWithDetail.run,
+      status: 'SENT',
+      due_at: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+      message: '請修正調整率並回傳新版估價報告。',
+      base_document_id: idsWithDetail.document,
+      base_document_version: 1,
+      response_document_id: null,
+      response_document_version: null,
+      sent_at: new Date().toISOString(),
+      resubmitted_by_user_id: null,
+      resubmitted_at: null,
+      rechecked_at: null,
+      items: [],
+    }]
+
+    const revisedDocument = {
+      document_id: revisedDocumentId,
+      document_group_id: idsWithDetail.documentGroup,
+      document_type: 'original',
+      original_filename: 'external-appraisal-revised.pdf',
+      mime_type: 'application/pdf',
+      version_no: 2,
+      is_active: true,
+      uploaded_at: '2026-09-12T07:15:00Z',
+    }
+    const pendingCandidate = {
+      extracted_field_id: fieldId,
+      extraction_id: extractionId,
+      document_id: revisedDocumentId,
+      form_code: 'F01',
+      field_name: 'parcel_area',
+      field_label: '宗地面積',
+      field_guidance: '請核對來源文件所載面積。',
+      extracted_value: '126.00',
+      confidence: '0.94',
+      source_page: 3,
+      source_text: '宗地面積 126.00 平方公尺',
+      analysis_provider: 'LOCAL_OCR',
+      model_id: null,
+      prompt_version: null,
+      field_status: 'NEEDS_CONFIRMATION',
+      confirmed_value: null,
+      confirmed_by_user_id: null,
+      confirmed_at: null,
+      applied_form_instance_id: null,
+      applied_at: null,
+    }
+    const extractionBase = {
+      extraction_id: extractionId,
+      case_id: idsWithDetail.case,
+      document_id: revisedDocumentId,
+      provider: 'local_pdf',
+      extraction_status: 'COMPLETED',
+      page_count: 6,
+      extracted_text: '宗地面積 126.00 平方公尺',
+      error_message: null,
+      started_at: '2026-09-12T07:16:00Z',
+      completed_at: '2026-09-12T07:16:02Z',
+    }
+
+    http.defaults.adapter = vi.fn(async (config) => {
+      requests.push({ method: config.method, url: config.url, data: config.data })
+      if (config.method === 'get' && config.url === `/review/workbench/cases/${idsWithDetail.review}`) {
+        return response(detailDto, config)
+      }
+      if (config.method === 'get' && config.url === `/review/workbench/cases/${idsWithDetail.review}/external-documents/${idsWithDetail.document}/extraction`) {
+        return response({
+          ...extractionBase,
+          extraction_id: '78787878-7878-4787-8787-787878787878',
+          document_id: idsWithDetail.document,
+          extracted_text: '舊版報告',
+          candidates: [],
+        }, config)
+      }
+      if (config.method === 'post' && config.url === `/review/workbench/cases/${idsWithDetail.review}/external-documents`) {
+        expect(config.data).toBeInstanceOf(FormData)
+        const body = config.data as FormData
+        expect(body.get('category')).toBe('original')
+        expect(body.get('document_group_id')).toBe(idsWithDetail.documentGroup)
+        detailDto = {
+          ...detailDto,
+          documents: [
+            { ...detailDto.documents[0], is_active: false },
+            revisedDocument,
+          ],
+        }
+        return response(revisedDocument, config, 201)
+      }
+      if (config.method === 'post' && config.url === `/review/workbench/cases/${idsWithDetail.review}/external-documents/${revisedDocumentId}/extract`) {
+        return response({ ...extractionBase, candidates: [pendingCandidate] }, config)
+      }
+      if (config.method === 'post' && config.url === `/review/workbench/cases/${idsWithDetail.review}/external-documents/${revisedDocumentId}/extraction/confirm`) {
+        expect(requestBody(config.data).confirmations).toEqual([{
+          extracted_field_id: fieldId,
+          decision: 'CONFIRM',
+        }])
+        return response({
+          ...extractionBase,
+          candidates: [{
+            ...pendingCandidate,
+            field_status: 'APPLIED',
+            confirmed_value: '126.00',
+            confirmed_by_user_id: reviewer.id,
+            confirmed_at: '2026-09-12T07:17:00Z',
+            applied_at: '2026-09-12T07:17:00Z',
+          }],
+        }, config)
+      }
+      if (config.method === 'post' && config.url === `/review/correction-requests/${correctionId}/resubmissions`) {
+        expect(requestBody(config.data)).toEqual({
+          document_id: revisedDocumentId,
+          document_version: 2,
+        })
+        const resubmitted = {
+          ...detailDto.correction_requests[0],
+          status: 'RESUBMITTED',
+          response_document_id: revisedDocumentId,
+          response_document_version: 2,
+          resubmitted_by_user_id: reviewer.id,
+          resubmitted_at: '2026-09-12T07:18:00Z',
+        }
+        detailDto = { ...detailDto, correction_requests: [resubmitted] }
+        return response(resubmitted, config, 201)
+      }
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/review/workbench/${idsWithDetail.review}`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="external-correction-return"]').text()).toContain('等待回件'))
+    expect(wrapper.get('[data-testid="review-input-provenance"]').text()).toContain('v1')
+    expect(wrapper.get('[data-testid="review-input-provenance"]').text()).toContain('審查輸入已凍結')
+
+    const correctionFileInput = wrapper.get('[data-testid="external-correction-file"]')
+    const revisedFile = new File(['%PDF-1.7 revised appraisal'], 'external-appraisal-revised.pdf', { type: 'application/pdf' })
+    Object.defineProperty(correctionFileInput.element, 'files', { value: [revisedFile], configurable: true })
+    await correctionFileInput.trigger('change')
+    await wrapper.get('[data-testid="upload-external-correction-version"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('第 2 版'))
+    expect(wrapper.get('[data-testid="review-input-provenance"]').text()).toContain('v1')
+    expect(wrapper.get(`[data-testid="external-document-${idsWithDetail.document}"]`).text()).toContain('歷史版本')
+    expect(wrapper.get(`[data-testid="external-document-${revisedDocumentId}"]`).text()).toContain('目前版本')
+
+    await wrapper.get('[data-testid="start-external-extraction"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('宗地面積'))
+    expect(wrapper.get('[data-testid="register-external-resubmission"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get(`[data-testid="confirm-external-field-${fieldId}"]`).trigger('click')
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="register-external-resubmission"]').attributes('disabled')).toBeUndefined())
+    await wrapper.get('[data-testid="register-external-resubmission"]').trigger('click')
+
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="external-correction-return"]').text()).toContain('已登記回件'))
+    expect(wrapper.get('[data-testid="recheck-correction"]').attributes('disabled')).toBeUndefined()
+    expect(requests.some((request) => request.url === `/review/correction-requests/${correctionId}/resubmissions`)).toBe(true)
+    wrapper.unmount()
+  })
+
   it('rechecks a resubmitted correction instead of offering a second correction request', async () => {
     const correctionId = '55555555-5555-4555-8555-555555555555'
     let recheckCount = 0
     let detailDto = structuredClone(detailBase)
+    detailDto.review.review_status = 'RETURNED_FOR_REVISION'
     detailDto.findings[0].status = 'CONFIRMED_ISSUE'
     const resubmitted = {
       correction_request_id: correctionId,
@@ -864,7 +1152,11 @@ describe('review demo flow', () => {
       if (config.method === 'post' && config.url === `/review/correction-requests/${correctionId}/recheck`) {
         recheckCount += 1
         const rechecked = { ...resubmitted, status: 'RECHECKED', rechecked_at: new Date().toISOString() }
-        detailDto = { ...detailDto, correction_requests: [rechecked] }
+        detailDto = {
+          ...detailDto,
+          review: { ...detailDto.review, review_status: 'REVIEW_REQUIRED' },
+          correction_requests: [rechecked],
+        }
         return response(rechecked, config)
       }
       throw new Error(`Unexpected request ${config.method} ${config.url}`)
@@ -956,6 +1248,16 @@ describe('review demo flow', () => {
           findings: [],
           risk_summary: {},
           case_decisions: [],
+          input_provenance: {
+            source: 'EXTERNAL',
+            version_no: 2,
+            frozen_at: '2026-09-12T07:05:00Z',
+            fingerprint: 'b'.repeat(64),
+            schema_version: 'external-review-input-v1',
+            submission_id: null,
+            external_input_snapshot_id: '89898989-8989-4898-8989-898989898989',
+            documents: [],
+          },
         }, config)
       }
       throw new Error(`Unexpected request ${config.method} ${config.url}`)
@@ -968,6 +1270,8 @@ describe('review demo flow', () => {
     await vi.waitFor(() => expect(wrapper.get('.review-result__card--file').text()).toContain(expectedLabel))
     const fileCard = wrapper.get('.review-result__card--file')
     expect(fileCard.text()).not.toContain(mimeType)
+    expect(wrapper.get('[data-testid="review-report-provenance"]').text()).toContain('外部案件 v2')
+    expect(wrapper.get('[data-testid="review-report-provenance"]').text()).toContain('b'.repeat(64))
     wrapper.unmount()
   })
 

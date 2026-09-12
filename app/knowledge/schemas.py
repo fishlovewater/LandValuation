@@ -25,6 +25,9 @@ class KnowledgeRetrievalStatus(StrEnum):
 class KnowledgeSearchRequest(BaseModel):
     question: str = Field(min_length=2, max_length=2000)
     case_id: UUID | None = None
+    review_id: UUID | None = None
+    finding_id: UUID | None = None
+    workspace: str | None = Field(default=None, max_length=30)
     as_of_date: date | None = None
     document_types: list[str] = Field(default_factory=list, max_length=10)
     limit: int = Field(default=5, ge=1, le=10)
@@ -71,6 +74,7 @@ class KnowledgeAnswerResponse(KnowledgeSourceResponse):
 
     answer_status: KnowledgeAnswerStatus
     answer: str
+    answer_route: str = "KNOWLEDGE"
     generation_mode: str
     next_action: str
     model_id: str | None = None
@@ -158,10 +162,18 @@ class KnowledgeProviderStatusResponse(BaseModel):
 
 class KnowledgeConversationCreate(BaseModel):
     title: str | None = Field(default=None, max_length=160)
+    case_id: UUID | None = None
+    review_id: UUID | None = None
+    finding_id: UUID | None = None
+    workspace: str | None = Field(default=None, max_length=30)
 
 
 class KnowledgeConversationResponse(BaseModel):
     conversation_id: UUID
+    case_id: UUID | None = None
+    review_id: UUID | None = None
+    finding_id: UUID | None = None
+    workspace: str | None = None
     title: str
     provider: str
     model_id: str | None = None

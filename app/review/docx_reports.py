@@ -70,6 +70,36 @@ def build_review_docx(report: ReviewReport) -> bytes:
         ],
     )
 
+    provenance = report.input_provenance
+    document.add_heading("審查輸入版本", level=1)
+    if provenance is None:
+        document.add_paragraph("此報告未提供審查輸入版本資訊。")
+    else:
+        source_label = {
+            "PLATFORM": "平台送審",
+            "EXTERNAL": "外部案件",
+            "LEGACY": "舊版相容資料",
+        }.get(provenance.source, provenance.source)
+        _key_value_table(
+            document,
+            [
+                ("資料來源", source_label),
+                ("輸入版本", f"v{provenance.version_no}" if provenance.version_no is not None else ""),
+                ("凍結時間", _local(provenance.frozen_at)),
+                ("內容指紋", provenance.fingerprint or ""),
+                ("快照格式", provenance.schema_version or ""),
+            ],
+        )
+        if provenance.documents:
+            document.add_paragraph("本次檢核使用文件", style="Intense Quote")
+            for item in provenance.documents:
+                filename = item.original_filename or str(item.document_id)
+                document.add_paragraph(
+                    f"{filename}／{item.document_type}／v{item.version_no}／"
+                    f"SHA-256：{item.checksum_sha256}",
+                    style="List Bullet",
+                )
+
     document.add_heading("風險與期限", level=1)
     document.add_paragraph(
         "內容風險與期限緊急度為兩個獨立指標：風險反映報告內容問題，"

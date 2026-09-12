@@ -36,6 +36,14 @@ function selectCitation(citationId: string): void {
 
     <div v-if="answer.supported && answer.text" class="answer-message__body">
       <p class="answer-message__text">{{ answer.text }}</p>
+      <div
+        v-if="answer.answerRoute === 'CASE' || answer.answerRoute === 'HYBRID'"
+        class="answer-message__system-source"
+        data-testid="assistant-case-source"
+      >
+        <strong>系統來源</strong>
+        <span>目前案件中已授權的結構化資料</span>
+      </div>
       <p v-for="(claim, claimIndex) in answer.claims" :key="`${claimIndex}-${claim.text}`" class="answer-message__claim">
         <span>{{ claim.text }}</span>
         <button
@@ -118,6 +126,21 @@ function selectCitation(citationId: string): void {
   margin: 0;
   white-space: pre-wrap;
 }
+
+.answer-message__system-source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  padding: 6px 9px;
+  border: 1px solid #dce5ee;
+  border-radius: 8px;
+  color: var(--app-ink-soft);
+  background: #f7f9fb;
+  font-size: 11px;
+}
+
+.answer-message__system-source strong { color: var(--app-ink); }
 
 .answer-message__citation {
   display: inline-flex;

@@ -1,9 +1,10 @@
 from io import BytesIO
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -52,17 +53,31 @@ from app.review.xlsx_reports import build_review_xlsx
 from app.review.docx_reports import build_review_docx
 from app.review.reports import ReviewReport
 from app.storage.dependencies import Storage
+from app.valuation.documents.schemas import DocumentCategory
+from app.valuation.extraction.field_catalog import field_input_guidance, field_label_zh
+from app.valuation.extraction.schemas import (
+    ExtractedFieldResponse,
+    ExtractionConfirmRequest,
+    ExtractionResponse,
+)
 from app.core.exceptions import AppError, ResourceNotFoundError
 from app.review.demo import DemoError, revise_demo
 from app.review.workbench_repository import WorkbenchRepository
 from app.review.workbench_schemas import (
     EligibleCaseRead,
+    ExternalReviewCaseCreate,
+    ExternalReviewCaseCreatedRead,
+    WorkbenchCaseSort,
+    WorkbenchCaseSource,
     WorkbenchCaseDetailRead,
     WorkbenchCaseList,
+    WorkbenchDocumentRead,
     WorkbenchPreflightRead,
+    WorkbenchSortDirection,
     WorkbenchStartRead,
     WorkbenchStatusGroup,
     WorkbenchSummaryRead,
+    WorkbenchUrgency,
 )
 from app.review.workbench_service import WorkbenchService
 
@@ -120,6 +135,20 @@ def workbench_service_for(session: DbSession) -> WorkbenchService:
     )
 
 
+def workbench_extraction_response(record, candidates) -> ExtractionResponse:
+    result = ExtractionResponse.model_validate(record)
+    result.candidates = []
+    for candidate in candidates:
+        response = ExtractedFieldResponse.model_validate(candidate)
+        response.field_label = field_label_zh(response.form_code, response.field_name)
+        response.field_guidance = field_input_guidance(
+            response.form_code,
+            response.field_name,
+        )
+        result.candidates.append(response)
+    return result
+
+
 def require_demo_development() -> None:
     if get_settings().app_env.lower() != "development":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
@@ -164,12 +193,27 @@ async def list_workbench_cases(
     status_filter: ReviewStatus | None = Query(default=None, alias="status"),
     risk_level: RiskLevel | None = None,
     status_group: WorkbenchStatusGroup | None = None,
+    case_source: WorkbenchCaseSource | None = Query(default=None, alias="source"),
+    district: str | None = Query(default=None, max_length=64),
+    urgency: WorkbenchUrgency | None = None,
+    sort_by: WorkbenchCaseSort = "received_at",
+    sort_direction: WorkbenchSortDirection = "desc",
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     user=Depends(require_permissions("review.execute")),
 ) -> WorkbenchCaseList:
     return await workbench_service_for(session).list_cases(
-        q, status_filter, risk_level, status_group, limit, offset
+        q,
+        status_filter,
+        risk_level,
+        status_group,
+        limit,
+        offset,
+        case_source=case_source,
+        district=district,
+        urgency_level=urgency,
+        sort_by=sort_by,
+        sort_direction=sort_direction,
     )
 
 
@@ -181,6 +225,108 @@ async def list_workbench_eligible_cases(
     user=Depends(require_permissions("review.execute")),
 ) -> list[EligibleCaseRead]:
     return await workbench_service_for(session).eligible_cases(q, limit)
+
+
+@router.post(
+    "/workbench/external-cases",
+    response_model=ExternalReviewCaseCreatedRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_external_review_case(
+    payload: ExternalReviewCaseCreate,
+    session: DbSession,
+    user=Depends(require_permissions("review.execute")),
+) -> ExternalReviewCaseCreatedRead:
+    return await workbench_service_for(session).create_external_case(
+        payload,
+        user.user_id,
+    )
+
+
+@router.post(
+    "/workbench/cases/{review_id}/external-documents",
+    response_model=WorkbenchDocumentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_external_review_document(
+    review_id: UUID,
+    session: DbSession,
+    storage: Storage,
+    category: Annotated[DocumentCategory, Form()],
+    file: Annotated[UploadFile, File()],
+    document_group_id: Annotated[UUID | None, Form()] = None,
+    user=Depends(require_permissions("review.execute")),
+) -> WorkbenchDocumentRead:
+    return await workbench_service_for(session).upload_external_document(
+        review_id,
+        category,
+        file,
+        user,
+        storage,
+        document_group_id,
+    )
+
+
+@router.post(
+    "/workbench/cases/{review_id}/external-documents/{document_id}/extract",
+    response_model=ExtractionResponse,
+)
+async def extract_external_review_document(
+    review_id: UUID,
+    document_id: UUID,
+    session: DbSession,
+    storage: Storage,
+    user=Depends(require_permissions("review.execute")),
+) -> ExtractionResponse:
+    record, candidates = await workbench_service_for(session).start_external_document_extraction(
+        review_id,
+        document_id,
+        user,
+        storage,
+    )
+    return workbench_extraction_response(record, candidates)
+
+
+@router.get(
+    "/workbench/cases/{review_id}/external-documents/{document_id}/extraction",
+    response_model=ExtractionResponse,
+)
+async def get_external_review_document_extraction(
+    review_id: UUID,
+    document_id: UUID,
+    session: DbSession,
+    storage: Storage,
+    user=Depends(require_permissions("review.execute")),
+) -> ExtractionResponse:
+    record, candidates = await workbench_service_for(session).get_external_document_extraction(
+        review_id,
+        document_id,
+        user,
+        storage,
+    )
+    return workbench_extraction_response(record, candidates)
+
+
+@router.post(
+    "/workbench/cases/{review_id}/external-documents/{document_id}/extraction/confirm",
+    response_model=ExtractionResponse,
+)
+async def confirm_external_review_document_extraction(
+    review_id: UUID,
+    document_id: UUID,
+    payload: ExtractionConfirmRequest,
+    session: DbSession,
+    storage: Storage,
+    user=Depends(require_permissions("review.execute")),
+) -> ExtractionResponse:
+    record, candidates = await workbench_service_for(session).confirm_external_document_extraction(
+        review_id,
+        document_id,
+        payload,
+        user,
+        storage,
+    )
+    return workbench_extraction_response(record, candidates)
 
 
 @router.get(

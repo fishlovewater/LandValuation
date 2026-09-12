@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  VALUATION_CASE_TYPE,
   valuationCaseTypeLabel,
   valuationLandUseLabel,
 } from '../../src/modules/valuation/valuation.labels'
 
 describe('valuation labels', () => {
   it('translates stored case type codes without altering readable values', () => {
+    expect(VALUATION_CASE_TYPE).toBe('LAND')
     expect(valuationCaseTypeLabel('LAND')).toBe('土地徵收補償市價查估')
     expect(valuationCaseTypeLabel('LAND_ACQUISITION')).toBe('土地徵收補償市價查估')
     expect(valuationCaseTypeLabel('土地徵收補償市價查估')).toBe('土地徵收補償市價查估')

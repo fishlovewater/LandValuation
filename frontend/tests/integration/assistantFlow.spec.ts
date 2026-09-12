@@ -7,10 +7,8 @@ import { http, tokenService } from '../../src/api/http'
 import { createAppRouter } from '../../src/router'
 import type { AuthUser } from '../../src/modules/auth/auth.types'
 import { useAuthStore } from '../../src/stores/auth.store'
-import {
-  buildAssistantContextPayload,
-  sanitizeAssistantContext,
-} from '../../src/modules/assistant/assistant.mappers'
+import AnswerMessage from '../../src/modules/assistant/components/AnswerMessage.vue'
+import { mapAssistantQuestion } from '../../src/modules/assistant/assistant.mappers'
 
 const ids = {
   case: '11111111-1111-4111-8111-111111111111',
@@ -19,6 +17,10 @@ const ids = {
   secondSession: '88888888-8888-4888-8888-888888888888',
   document: '44444444-4444-4444-8444-444444444444',
   chunk: '55555555-5555-4555-8555-555555555555',
+  generalConversation: '99999999-9999-4999-8999-999999999999',
+  caseConversation: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  reviewConversation: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  review: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
 }
 
 const assistantUser: AuthUser = {
@@ -76,6 +78,7 @@ const supportedQuestionDto = (sessionId = ids.session) => ({
   assistant_session_id: sessionId,
   answer_status: 'SUPPORTED',
   answer: '本案應以正式來源核對適用條件。',
+  answer_route: 'KNOWLEDGE',
   generation_mode: 'MOCK',
   next_action: 'REVIEW_SOURCE',
   clarification_question: null,
@@ -84,6 +87,39 @@ const supportedQuestionDto = (sessionId = ids.session) => ({
     citation_ids: [ids.chunk],
   }],
   citations: [citationDto()],
+  unreadable_sources: [],
+})
+
+const knowledgeConversationDto = (
+  conversationId: string,
+  context: {
+    case_id?: string | null
+    review_id?: string | null
+    finding_id?: string | null
+    workspace?: string | null
+  } = {},
+) => ({
+  conversation_id: conversationId,
+  case_id: context.case_id ?? null,
+  review_id: context.review_id ?? null,
+  finding_id: context.finding_id ?? null,
+  workspace: context.workspace ?? null,
+  title: context.case_id ? '案件對話' : '一般對話',
+  provider: 'mock',
+  model_id: 'mock-assistant-router-v1',
+  status: 'ACTIVE',
+  created_at: '2026-09-12T04:00:00Z',
+  updated_at: '2026-09-12T04:00:00Z',
+})
+
+const caseConversationAnswerDto = () => ({
+  answer_status: 'SUPPORTED',
+  answer: '目前案件資料已依授權範圍讀取。',
+  answer_route: 'CASE',
+  generation_mode: 'STRUCTURED_CASE_DATA',
+  next_action: 'CONTINUE_CONVERSATION',
+  clarification_question: null,
+  citations: [],
   unreadable_sources: [],
 })
 
@@ -118,6 +154,9 @@ describe('cited assistant demo flow', () => {
       if (config.method === 'get' && config.url === `/ai-assistant/sessions/${ids.session}`) {
         return response(sessionDto(), config)
       }
+      if (config.method === 'get' && config.url === `/ai-assistant/sessions/${ids.session}/messages`) {
+        return response([], config)
+      }
       if (config.method === 'post' && config.url === `/ai-assistant/sessions/${ids.session}/questions`) {
         return response(supportedQuestionDto(), config)
       }
@@ -125,33 +164,22 @@ describe('cited assistant demo flow', () => {
     }) as unknown as typeof originalAdapter
 
     const router = createAppRouter(createMemoryHistory())
-    await router.push(`/app/assistant?caseId=${ids.case}&formId=${ids.form}`)
+    await router.push(`/app/assistant/sessions/${ids.session}?caseId=${ids.case}&formId=${ids.form}`)
     const wrapper = mount(AppLayout, { attachTo: document.body, global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('請輸入問題'))
 
     const assistantContext = wrapper.get('[data-testid="assistant-context"]')
-    expect(assistantContext.text()).toContain('案件模式')
+    expect(assistantContext.text()).toContain('已連結目前案件')
     expect(assistantContext.text()).toContain('目前案件資料已載入')
     expect(assistantContext.text()).toContain('必要資料已齊，可進行後續估價作業')
     expect(assistantContext.text()).not.toContain('READY_TO_SUBMIT')
-    const modeGuide = wrapper.get('[data-testid="assistant-mode-guide"]')
-    expect(modeGuide.text()).toContain('案件模式')
-    expect(modeGuide.text()).toContain('知識模式')
-    expect(modeGuide.text()).toContain('回答會附上可核對來源')
-    expect(wrapper.get('[data-testid="assistant-return-case"]').attributes('href')).toContain(`/app/valuation/cases/${ids.case}/prepare`)
+    expect(wrapper.find('[data-testid="assistant-mode-guide"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('案件模式')
+    expect(wrapper.text()).not.toContain('知識模式')
+    expect(wrapper.get('[data-testid="assistant-return-case"]').attributes('href')).toContain(`/app/valuation/cases/${ids.case}`)
     expect(wrapper.get('[data-testid="assistant-suggestion-0"]').text()).toContain('目前這筆案件')
 
-    expect(requests[0]).toMatchObject({
-      method: 'post',
-      url: '/ai-assistant/sessions',
-      data: {
-        case_id: ids.case,
-        form_instance_id: ids.form,
-        selected_form_type: 'F03',
-      },
-    })
-    expect(requests[0]?.data).not.toHaveProperty('route_name')
-    expect(requests[0]?.data).not.toHaveProperty('case_summary')
+    expect(requests.some((request) => request.method === 'post' && request.url === '/ai-assistant/sessions')).toBe(false)
 
     await wrapper.get('[data-testid="assistant-question"]').setValue('請說明目前狀態')
     await wrapper.get('[data-testid="assistant-submit"]').trigger('click')
@@ -180,6 +208,7 @@ describe('cited assistant demo flow', () => {
     http.defaults.adapter = vi.fn(async (config) => {
       if (config.method === 'post' && config.url === '/ai-assistant/sessions') return response(sessionDto(), config, 201)
       if (config.method === 'get' && config.url === `/ai-assistant/sessions/${ids.session}`) return response(sessionDto(), config)
+      if (config.method === 'get' && config.url === `/ai-assistant/sessions/${ids.session}/messages`) return response([], config)
       if (config.method === 'post' && config.url === `/ai-assistant/sessions/${ids.session}/questions`) {
         return response({
           ...supportedQuestionDto(),
@@ -193,7 +222,7 @@ describe('cited assistant demo flow', () => {
     }) as unknown as typeof originalAdapter
 
     const router = createAppRouter(createMemoryHistory())
-    await router.push(`/app/assistant?caseId=${ids.case}&formId=${ids.form}`)
+    await router.push(`/app/assistant/sessions/${ids.session}?caseId=${ids.case}&formId=${ids.form}`)
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('請輸入問題'))
     await wrapper.get('[data-testid="assistant-question"]').setValue('請確認來源')
@@ -211,6 +240,7 @@ describe('cited assistant demo flow', () => {
     http.defaults.adapter = vi.fn(async (config) => {
       if (config.method === 'post' && config.url === '/ai-assistant/sessions') return response(sessionDto(), config, 201)
       if (config.method === 'get' && config.url === `/ai-assistant/sessions/${ids.session}`) return response(sessionDto(), config)
+      if (config.method === 'get' && config.url === `/ai-assistant/sessions/${ids.session}/messages`) return response([], config)
       if (config.method === 'post' && config.url === `/ai-assistant/sessions/${ids.session}/questions`) {
         return response({
           ...supportedQuestionDto(),
@@ -224,7 +254,7 @@ describe('cited assistant demo flow', () => {
     }) as unknown as typeof originalAdapter
 
     const router = createAppRouter(createMemoryHistory())
-    await router.push(`/app/assistant?caseId=${ids.case}&formId=${ids.form}`)
+    await router.push(`/app/assistant/sessions/${ids.session}?caseId=${ids.case}&formId=${ids.form}`)
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('請輸入問題'))
     await wrapper.get('[data-testid="assistant-question"]').setValue('請確認主張')
@@ -236,7 +266,7 @@ describe('cited assistant demo flow', () => {
     wrapper.unmount()
   })
 
-  it('does not expose the cited composer without knowledge.read and case.read', async () => {
+  it('keeps chat and case questions available without knowledge.read while leaving RAG authorization to the backend route', async () => {
     useAuthStore().user = {
       ...assistantUser,
       permissions: ['assistant.use', 'valuation.read'],
@@ -246,36 +276,187 @@ describe('cited assistant demo flow', () => {
       requests.push(`${config.method} ${config.url}`)
       if (config.method === 'post' && config.url === '/ai-assistant/sessions') return response(sessionDto(), config, 201)
       if (config.method === 'get' && config.url === `/ai-assistant/sessions/${ids.session}`) return response(sessionDto(), config)
+      if (config.method === 'get' && config.url === `/ai-assistant/sessions/${ids.session}/messages`) return response([], config)
+      if (config.method === 'post' && config.url === `/ai-assistant/sessions/${ids.session}/questions`) {
+        return response({
+          assistant_session_id: ids.session,
+          answer_status: 'SUPPORTED',
+          answer: '你好。一般對話不需要查詢知識庫。',
+          answer_route: 'CHAT',
+          generation_mode: 'CHAT',
+          next_action: 'CONTINUE_CONVERSATION',
+          clarification_question: null,
+          claims: [],
+          citations: [],
+          unreadable_sources: [],
+        }, config)
+      }
       throw new Error(`Unexpected request ${config.method} ${config.url}`)
     }) as unknown as typeof originalAdapter
 
     const router = createAppRouter(createMemoryHistory())
-    await router.push(`/app/assistant?caseId=${ids.case}&formId=${ids.form}`)
+    await router.push(`/app/assistant/sessions/${ids.session}?caseId=${ids.case}&formId=${ids.form}`)
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('請輸入問題'))
 
-    expect(wrapper.get('[data-testid="assistant-question"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.get('[data-testid="assistant-permission-required"]').text()).toContain('目前帳號沒有查看案件資料與來源文件的權限')
-    expect(requests.some((request) => request.endsWith('/questions'))).toBe(false)
+    expect(wrapper.get('[data-testid="assistant-question"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="assistant-permission-required"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="assistant-question"]').setValue('你好')
+    await wrapper.get('[data-testid="assistant-submit"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('一般對話不需要查詢知識庫'))
+    expect(requests.some((request) => request.endsWith('/questions'))).toBe(true)
     wrapper.unmount()
   })
 
-  it('drops unsupported and unauthorized context fields before transport', () => {
-    const context = sanitizeAssistantContext({
-      caseId: ids.case,
-      parcelId: 'parcel-must-not-leak',
-      formId: ids.form,
-      findingId: 'finding-must-not-leak',
-      routeName: 'review-workbench',
-    }, ['caseId', 'formId'])
-    expect(buildAssistantContextPayload(context)).toEqual({
+  it('uses a persistent case conversation without creating a legacy assistant session', async () => {
+    useAuthStore().user = assistantUser
+    const requests: Array<{ method?: string; url?: string; data?: Record<string, unknown> }> = []
+    const generalConversation = knowledgeConversationDto(ids.generalConversation)
+    const caseConversation = knowledgeConversationDto(ids.caseConversation, {
       case_id: ids.case,
-      form_instance_id: ids.form,
-      selected_form_type: 'F03',
+      workspace: 'valuation',
     })
-    expect(JSON.stringify(buildAssistantContextPayload(context))).not.toContain('parcel-must-not-leak')
-    expect(JSON.stringify(buildAssistantContextPayload(context))).not.toContain('finding-must-not-leak')
-    expect(JSON.stringify(buildAssistantContextPayload(context))).not.toContain('review-workbench')
+    http.defaults.adapter = vi.fn(async (config) => {
+      const data = config.data ? JSON.parse(String(config.data)) as Record<string, unknown> : undefined
+      requests.push({ method: config.method, url: config.url, data })
+      if (config.method === 'get' && config.url === '/knowledge/conversations') {
+        return response([generalConversation, caseConversation], config)
+      }
+      if (config.method === 'get' && config.url === `/knowledge/conversations/${ids.caseConversation}/messages`) {
+        return response([], config)
+      }
+      if (config.method === 'post' && config.url === `/knowledge/conversations/${ids.caseConversation}/messages`) {
+        return response(caseConversationAnswerDto(), config)
+      }
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/assistant?caseId=${ids.case}&workspace=valuation`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain('請輸入問題'))
+
+    expect(wrapper.text()).toContain('已連結目前案件')
+    expect(requests.some((request) => request.url === '/ai-assistant/sessions')).toBe(false)
+    expect(wrapper.find('[data-testid="assistant-workflow-actions"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="assistant-question"]').setValue('目前案件狀態如何？')
+    await wrapper.get('[data-testid="assistant-submit"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.text()).toContain('目前案件資料已依授權範圍讀取。'))
+
+    expect(requests.find((request) => request.url === `/knowledge/conversations/${ids.caseConversation}/messages` && request.method === 'post')).toMatchObject({
+      data: {
+        question: '目前案件狀態如何？',
+        case_id: ids.case,
+        review_id: null,
+        finding_id: null,
+        workspace: 'valuation',
+      },
+    })
+    wrapper.unmount()
+  })
+
+  it('creates a new exact-context conversation instead of reusing another context for the same case', async () => {
+    useAuthStore().user = assistantUser
+    const requests: Array<{ method?: string; url?: string; data?: Record<string, unknown> }> = []
+    const reviewConversation = knowledgeConversationDto(ids.reviewConversation, {
+      case_id: ids.case,
+      review_id: ids.review,
+      workspace: 'review',
+    })
+    const createdConversation = knowledgeConversationDto(ids.caseConversation, {
+      case_id: ids.case,
+      workspace: 'valuation',
+    })
+    let created = false
+    http.defaults.adapter = vi.fn(async (config) => {
+      const data = config.data ? JSON.parse(String(config.data)) as Record<string, unknown> : undefined
+      requests.push({ method: config.method, url: config.url, data })
+      if (config.method === 'get' && config.url === '/knowledge/conversations') {
+        return response(created ? [createdConversation, reviewConversation] : [reviewConversation], config)
+      }
+      if (config.method === 'post' && config.url === '/knowledge/conversations') {
+        created = true
+        return response(createdConversation, config, 201)
+      }
+      if (config.method === 'get' && config.url === `/knowledge/conversations/${ids.caseConversation}/messages`) {
+        return response([], config)
+      }
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/assistant?caseId=${ids.case}&workspace=valuation`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(router.currentRoute.value.query.conversationId).toBe(ids.caseConversation))
+
+    const createRequests = requests.filter((request) => request.method === 'post' && request.url === '/knowledge/conversations')
+    expect(createRequests).toHaveLength(1)
+    expect(createRequests[0]?.data).toEqual({
+      case_id: ids.case,
+      review_id: null,
+      finding_id: null,
+      workspace: 'valuation',
+    })
+    expect(requests.some((request) => request.url === '/ai-assistant/sessions')).toBe(false)
+    expect(wrapper.text()).toContain('已連結目前案件')
+    wrapper.unmount()
+  })
+
+  it('renders routed chat answers without inventing citations while keeping RAG fail-closed', () => {
+    const direct = mapAssistantQuestion({
+      assistant_session_id: ids.session,
+      answer_status: 'SUPPORTED',
+      answer: '你好，可以直接輸入問題。',
+      answer_route: 'CHAT',
+      generation_mode: 'CHAT',
+      next_action: 'CONTINUE_CONVERSATION',
+      clarification_question: null,
+      claims: [],
+      citations: [],
+      unreadable_sources: [],
+    })
+    expect(direct).toMatchObject({
+      supported: true,
+      answerRoute: 'CHAT',
+      text: '你好，可以直接輸入問題。',
+      citations: [],
+    })
+    const chatAnswer = mount(AnswerMessage, { props: { answer: direct } })
+    expect(chatAnswer.find('[data-testid="assistant-case-source"]').exists()).toBe(false)
+    chatAnswer.unmount()
+
+    const caseAnswer = mapAssistantQuestion({
+      assistant_session_id: ids.session,
+      answer_status: 'SUPPORTED',
+      answer: '案件目前狀態為估價作業中。',
+      answer_route: 'CASE',
+      generation_mode: 'STRUCTURED_CASE_DATA',
+      next_action: 'REVIEW_CASE',
+      clarification_question: null,
+      claims: [],
+      citations: [],
+      unreadable_sources: [],
+    })
+    const caseMessage = mount(AnswerMessage, { props: { answer: caseAnswer } })
+    expect(caseMessage.get('[data-testid="assistant-case-source"]').text()).toContain('目前案件中已授權的結構化資料')
+    expect(caseMessage.find('[data-testid^="assistant-citation-"]').exists()).toBe(false)
+    caseMessage.unmount()
+
+    const uncitedKnowledge = mapAssistantQuestion({
+      assistant_session_id: ids.session,
+      answer_status: 'SUPPORTED',
+      answer: '這段正式知識回答沒有來源，不應直接顯示。',
+      answer_route: 'KNOWLEDGE',
+      generation_mode: 'RAG',
+      next_action: 'REVIEW_SOURCE',
+      clarification_question: null,
+      claims: [],
+      citations: [],
+      unreadable_sources: [],
+    })
+    expect(uncitedKnowledge.supported).toBe(false)
+    expect(uncitedKnowledge.answerRoute).toBe('KNOWLEDGE')
+    expect(uncitedKnowledge.text).toContain('目前沒有足夠的可讀適用來源')
   })
 
   it('clears submitting state on session change, ignores stale answers, and permits the new session', async () => {
@@ -335,6 +516,7 @@ describe('cited assistant demo flow', () => {
     http.defaults.adapter = vi.fn((config) => {
       if (config.method === 'post' && config.url === '/ai-assistant/sessions') return Promise.resolve(response(sessionDto(), config, 201))
       if (config.method === 'get' && config.url === `/ai-assistant/sessions/${ids.session}`) return Promise.resolve(response(sessionDto(), config))
+      if (config.method === 'get' && config.url === `/ai-assistant/sessions/${ids.session}/messages`) return Promise.resolve(response([], config))
       if (config.method === 'post' && config.url === `/ai-assistant/sessions/${ids.session}/questions`) {
         return new Promise((resolve) => { resolveQuestion = resolve })
       }
@@ -342,7 +524,7 @@ describe('cited assistant demo flow', () => {
     }) as unknown as typeof originalAdapter
 
     const router = createAppRouter(createMemoryHistory())
-    await router.push(`/app/assistant?caseId=${ids.case}&formId=${ids.form}`)
+    await router.push(`/app/assistant/sessions/${ids.session}?caseId=${ids.case}&formId=${ids.form}`)
     const wrapper = mount(AppLayout, { attachTo: document.body, global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('請輸入問題'))
 
@@ -375,6 +557,7 @@ describe('cited assistant demo flow', () => {
       requests.push({ url: config.url, data })
       if (config.method === 'post' && config.url === '/ai-assistant/sessions') return response(sessionDto(), config, 201)
       if (config.method === 'get' && config.url === `/ai-assistant/sessions/${ids.session}`) return response(sessionDto(), config)
+      if (config.method === 'get' && config.url === `/ai-assistant/sessions/${ids.session}/messages`) return response([], config)
       if (config.method === 'post' && config.url === `/ai-assistant/sessions/${ids.session}/messages`) {
         const toolName = data?.run_calculation
           ? 'run_calculation'
@@ -413,7 +596,7 @@ describe('cited assistant demo flow', () => {
     }) as unknown as typeof originalAdapter
 
     const router = createAppRouter(createMemoryHistory())
-    await router.push(`/app/assistant?caseId=${ids.case}&formId=${ids.form}`)
+    await router.push(`/app/assistant/sessions/${ids.session}?caseId=${ids.case}&formId=${ids.form}`)
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('請輸入問題'))
 
@@ -456,12 +639,13 @@ describe('cited assistant demo flow', () => {
       requests.push(`${config.method} ${config.url}`)
       if (config.method === 'post' && config.url === '/ai-assistant/sessions') return response(sessionDto(), config, 201)
       if (config.method === 'get' && config.url === `/ai-assistant/sessions/${ids.session}`) return response(sessionDto(), config)
+      if (config.method === 'get' && config.url === `/ai-assistant/sessions/${ids.session}/messages`) return response([], config)
       if (config.method === 'post' && config.url === `/ai-assistant/sessions/${ids.session}/questions`) return response(supportedQuestionDto(), config)
       throw new Error(`Unexpected request ${config.method} ${config.url}`)
     }) as unknown as typeof originalAdapter
 
     const router = createAppRouter(createMemoryHistory())
-    await router.push(`/app/assistant?caseId=${ids.case}&formId=${ids.form}`)
+    await router.push(`/app/assistant/sessions/${ids.session}?caseId=${ids.case}&formId=${ids.form}`)
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('請輸入問題'))
 
@@ -470,7 +654,7 @@ describe('cited assistant demo flow', () => {
     await wrapper.get('[data-testid="assistant-question"]').setValue('請說明來源')
     await wrapper.get('[data-testid="assistant-submit"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.text()).toContain('本案應以正式來源核對適用條件'))
-    expect(requests.some((request) => request.endsWith('/messages'))).toBe(false)
+    expect(requests.some((request) => request.startsWith('post ') && request.endsWith('/messages'))).toBe(false)
     expect(requests.some((request) => request.endsWith('/questions'))).toBe(true)
     wrapper.unmount()
   })
@@ -480,12 +664,13 @@ describe('cited assistant demo flow', () => {
     http.defaults.adapter = vi.fn(async (config) => {
       if (config.method === 'post' && config.url === '/ai-assistant/sessions') return response(sessionDto(), config, 201)
       if (config.method === 'get' && config.url === `/ai-assistant/sessions/${ids.session}`) return response(sessionDto(), config)
+      if (config.method === 'get' && config.url === `/ai-assistant/sessions/${ids.session}/messages`) return response([], config)
       if (config.method === 'post' && config.url === `/ai-assistant/sessions/${ids.session}/questions`) return response(supportedQuestionDto(), config)
       throw new Error(`Unexpected request ${config.method} ${config.url}`)
     }) as unknown as typeof originalAdapter
 
     const router = createAppRouter(createMemoryHistory())
-    await router.push(`/app/assistant?caseId=${ids.case}&formId=${ids.form}`)
+    await router.push(`/app/assistant/sessions/${ids.session}?caseId=${ids.case}&formId=${ids.form}`)
     const wrapper = mount(AppLayout, { attachTo: document.body, global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('請輸入問題'))
 

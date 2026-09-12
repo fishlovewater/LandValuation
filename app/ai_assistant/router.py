@@ -30,8 +30,6 @@ AssistantQuestionUser = Annotated[
         require_permissions(
             "assistant.use",
             "valuation.read",
-            "knowledge.read",
-            "case.read",
         )
     ),
 ]

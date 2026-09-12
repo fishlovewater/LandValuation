@@ -43,7 +43,7 @@ class ValuationRepository:
         offset: int,
         limit: int,
     ) -> list[CaseRecord]:
-        statement = select(CaseRecord)
+        statement = select(CaseRecord).where(CaseRecord.case_type != "EXTERNAL_REVIEW")
         if owner_id is not None:
             statement = statement.where(CaseRecord.created_by_user_id == owner_id)
         if case_status is not None:

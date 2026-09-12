@@ -8,10 +8,12 @@ from app.core.exceptions import AppError, PermissionDeniedError
 from app.valuation.models import CaseRecord, FormInstanceRecord
 from app.valuation.schemas import (
     CaseStatus,
+    CaseWorkspaceUpdate,
     FormCode,
     FormCreate,
     FormDraftUpdate,
     FormStatus,
+    ValuationWorkspaceStage,
 )
 from app.valuation.service import ValuationService
 
@@ -154,6 +156,77 @@ async def test_archive_case_locks_case_row_before_changing_status() -> None:
 
     assert repository.case_reads == [(record.case_id, True)]
     assert record.case_status == CaseStatus.ARCHIVED.value
+
+
+@pytest.mark.asyncio
+async def test_case_workspace_requires_basic_info_confirmation_before_workflow() -> None:
+    user = user_with_role()
+    record = case_record(user.user_id, CaseStatus.PROCESSING.value)
+    repository = FakeRepository(record)
+    service = ValuationService(None, repository=repository)
+
+    with pytest.raises(AppError) as raised:
+        await service.update_case_workspace(
+            record.case_id,
+            CaseWorkspaceUpdate(last_workspace_stage=ValuationWorkspaceStage.DOCUMENTS),
+            user,
+        )
+
+    assert raised.value.code == "CASE_BASIC_INFO_NOT_CONFIRMED"
+    assert raised.value.status_code == 409
+    assert record.basic_info_confirmed_at is None
+
+
+@pytest.mark.asyncio
+async def test_case_workspace_confirmation_records_user_and_first_stage() -> None:
+    user = user_with_role()
+    record = case_record(user.user_id, CaseStatus.PROCESSING.value)
+    repository = FakeRepository(record)
+    service = ValuationService(None, repository=repository)
+
+    updated = await service.update_case_workspace(
+        record.case_id,
+        CaseWorkspaceUpdate(
+            confirm_basic_info=True,
+            last_workspace_stage=ValuationWorkspaceStage.DOCUMENTS,
+        ),
+        user,
+    )
+
+    assert updated.basic_info_confirmed_at is not None
+    assert updated.basic_info_confirmed_by_user_id == user.user_id
+    assert updated.last_workspace_stage == ValuationWorkspaceStage.DOCUMENTS.value
+    assert updated.updated_by_user_id == user.user_id
+    assert repository.case_reads == [(record.case_id, True)]
+
+
+@pytest.mark.asyncio
+async def test_case_workspace_stage_update_preserves_original_confirmation() -> None:
+    user = user_with_role()
+    record = case_record(user.user_id, CaseStatus.PROCESSING.value)
+    repository = FakeRepository(record)
+    service = ValuationService(None, repository=repository)
+
+    first = await service.update_case_workspace(
+        record.case_id,
+        CaseWorkspaceUpdate(
+            confirm_basic_info=True,
+            last_workspace_stage=ValuationWorkspaceStage.DOCUMENTS,
+        ),
+        user,
+    )
+    confirmed_at = first.basic_info_confirmed_at
+    confirmed_by = first.basic_info_confirmed_by_user_id
+
+    updated = await service.update_case_workspace(
+        record.case_id,
+        CaseWorkspaceUpdate(last_workspace_stage=ValuationWorkspaceStage.AI_REVIEW),
+        user,
+    )
+
+    assert updated.basic_info_confirmed_at == confirmed_at
+    assert updated.basic_info_confirmed_by_user_id == confirmed_by
+    assert updated.last_workspace_stage == ValuationWorkspaceStage.AI_REVIEW.value
 
 
 @pytest.mark.asyncio

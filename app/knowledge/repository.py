@@ -64,17 +64,49 @@ class KnowledgeRepository:
         provider: str,
         model_id: str | None,
         title: str = "新對話",
+        case_id: UUID | None = None,
+        review_id: UUID | None = None,
+        finding_id: UUID | None = None,
+        workspace: str | None = None,
     ) -> KnowledgeConversationRecord:
         record = KnowledgeConversationRecord(
             user_id=user_id,
             title=title,
             provider=provider,
             model_id=model_id,
+            case_id=case_id,
+            review_id=review_id,
+            finding_id=finding_id,
+            workspace=workspace,
         )
         self.session.add(record)
         await self.session.flush()
         await self.session.refresh(record)
         return record
+
+    async def update_conversation_context(
+        self,
+        conversation: KnowledgeConversationRecord,
+        *,
+        case_id: UUID | None,
+        review_id: UUID | None,
+        finding_id: UUID | None,
+        workspace: str | None,
+    ) -> None:
+        changed = False
+        for field, value in (
+            ("case_id", case_id),
+            ("review_id", review_id),
+            ("finding_id", finding_id),
+            ("workspace", workspace),
+        ):
+            if getattr(conversation, field) != value:
+                setattr(conversation, field, value)
+                changed = True
+        if not changed:
+            return
+        conversation.updated_at = datetime.now(UTC)
+        await self.session.flush()
 
     async def get_conversation(
         self, conversation_id: UUID, user_id: UUID

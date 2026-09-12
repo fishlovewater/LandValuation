@@ -1,20 +1,3 @@
-export interface AssistantContext {
-  caseId?: string
-  parcelId?: string
-  formId?: string
-  findingId?: string
-  routeName: string
-}
-
-export type AssistantContextField = keyof AssistantContext
-
-/** The only create-session fields accepted by the verified AI Assistant API. */
-export interface AssistantSessionCreateDto {
-  case_id: string
-  form_instance_id: string
-  selected_form_type: 'F03'
-}
-
 export interface AssistantSessionResponseDto {
   assistant_session_id: string
   case_id: string
@@ -107,9 +90,20 @@ export interface AssistantMessageResponseDto {
 
 export interface AssistantQuestionRequestDto {
   question: string
+  case_id?: string | null
+  review_id?: string | null
+  finding_id?: string | null
+  workspace?: string | null
   as_of_date?: string | null
   document_types?: string[]
   limit?: number
+}
+
+export interface AssistantConversationContextDto {
+  case_id?: string | null
+  review_id?: string | null
+  finding_id?: string | null
+  workspace?: string | null
 }
 
 export type AssistantAnswerStatus =
@@ -118,6 +112,8 @@ export type AssistantAnswerStatus =
   | 'CLARIFICATION_REQUIRED'
   | 'NO_RELEVANT_SOURCE'
   | 'CASE_CONTEXT_NOT_AVAILABLE'
+
+export type AssistantAnswerRoute = 'CHAT' | 'CASE' | 'KNOWLEDGE' | 'HYBRID'
 
 export interface AssistantClaimResponseDto {
   text: string
@@ -135,6 +131,7 @@ export interface AssistantQuestionResponseDto {
   assistant_session_id: string
   answer_status: AssistantAnswerStatus
   answer: string
+  answer_route?: AssistantAnswerRoute
   generation_mode: string
   next_action: string
   clarification_question?: string | null
@@ -164,6 +161,7 @@ export interface KnowledgeQuestionCitationResponseDto {
 export interface KnowledgeQuestionResponseDto {
   answer_status: AssistantAnswerStatus
   answer: string
+  answer_route?: AssistantAnswerRoute
   generation_mode: string
   next_action: string
   model_id?: string | null
@@ -174,6 +172,10 @@ export interface KnowledgeQuestionResponseDto {
 
 export interface KnowledgeConversationDto {
   conversation_id: string
+  case_id: string | null
+  review_id: string | null
+  finding_id: string | null
+  workspace: string | null
   title: string
   provider: string
   model_id: string | null
@@ -237,6 +239,7 @@ export interface AssistantClaimModel {
 export interface AssistantAnswerModel {
   answerStatus: AssistantAnswerStatus
   text: string
+  answerRoute: AssistantAnswerRoute
   generationMode: string
   nextAction: string
   clarificationQuestion: string | null

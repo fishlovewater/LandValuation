@@ -157,6 +157,7 @@ class ValidationRunRead(BaseModel):
     error_code: str | None
     error_message: str | None
     submission_id: UUID | None = None
+    external_input_snapshot_id: UUID | None = None
 
 
 class FindingRead(BaseModel):

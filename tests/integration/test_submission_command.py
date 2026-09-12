@@ -10,6 +10,7 @@ from sqlalchemy.engine import make_url
 
 from app.db.session import AsyncSessionFactory
 from app.core.exceptions import AppError
+from app.history.repository import HistoryRepository
 from app.review.correction_repository import CorrectionRepository
 from app.review.correction_service import CorrectionService
 from app.review.repository import ReviewRepository
@@ -1055,6 +1056,20 @@ async def test_real_sessions_submit_same_request_once(
 
     assert submission_count == 1
     assert event_count == 1
+
+    async with AsyncSessionFactory() as session:
+        history_review = await HistoryRepository(session).review_data(case_id)
+    platform_snapshot = next(
+        item
+        for item in history_review["input_snapshots"]
+        if item["submission_id"] == first.submission_id
+    )
+    assert platform_snapshot["source"] == "PLATFORM"
+    assert platform_snapshot["document_count"] == 1
+    assert platform_snapshot["primary_document_name"] == "submission-report.pdf"
+    assert platform_snapshot["primary_document_version"] == 1
+    assert platform_snapshot["primary_document_checksum"] == "a" * 64
+    assert "submission-report.pdf · v1" in platform_snapshot["document_versions"]
 
 
 @pytest.mark.asyncio

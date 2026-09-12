@@ -33,6 +33,8 @@ from app.review.reports import (
     ReportCorrectionRequest,
     ReportDecision,
     ReportHistoryEvent,
+    ReportInputDocument,
+    ReportInputProvenance,
     ReportRiskSummary,
     ReportRun,
     ReportUrgency,
@@ -41,6 +43,12 @@ from app.review.reports import (
 )
 from app.review.urgency import classify_urgency
 from app.review.schemas import FindingRead
+from app.review.status_policy import (
+    REVIEW_MUTABLE_STATUSES,
+    REVIEW_SUPPLEMENT_REQUEST_STATUSES,
+    REVIEW_TRIAGE_STATUSES,
+    ensure_review_status_allowed,
+)
 from app.review.rule_selection import (
     RuleCandidate,
     rule_versions_are_handoff_compatible,
@@ -56,12 +64,14 @@ from app.review.trusted_inputs import (
 )
 from app.valuation.submissions.snapshot import (
     SNAPSHOT_SCHEMA_VERSION,
+    normalize_snapshot_value,
     snapshot_fingerprint,
 )
 
 
 _MISSING_FINGERPRINT = object()
 _EXECUTION_CONTEXT_SCHEMA_VERSION = "valuation-review-execution-v1"
+_EXTERNAL_REVIEW_INPUT_SCHEMA_VERSION = "external-review-input-v1"
 
 
 def _first_present(*values):
@@ -150,12 +160,24 @@ class ReviewService:
         return review
 
     async def assign(self, review_id, reviewer_id):
+        review = await self.get(review_id)
+        ensure_review_status_allowed(
+            review.review_status,
+            REVIEW_MUTABLE_STATUSES,
+            action="變更審查人員",
+        )
         try:
             return await self.repository.assign(review_id, reviewer_id)
         except LookupError as exc:
             raise ResourceNotFoundError("審查案件") from exc
 
     async def set_priority(self, review_id, priority, reason, actor_id):
+        review = await self.get(review_id)
+        ensure_review_status_allowed(
+            review.review_status,
+            REVIEW_MUTABLE_STATUSES,
+            action="調整案件優先順序",
+        )
         try:
             return await self.repository.set_priority(
                 review_id, priority, reason, actor_id
@@ -1023,7 +1045,12 @@ class ReviewService:
         return await self.repository.list_missing_items(review_id)
 
     async def request_supplement(self, review_id, due_at):
-        await self.get(review_id)
+        review = await self.get(review_id)
+        ensure_review_status_allowed(
+            review.review_status,
+            REVIEW_SUPPLEMENT_REQUEST_STATUSES,
+            action="要求補件",
+        )
         if due_at <= datetime.now(due_at.tzinfo):
             raise AppError("INVALID_DUE_AT", "補件期限必須晚於目前時間", 422)
         return await self.repository.request_supplement(review_id, due_at)
@@ -1339,6 +1366,43 @@ class ReviewService:
             snapshots.append(ReviewService._field_snapshot(field))
         return snapshots
 
+    async def _freeze_external_review_input(
+        self,
+        review,
+        actor_id: UUID,
+        run_input_snapshot: dict,
+    ):
+        """Persist the external evidence package used by the next Review run."""
+        if review.latest_submission_id is not None:
+            return None
+        case = await self.repository.get_case(review.case_id)
+        if case is None or getattr(case, "case_type", None) != "EXTERNAL_REVIEW":
+            return None
+
+        documents = await self.repository.list_external_snapshot_documents(
+            review.case_id
+        )
+        fields = await self.repository.list_external_snapshot_fields(review.case_id)
+        snapshot = normalize_snapshot_value(
+            {
+                "schema_version": _EXTERNAL_REVIEW_INPUT_SCHEMA_VERSION,
+                "review_id": review.review_id,
+                "case_id": review.case_id,
+                "documents": documents,
+                "resolved_fields": fields,
+                "run_input": run_input_snapshot,
+            }
+        )
+        fingerprint = snapshot_fingerprint(snapshot)
+        return await self.repository.create_external_input_snapshot(
+            review_id=review.review_id,
+            case_id=review.case_id,
+            actor_id=actor_id,
+            snapshot_schema_version=_EXTERNAL_REVIEW_INPUT_SCHEMA_VERSION,
+            input_snapshot=snapshot,
+            input_fingerprint=fingerprint,
+        )
+
     async def create_run(
         self, review_id, actor_id, supersedes_by_rule_id=None, locked_review=None
     ):
@@ -1357,6 +1421,11 @@ class ReviewService:
             # the existing canonical live-data fallback.
             case = await self.repository.get_case_report_data(review.case_id)
         input_snapshot = self._input_snapshot(review, case, context)
+        external_snapshot = await self._freeze_external_review_input(
+            review,
+            actor_id,
+            input_snapshot,
+        )
 
         review.review_status = ensure_transition(review.review_status, "ANALYZING")
         run = await self.repository.create_run(
@@ -1365,6 +1434,11 @@ class ReviewService:
             UUID(str(context.rule_version["rule_version_id"])),
             input_snapshot,
             submission_id=review.latest_submission_id,
+            external_input_snapshot_id=(
+                None
+                if external_snapshot is None
+                else external_snapshot.external_input_snapshot_id
+            ),
         )
         findings = []
         for prepared_rule in context.prepared_rules:
@@ -1814,6 +1888,7 @@ class ReviewService:
                 "舊檢核批次缺少不可變的報表脈絡",
                 409,
             )
+        input_provenance = await self._report_input_provenance(run, review)
         corrections = CorrectionRepository(self.repository.session)
         run_document = run.input_snapshot.get("document")
         run_document_id = (
@@ -1823,6 +1898,34 @@ class ReviewService:
         )
         report_requests = []
         history = []
+        if input_provenance.frozen_at is not None:
+            source_label = {
+                "PLATFORM": "平台送審",
+                "EXTERNAL": "外部審查輸入",
+                "LEGACY": "舊版檢核輸入",
+            }[input_provenance.source]
+            version_label = (
+                f" v{input_provenance.version_no}"
+                if input_provenance.version_no is not None
+                else ""
+            )
+            history.append(
+                ReportHistoryEvent(
+                    event_type="REVIEW_INPUT_FROZEN",
+                    occurred_at=input_provenance.frozen_at,
+                    actor_id=None,
+                    reason=f"{source_label}{version_label}",
+                )
+            )
+        if run.completed_at is not None:
+            history.append(
+                ReportHistoryEvent(
+                    event_type="VALIDATION_RUN_COMPLETED",
+                    occurred_at=run.completed_at,
+                    actor_id=run.triggered_by_user_id,
+                    reason=f"檢核批次 #{run.run_no}",
+                )
+            )
         for request in await corrections.list_requests(review.review_id):
             belongs_to_run = request.based_on_validation_run_id == validation_run_id
             if request.response_document_id is not None and run_document_id is not None:
@@ -1948,5 +2051,138 @@ class ReviewService:
             ),
             correction_requests=report_requests,
             history=sorted(history, key=lambda item: item.occurred_at),
+            input_provenance=input_provenance,
         )
         return build_review_report(data)
+
+    async def _report_input_provenance(self, run, review) -> ReportInputProvenance:
+        """Project the immutable input pointer for one historical Review run."""
+
+        if run.submission_id is not None:
+            row = await self.repository.get_submission_provenance_by_id(
+                run.submission_id,
+                review_id=review.review_id,
+                case_id=review.case_id,
+            )
+            if row is None:
+                raise AppError(
+                    "HISTORICAL_RUN_CONTEXT_UNAVAILABLE",
+                    "檢核批次找不到對應的平台送審版本",
+                    409,
+                )
+            documents = self._report_input_documents(
+                row.get("input_snapshot"),
+                missing_message="平台送審版本缺少文件版本資訊",
+                incomplete_message="平台送審版本的文件資訊不完整",
+            )
+            source_report_document_id = row.get("source_report_document_id")
+            if source_report_document_id is not None and not any(
+                document.document_id == source_report_document_id
+                for document in documents
+            ):
+                raise AppError(
+                    "HISTORICAL_RUN_CONTEXT_UNAVAILABLE",
+                    "平台送審版本未包含本次送審的完整估價報告",
+                    409,
+                )
+            return ReportInputProvenance(
+                source="PLATFORM",
+                version_no=row["submission_no"],
+                frozen_at=row["submitted_at"],
+                fingerprint=row["input_fingerprint"],
+                schema_version=SNAPSHOT_SCHEMA_VERSION,
+                submission_id=row["submission_id"],
+                documents=documents,
+            )
+
+        if run.external_input_snapshot_id is not None:
+            row = await self.repository.get_external_input_snapshot_provenance_by_id(
+                run.external_input_snapshot_id,
+                review_id=review.review_id,
+                case_id=review.case_id,
+            )
+            if row is None:
+                raise AppError(
+                    "HISTORICAL_RUN_CONTEXT_UNAVAILABLE",
+                    "檢核批次找不到對應的外部審查輸入版本",
+                    409,
+                )
+            documents = self._report_input_documents(
+                row.get("input_snapshot"),
+                missing_message="外部審查輸入版本缺少文件版本資訊",
+                incomplete_message="外部審查輸入版本的文件資訊不完整",
+            )
+            return ReportInputProvenance(
+                source="EXTERNAL",
+                version_no=row["snapshot_no"],
+                frozen_at=row["created_at"],
+                fingerprint=row["input_fingerprint"],
+                schema_version=row["snapshot_schema_version"],
+                external_input_snapshot_id=row["external_input_snapshot_id"],
+                documents=documents,
+            )
+
+        # Backward compatibility for Review runs created before immutable
+        # Submission/External Snapshot pointers existed. Their run snapshot is
+        # still exposed as legacy provenance instead of being mistaken for a
+        # modern platform or external snapshot.
+        document = run.input_snapshot.get("document")
+        documents = []
+        if isinstance(document, dict) and all(
+            document.get(key) is not None
+            for key in ("document_id", "version_no", "checksum_sha256")
+        ):
+            documents.append(
+                ReportInputDocument(
+                    document_id=document["document_id"],
+                    document_group_id=document.get("document_group_id"),
+                    document_type="original",
+                    version_no=document["version_no"],
+                    checksum_sha256=document["checksum_sha256"],
+                )
+            )
+        return ReportInputProvenance(
+            source="LEGACY",
+            version_no=run.run_no,
+            frozen_at=run.started_at,
+            documents=documents,
+        )
+
+    @staticmethod
+    def _report_input_documents(
+        snapshot,
+        *,
+        missing_message: str,
+        incomplete_message: str,
+    ) -> "list[ReportInputDocument]":
+        """Project only immutable, user-safe document provenance from a snapshot."""
+
+        raw_documents = snapshot.get("documents") if isinstance(snapshot, dict) else None
+        if not isinstance(raw_documents, list) or not raw_documents:
+            raise AppError(
+                "HISTORICAL_RUN_CONTEXT_UNAVAILABLE",
+                missing_message,
+                409,
+            )
+        documents: list[ReportInputDocument] = []
+        try:
+            for document in raw_documents:
+                if not isinstance(document, dict):
+                    raise ValueError
+                documents.append(
+                    ReportInputDocument(
+                        document_id=document["document_id"],
+                        document_group_id=document.get("document_group_id"),
+                        document_type=document["document_type"],
+                        version_no=document["version_no"],
+                        checksum_sha256=document["checksum_sha256"],
+                        original_filename=document.get("original_filename"),
+                    )
+                )
+        except (KeyError, TypeError, ValueError):
+            raise AppError(
+                "HISTORICAL_RUN_CONTEXT_UNAVAILABLE",
+                incomplete_message,
+                409,
+            )
+        return documents

@@ -4,6 +4,8 @@ from uuid import uuid4
 from app.review.reports import (
     ReportCase,
     ReportDecision,
+    ReportInputDocument,
+    ReportInputProvenance,
     ReportRiskSummary,
     ReportRun,
     ReviewReportInput,
@@ -13,6 +15,7 @@ from app.review.reports import (
 
 def report_input():
     finding_id = uuid4()
+    document_id = uuid4()
     return ReviewReportInput(
         case=ReportCase(
             case_id=uuid4(),
@@ -85,6 +88,24 @@ def report_input():
                 after_value={"reported_rate": "-7.00"},
             )
         ],
+        input_provenance=ReportInputProvenance(
+            source="EXTERNAL",
+            version_no=2,
+            frozen_at=datetime(2026, 9, 12, 8, 0, tzinfo=UTC),
+            fingerprint="a" * 64,
+            schema_version="external-review-input-v1",
+            external_input_snapshot_id=uuid4(),
+            documents=[
+                ReportInputDocument(
+                    document_id=document_id,
+                    document_group_id=uuid4(),
+                    document_type="original",
+                    version_no=2,
+                    checksum_sha256="b" * 64,
+                    original_filename="external-report-v2.pdf",
+                )
+            ],
+        ),
     )
 
 
@@ -100,6 +121,10 @@ def test_report_keeps_machine_ai_and_human_records_separate():
     assert report.findings[0].ai_assessment.reasoning_summary
     assert report.findings[0].decisions[0].reason == "現勘資料支持部分調整"
     assert report.risk_summary.high_count == 1
+    assert report.input_provenance is not None
+    assert report.input_provenance.source == "EXTERNAL"
+    assert report.input_provenance.version_no == 2
+    assert report.input_provenance.documents[0].original_filename == "external-report-v2.pdf"
 
 
 def test_report_does_not_expose_storage_endpoints_or_hidden_reasoning():
@@ -108,3 +133,4 @@ def test_report_does_not_expose_storage_endpoints_or_hidden_reasoning():
     assert "localhost" not in serialized
     assert "presigned" not in serialized
     assert "chain_of_thought" not in serialized
+    assert "object_key" not in serialized

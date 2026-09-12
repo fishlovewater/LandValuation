@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,7 @@ from app.valuation.repository import ValuationRepository
 from app.valuation.requirements import FORM_REQUIREMENTS
 from app.valuation.schemas import (
     CaseCreate,
+    CaseWorkspaceUpdate,
     CaseStatus,
     CaseUpdate,
     FormCode,
@@ -119,6 +121,30 @@ class ValuationService:
         record = await self._owned_editable_case(case_id, user)
         for field, value in payload.model_dump(exclude_unset=True).items():
             setattr(record, field, value)
+        record.updated_by_user_id = user.user_id
+        return await self.repository.save_case(record)
+
+    async def update_case_workspace(
+        self, case_id: UUID, payload: CaseWorkspaceUpdate, user: User
+    ) -> CaseRecord:
+        record = await self._owned_editable_case(case_id, user)
+        if payload.confirm_basic_info and record.basic_info_confirmed_at is None:
+            record.basic_info_confirmed_at = datetime.now(UTC)
+            record.basic_info_confirmed_by_user_id = user.user_id
+
+        if payload.last_workspace_stage is not None:
+            if (
+                payload.last_workspace_stage.value != "case"
+                and record.basic_info_confirmed_at is None
+                and not payload.confirm_basic_info
+            ):
+                raise AppError(
+                    "CASE_BASIC_INFO_NOT_CONFIRMED",
+                    "請先確認案件基本資料後再進入估價流程。",
+                    409,
+                )
+            record.last_workspace_stage = payload.last_workspace_stage.value
+
         record.updated_by_user_id = user.user_id
         return await self.repository.save_case(record)
 

@@ -376,13 +376,14 @@ async def seed() -> None:
                      "snapshot": '{"demo":true,"method":"comparison","unit_price":88000}'})
                 await session.execute(text("""INSERT INTO review.reviews
                     (review_id,case_id,review_type,review_status,received_at,started_at,completed_at)
-                    VALUES (:id,:case_id,'SMART_REVIEW','COMPLETED',
+                    VALUES (:id,:case_id,'SMART_REVIEW','REVIEW_COMPLETED',
                     TIMESTAMPTZ '2026-08-19 09:00:00+08',
                     TIMESTAMPTZ '2026-08-20 10:00:00+08',
                     TIMESTAMPTZ '2026-08-20 12:00:00+08'),
-                    (:both_id,:both_case,'MANUAL_REVIEW','RUNNING',
+                    (:both_id,:both_case,'MANUAL_REVIEW','REVIEW_COMPLETED',
                     TIMESTAMPTZ '2026-08-20 09:00:00+08',
-                    TIMESTAMPTZ '2026-08-21 10:00:00+08',NULL)"""),
+                    TIMESTAMPTZ '2026-08-21 10:00:00+08',
+                    TIMESTAMPTZ '2026-08-21 12:00:00+08')"""),
                     {"id": REVIEW_ID, "case_id": REVIEW_CASE_ID,
                      "both_id": BOTH_REVIEW_ID, "both_case": BOTH_CASE_ID})
                 await session.execute(text("""INSERT INTO review.risk_summaries

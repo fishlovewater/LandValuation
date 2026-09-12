@@ -200,6 +200,8 @@ function mapReview(data: Record<string, unknown> | null | undefined): HistoryRev
   if (!data) return null
   return {
     reviews: rows(data, 'reviews'),
+    validationRuns: rows(data, 'validation_runs'),
+    inputSnapshots: rows(data, 'input_snapshots'),
     findings: rows(data, 'findings'),
     riskSummaries: rows(data, 'risk_summaries'),
     decisions: rows(data, 'decisions'),
@@ -345,6 +347,31 @@ export function mapHistoryTimeline(dto: HistoryCaseDetailDto): HistoryTimelineEv
     title: '審查完成',
     idKey: 'review_id',
     description: () => '審查流程已完成。',
+  })
+  addRowEvent(events, rows(review, 'input_snapshots'), {
+    module: 'review',
+    sourceType: 'review_input_snapshot',
+    dateKeys: ['frozen_at'],
+    title: '審查輸入版本凍結',
+    idKey: 'external_input_snapshot_id',
+    description: (row) => {
+      const source = normalized(row.source)
+      const sourceLabel = source === 'PLATFORM' ? '平台送審' : source === 'EXTERNAL' ? '外部案件' : '審查輸入'
+      const version = stringValue(row.input_version)
+      return `${sourceLabel}${version ? ` v${version}` : ''} 已凍結作為檢核依據。`
+    },
+  })
+  addRowEvent(events, rows(review, 'validation_runs'), {
+    module: 'review',
+    sourceType: 'review_validation_run',
+    dateKeys: ['completed_at', 'started_at'],
+    title: '審查檢核完成',
+    idKey: 'validation_run_id',
+    description: (row) => {
+      const runNo = stringValue(row.run_no)
+      const status = stringValue(row.run_status)
+      return `檢核批次${runNo ? ` #${runNo}` : ''}${status ? `，狀態：${statusLabel(status)}` : ''}`
+    },
   })
   addRowEvent(events, rows(review, 'findings'), {
     module: 'review',

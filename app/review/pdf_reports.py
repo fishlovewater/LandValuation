@@ -24,6 +24,21 @@ def build_review_pdf(report: ReviewReport) -> bytes:
     line("Review Report", "Helvetica-Bold", 16)
     line(f"Case {report.case.case_no}")
     line(f"Run {report.run.run_no}")
+    if report.input_provenance is not None:
+        provenance = report.input_provenance
+        line(f"Input source {provenance.source}")
+        if provenance.version_no is not None:
+            line(f"Input version v{provenance.version_no}")
+        if provenance.frozen_at is not None:
+            line(f"Input frozen {provenance.frozen_at.isoformat()}")
+        if provenance.fingerprint:
+            line(f"Input fingerprint {provenance.fingerprint}")
+        for document in provenance.documents:
+            label = document.original_filename or str(document.document_id)
+            line(
+                f"Input document {label} | {document.document_type} | "
+                f"v{document.version_no} | {document.checksum_sha256}"
+            )
     line(f"Risk {report.risk_summary.overall_risk_level}")
     line(
         "Counts HIGH={high} MEDIUM={medium} LOW={low} MISSING={missing}".format(

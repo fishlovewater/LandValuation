@@ -19,6 +19,7 @@ def test_docx_contains_required_sections(report_fixture):  # noqa: F811
     text = "\n".join(paragraph.text for paragraph in document.paragraphs)
     for heading in [
         "案件基本資料",
+        "審查輸入版本",
         "風險與期限",
         "疑點與證據",
         "修正要求",
@@ -27,6 +28,15 @@ def test_docx_contains_required_sections(report_fixture):  # noqa: F811
     ]:
         assert heading in text
     assert "審查人員另訂正式值" not in text
+
+
+def test_docx_contains_review_input_provenance(report_fixture):  # noqa: F811
+    document = Document(BytesIO(build_review_docx(report_fixture)))
+    text = _all_text(document)
+    assert "外部案件" in text
+    assert "external-report-v2.pdf" in text
+    assert "SHA-256" in text
+    assert "a" * 64 in text
 
 
 def test_docx_labels_ai_output_and_keeps_sources(report_fixture):  # noqa: F811

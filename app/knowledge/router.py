@@ -4,10 +4,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends
 
+from app.ai_assistant.chat_service import answer_general_chat, answer_structured_case_chat
+from app.ai_assistant.routing import AssistantAnswerRoute, route_assistant_question
 from app.auth.dependencies import CurrentUser, DbSession, require_permissions
 from app.auth.models import User
+from app.auth.service import permission_codes
 from app.core.config import get_settings
-from app.core.exceptions import AppError, ResourceNotFoundError, StorageError
+from app.core.exceptions import AppError, PermissionDeniedError, ResourceNotFoundError, StorageError
 from app.knowledge.answer_service import (
     _retrieval_candidates,
     answer_knowledge_question,
@@ -34,6 +37,11 @@ from app.storage.service import StorageService
 router = APIRouter()
 
 KnowledgeReader = Annotated[User, Depends(require_permissions("knowledge.read"))]
+AssistantConversationUser = Annotated[User, Depends(require_permissions("assistant.use"))]
+
+_ASSISTANT_WORKSPACES = frozenset({"valuation", "review"})
+
+
 def get_storage_service() -> StorageService:
     return StorageService(get_minio_client())
 
@@ -100,6 +108,10 @@ async def ask(
 def _conversation_response(record) -> KnowledgeConversationResponse:
     return KnowledgeConversationResponse(
         conversation_id=record.conversation_id,
+        case_id=record.case_id,
+        review_id=record.review_id,
+        finding_id=record.finding_id,
+        workspace=record.workspace,
         title=record.title,
         provider=record.provider,
         model_id=record.model_id,
@@ -107,6 +119,71 @@ def _conversation_response(record) -> KnowledgeConversationResponse:
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
+
+
+def _require_knowledge_access(user: User) -> None:
+    if "knowledge.read" not in permission_codes(user):
+        raise PermissionDeniedError("沒有查看法規知識的權限")
+
+
+def _normalize_workspace(workspace: str | None) -> str | None:
+    normalized = (workspace or "").strip().lower() or None
+    if normalized is not None and normalized not in _ASSISTANT_WORKSPACES:
+        raise AppError(
+            "ASSISTANT_CONTEXT_INVALID",
+            "AI 助手工作區僅支援估價或審查情境。",
+            422,
+        )
+    return normalized
+
+
+def _assert_conversation_context_matches(record, payload: KnowledgeSearchRequest) -> None:
+    for field in ("case_id", "review_id", "finding_id"):
+        requested = getattr(payload, field)
+        if requested is not None and requested != getattr(record, field):
+            raise AppError(
+                "ASSISTANT_CONTEXT_CONFLICT",
+                "目前對話綁定的案件情境與這次要求不一致，請開啟新的對話。",
+                409,
+            )
+    requested_workspace = _normalize_workspace(payload.workspace)
+    if requested_workspace is not None and requested_workspace != _normalize_workspace(record.workspace):
+        raise AppError(
+            "ASSISTANT_CONTEXT_CONFLICT",
+            "目前對話綁定的工作區與這次要求不一致，請開啟新的對話。",
+            409,
+        )
+
+
+def _validate_case_subcontext(
+    context: CaseAssistantContextResponse,
+    *,
+    review_id: UUID | None,
+    finding_id: UUID | None,
+) -> None:
+    if review_id is None and finding_id is None:
+        return
+    if not context.review_access:
+        raise PermissionDeniedError("目前帳號沒有查看審查資料的權限")
+    review = context.latest_review
+    if review is None:
+        raise ResourceNotFoundError("審查資料")
+    if review_id is not None and review.review_id != review_id:
+        raise ResourceNotFoundError("審查案件")
+    if finding_id is not None and all(item.finding_id != finding_id for item in review.findings):
+        raise ResourceNotFoundError("審查疑點")
+
+
+def _previous_answer_route(records) -> AssistantAnswerRoute | None:
+    for record in reversed(records):
+        if record.role != "ASSISTANT" or not isinstance(record.response_payload, dict):
+            continue
+        raw = record.response_payload.get("answer_route")
+        try:
+            return AssistantAnswerRoute(raw)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _conversation_message_response(record) -> KnowledgeConversationMessageResponse:
@@ -127,8 +204,21 @@ def _conversation_message_response(record) -> KnowledgeConversationMessageRespon
 async def create_conversation(
     payload: KnowledgeConversationCreate,
     session: DbSession,
-    user: KnowledgeReader,
+    user: AssistantConversationUser,
 ) -> KnowledgeConversationResponse:
+    if (payload.review_id is not None or payload.finding_id is not None) and payload.case_id is None:
+        raise AppError(
+            "ASSISTANT_CONTEXT_INVALID",
+            "審查或疑點情境必須同時包含案件識別資料。",
+            422,
+        )
+    if payload.case_id is not None:
+        context = await load_authorized_case_context(session, user, payload.case_id)
+        _validate_case_subcontext(
+            context,
+            review_id=payload.review_id,
+            finding_id=payload.finding_id,
+        )
     settings = get_settings()
     provider_name = settings.knowledge_answer_provider.lower()
     model_id = None
@@ -139,6 +229,10 @@ async def create_conversation(
         provider=provider_name,
         model_id=model_id,
         title=(payload.title or "新對話").strip() or "新對話",
+        case_id=payload.case_id,
+        review_id=payload.review_id,
+        finding_id=payload.finding_id,
+        workspace=_normalize_workspace(payload.workspace),
     )
     return _conversation_response(record)
 
@@ -146,7 +240,7 @@ async def create_conversation(
 @router.get("/conversations", response_model=list[KnowledgeConversationResponse])
 async def list_conversations(
     session: DbSession,
-    user: KnowledgeReader,
+    user: AssistantConversationUser,
 ) -> list[KnowledgeConversationResponse]:
     records = await KnowledgeRepository(session).list_conversations(user.user_id)
     return [_conversation_response(record) for record in records]
@@ -159,12 +253,12 @@ async def list_conversations(
 async def conversation_messages(
     conversation_id: UUID,
     session: DbSession,
-    user: KnowledgeReader,
+    user: AssistantConversationUser,
 ) -> list[KnowledgeConversationMessageResponse]:
     repository = KnowledgeRepository(session)
     conversation = await repository.get_conversation(conversation_id, user.user_id)
     if conversation is None:
-        raise ResourceNotFoundError("知識助理對話")
+        raise ResourceNotFoundError("AI 助手對話")
     records = await repository.list_conversation_messages(conversation_id)
     return [_conversation_message_response(record) for record in records]
 
@@ -177,19 +271,34 @@ async def ask_conversation(
     conversation_id: UUID,
     payload: KnowledgeSearchRequest,
     session: DbSession,
-    user: KnowledgeReader,
+    user: AssistantConversationUser,
     storage: KnowledgeStorage,
 ) -> KnowledgeAnswerResponse:
-    if payload.case_id is not None:
-        raise AppError(
-            "KNOWLEDGE_CONVERSATION_CASE_NOT_ALLOWED",
-            "知識模式不接受案件篩選；請改用案件助手查詢目前案件。",
-            422,
-        )
     repository = KnowledgeRepository(session)
     conversation = await repository.get_conversation(conversation_id, user.user_id)
     if conversation is None:
-        raise ResourceNotFoundError("知識助理對話")
+        raise ResourceNotFoundError("AI 助手對話")
+
+    _assert_conversation_context_matches(conversation, payload)
+    case_id = conversation.case_id
+    review_id = conversation.review_id
+    finding_id = conversation.finding_id
+    workspace = _normalize_workspace(conversation.workspace)
+    if (review_id is not None or finding_id is not None) and case_id is None:
+        raise AppError(
+            "ASSISTANT_CONTEXT_INVALID",
+            "審查或疑點情境必須同時包含案件識別資料。",
+            422,
+        )
+
+    case_context = None
+    if case_id is not None:
+        case_context = await load_authorized_case_context(session, user, case_id)
+        _validate_case_subcontext(
+            case_context,
+            review_id=review_id,
+            finding_id=finding_id,
+        )
     existing = await repository.list_conversation_messages(conversation_id, limit=20)
     history = [
         {
@@ -205,13 +314,102 @@ async def ask_conversation(
         content=payload.question,
     )
     await repository.rename_conversation_if_new(conversation, payload.question)
-    result = await answer_knowledge_question(
-        session=session,
-        storage=storage,
-        user=user,
-        request=payload,
-        conversation_history=history,
+    route = route_assistant_question(
+        payload.question,
+        has_case_context=case_id is not None,
+        previous_route=_previous_answer_route(existing),
     )
+    if route == AssistantAnswerRoute.CHAT:
+        answer, model_id = await answer_general_chat(
+            payload.question,
+            conversation_history=history,
+        )
+        result = KnowledgeAnswerResponse(
+            answer_status="SUPPORTED",
+            answer=answer,
+            answer_route=route.value,
+            generation_mode="CHAT",
+            next_action="CONTINUE_CONVERSATION",
+            model_id=model_id,
+        )
+    elif route == AssistantAnswerRoute.CASE:
+        if case_context is None:
+            raise AppError(
+                "CASE_CONTEXT_NOT_AVAILABLE",
+                "目前頁面沒有可供查詢的案件資料。",
+                422,
+            )
+        answer, model_id = await answer_structured_case_chat(
+            payload.question,
+            case_context=case_context.model_dump(mode="json"),
+            review_id=str(review_id) if review_id else None,
+            finding_id=str(finding_id) if finding_id else None,
+            conversation_history=history,
+        )
+        result = KnowledgeAnswerResponse(
+            answer_status="SUPPORTED",
+            answer=answer,
+            answer_route=route.value,
+            generation_mode="STRUCTURED_CASE_DATA",
+            next_action="CONTINUE_CONVERSATION",
+            model_id=model_id,
+            case_context=case_context,
+        )
+    elif route == AssistantAnswerRoute.KNOWLEDGE:
+        _require_knowledge_access(user)
+        result = (
+            await answer_knowledge_question(
+                session=session,
+                storage=storage,
+                user=user,
+                request=payload.model_copy(
+                    update={
+                        "case_id": None,
+                        "review_id": None,
+                        "finding_id": None,
+                    }
+                ),
+                conversation_history=history,
+            )
+        ).model_copy(update={"answer_route": route.value})
+    else:
+        _require_knowledge_access(user)
+        if case_context is None:
+            raise AppError(
+                "CASE_CONTEXT_NOT_AVAILABLE",
+                "目前頁面沒有可供查詢的案件資料。",
+                422,
+            )
+        case_answer, case_model_id = await answer_structured_case_chat(
+            payload.question,
+            case_context=case_context.model_dump(mode="json"),
+            review_id=str(review_id) if review_id else None,
+            finding_id=str(finding_id) if finding_id else None,
+            conversation_history=history,
+        )
+        knowledge_result = await answer_knowledge_question(
+            session=session,
+            storage=storage,
+            user=user,
+            request=payload.model_copy(update={"case_id": case_id}),
+            conversation_history=history,
+        )
+        if knowledge_result.answer_status.value == "SUPPORTED":
+            result = knowledge_result.model_copy(
+                update={
+                    "answer": f"{case_answer}\n\n{knowledge_result.answer}",
+                    "answer_route": route.value,
+                    "case_context": case_context,
+                    "model_id": knowledge_result.model_id or case_model_id,
+                }
+            )
+        else:
+            result = knowledge_result.model_copy(
+                update={
+                    "answer_route": route.value,
+                    "case_context": case_context,
+                }
+            )
     await repository.add_conversation_message(
         conversation,
         role="ASSISTANT",

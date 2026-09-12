@@ -129,6 +129,47 @@ class CorrectionRepository:
         ).mappings().one_or_none()
         return dict(row) if row else None
 
+    async def external_resubmission_extraction_state(
+        self,
+        case_id: UUID,
+        document_id: UUID,
+    ) -> dict | None:
+        """Return the latest extraction state used to gate an external return.
+
+        External correction documents are mutable intake until OCR/text extraction
+        has completed and every candidate from that latest extraction has been
+        explicitly confirmed/applied or rejected.  Registration as the formal
+        correction return is therefore a server-side state transition, not merely
+        a UI convention.
+        """
+        row = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT de.extraction_id,
+                           de.extraction_status,
+                           count(ef.extracted_field_id) FILTER (
+                             WHERE ef.field_status IS NULL
+                                OR ef.field_status NOT IN ('APPLIED', 'CONFIRMED', 'REJECTED')
+                           ) AS pending_candidate_count
+                    FROM (
+                        SELECT extraction_id, extraction_status
+                        FROM valuation.document_extractions
+                        WHERE case_id = :case_id
+                          AND document_id = :document_id
+                        ORDER BY created_at DESC, extraction_id DESC
+                        LIMIT 1
+                    ) de
+                    LEFT JOIN valuation.extracted_fields ef
+                      ON ef.extraction_id = de.extraction_id
+                    GROUP BY de.extraction_id, de.extraction_status
+                    """
+                ),
+                {"case_id": case_id, "document_id": document_id},
+            )
+        ).mappings().one_or_none()
+        return dict(row) if row else None
+
     async def get_urgency_settings(
         self, for_update: bool = False
     ) -> UrgencySettings | None:

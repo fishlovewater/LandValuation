@@ -650,6 +650,11 @@ describe('valuation demo flow', () => {
     expect(dashboardSummary.text()).toContain('1 件已設定作業期限')
     expect(dashboardSummary.text()).toContain('預設依作業期限由近到遠排列')
     expect(wrapper.get('[data-testid="valuation-case-list"]').text()).toContain('案件列表')
+    await wrapper.get('[data-testid="create-case"]').trigger('click')
+    const fixedCaseType = wrapper.get('[data-testid="create-case-type-fixed"]')
+    expect(fixedCaseType.text()).toContain('土地徵收補償市價查估')
+    expect(fixedCaseType.find('input').exists()).toBe(false)
+    await wrapper.get('.create-case-actions button').trigger('click')
     expect(wrapper.get(`[data-testid="case-open-${ids.case}"]`).exists()).toBe(true)
     await wrapper.get(`[data-testid="case-open-${ids.case}"]`).trigger('click')
     await vi.waitFor(

@@ -182,6 +182,8 @@ export interface HistoryValuationModel {
 
 export interface HistoryReviewModel {
   reviews: Record<string, unknown>[]
+  validationRuns: Record<string, unknown>[]
+  inputSnapshots: Record<string, unknown>[]
   findings: Record<string, unknown>[]
   riskSummaries: Record<string, unknown>[]
   decisions: Record<string, unknown>[]

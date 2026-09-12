@@ -1,8 +1,8 @@
 import { isAxiosError } from 'axios'
 import { ForbiddenError, http } from '../../api/http'
-import { buildAssistantContextPayload, isUsableAssistantContext, mapAssistantSession } from './assistant.mappers'
+import { mapAssistantSession } from './assistant.mappers'
 import type {
-  AssistantContext,
+  AssistantConversationContextDto,
   AssistantHistoryMessageDto,
   AssistantMessageResponseDto,
   AssistantMessageRequestDto,
@@ -36,7 +36,7 @@ export function canUseAssistant(permissions: readonly string[]): boolean {
   return permissions.includes('assistant.use')
 }
 
-export function canStartAssistantSession(permissions: readonly string[]): boolean {
+export function canAccessLegacyAssistantSession(permissions: readonly string[]): boolean {
   return hasPermissions(permissions, ['assistant.use', 'valuation.read'])
 }
 
@@ -44,13 +44,7 @@ export function canAskAssistantQuestion(permissions: readonly string[]): boolean
   return hasPermissions(permissions, [
     'assistant.use',
     'valuation.read',
-    'knowledge.read',
-    'case.read',
   ])
-}
-
-export function canAskGeneralAssistantQuestion(permissions: readonly string[]): boolean {
-  return hasPermissions(permissions, ['assistant.use', 'knowledge.read'])
 }
 
 export function canUpdateAssistantValuation(permissions: readonly string[]): boolean {
@@ -98,6 +92,7 @@ export function mapKnowledgeQuestionResponse(data: KnowledgeQuestionResponseDto)
     assistant_session_id: '',
     answer_status: data.answer_status,
     answer: data.answer,
+    answer_route: data.answer_route ?? 'KNOWLEDGE',
     generation_mode: data.generation_mode,
     next_action: data.next_action,
     clarification_question: data.clarification_question,
@@ -108,16 +103,6 @@ export function mapKnowledgeQuestionResponse(data: KnowledgeQuestionResponseDto)
 }
 
 export const assistantApi = {
-  async createSession(context: AssistantContext, signal?: AbortSignal): Promise<AssistantSessionModel> {
-    if (!isUsableAssistantContext(context)) throw new AssistantContextError()
-    const response = await http.post<AssistantSessionResponseDto>(
-      '/ai-assistant/sessions',
-      buildAssistantContextPayload(context),
-      { signal },
-    )
-    return mapAssistantSession(response.data)
-  },
-
   async getSession(sessionId: string, signal?: AbortSignal): Promise<AssistantSessionModel> {
     const normalizedId = sessionId.trim()
     if (!normalizedId) throw new AssistantContextError()
@@ -190,8 +175,11 @@ export const assistantApi = {
     return response.data
   },
 
-  async createKnowledgeConversation(signal?: AbortSignal): Promise<KnowledgeConversationDto> {
-    const response = await http.post<KnowledgeConversationDto>('/knowledge/conversations', {}, { signal })
+  async createKnowledgeConversation(
+    context: AssistantConversationContextDto = {},
+    signal?: AbortSignal,
+  ): Promise<KnowledgeConversationDto> {
+    const response = await http.post<KnowledgeConversationDto>('/knowledge/conversations', context, { signal })
     return response.data
   },
 
@@ -224,6 +212,10 @@ export const assistantApi = {
     if (question.length < ASSISTANT_QUESTION_MIN_LENGTH) throw new AssistantQuestionValidationError()
     if (question.length > 2000) throw new Error('問題內容不可超過 2000 字。')
     const payload: AssistantQuestionRequestDto = { question }
+    if (request.case_id !== undefined) payload.case_id = request.case_id
+    if (request.review_id !== undefined) payload.review_id = request.review_id
+    if (request.finding_id !== undefined) payload.finding_id = request.finding_id
+    if (request.workspace !== undefined) payload.workspace = request.workspace
     if (request.as_of_date !== undefined) payload.as_of_date = request.as_of_date
     if (request.document_types !== undefined) payload.document_types = [...request.document_types]
     if (request.limit !== undefined) payload.limit = request.limit
@@ -268,6 +260,9 @@ export function safeAssistantErrorMessage(error: unknown): string {
     const code = responseErrorCode(error)
     if (code === 'ASSISTANT_SESSION_CLOSED') {
       return '目前的智能助理對話已結束，請重新開啟智能助理。'
+    }
+    if (code === 'ASSISTANT_CONTEXT_CONFLICT') {
+      return '目前對話綁定的案件情境與頁面不一致，請開啟新的對話。'
     }
     if (code === 'CASE_STATE_CONFLICT') {
       return '案件目前已進入不可修改狀態；仍可查詢案件或法規，但不能執行修改型操作。'

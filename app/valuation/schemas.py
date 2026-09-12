@@ -19,6 +19,15 @@ class CaseStatus(StrEnum):
     REVIEW_COMPLETED = "REVIEW_COMPLETED"
 
 
+class ValuationWorkspaceStage(StrEnum):
+    CASE = "case"
+    DOCUMENTS = "documents"
+    AI_REVIEW = "ai-review"
+    DATA = "data"
+    CALCULATION = "calculation"
+    REPORT = "report"
+
+
 class FormCode(StrEnum):
     F01 = "F01"
     F02 = "F02"
@@ -81,6 +90,17 @@ class CaseUpdate(RequestModel):
         return self
 
 
+class CaseWorkspaceUpdate(RequestModel):
+    confirm_basic_info: bool = False
+    last_workspace_stage: ValuationWorkspaceStage | None = None
+
+    @model_validator(mode="after")
+    def require_workspace_update(self):
+        if not self.confirm_basic_info and self.last_workspace_stage is None:
+            raise ValueError("至少需要確認案件資料或更新工作階段")
+        return self
+
+
 class CaseResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -95,6 +115,9 @@ class CaseResponse(BaseModel):
     district_code: str
     land_use_type: str | None
     case_status: CaseStatus
+    basic_info_confirmed_at: datetime | None = None
+    basic_info_confirmed_by_user_id: UUID | None = None
+    last_workspace_stage: ValuationWorkspaceStage = ValuationWorkspaceStage.CASE
     created_by_user_id: UUID | None
     updated_by_user_id: UUID | None
     created_at: datetime

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.review.completeness import CaseInputSnapshot, DocumentSnapshot, MissingRequirement
 from app.review.models import (
     Decision,
+    ExternalReviewInputSnapshot,
     Finding,
     MissingItem,
     Review,
@@ -107,19 +108,9 @@ class ReviewRepository:
                     ReviewSubmissionRecord.submitted_at,
                     ReviewSubmissionRecord.input_fingerprint,
                     ReviewSubmissionRecord.source_report_document_id,
-                    DocumentRecord.document_id,
-                    DocumentRecord.document_type,
-                    DocumentRecord.version_no,
-                    DocumentRecord.document_group_id,
-                    DocumentRecord.object_key,
-                    DocumentRecord.checksum_sha256,
+                    ReviewSubmissionRecord.input_snapshot,
                 )
-                .join(
-                    DocumentRecord,
-                    (DocumentRecord.document_id
-                     == ReviewSubmissionRecord.source_report_document_id)
-                    & (DocumentRecord.case_id == ReviewSubmissionRecord.case_id),
-                ).where(
+                .where(
                     ReviewSubmissionRecord.submission_id == submission_id,
                     ReviewSubmissionRecord.review_id == review_id,
                     ReviewSubmissionRecord.case_id == case_id,
@@ -155,6 +146,149 @@ class ReviewRepository:
             row["submission_id"]: dict(row)
             for row in rows
         }
+
+    async def list_external_snapshot_documents(self, case_id: UUID) -> list[dict]:
+        rows = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT document_id, document_group_id, document_type,
+                           original_filename, mime_type, checksum_sha256,
+                           version_no, uploaded_at
+                    FROM valuation.documents
+                    WHERE case_id = :case_id
+                      AND is_active = true
+                    ORDER BY document_type, document_group_id, version_no, document_id
+                    """
+                ),
+                {"case_id": case_id},
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+    async def list_external_snapshot_fields(self, case_id: UUID) -> list[dict]:
+        rows = (
+            await self.session.execute(
+                text(
+                    """
+                    SELECT ef.extracted_field_id, ef.document_id,
+                           d.document_group_id, d.version_no AS document_version,
+                           ef.form_code, ef.field_name, ef.extracted_value,
+                           ef.confirmed_value, ef.confidence, ef.source_page,
+                           ef.source_text, ef.field_status,
+                           ef.confirmed_by_user_id, ef.confirmed_at
+                    FROM valuation.documents d
+                    JOIN LATERAL (
+                        SELECT de.extraction_id
+                        FROM valuation.document_extractions de
+                        WHERE de.case_id = d.case_id
+                          AND de.document_id = d.document_id
+                          AND de.extraction_status = 'COMPLETED'
+                        ORDER BY de.completed_at DESC NULLS LAST,
+                                 de.created_at DESC,
+                                 de.extraction_id DESC
+                        LIMIT 1
+                    ) latest_extraction ON true
+                    JOIN valuation.extracted_fields ef
+                      ON ef.extraction_id = latest_extraction.extraction_id
+                    WHERE d.case_id = :case_id
+                      AND d.is_active = true
+                      AND ef.field_status IN ('APPLIED', 'CONFIRMED', 'REJECTED')
+                    ORDER BY d.document_type, d.document_group_id,
+                             d.version_no, ef.form_code, ef.field_name,
+                             ef.extracted_field_id
+                    """
+                ),
+                {"case_id": case_id},
+            )
+        ).mappings()
+        return [dict(row) for row in rows]
+
+    async def create_external_input_snapshot(
+        self,
+        *,
+        review_id: UUID,
+        case_id: UUID,
+        actor_id: UUID,
+        snapshot_schema_version: str,
+        input_snapshot: dict,
+        input_fingerprint: str,
+    ) -> ExternalReviewInputSnapshot:
+        snapshot_no = (
+            await self.session.scalar(
+                select(func.coalesce(func.max(ExternalReviewInputSnapshot.snapshot_no), 0)).where(
+                    ExternalReviewInputSnapshot.review_id == review_id
+                )
+            )
+        ) + 1
+        record = ExternalReviewInputSnapshot(
+            review_id=review_id,
+            case_id=case_id,
+            snapshot_no=snapshot_no,
+            snapshot_schema_version=snapshot_schema_version,
+            input_snapshot=input_snapshot,
+            input_fingerprint=input_fingerprint,
+            created_by_user_id=actor_id,
+        )
+        self.session.add(record)
+        await self.session.flush()
+        await self.session.refresh(record)
+        return record
+
+    async def get_external_input_snapshot_metadata_by_ids(
+        self,
+        snapshot_ids: set[UUID],
+        *,
+        review_id: UUID,
+        case_id: UUID,
+    ) -> dict[UUID, dict]:
+        if not snapshot_ids:
+            return {}
+        rows = (
+            await self.session.execute(
+                select(
+                    ExternalReviewInputSnapshot.external_input_snapshot_id,
+                    ExternalReviewInputSnapshot.snapshot_no,
+                    ExternalReviewInputSnapshot.snapshot_schema_version,
+                    ExternalReviewInputSnapshot.input_fingerprint,
+                    ExternalReviewInputSnapshot.created_at,
+                ).where(
+                    ExternalReviewInputSnapshot.external_input_snapshot_id.in_(snapshot_ids),
+                    ExternalReviewInputSnapshot.review_id == review_id,
+                    ExternalReviewInputSnapshot.case_id == case_id,
+                )
+            )
+        ).mappings()
+        return {
+            row["external_input_snapshot_id"]: dict(row)
+            for row in rows
+        }
+
+    async def get_external_input_snapshot_provenance_by_id(
+        self,
+        snapshot_id: UUID,
+        *,
+        review_id: UUID,
+        case_id: UUID,
+    ) -> dict | None:
+        """Load one external snapshot for server-side report provenance projection."""
+        row = (
+            await self.session.execute(
+                select(
+                    ExternalReviewInputSnapshot.external_input_snapshot_id,
+                    ExternalReviewInputSnapshot.snapshot_no,
+                    ExternalReviewInputSnapshot.snapshot_schema_version,
+                    ExternalReviewInputSnapshot.input_fingerprint,
+                    ExternalReviewInputSnapshot.input_snapshot,
+                    ExternalReviewInputSnapshot.created_at,
+                ).where(
+                    ExternalReviewInputSnapshot.external_input_snapshot_id == snapshot_id,
+                    ExternalReviewInputSnapshot.review_id == review_id,
+                    ExternalReviewInputSnapshot.case_id == case_id,
+                )
+            )
+        ).mappings().one_or_none()
+        return dict(row) if row else None
 
     async def list(self, query: ReviewListQuery) -> tuple[list[Review], int]:
         filters = []
@@ -514,6 +648,7 @@ class ReviewRepository:
         rule_version_id: UUID,
         input_snapshot: dict,
         submission_id: UUID | None = None,
+        external_input_snapshot_id: UUID | None = None,
     ) -> ValidationRun:
         run_no = (
             await self.session.scalar(
@@ -535,6 +670,7 @@ class ReviewRepository:
             },
             input_snapshot=input_snapshot,
             submission_id=submission_id,
+            external_input_snapshot_id=external_input_snapshot_id,
         )
         self.session.add(run)
         await self.session.flush()

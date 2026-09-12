@@ -11,8 +11,10 @@ import GlassModal from '../../../components/glass/GlassModal.vue'
 import { liquidGlass as vLiquidGlass } from '../../../directives/liquidGlass'
 import { useAuthStore } from '../../../stores/auth.store'
 import EvidenceViewer from '../components/EvidenceViewer.vue'
+import ExternalReviewIntake from '../components/ExternalReviewIntake.vue'
 import FindingPanel from '../components/FindingPanel.vue'
 import ReviewActionBar from '../components/ReviewActionBar.vue'
+import ReviewProgressBar from '../components/ReviewProgressBar.vue'
 import { reviewApi, safeReviewErrorMessage } from '../review.api'
 import {
   correctionStatusLabel,
@@ -23,6 +25,11 @@ import {
   missingItemStatusLabel,
   selectEvidenceDocument,
 } from '../review.mappers'
+import {
+  canMutateExternalReviewInput,
+  reviewInteractionCopy,
+  reviewInteractionMode,
+} from '../review.status'
 import type {
   FindingTriageDecision,
   GeneratedReportDto,
@@ -59,6 +66,11 @@ const reviewId = computed(() => {
 })
 const canDecide = computed(() => authStore.permissions.includes('review.decide'))
 const canExecute = computed(() => authStore.permissions.includes('review.execute'))
+const interactionMode = computed(() => reviewInteractionMode(detail.value?.reviewStatusCode ?? ''))
+const interactionCopy = computed(() => reviewInteractionCopy(detail.value?.reviewStatusCode ?? ''))
+const canMutateExternalInput = computed(() => Boolean(
+  detail.value && canMutateExternalReviewInput(detail.value.reviewStatusCode),
+))
 const selectedFinding = computed<ReviewFindingModel | null>(
   () => detail.value?.findings.find((finding) => finding.findingId === selectedFindingId.value) ?? null,
 )
@@ -90,6 +102,82 @@ const latestCorrection = computed(() => {
     null,
   )
 })
+const isPlatformCase = computed(() => detail.value?.caseSourceCode === 'PLATFORM')
+const correctionRecipientLabel = computed(() => isPlatformCase.value ? '估價端' : '外部廠商')
+const sourceSummary = computed(() => isPlatformCase.value
+  ? '本次審查依平台送審時凍結的案件資料與文件版本進行，後續編輯不會改變本次審查依據。'
+  : '本次審查以已匯入並確認的外部文件與案件資料版本進行。')
+const inputVersionLabel = computed(() => {
+  const current = detail.value
+  if (!current) return ''
+  if (current.caseSourceCode === 'PLATFORM') {
+    return current.submissionNo !== null
+      ? `第 ${current.submissionNo} 次送審 · 審查輸入已凍結`
+      : current.submissionId
+        ? '平台送審 · 審查輸入已凍結'
+        : ''
+  }
+  return latestRun.value?.externalInputSnapshotNo
+    ? `v${latestRun.value.externalInputSnapshotNo} 審查輸入已凍結`
+    : ''
+})
+const inputVersionFingerprint = computed(() => isPlatformCase.value
+  ? detail.value?.inputFingerprint ?? null
+  : latestRun.value?.externalInputFingerprint ?? null)
+const inputVersionFrozenAt = computed(() => isPlatformCase.value
+  ? detail.value?.submittedAt ?? null
+  : latestRun.value?.externalInputSnapshotCreatedAt ?? null)
+const workflowSteps = computed(() => {
+  const current = detail.value
+  if (!current) return []
+  const labels = current.caseSourceCode === 'PLATFORM'
+    ? [
+        ['received', '接收送審'],
+        ['confirm', '資料確認'],
+        ['validate', '智慧檢核'],
+        ['triage', '人工判定'],
+        ['recheck', '修正／重檢'],
+        ['complete', '審查完成'],
+      ]
+    : [
+        ['created', '建立案件'],
+        ['documents', '文件匯入'],
+        ['confirm', '欄位確認'],
+        ['validate', '智慧檢核'],
+        ['triage', '人工判定'],
+        ['recheck', '修正／重檢'],
+        ['complete', '審查完成'],
+      ]
+  const completeIndex = labels.length - 1
+  const recheckIndex = labels.findIndex(([key]) => key === 'recheck')
+  const triageIndex = labels.findIndex(([key]) => key === 'triage')
+  const validateIndex = labels.findIndex(([key]) => key === 'validate')
+  const confirmIndex = labels.findIndex(([key]) => key === 'confirm')
+  const documentsIndex = labels.findIndex(([key]) => key === 'documents')
+  const status = current.reviewStatusCode.toUpperCase()
+  const correctionActive = Boolean(latestCorrection.value && latestCorrection.value.status !== 'RECHECKED')
+
+  let activeIndex = confirmIndex
+  if (['APPROVED', 'REVIEW_COMPLETED'].includes(status)) {
+    activeIndex = completeIndex
+  } else if (correctionActive || status === 'RETURNED_FOR_REVISION') {
+    activeIndex = recheckIndex
+  } else if (latestRun.value?.runStatusCode === 'RUNNING' || status === 'ANALYZING') {
+    activeIndex = validateIndex
+  } else if (latestRun.value?.runStatusCode === 'COMPLETED') {
+    activeIndex = triageIndex
+  } else if (current.caseSourceCode !== 'PLATFORM' && !current.documents.length && documentsIndex >= 0) {
+    activeIndex = documentsIndex
+  }
+
+  return labels.map(([key, label], index) => ({
+    key,
+    label,
+    state: index < activeIndex ? 'done' as const : index === activeIndex ? 'active' as const : 'upcoming' as const,
+  }))
+})
+const activeWorkflowLabel = computed(() => workflowSteps.value.find((step) => step.state === 'active')?.label ?? '審查處理')
+const supplementActionLabel = computed(() => isPlatformCase.value ? '要求估價端補件' : '建立外部補件要求')
 
 function recheckOutcomeLabel(value: string): string {
   const labels: Record<string, string> = {
@@ -115,34 +203,55 @@ const requestableMissingItems = computed(() =>
 const canRequestSupplement = computed(() => Boolean(
   canExecute.value
     && requestableMissingItems.value.length
-    && detail.value?.reviewStatusCode !== 'REVIEW_COMPLETED',
+    && ['PENDING_MATERIALS', 'SUPPLEMENT_REQUIRED'].includes(detail.value?.reviewStatusCode ?? ''),
 ))
 const correctionGateBlockers = computed(() => {
   if (!detail.value) return ['尚未載入案件資料。']
   const blockers: string[] = []
   if (!canDecide.value) blockers.push('目前帳號沒有要求修正的權限。')
+  if (detail.value.reviewStatusCode !== 'REVIEW_REQUIRED') blockers.push('只有待人工決策中的案件可建立修正通知。')
   if (latestRun.value?.runStatusCode !== 'COMPLETED') blockers.push('最新一次智慧審查尚未完成。')
   const openCount = detail.value.findings.filter((finding) => ['OPEN', 'REQUIRES_SUPPLEMENT'].includes(finding.statusCode)).length
   const expertCount = detail.value.findings.filter((finding) => finding.statusCode === 'EXPERT_REVIEW').length
   if (openCount) blockers.push(`仍有 ${openCount} 項疑點尚未完成判定。`)
   if (expertCount) blockers.push(`仍有 ${expertCount} 項疑點等待專業覆核。`)
-  if (!confirmedFindings.value.length) blockers.push('至少需要一項已確認問題，才能要求估價端修正。')
+  if (!confirmedFindings.value.length) blockers.push(`至少需要一項已確認問題，才能要求${correctionRecipientLabel.value}修正。`)
   const active = latestCorrection.value
   if (active && active.status !== 'RECHECKED') blockers.push('目前已有進行中的修正通知。')
   return blockers
 })
 const canRequestCorrection = computed(() => correctionGateBlockers.value.length === 0)
 const canSendCorrection = computed(() => Boolean(
-  canDecide.value && latestCorrection.value?.status === 'DRAFT',
+  canDecide.value
+    && detail.value?.reviewStatusCode === 'REVIEW_REQUIRED'
+    && latestCorrection.value?.status === 'DRAFT',
 ))
 const canRecheckCorrection = computed(() => Boolean(
-  canExecute.value && latestCorrection.value?.status === 'RESUBMITTED',
+  canExecute.value
+    && detail.value?.reviewStatusCode === 'RETURNED_FOR_REVISION'
+    && latestCorrection.value?.status === 'RESUBMITTED',
 ))
 const correctionActionReason = computed(() => {
-  if (latestCorrection.value?.status === 'DRAFT') return canSendCorrection.value ? '修正通知草稿已建立，可正式送出並退回估價端。' : '目前帳號沒有送出修正通知的權限。'
-  if (latestCorrection.value?.status === 'SENT') return '修正通知已送出，等待估價端建立較新的正式版本並重新送審。'
-  if (latestCorrection.value?.status === 'RESUBMITTED') return canRecheckCorrection.value ? '估價端已送回新版，可執行新版完整性與規則重檢。' : '目前帳號沒有執行新版重檢的權限。'
-  return correctionGateBlockers.value[0] ?? '建立修正通知並送回估價端。'
+  if (latestCorrection.value?.status === 'DRAFT') {
+    if (detail.value?.reviewStatusCode !== 'REVIEW_REQUIRED') return '目前案件狀態不可送出修正通知。'
+    if (!canSendCorrection.value) return '目前帳號沒有送出修正通知的權限。'
+    return isPlatformCase.value
+      ? '修正通知草稿已建立，可正式送出並退回估價端。'
+      : '修正通知草稿已建立；請先透過既有外部管道通知廠商，再於系統確認已對外通知。'
+  }
+  if (latestCorrection.value?.status === 'SENT') {
+    return isPlatformCase.value
+      ? '修正通知已送出，等待估價端建立較新的正式版本並重新送審。'
+      : '已記錄完成對外通知，等待外部廠商回傳新版文件。'
+  }
+  if (latestCorrection.value?.status === 'RESUBMITTED') {
+    if (detail.value?.reviewStatusCode !== 'RETURNED_FOR_REVISION') return '只有等待補正的案件可執行新版重檢。'
+    if (!canRecheckCorrection.value) return '目前帳號沒有執行新版重檢的權限。'
+    return isPlatformCase.value
+      ? '估價端已送回新版，可執行新版完整性與規則重檢。'
+      : '外部廠商新版文件已匯入，可執行新版完整性與規則重檢。'
+  }
+  return correctionGateBlockers.value[0] ?? `建立修正通知並要求${correctionRecipientLabel.value}修正。`
 })
 const canTriage = computed(() => Boolean(
   canDecide.value
@@ -176,8 +285,15 @@ const completionBlockers = computed(() => {
   if (activeRequests || unevaluatedItems) blockers.push('仍有修正通知尚未完成新版重檢。')
   return blockers
 })
-const canFinalize = computed(() => Boolean(canDecide.value && completionBlockers.value.length === 0 && detail.value?.reviewStatusCode !== 'REVIEW_COMPLETED'))
-const finalizeActionReason = computed(() => completionBlockers.value[0] ?? '完成審查前會顯示未處理疑點數量。')
+const canFinalize = computed(() => Boolean(
+  canDecide.value
+    && detail.value?.reviewStatusCode === 'REVIEW_REQUIRED'
+    && completionBlockers.value.length === 0,
+))
+const finalizeActionReason = computed(() => {
+  if (detail.value?.reviewStatusCode !== 'REVIEW_REQUIRED') return '只有待人工決策中的案件可完成審查。'
+  return completionBlockers.value[0] ?? '完成審查前會顯示未處理疑點數量。'
+})
 const startableReviewStatuses = new Set(['RECEIVED', 'PREPROCESSING', 'PENDING_MATERIALS', 'READY_FOR_REVIEW'])
 const showStartReview = computed(() => Boolean(
   detail.value
@@ -206,18 +322,50 @@ function queueParams() {
     status: stringQuery('status') || undefined,
     riskLevel: stringQuery('riskLevel') || undefined,
     statusGroup: stringQuery('statusGroup') || undefined,
+    source: stringQuery('source') || undefined,
+    district: stringQuery('district') || undefined,
+    urgency: stringQuery('urgency') || undefined,
+    sortBy: stringQuery('sortBy') || undefined,
+    sortDirection: stringQuery('sortDirection') === 'asc' ? 'asc' as const : 'desc' as const,
     limit: pageSize,
     offset: (page - 1) * pageSize,
   }
 }
 
 function queueQuery(): Record<string, string> {
-  const names = ['q', 'status', 'riskLevel', 'statusGroup', 'sortBy', 'sortDirection', 'page', 'pageSize']
+  const names = [
+    'q',
+    'status',
+    'riskLevel',
+    'statusGroup',
+    'source',
+    'district',
+    'urgency',
+    'sortBy',
+    'sortDirection',
+    'page',
+    'pageSize',
+  ]
   return Object.fromEntries(
     names
       .map((name) => [name, stringQuery(name)] as const)
       .filter(([, value]) => value),
   )
+}
+
+function syncAssistantContextQuery(): void {
+  const currentDetail = detail.value
+  if (!currentDetail) return
+  const nextQuery = {
+    ...route.query,
+    caseId: currentDetail.caseId,
+    ...(selectedFindingId.value ? { finding: selectedFindingId.value } : {}),
+  }
+  if (
+    route.query.caseId === currentDetail.caseId
+    && (!selectedFindingId.value || route.query.finding === selectedFindingId.value)
+  ) return
+  void router.replace({ query: nextQuery })
 }
 
 async function loadDetail(): Promise<void> {
@@ -232,6 +380,7 @@ async function loadDetail(): Promise<void> {
     if (!detail.value.findings.some((finding) => finding.findingId === selectedFindingId.value)) {
       selectedFindingId.value = detail.value.findings[0]?.findingId ?? ''
     }
+    syncAssistantContextQuery()
   } catch (caught: unknown) {
     if (serial === loadSerial) error.value = safeReviewErrorMessage(caught)
   } finally {
@@ -252,6 +401,7 @@ async function refreshAfterMutation(): Promise<void> {
   if (!detail.value.findings.some((finding) => finding.findingId === selectedFindingId.value)) {
     selectedFindingId.value = detail.value.findings[0]?.findingId ?? ''
   }
+  syncAssistantContextQuery()
 }
 
 async function saveFindingDecision(value: {
@@ -340,7 +490,7 @@ async function createAndSendCorrection(): Promise<void> {
   const message = correctionMessage.value.trim()
   const due = new Date(correctionDueAt.value)
   if (!message) {
-    actionError.value = '請填寫要通知估價端的修正內容。'
+    actionError.value = `請填寫要通知${correctionRecipientLabel.value}的修正內容。`
     return
   }
   if (!correctionDueAt.value || Number.isNaN(due.getTime()) || due.getTime() <= Date.now()) {
@@ -356,8 +506,10 @@ async function createAndSendCorrection(): Promise<void> {
       due_at: due.toISOString(),
     })
     createdDraftId = draft.correction_request_id
-    await reviewApi.sendCorrectionRequest(draft.correction_request_id)
     correctionOpen.value = false
+    if (isPlatformCase.value) {
+      await reviewApi.sendCorrectionRequest(draft.correction_request_id)
+    }
     await refreshAfterMutation()
   } catch (caught: unknown) {
     // Draft creation and sending are two separate server transactions. If the
@@ -581,6 +733,59 @@ onBeforeUnmount(() => {
       <LoadingSkeleton v-if="loading && !detail" :rows="7" label="審查案件載入中" />
       <ErrorState v-else-if="error && !detail" :message="error" @retry="loadDetail" />
       <template v-else-if="detail">
+        <ReviewProgressBar :steps="workflowSteps" />
+
+        <section class="review-workbench__source-strip" data-testid="review-source-strip" aria-label="案件來源與目前流程">
+          <div class="review-workbench__source-main">
+            <span class="review-workbench__source-badge" :data-source="detail.caseSourceCode">{{ detail.caseSourceLabel }}</span>
+            <div>
+              <strong>目前階段：{{ activeWorkflowLabel }}</strong>
+              <p>{{ sourceSummary }}</p>
+            </div>
+          </div>
+          <div class="review-workbench__source-stats" aria-label="案件摘要">
+            <span><b>{{ detail.documents.length }}</b> 份文件</span>
+            <span><b>{{ detail.findings.length }}</b> 項疑點</span>
+            <span><b>{{ unresolvedMissingItems.length }}</b> 項待補資料</span>
+            <span
+              v-if="inputVersionLabel"
+              data-testid="review-input-provenance"
+              :title="inputVersionFingerprint ? `輸入指紋 ${inputVersionFingerprint}` : undefined"
+            >
+              <b>{{ inputVersionLabel }}</b>
+            </span>
+          </div>
+          <button
+            type="button"
+            data-testid="open-review-context"
+            aria-controls="review-context-drawer"
+            :aria-expanded="drawer === 'left'"
+            @click="openDrawer('left', $event)"
+          >
+            案件資料
+          </button>
+        </section>
+
+        <section
+          v-if="interactionMode !== 'EDITABLE'"
+          class="review-workbench__readonly-banner"
+          :data-mode="interactionMode"
+          data-testid="review-readonly-mode"
+          role="status"
+        >
+          <strong>{{ interactionCopy.title }}</strong>
+          <p>{{ interactionCopy.description }}</p>
+        </section>
+
+        <ExternalReviewIntake
+          v-if="detail.caseSourceCode === 'EXTERNAL'"
+          :review-id="detail.reviewId"
+          :documents="detail.documents"
+          :correction-request="latestCorrection"
+          :can-mutate="canMutateExternalInput"
+          @changed="loadDetail"
+        />
+
         <div v-if="showStartReview" v-liquid-glass data-lg class="review-workbench__start-panel lg" data-testid="review-start-panel">
           <div>
             <strong>尚未開始智慧審查</strong>
@@ -604,6 +809,7 @@ onBeforeUnmount(() => {
           :can-send-correction="canSendCorrection"
           :can-recheck-correction="canRecheckCorrection"
           :correction-status="latestCorrection?.status ?? null"
+          :case-source-code="detail.caseSourceCode"
           :correction-action-reason="correctionActionReason"
           :review-status-code="detail.reviewStatusCode"
           :total-finding-count="detail.findings.length"
@@ -642,14 +848,14 @@ onBeforeUnmount(() => {
               :disabled="mutating"
               @click="askSupplement"
             >
-              要求估價端補件
+              {{ supplementActionLabel }}
             </button>
           </div>
           <p v-if="requestableMissingItems.length" class="review-workbench__supplement-note">
-            有 {{ requestableMissingItems.length }} 項完整性缺件尚未通知估價端；設定期限後可一次正式提出補件要求。
+            有 {{ requestableMissingItems.length }} 項完整性缺件尚未通知{{ correctionRecipientLabel }}；設定期限後可一次正式提出補件要求。
           </p>
           <p v-else-if="requestedMissingItems.length" class="review-workbench__supplement-note">
-            已提出 {{ requestedMissingItems.length }} 項補件要求，等待估價端補齊資料。
+            已提出 {{ requestedMissingItems.length }} 項補件要求，等待{{ correctionRecipientLabel }}補齊資料。
           </p>
           <ul>
             <li v-for="item in detail.missingItems" :key="item.missing_item_id">
@@ -727,7 +933,6 @@ onBeforeUnmount(() => {
         </section>
 
         <div class="review-workbench__mobile-tools" aria-label="輔助面板">
-          <button type="button" data-testid="open-review-context" aria-controls="review-context-drawer" :aria-expanded="drawer === 'left'" @click="openDrawer('left', $event)">案件資料</button>
           <button type="button" data-testid="open-review-finding" aria-controls="review-finding-drawer" :aria-expanded="drawer === 'right'" @click="openDrawer('right', $event)">疑點內容</button>
         </div>
 
@@ -762,6 +967,16 @@ onBeforeUnmount(() => {
               <div><dt>審查狀態</dt><dd>{{ detail.reviewStatusLabel }}</dd></div>
               <div><dt>風險</dt><dd>{{ detail.riskLevelLabel }}</dd></div>
             </dl>
+            <section v-if="inputVersionLabel" class="review-workbench__context-section" data-testid="review-input-context">
+              <h3>審查依據版本</h3>
+              <dl class="review-workbench__case-facts review-workbench__provenance-facts">
+                <div><dt>資料來源</dt><dd>{{ detail.caseSourceLabel }}</dd></div>
+                <div><dt>凍結版本</dt><dd>{{ inputVersionLabel }}</dd></div>
+                <div v-if="inputVersionFrozenAt"><dt>凍結時間</dt><dd>{{ new Date(inputVersionFrozenAt).toLocaleString('zh-TW') }}</dd></div>
+                <div v-if="inputVersionFingerprint"><dt>內容指紋</dt><dd class="review-workbench__fingerprint">{{ inputVersionFingerprint }}</dd></div>
+              </dl>
+              <p class="review-workbench__muted">本次檢核與審查結果綁定此凍結版本；後續案件或文件變更不會回寫到既有審查依據。</p>
+            </section>
             <section class="review-workbench__context-section">
               <h3>文件（{{ detail.documents.length }}）</h3>
               <ul v-if="detail.documents.length" class="review-workbench__plain-list">
@@ -822,6 +1037,29 @@ onBeforeUnmount(() => {
             aria-label="疑點內容"
           >
             <button v-if="drawer === 'right'" type="button" class="review-workbench__drawer-close" aria-label="關閉疑點內容" @click="closeDrawer">×</button>
+            <section class="review-workbench__finding-queue" aria-labelledby="review-finding-queue-title">
+              <div class="review-workbench__finding-queue-heading">
+                <div>
+                  <span>人工判定</span>
+                  <strong id="review-finding-queue-title">疑點佇列</strong>
+                </div>
+                <small>{{ unresolvedCount }} 項待處理</small>
+              </div>
+              <div v-if="detail.findings.length" class="review-workbench__finding-tabs">
+                <button
+                  v-for="finding in detail.findings"
+                  :key="finding.findingId"
+                  type="button"
+                  :class="{ 'is-selected': finding.findingId === selectedFindingId }"
+                  :aria-pressed="finding.findingId === selectedFindingId"
+                  @click="selectFinding(finding.findingId)"
+                >
+                  <span>{{ finding.title }}</span>
+                  <small>{{ finding.severityLabel }} · {{ finding.statusLabel }}</small>
+                </button>
+              </div>
+              <p v-else class="review-workbench__muted">目前沒有需要人工判定的疑點。</p>
+            </section>
             <GlassCard class="review-workbench__finding-frame" data-testid="right-finding-frame">
               <FindingPanel
                 :finding="selectedFinding"
@@ -852,12 +1090,13 @@ onBeforeUnmount(() => {
     <GlassModal
       :open="correctionOpen"
       id="review-correction-request"
-      title="要求估價端修正"
+      :title="isPlatformCase ? '要求估價端修正' : '建立外部修正通知'"
       initial-focus="#review-correction-message"
       @close="correctionOpen = false"
     >
       <form class="review-workbench__correction-form" data-testid="correction-request-form" @submit.prevent="createAndSendCorrection">
-        <p>送出後會儲存本次已確認的問題內容，案件將正式退回估價端；估價端修正後需以新版資料重新送審。</p>
+        <p v-if="isPlatformCase">送出後會儲存本次已確認的問題內容，案件將正式退回估價端；估價端修正後需以新版資料重新送審。</p>
+        <p v-else>建立後會先儲存本次已確認的問題內容。請透過既有外部管道將修正內容提供給廠商，再回到系統確認已對外通知；收到新版文件後再匯入並重新檢核。</p>
         <label>
           <span>修正內容 *</span>
           <textarea id="review-correction-message" v-model="correctionMessage" rows="7" maxlength="4000" required />
@@ -876,7 +1115,7 @@ onBeforeUnmount(() => {
         </section>
         <div class="review-workbench__correction-actions">
           <button type="button" :disabled="mutating" @click="correctionOpen = false">取消</button>
-          <button type="submit" :disabled="mutating">{{ mutating ? '送出中…' : '建立並送出修正通知' }}</button>
+          <button type="submit" :disabled="mutating">{{ mutating ? '處理中…' : isPlatformCase ? '建立並送出修正通知' : '建立修正通知' }}</button>
         </div>
       </form>
     </GlassModal>
@@ -884,12 +1123,13 @@ onBeforeUnmount(() => {
     <GlassModal
       :open="supplementOpen"
       id="review-supplement-request"
-      title="要求估價端補件"
+      :title="isPlatformCase ? '要求估價端補件' : '建立外部補件要求'"
       initial-focus="#review-supplement-due-at"
       @close="supplementOpen = false"
     >
       <form class="review-workbench__correction-form" data-testid="supplement-request-form" @submit.prevent="sendSupplementRequest">
-        <p>送出後，尚未補齊的必要資料會正式列為補件項目，並儲存你設定的補件期限。</p>
+        <p v-if="isPlatformCase">送出後，尚未補齊的必要資料會正式列為補件項目，並儲存你設定的補件期限。</p>
+        <p v-else>系統會記錄尚未補齊的必要資料與期限；請再透過既有外部管道通知廠商，收到資料後匯入案件。</p>
         <section class="review-workbench__correction-preview" aria-label="本次補件項目">
           <strong>本次要求補件 {{ requestableMissingItems.length }} 項</strong>
           <ul>
@@ -919,6 +1159,21 @@ onBeforeUnmount(() => {
 .review-workbench__start-panel button { min-height: 44px; padding: 8px 16px; border: 1px solid var(--app-accent); border-radius: 8px; color: #fff8f2; background: var(--app-accent); cursor: pointer; font-weight: 800; white-space: nowrap; }
 .review-workbench__start-panel button:disabled { cursor: not-allowed; opacity: .55; }
 .review-workbench__back { min-height: 42px; padding: 8px 15px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: var(--app-paper-strong); cursor: pointer; font-size: 12px; font-weight: 800; }
+.review-workbench__source-strip { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 18px; margin-top: 12px; padding: 14px 16px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #f8fafc; }
+.review-workbench__source-main { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+.review-workbench__source-main > div { display: grid; gap: 3px; min-width: 0; }
+.review-workbench__source-main strong { color: var(--app-ink); font-size: 13px; }
+.review-workbench__source-main p { margin: 0; color: var(--app-muted); font-size: 11px; line-height: 1.55; }
+.review-workbench__source-badge { flex: 0 0 auto; padding: 5px 8px; border-radius: 999px; color: #2e5984; background: #edf4fb; font-size: 10px; font-weight: 900; white-space: nowrap; }
+.review-workbench__source-badge[data-source="EXTERNAL"] { color: #765514; background: #fff2c9; }
+.review-workbench__source-stats { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px 12px; color: var(--app-muted); font-size: 10px; white-space: nowrap; }
+.review-workbench__source-stats b { color: var(--app-ink); font-size: 12px; }
+.review-workbench__source-strip > button { min-height: 40px; padding: 7px 12px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: #fff; cursor: pointer; font-size: 11px; font-weight: 900; white-space: nowrap; }
+.review-workbench__source-strip > button:hover { border-color: rgba(200, 91, 67, .35); color: var(--app-accent-deep); }
+.review-workbench__readonly-banner { display: grid; gap: 4px; margin-top: 12px; padding: 12px 14px; border: 1px solid #d8c48d; border-radius: var(--app-radius-sm); background: #fff9e8; }
+.review-workbench__readonly-banner[data-mode="READ_ONLY"] { border-color: var(--app-line); background: #f5f7f9; }
+.review-workbench__readonly-banner strong { color: var(--app-ink); font-size: 12px; }
+.review-workbench__readonly-banner p { margin: 0; color: var(--app-muted); font-size: 11px; line-height: 1.55; }
 .review-workbench__error { margin: 12px 0 0; color: #ac3c37; font-size: 13px; }
 .review-workbench__supplement,
 .review-workbench__diffs,
@@ -985,11 +1240,24 @@ onBeforeUnmount(() => {
 .review-workbench__correction-actions button[type="submit"] { border-color: var(--app-accent); color: #fff; background: var(--app-accent); }
 .review-workbench__correction-actions button:disabled { cursor: not-allowed; opacity: .55; }
 .review-workbench :deep(.review-action-bar) { position: sticky; z-index: 18; top: 104px; margin-top: 12px; box-shadow: 0 12px 28px rgba(30, 52, 78, .12); }
-.review-workbench__layout { display: grid; grid-template-columns: minmax(190px, 230px) minmax(380px, 1fr) minmax(320px, 410px); align-items: start; gap: 16px; margin-top: 16px; }
-.review-workbench__left { position: sticky; top: 190px; display: grid; max-height: calc(100vh - 210px); gap: 16px; overflow: auto; padding: 18px; border: 1px solid var(--app-line); border-radius: var(--app-radius-md); background: #f7f8fb; }
+.review-workbench__layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 420px); align-items: start; gap: 16px; margin-top: 16px; }
+.review-workbench__left { display: none; }
+.review-workbench__left--open { position: fixed; z-index: 50; inset: 16px auto 16px 16px; display: grid; width: min(360px, calc(100vw - 32px)); max-height: none; gap: 16px; overflow: auto; padding: 18px; border: 1px solid var(--app-line); border-radius: var(--app-radius-md); background: #f7f8fb; box-shadow: 0 18px 50px rgba(33, 48, 74, .22); }
 .review-workbench__center { min-width: 0; }
 .review-workbench__right { position: sticky; top: 190px; min-width: 0; max-height: calc(100vh - 210px); overflow: auto; }
 .review-workbench__finding-frame { padding: 0; overflow: hidden; background: rgba(255, 255, 255, .82); }
+.review-workbench__finding-queue { display: grid; gap: 9px; margin-bottom: 10px; padding: 12px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #f8fafc; }
+.review-workbench__finding-queue-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.review-workbench__finding-queue-heading > div { display: grid; gap: 2px; }
+.review-workbench__finding-queue-heading span { color: var(--app-accent-deep); font-size: 9px; font-weight: 900; letter-spacing: .12em; }
+.review-workbench__finding-queue-heading strong { color: var(--app-ink); font-size: 13px; }
+.review-workbench__finding-queue-heading small { color: var(--app-muted); font-size: 10px; }
+.review-workbench__finding-tabs { display: grid; gap: 6px; max-height: 188px; overflow: auto; }
+.review-workbench__finding-tabs button { display: grid; gap: 3px; width: 100%; padding: 8px 9px; border: 1px solid transparent; border-radius: 8px; color: var(--app-ink-soft); background: #fff; cursor: pointer; text-align: left; }
+.review-workbench__finding-tabs button:hover,
+.review-workbench__finding-tabs button.is-selected { border-color: rgba(200, 91, 67, .24); color: var(--app-accent-deep); background: var(--app-accent-soft); }
+.review-workbench__finding-tabs span { font-size: 11px; font-weight: 800; line-height: 1.4; }
+.review-workbench__finding-tabs small { color: var(--app-muted); font-size: 9px; }
 .review-workbench__panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .review-workbench__panel-heading p { margin: 0 0 4px; color: var(--app-accent-deep); font-size: 9px; font-weight: 900; letter-spacing: .14em; }
 .review-workbench__panel-heading h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 21px; }
@@ -999,6 +1267,8 @@ onBeforeUnmount(() => {
 .review-workbench__case-facts div { display: grid; gap: 3px; }
 .review-workbench__case-facts dt { color: var(--app-muted); font-size: 10px; font-weight: 800; }
 .review-workbench__case-facts dd { margin: 0; color: var(--app-ink); font-size: 13px; font-weight: 800; overflow-wrap: anywhere; }
+.review-workbench__provenance-facts { gap: 8px; }
+.review-workbench__fingerprint { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px !important; word-break: break-all; }
 .review-workbench__context-section { display: grid; gap: 9px; padding-top: 14px; border-top: 1px solid var(--app-line); }
 .review-workbench__context-section h3 { margin: 0; color: var(--app-ink); font-size: 13px; }
 .review-workbench__plain-list,
@@ -1018,9 +1288,9 @@ onBeforeUnmount(() => {
 
 @media (max-width: 1180px) {
   .review-workbench { padding-inline: 18px; }
-  .review-workbench__layout { grid-template-columns: minmax(175px, 210px) minmax(340px, 1fr); }
-  .review-workbench__right { position: static; grid-column: 1 / -1; max-height: none; overflow: visible; }
-  .review-workbench__finding-frame { max-width: none; }
+  .review-workbench__layout { grid-template-columns: minmax(0, 1fr) minmax(300px, 360px); }
+  .review-workbench__source-strip { grid-template-columns: minmax(0, 1fr) auto; }
+  .review-workbench__source-stats { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
 }
 
 @media (max-width: 980px) {
@@ -1029,10 +1299,8 @@ onBeforeUnmount(() => {
   .review-workbench__mobile-tools { display: flex; gap: 8px; margin-top: 14px; }
   .review-workbench__mobile-tools button { min-height: 44px; padding: 8px 14px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: var(--app-paper-strong); cursor: pointer; font-size: 12px; font-weight: 800; }
   .review-workbench__layout { display: block; margin-top: 12px; }
-  .review-workbench__left,
   .review-workbench__right { display: none; }
-  .review-workbench__left--open,
-  .review-workbench__right--open { position: fixed; z-index: 50; inset: 16px auto 16px 16px; display: grid; width: min(330px, calc(100vw - 32px)); max-height: none; box-shadow: 0 18px 50px rgba(33, 48, 74, .22); }
+  .review-workbench__right--open { position: fixed; z-index: 50; display: grid; max-height: none; box-shadow: 0 18px 50px rgba(33, 48, 74, .22); }
   .review-workbench__right--open { inset: 16px 16px 16px auto; width: min(430px, calc(100vw - 32px)); overflow: auto; }
   .review-workbench__center { width: 100%; }
   .review-workbench__drawer-close { position: absolute; z-index: 1; top: 8px; right: 8px; }
@@ -1040,6 +1308,10 @@ onBeforeUnmount(() => {
 
 @media (max-width: 640px) {
   .review-workbench { padding-inline: 14px; }
+  .review-workbench__source-strip { grid-template-columns: 1fr; align-items: stretch; gap: 10px; }
+  .review-workbench__source-main { align-items: flex-start; flex-direction: column; }
+  .review-workbench__source-stats { grid-column: auto; grid-row: auto; justify-content: flex-start; white-space: normal; }
+  .review-workbench__source-strip > button { width: 100%; }
   .review-workbench__start-panel { align-items: stretch; flex-direction: column; }
   .review-workbench__start-panel button { width: 100%; }
   .review-workbench__supplement-heading,

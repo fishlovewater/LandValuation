@@ -1,9 +1,16 @@
 import { isAxiosError } from 'axios'
 import { ForbiddenError, http } from '../../api/http'
 import type {
+  DocumentCategory,
+  ExtractionCandidateDecision,
+  ExtractionResponseDto,
+} from '../valuation/valuation.types'
+import type {
   CorrectionRequestCreateDto,
   CorrectionRequestDto,
   DecisionDto,
+  ExternalReviewCaseCreateDto,
+  ExternalReviewCaseCreatedDto,
   FindingDto,
   FindingTriageRequestDto,
   GeneratedReportCreateDto,
@@ -15,6 +22,7 @@ import type {
   WorkbenchCaseListDto,
   WorkbenchPreflightDto,
   WorkbenchStartDto,
+  WorkbenchDocumentDto,
   MissingItemDto,
 } from './review.types'
 
@@ -23,8 +31,31 @@ export interface ListReviewCasesParams {
   status?: string
   riskLevel?: string
   statusGroup?: string
+  source?: string
+  district?: string
+  urgency?: string
+  sortBy?: string
+  sortDirection?: 'asc' | 'desc'
   limit?: number
   offset?: number
+}
+
+export interface ExternalExtractionConfirmation {
+  extracted_field_id: string
+  decision: ExtractionCandidateDecision
+  corrected_value?: unknown
+}
+
+function reviewSortKey(value?: string): string | undefined {
+  const keys: Record<string, string> = {
+    caseNo: 'case_no',
+    name: 'case_title',
+    status: 'status',
+    updatedAt: 'received_at',
+    dueAt: 'due_at',
+    risk: 'risk',
+  }
+  return value ? keys[value] ?? 'received_at' : undefined
 }
 
 export const reviewApi = {
@@ -41,6 +72,11 @@ export const reviewApi = {
         status: params.status,
         risk_level: params.riskLevel,
         status_group: params.statusGroup,
+        source: params.source,
+        district: params.district,
+        urgency: params.urgency,
+        sort_by: reviewSortKey(params.sortBy),
+        sort_direction: params.sortDirection,
         limit: params.limit ?? 20,
         offset: params.offset ?? 0,
       },
@@ -50,6 +86,64 @@ export const reviewApi = {
 
   async getCase(reviewId: string): Promise<WorkbenchCaseDetailDto> {
     const response = await http.get<WorkbenchCaseDetailDto>(`/review/workbench/cases/${reviewId}`)
+    return response.data
+  },
+
+  async createExternalCase(payload: ExternalReviewCaseCreateDto): Promise<ExternalReviewCaseCreatedDto> {
+    const response = await http.post<ExternalReviewCaseCreatedDto>(
+      '/review/workbench/external-cases',
+      payload,
+    )
+    return response.data
+  },
+
+  async uploadExternalDocument(
+    reviewId: string,
+    category: Exclude<DocumentCategory, 'complete-valuation-report'>,
+    file: File,
+    documentGroupId?: string | null,
+  ): Promise<WorkbenchDocumentDto> {
+    const body = new FormData()
+    body.append('category', category)
+    body.append('file', file)
+    if (documentGroupId) body.append('document_group_id', documentGroupId)
+    const response = await http.post<WorkbenchDocumentDto>(
+      `/review/workbench/cases/${reviewId}/external-documents`,
+      body,
+      { headers: { 'Content-Type': undefined } },
+    )
+    return response.data
+  },
+
+  async startExternalDocumentExtraction(
+    reviewId: string,
+    documentId: string,
+  ): Promise<ExtractionResponseDto> {
+    const response = await http.post<ExtractionResponseDto>(
+      `/review/workbench/cases/${reviewId}/external-documents/${documentId}/extract`,
+    )
+    return response.data
+  },
+
+  async getExternalDocumentExtraction(
+    reviewId: string,
+    documentId: string,
+  ): Promise<ExtractionResponseDto> {
+    const response = await http.get<ExtractionResponseDto>(
+      `/review/workbench/cases/${reviewId}/external-documents/${documentId}/extraction`,
+    )
+    return response.data
+  },
+
+  async confirmExternalDocumentExtraction(
+    reviewId: string,
+    documentId: string,
+    confirmations: ExternalExtractionConfirmation[],
+  ): Promise<ExtractionResponseDto> {
+    const response = await http.post<ExtractionResponseDto>(
+      `/review/workbench/cases/${reviewId}/external-documents/${documentId}/extraction/confirm`,
+      { confirmations },
+    )
     return response.data
   },
 
@@ -104,6 +198,18 @@ export const reviewApi = {
     const response = await http.post<CorrectionRequestDto>(
       `/review/correction-requests/${correctionRequestId}/send`,
       {},
+    )
+    return response.data
+  },
+
+  async registerCorrectionResubmission(
+    correctionRequestId: string,
+    documentId: string,
+    documentVersion: number,
+  ): Promise<CorrectionRequestDto> {
+    const response = await http.post<CorrectionRequestDto>(
+      `/review/correction-requests/${correctionRequestId}/resubmissions`,
+      { document_id: documentId, document_version: documentVersion },
     )
     return response.data
   },
@@ -172,7 +278,10 @@ export function safeReviewErrorMessage(error: unknown): string {
       CORRECTION_RECHECK_SUBMISSION_INVALID: '新版送審資料不存在或不屬於此審查案件。',
       CORRECTION_RECHECK_DOCUMENT_MISMATCH: '新版回件文件與目前送審版本不一致，請確認估價端已重新送審。',
       CORRECTION_RESUBMISSION_INVALID: '補正回件版本不符合案件沿革或版本要求。',
+      EXTERNAL_RESUBMISSION_EXTRACTION_REQUIRED: '外部修正版尚未完成 OCR／文字擷取，請先完成文件辨識。',
+      EXTERNAL_RESUBMISSION_CONFIRMATION_REQUIRED: '外部修正版仍有待確認欄位，請先完成欄位確認。',
       REVIEW_DECISION_INVALID: '請補充審查理由或必要內容。',
+      EXTERNAL_REVIEW_OPERATION_NOT_ALLOWED: '此操作只適用於外部審查案件。',
       DATA_CONFLICT: '資料狀態已變更，請重新整理後再試。',
     }
     return knownMessages[code] ?? '案件狀態不允許此操作，請重新整理後確認。'
@@ -180,7 +289,10 @@ export function safeReviewErrorMessage(error: unknown): string {
   if (isAxiosError(error) && error.response?.status === 422) {
     const code = error.response.data?.error?.code
     if (code === 'CORRECTION_DUE_AT_INVALID') return '修正期限必須晚於目前時間。'
-    return '修正通知內容或期限格式不正確，請檢查後再試。'
+    if (code === 'EXTERNAL_REVIEW_DOCUMENT_CATEGORY_INVALID') return '此文件類型不能作為外部審查來源文件。'
+    if (code === 'EXTRACTED_TEXT_REQUIRED') return '文件沒有可供欄位辨識的文字內容，請改用可讀取的文件或人工查核。'
+    if (code === 'EXTRACTION_CONFIRMATION_INVALID') return '欄位確認內容不完整或已失效，請重新讀取辨識結果後再試。'
+    return '文件、欄位或輸入內容格式不正確，請檢查後再試。'
   }
   return '審查服務目前無法完成此操作，請稍後再試。'
 }

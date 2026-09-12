@@ -109,6 +109,39 @@ async def test_history_detail_risk_summaries_are_scoped_to_latest_run_and_ordere
 
 
 @pytest.mark.asyncio
+async def test_history_review_data_exposes_run_and_input_version_metadata_without_snapshot_payload():
+    session = DetailSession()
+
+    result = await HistoryRepository(session).review_data(uuid4())
+
+    assert result["validation_runs"] == []
+    assert result["input_snapshots"] == []
+    validation_sql = next(
+        sql for sql in session.statements if "FROM valuation.validation_runs" in sql
+    )
+    platform_sql = next(
+        sql for sql in session.statements if "FROM valuation.review_submissions" in sql
+    )
+    external_sql = next(
+        sql for sql in session.statements if "FROM review.external_input_snapshots" in sql
+    )
+    assert "run_no" in validation_sql
+    assert "submission_id" in validation_sql
+    assert "external_input_snapshot_id" in validation_sql
+    assert "input_fingerprint AS fingerprint" in platform_sql
+    assert "jsonb_array_length(s.input_snapshot -> 'documents')" in platform_sql
+    assert "document_row ->> 'original_filename'" in platform_sql
+    assert "document_versions" in platform_sql
+    assert "JOIN valuation.documents" not in platform_sql
+    assert "jsonb_array_length(s.input_snapshot -> 'documents')" in external_sql
+    assert "document_versions" in external_sql
+    assert "s.input_snapshot," not in platform_sql
+    assert "s.input_snapshot," not in external_sql
+    assert "object_key" not in platform_sql
+    assert "object_key" not in external_sql
+
+
+@pytest.mark.asyncio
 async def test_history_case_versions_are_ordered_newest_first_and_resolve_actor_name():
     session = Session()
 

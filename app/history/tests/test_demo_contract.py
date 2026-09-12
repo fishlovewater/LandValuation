@@ -122,4 +122,5 @@ def test_demo_review_insert_uses_authoritative_deterministic_timestamps():
     review_insert = source.split("INSERTINTOreview.reviews", 1)[1].split(
         "INSERTINTOreview.risk_summaries", 1
     )[0]
-    assert review_insert.count("TIMESTAMPTZ") == 5
+    assert review_insert.count("TIMESTAMPTZ") == 6
+    assert review_insert.count("REVIEW_COMPLETED") == 2

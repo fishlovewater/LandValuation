@@ -11,6 +11,10 @@ def test_pdf_contains_case_run_risk_and_one_row_per_finding():
     assert content.startswith(b"%PDF")
     assert b"CASE-REPORT-001" in content
     assert b"Run 2" in content
+    assert b"Input source EXTERNAL" in content
+    assert b"Input version v2" in content
+    assert b"external-report-v2.pdf" in content
+    assert b"Input fingerprint " + (b"a" * 64) in content
     assert b"Risk HIGH" in content
     assert b"RATE-001" in content
     assert b"localhost" not in content

@@ -1,22 +1,32 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
-import { PhArrowClockwise as Retry, PhBroom as Clear, PhSparkle as Sparkle } from '@phosphor-icons/vue'
+import {
+  PhArrowClockwise as Retry,
+  PhBriefcase as Briefcase,
+  PhClockCounterClockwise as History,
+  PhDatabase as Database,
+  PhPlus as Plus,
+  PhSparkle as Sparkle,
+} from '@phosphor-icons/vue'
 import GlassDrawer from '../../../components/glass/GlassDrawer.vue'
 import { useAuthStore } from '../../../stores/auth.store'
-import { valuationApi } from '../../valuation/valuation.api'
+import { reviewApi } from '../../review/review.api'
 import AnswerMessage from './AnswerMessage.vue'
 import {
   ASSISTANT_QUESTION_MIN_LENGTH,
   assistantApi,
-  canAskAssistantQuestion,
-  canAskGeneralAssistantQuestion,
-  canStartAssistantSession,
+  canUseAssistant,
   mapKnowledgeQuestionResponse,
   safeAssistantErrorMessage,
 } from '../assistant.api'
 import { mapAssistantQuestion } from '../assistant.mappers'
-import type { AssistantAnswerModel, AssistantSessionModel } from '../assistant.types'
+import type {
+  AssistantAnswerModel,
+  AssistantConversationContextDto,
+  KnowledgeConversationDto,
+  KnowledgeConversationMessageDto,
+} from '../assistant.types'
 
 const props = withDefaults(defineProps<{ open?: boolean }>(), { open: false })
 const emit = defineEmits<{ close: [] }>()
@@ -24,67 +34,115 @@ const route = useRoute()
 const auth = useAuthStore()
 
 interface ConversationItem {
-  id: number
+  id: number | string
   question: string
   answer: AssistantAnswerModel | null
   failed?: boolean
 }
 
-const session = ref<AssistantSessionModel | null>(null)
-const knowledgeConversationId = ref('')
+const conversationId = ref('')
+const conversations = ref<KnowledgeConversationDto[]>([])
 const items = ref<ConversationItem[]>([])
 const question = ref('')
 const loading = ref(false)
 const sending = ref(false)
 const error = ref('')
-const contextCaseId = ref('')
-const contextFormId = ref('')
+const historyOpen = ref(false)
+const resolvedReviewCaseId = ref('')
 let serial = 0
 
-const canStart = computed(() => canStartAssistantSession(auth.permissions))
-const canAskGeneral = computed(() => canAskGeneralAssistantQuestion(auth.permissions))
-const canAsk = computed(() => (
-  session.value
-    ? canAskAssistantQuestion(auth.permissions)
-    : canAskGeneral.value && Boolean(knowledgeConversationId.value)
-))
-const contextReady = computed(() => Boolean(contextCaseId.value && contextFormId.value))
-const currentContextLabel = computed(() => {
-  if (!contextCaseId.value) return '目前可查詢法規與知識文件'
-  if (!contextFormId.value) return '已帶入目前案件，但尚無可用的比準地地價估計表資料'
-  return '已帶入目前案件與比準地地價估計表資料'
+const canUse = computed(() => canUseAssistant(auth.permissions))
+
+const context = computed(() => {
+  const routeName = String(route.name ?? '')
+  const caseId = routeString(route.query.caseId)
+    || routeString(route.query.case_id)
+    || routeString(route.params.caseId)
+    || resolvedReviewCaseId.value
+  const reviewId = routeString(route.params.reviewId)
+    || routeString(route.query.reviewId)
+    || routeString(route.query.review_id)
+  const findingId = routeString(route.query.finding)
+    || routeString(route.query.findingId)
+    || routeString(route.query.finding_id)
+  const workspace = routeName.startsWith('review-')
+    ? 'review'
+    : routeName.startsWith('valuation-')
+      ? 'valuation'
+      : ''
+  return { caseId, reviewId, findingId, workspace }
 })
+
+const currentContextLabel = computed(() => {
+  const active = activeConversation.value
+  if (active && !conversationMatchesContext(active)) {
+    if (active.review_id) return '正在查看一筆歷史審查案件對話；提問會沿用該對話已授權的案件情境。'
+    if (active.case_id) return '正在查看一筆歷史案件對話；提問會沿用該對話已授權的案件情境。'
+    return '正在查看一般歷史對話；需要正式依據時，系統會自動查詢可用知識資料。'
+  }
+  if (context.value.caseId && context.value.reviewId) {
+    return context.value.findingId
+      ? '已連結目前審查案件與選取疑點；系統會依問題自動判斷是否需要案件資料、知識資料或兩者。'
+      : '已連結目前審查案件；系統會依問題自動判斷資料來源。'
+  }
+  if (context.value.caseId) return '已連結目前案件；一般問答直接回答，涉及案件或正式依據時會自動取得可用資料。'
+  return '一般問題直接回答；需要正式依據時，系統會自動查詢可用知識資料。'
+})
+const emptyTitle = computed(() => '開始對話')
+const emptyCopy = computed(() => context.value.caseId
+  ? '直接輸入問題。你不需要選擇模式；系統會自行判斷要使用一般對話、案件資料、知識庫或混合資料。'
+  : '直接輸入問題。一般問答不會啟動知識檢索；需要正式依據時才會自動查詢知識資料。')
 
 function routeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-async function resolveContext(): Promise<{ caseId: string; formId: string }> {
-  const caseId = routeString(route.query.caseId)
-    || routeString(route.query.case_id)
-    || routeString(route.params.caseId)
-  let formId = routeString(route.query.formId) || routeString(route.query.form_id)
-  contextCaseId.value = caseId
-  contextFormId.value = formId
-
-  if (!caseId || formId || !auth.permissions.includes('valuation.read')) return { caseId, formId }
-  const forms = await valuationApi.listForms(caseId)
-  const f03 = forms
-    .filter((form) => form.form_code === 'F03')
-    .sort((left, right) => right.version_no - left.version_no)[0]
-  formId = f03?.form_instance_id ?? ''
-  contextFormId.value = formId
-  return { caseId, formId }
+function contextPayload(): AssistantConversationContextDto {
+  const payload: AssistantConversationContextDto = {
+    case_id: context.value.caseId || null,
+    workspace: context.value.workspace || null,
+  }
+  if (context.value.caseId && context.value.reviewId) payload.review_id = context.value.reviewId
+  if (context.value.caseId && context.value.reviewId && context.value.findingId) {
+    payload.finding_id = context.value.findingId
+  }
+  return payload
 }
 
-function restoreGeneralConversation(
-  rows: Awaited<ReturnType<typeof assistantApi.getKnowledgeConversationMessages>>,
-): void {
+const activeConversation = computed(() =>
+  conversations.value.find((item) => item.conversation_id === conversationId.value) ?? null,
+)
+
+function conversationMatchesContext(conversation: KnowledgeConversationDto): boolean {
+  if (context.value.caseId) {
+    if (conversation.case_id !== context.value.caseId) return false
+    if ((conversation.review_id ?? '') !== context.value.reviewId) return false
+    if ((conversation.finding_id ?? '') !== context.value.findingId) return false
+    return (conversation.workspace ?? '') === context.value.workspace
+  }
+  return !conversation.case_id
+    && !conversation.review_id
+    && !conversation.finding_id
+    && (conversation.workspace ?? '') === context.value.workspace
+}
+
+function activeQuestionContext(): AssistantConversationContextDto {
+  const active = activeConversation.value
+  if (!active) return contextPayload()
+  return {
+    case_id: active.case_id,
+    review_id: active.review_id,
+    finding_id: active.finding_id,
+    workspace: active.workspace,
+  }
+}
+
+function restoreConversation(rows: KnowledgeConversationMessageDto[]): void {
   const restored: ConversationItem[] = []
   let current: ConversationItem | null = null
   for (const row of rows) {
     if (row.role === 'USER') {
-      current = { id: row.message_no, question: row.content, answer: null }
+      current = { id: row.message_id, question: row.content, answer: null }
       restored.push(current)
       continue
     }
@@ -95,53 +153,59 @@ function restoreGeneralConversation(
   items.value = restored
 }
 
-async function ensureGeneralConversation(forceNew = false): Promise<void> {
-  session.value = null
-  if (!canAskGeneral.value) return
-  if (forceNew) {
-    const created = await assistantApi.createKnowledgeConversation()
-    knowledgeConversationId.value = created.conversation_id
-    items.value = []
+async function refreshConversations(): Promise<void> {
+  if (!canUse.value) {
+    conversations.value = []
     return
   }
-  const conversations = await assistantApi.listKnowledgeConversations()
-  let selected = conversations[0]
-  if (!selected) selected = await assistantApi.createKnowledgeConversation()
-  knowledgeConversationId.value = selected.conversation_id
-  const rows = await assistantApi.getKnowledgeConversationMessages(selected.conversation_id)
-  restoreGeneralConversation(rows)
+  conversations.value = await assistantApi.listKnowledgeConversations()
 }
 
-async function ensureSession(forceNew = false): Promise<void> {
+async function loadConversation(targetId: string): Promise<void> {
+  conversationId.value = targetId
+  const rows = await assistantApi.getKnowledgeConversationMessages(targetId)
+  restoreConversation(rows)
+}
+
+async function ensureConversation(forceNew = false): Promise<void> {
+  await refreshConversations()
+  let selected = forceNew
+    ? undefined
+    : conversations.value.find((item) => item.conversation_id === conversationId.value && conversationMatchesContext(item))
+      ?? conversations.value.find(conversationMatchesContext)
+
+  if (!selected) {
+    selected = await assistantApi.createKnowledgeConversation(contextPayload())
+    conversations.value = [selected, ...conversations.value]
+  }
+  await loadConversation(selected.conversation_id)
+}
+
+async function resolveReviewCaseContext(): Promise<void> {
+  const reviewId = routeString(route.params.reviewId)
+    || routeString(route.query.reviewId)
+    || routeString(route.query.review_id)
+  const directCaseId = routeString(route.query.caseId)
+    || routeString(route.query.case_id)
+    || routeString(route.params.caseId)
+  if (!reviewId || directCaseId || resolvedReviewCaseId.value) return
+  if (!auth.permissions.includes('review.execute') || !auth.permissions.includes('case.read')) return
+  const detail = await reviewApi.getCase(reviewId)
+  resolvedReviewCaseId.value = detail.case.case_id
+}
+
+async function initializeAssistant(): Promise<void> {
   const token = ++serial
   error.value = ''
   loading.value = true
+  historyOpen.value = false
   try {
-    const context = await resolveContext()
+    if (!canUse.value) return
+    await resolveReviewCaseContext()
     if (token !== serial) return
-    if (!context.caseId || !context.formId || !canStart.value) {
-      contextCaseId.value = context.caseId
-      contextFormId.value = context.formId
-      await ensureGeneralConversation(forceNew)
-      return
-    }
-    knowledgeConversationId.value = ''
-    if (
-      !forceNew
-      && session.value?.caseId === context.caseId
-      && session.value.formInstanceId === context.formId
-    ) return
-    session.value = await assistantApi.createSession({
-      caseId: context.caseId,
-      formId: context.formId,
-      routeName: String(route.name ?? 'assistant-drawer'),
-    })
-    if (forceNew) items.value = []
+    await ensureConversation()
   } catch (caught) {
-    if (token === serial) {
-      session.value = null
-      error.value = safeAssistantErrorMessage(caught)
-    }
+    if (token === serial) error.value = safeAssistantErrorMessage(caught)
   } finally {
     if (token === serial) loading.value = false
   }
@@ -149,17 +213,19 @@ async function ensureSession(forceNew = false): Promise<void> {
 
 async function send(value = question.value): Promise<void> {
   const content = value.trim()
-  if (!content || content.length < ASSISTANT_QUESTION_MIN_LENGTH || !canAsk.value || sending.value) return
+  if (!content || content.length < ASSISTANT_QUESTION_MIN_LENGTH || !canUse.value || !conversationId.value || sending.value) return
   question.value = ''
   error.value = ''
   const item: ConversationItem = { id: Date.now(), question: content, answer: null }
   items.value.push(item)
   sending.value = true
   try {
-    const response = session.value
-      ? await assistantApi.askQuestion(session.value.assistantSessionId, { question: content })
-      : await assistantApi.askKnowledgeConversation(knowledgeConversationId.value, { question: content })
+    const response = await assistantApi.askKnowledgeConversation(conversationId.value, {
+      question: content,
+      ...activeQuestionContext(),
+    })
     item.answer = mapAssistantQuestion(response)
+    void refreshConversations().catch(() => undefined)
   } catch (caught) {
     item.failed = true
     error.value = safeAssistantErrorMessage(caught)
@@ -173,136 +239,274 @@ async function retryLast(): Promise<void> {
   if (last) await send(last.question)
 }
 
-async function clearConversation(): Promise<void> {
-  items.value = []
+async function startNewConversation(): Promise<void> {
+  if (!canUse.value || loading.value || sending.value) return
   question.value = ''
-  await ensureSession(true)
+  error.value = ''
+  historyOpen.value = false
+  loading.value = true
+  try {
+    conversationId.value = ''
+    items.value = []
+    await ensureConversation(true)
+  } catch (caught) {
+    error.value = safeAssistantErrorMessage(caught)
+  } finally {
+    loading.value = false
+  }
 }
+
+async function toggleHistory(): Promise<void> {
+  historyOpen.value = !historyOpen.value
+  if (!historyOpen.value || !canUse.value) return
+  try {
+    await refreshConversations()
+  } catch (caught) {
+    error.value = safeAssistantErrorMessage(caught)
+  }
+}
+
+async function selectConversation(target: KnowledgeConversationDto): Promise<void> {
+  if (!canUse.value) return
+  historyOpen.value = false
+  question.value = ''
+  error.value = ''
+  loading.value = true
+  try {
+    await loadConversation(target.conversation_id)
+  } catch (caught) {
+    error.value = safeAssistantErrorMessage(caught)
+  } finally {
+    loading.value = false
+  }
+}
+function conversationTitle(conversation: KnowledgeConversationDto): string {
+  return conversation.title.trim() || '新對話'
+}
+
+function conversationContextLabel(conversation: KnowledgeConversationDto): string {
+  if (conversation.workspace === 'review') return '審查案件'
+  if (conversation.workspace === 'valuation') return '估價案件'
+  if (conversation.case_id) return '案件對話'
+  return '一般對話'
+}
+
+function conversationTime(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleString('zh-TW', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function citationLabel(citation: AssistantAnswerModel['citations'][number]): string {
+  const title = citation.documentName || citation.documentCode || '來源文件'
+  const locations: string[] = []
+  if (citation.articleNo) locations.push(citation.articleNo)
+  if (citation.pageStart) locations.push(`第 ${citation.pageStart} 頁`)
+  return locations.length ? `${title} · ${locations.join(' · ')}` : title
+}
+
+function fullPageQuery(): Record<string, string> {
+  const query: Record<string, string> = {}
+  if (conversationId.value) query.conversationId = conversationId.value
+  const active = activeConversation.value
+  const resolved = activeQuestionContext()
+  if (resolved.case_id) query.caseId = resolved.case_id
+  if (resolved.review_id) query.reviewId = resolved.review_id
+  if (resolved.finding_id) query.findingId = resolved.finding_id
+  if (resolved.workspace) query.workspace = resolved.workspace
+  if (!active && context.value.caseId) query.caseId = context.value.caseId
+  return query
+}
+
+const sourceContext = computed(() => activeQuestionContext())
 
 watch(
   () => props.open,
   (open) => {
-    if (open) void ensureSession()
+    if (open) void initializeAssistant()
+    else historyOpen.value = false
   },
 )
 
-watch(
-  () => route.fullPath,
-  () => {
-    serial += 1
-    session.value = null
-    knowledgeConversationId.value = ''
-    contextCaseId.value = ''
-    contextFormId.value = ''
-    items.value = []
-    if (props.open) void ensureSession()
-  },
-)
+watch(() => route.fullPath, () => {
+  if (!props.open) return
+  serial += 1
+  resolvedReviewCaseId.value = ''
+  conversationId.value = ''
+  items.value = []
+  question.value = ''
+  historyOpen.value = false
+  void initializeAssistant()
+})
 </script>
 
 <template>
-  <GlassDrawer :open="open" title="估價審查知識助手" width="520px" @close="emit('close')">
+  <GlassDrawer :open="open" title="AI 助手" width="460px" floating @close="emit('close')">
     <div class="assistant-quick">
+      <div class="assistant-quick__toolbar">
+        <span class="assistant-quick__auto-note">依問題自動判斷資料來源</span>
+        <div class="assistant-quick__history-wrap">
+          <button
+            class="assistant-quick__history-trigger"
+            type="button"
+            aria-label="開始新對話"
+            title="開始新對話"
+            :disabled="loading || sending || !canUse"
+            @click="startNewConversation"
+          >
+            <Plus :size="18" weight="bold" aria-hidden="true" />
+          </button>
+          <button
+            class="assistant-quick__history-trigger"
+            type="button"
+            aria-label="歷史對話"
+            title="歷史對話"
+            :aria-expanded="historyOpen"
+            aria-controls="assistant-history-popover"
+            @click="toggleHistory"
+          >
+            <History :size="18" weight="bold" aria-hidden="true" />
+          </button>
+          <section
+            v-if="historyOpen"
+            id="assistant-history-popover"
+            class="assistant-quick__history"
+            role="dialog"
+            aria-label="歷史對話"
+          >
+            <header>
+              <div><strong>歷史對話</strong><span>依目前登入帳號顯示</span></div>
+              <button type="button" :disabled="loading || sending || !canUse" @click="startNewConversation">
+                <Plus :size="14" weight="bold" aria-hidden="true" />新增
+              </button>
+            </header>
+            <button
+              v-for="conversation in conversations"
+              :key="conversation.conversation_id"
+              type="button"
+              :class="['assistant-quick__history-item', { 'is-current': conversation.conversation_id === conversationId }]"
+              @click="selectConversation(conversation)"
+            >
+              <div>
+                <strong>{{ conversationTitle(conversation) }}</strong>
+                <small>{{ conversationContextLabel(conversation) }}</small>
+              </div>
+              <span>{{ conversationTime(conversation.updated_at) }}</span>
+            </button>
+            <p v-if="!conversations.length" class="assistant-quick__history-empty">
+              {{ canUse ? '目前還沒有對話紀錄。' : '此帳號沒有可讀取的對話紀錄。' }}
+            </p>
+          </section>
+        </div>
+      </div>
+
       <section class="assistant-quick__context" data-testid="assistant-quick-context">
         <Sparkle :size="18" weight="duotone" aria-hidden="true" />
-        <div><strong>目前資料範圍</strong><span>{{ currentContextLabel }}</span></div>
+        <div><strong>目前工作內容</strong><span>{{ currentContextLabel }}</span></div>
       </section>
 
-      <p v-if="loading" class="assistant-quick__notice" role="status">正在準備智能助理…</p>
-      <p v-else-if="!canStart && !canAskGeneral" class="assistant-quick__notice" role="status">
-        此帳號沒有使用智能助理或讀取知識資料的權限。
-      </p>
-      <p v-else-if="!contextReady" class="assistant-quick__notice" role="status">
-        可直接查詢法規、條文與知識文件；目前不會帶入案件資料。
+      <p v-if="loading" class="assistant-quick__notice" role="status">正在準備 AI 助手…</p>
+      <p v-else-if="!canUse" class="assistant-quick__notice" role="status">
+        此帳號沒有使用 AI 助手的權限。
       </p>
       <p v-if="error" class="assistant-quick__error" role="alert">{{ error }}</p>
 
       <div v-if="items.length" class="assistant-quick__messages" aria-live="polite">
         <article v-for="item in items" :key="item.id" class="assistant-quick__exchange">
-          <div class="assistant-quick__user"><span>問題</span><p>{{ item.question }}</p></div>
-          <AnswerMessage v-if="item.answer" :answer="item.answer" />
+          <div class="assistant-quick__user"><span>你</span><p>{{ item.question }}</p></div>
+          <template v-if="item.answer">
+            <AnswerMessage :answer="item.answer" />
+            <section
+              v-if="item.answer.answerRoute === 'CASE' || item.answer.answerRoute === 'HYBRID' || item.answer.citations.length"
+              class="assistant-quick__sources"
+              aria-label="資料來源"
+            >
+              <div class="assistant-quick__sources-heading">
+                <Database :size="14" weight="bold" aria-hidden="true" />
+                <strong>資料來源</strong>
+              </div>
+              <ul>
+                <li v-if="item.answer.answerRoute === 'CASE' || item.answer.answerRoute === 'HYBRID'">
+                  <Briefcase :size="12" weight="bold" aria-hidden="true" />
+                  {{ sourceContext.review_id ? (sourceContext.finding_id ? '審查案件與選取疑點' : '審查案件資料') : '案件系統資料' }}
+                </li>
+                <li v-for="citation in item.answer.citations" :key="citation.citationId">
+                  {{ citationLabel(citation) }}
+                </li>
+              </ul>
+            </section>
+          </template>
           <p v-else-if="item.failed" class="assistant-quick__failed">這次提問未完成，可重新提問。</p>
-          <p v-else class="assistant-quick__thinking">正在查找可授權引用的資料…</p>
+          <p v-else class="assistant-quick__thinking">正在判斷問題並準備回答…</p>
         </article>
       </div>
-      <div v-else class="assistant-quick__empty">
-        <strong>尚無對話</strong>
-        <span>回答會標示可驗證的法規、基準或文件來源；找不到足夠資料時會明確告知。</span>
+      <div v-else-if="!loading" class="assistant-quick__empty">
+        <Sparkle :size="28" weight="duotone" aria-hidden="true" />
+        <strong>{{ emptyTitle }}</strong>
+        <span>{{ emptyCopy }}</span>
       </div>
-
-      <form class="assistant-quick__composer" @submit.prevent="send()">
-        <label for="assistant-quick-question">輸入問題</label>
-        <textarea
-          id="assistant-quick-question"
-          v-model="question"
-          rows="4"
-          maxlength="2000"
-          :disabled="!canAsk || loading || sending"
-          :placeholder="contextReady
-            ? '例如：這筆案件採用的估價基準依據是什麼？'
-            : '例如：土地估價相關規定有哪些適用條件？'"
-        />
-        <div class="assistant-quick__composer-actions">
-          <button type="button" class="assistant-quick__secondary" :disabled="!items.length || sending" @click="retryLast">
-            <Retry :size="16" aria-hidden="true" />重新提問
-          </button>
-          <button type="button" class="assistant-quick__secondary" :disabled="!items.length || sending" @click="clearConversation">
-            <Clear :size="16" aria-hidden="true" />清除對話
-          </button>
-          <button type="submit" class="assistant-quick__send" :disabled="!canAsk || sending || question.trim().length < ASSISTANT_QUESTION_MIN_LENGTH">
-            {{ sending ? '送出中…' : '送出' }}
-          </button>
-        </div>
-      </form>
-
-      <RouterLink class="assistant-quick__full" :to="contextReady
-        ? { name: 'assistant', query: { caseId: contextCaseId, formId: contextFormId } }
-        : { name: 'assistant', query: knowledgeConversationId ? { conversationId: knowledgeConversationId } : {} }" @click="emit('close')">
-        開啟完整助理工作區
-      </RouterLink>
-      <p class="assistant-quick__disclaimer">智能助理建議僅供輔助；可查看的資料與可執行操作依目前帳號權限而定。</p>
     </div>
+
+    <template #footer>
+      <div class="assistant-quick__footer">
+        <form class="assistant-quick__composer" @submit.prevent="send()">
+          <label class="sr-only" for="assistant-quick-question">輸入問題</label>
+          <textarea
+            id="assistant-quick-question"
+            v-model="question"
+            rows="3"
+            maxlength="2000"
+            :disabled="!canUse || loading || sending"
+            placeholder="輸入問題；需要案件或正式依據時會自動查找…"
+          />
+          <div class="assistant-quick__composer-actions">
+            <button type="button" class="assistant-quick__icon-action" aria-label="重新提問" title="重新提問" :disabled="!items.length || sending" @click="retryLast">
+              <Retry :size="17" weight="bold" aria-hidden="true" />
+            </button>
+            <RouterLink
+              class="assistant-quick__full"
+              :to="{ name: 'assistant', query: fullPageQuery() }"
+              @click="emit('close')"
+            >
+              完整頁面
+            </RouterLink>
+            <button type="submit" class="assistant-quick__send" :disabled="!canUse || sending || question.trim().length < ASSISTANT_QUESTION_MIN_LENGTH">
+              {{ sending ? '送出中…' : '送出' }}
+            </button>
+          </div>
+        </form>
+        <p class="assistant-quick__disclaimer">身分與資料權限沿用目前登入帳號；AI 只會使用後端授權可讀的資料。</p>
+      </div>
+    </template>
   </GlassDrawer>
 </template>
 
 <style scoped>
-.assistant-quick { display: grid; gap: 14px; min-height: 100%; }
-.assistant-quick__context,
-.assistant-quick__empty,
-.assistant-quick__composer,
-.assistant-quick__exchange {
-  border: 1px solid rgba(255,255,255,.82);
-  border-radius: 16px;
-  background: rgba(255,255,255,.58);
-  box-shadow: 0 12px 28px rgba(45,65,95,.07);
-}
-.assistant-quick__context { display: flex; align-items: center; gap: 10px; padding: 12px 14px; color: var(--app-blue); }
-.assistant-quick__context div { display: grid; gap: 2px; }
-.assistant-quick__context strong { color: var(--app-ink); font-size: 12px; }
-.assistant-quick__context span { color: var(--app-muted); font-size: 11px; }
-.assistant-quick__notice,
-.assistant-quick__error { margin: 0; padding: 12px 14px; border-radius: 12px; font-size: 12px; line-height: 1.65; }
-.assistant-quick__notice { color: var(--app-ink-soft); background: rgba(233,240,248,.72); }
-.assistant-quick__error { color: #8a3c34; background: rgba(255,245,243,.84); }
-.assistant-quick__messages { display: grid; gap: 12px; }
-.assistant-quick__exchange { display: grid; gap: 12px; padding: 14px; }
-.assistant-quick__user { display: grid; gap: 5px; }
-.assistant-quick__user span { color: var(--app-accent-deep); font-size: 10px; font-weight: 900; letter-spacing: .12em; }
-.assistant-quick__user p { margin: 0; color: var(--app-ink); line-height: 1.65; }
-.assistant-quick__thinking,
-.assistant-quick__failed { margin: 0; color: var(--app-muted); font-size: 12px; }
-.assistant-quick__empty { display: grid; gap: 5px; padding: 24px 18px; text-align: center; }
-.assistant-quick__empty strong { color: var(--app-ink); }
-.assistant-quick__empty span { color: var(--app-muted); font-size: 12px; line-height: 1.65; }
-.assistant-quick__composer { display: grid; gap: 8px; margin-top: auto; padding: 14px; }
-.assistant-quick__composer label { color: var(--app-ink); font-size: 12px; font-weight: 900; }
-.assistant-quick__composer textarea { width: 100%; min-height: 96px; padding: 11px 12px; border: 1px solid var(--app-line); border-radius: 12px; color: var(--app-ink); background: rgba(255,255,255,.8); font: inherit; resize: vertical; }
-.assistant-quick__composer textarea:focus { outline: 0; border-color: var(--app-accent); box-shadow: 0 0 0 3px var(--app-accent-soft); }
-.assistant-quick__composer-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.assistant-quick__composer-actions button { min-height: 40px; border-radius: 999px; cursor: pointer; font-weight: 800; }
-.assistant-quick__secondary { display: inline-flex; align-items: center; gap: 5px; padding: 0 11px; border: 1px solid var(--app-line); color: var(--app-ink-soft); background: rgba(255,255,255,.66); }
-.assistant-quick__send { margin-left: auto; padding: 0 18px; border: 1px solid var(--app-accent); color: #fff; background: var(--app-accent); }
-.assistant-quick__composer-actions button:disabled { cursor: not-allowed; opacity: .5; }
-.assistant-quick__full { justify-self: end; color: var(--app-blue); font-size: 12px; font-weight: 800; }
-.assistant-quick__disclaimer { margin: 0; color: var(--app-muted); font-size: 10px; line-height: 1.55; text-align: center; }
+.assistant-quick { display:grid; gap:12px; min-height:100%; align-content:start; }
+.assistant-quick__toolbar { position:relative; display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.assistant-quick__auto-note { color:var(--app-muted); font-size:9px; font-weight:750; }
+.assistant-quick__history-wrap { position:relative; display:flex; align-items:center; gap:6px; }
+.assistant-quick__history-trigger { display:grid; width:34px; height:34px; place-items:center; border:1px solid #d4dde6; border-radius:8px; color:#607388; background:#fff; cursor:pointer; }
+.assistant-quick__history { position:absolute; z-index:3; top:40px; right:0; display:grid; width:min(320px, calc(100vw - 64px)); max-height:390px; overflow:auto; padding:8px; border:1px solid #d5dfe8; border-radius:10px; background:#fff; box-shadow:0 16px 36px rgba(31,48,78,.18); }
+.assistant-quick__history header { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:5px 5px 8px; border-bottom:1px solid #edf1f4; }
+.assistant-quick__history header>div { display:grid; gap:2px; }.assistant-quick__history header strong{color:var(--app-ink);font-size:11px}.assistant-quick__history header span{color:var(--app-muted);font-size:9px}
+.assistant-quick__history header button { display:inline-flex; min-height:28px; align-items:center; gap:4px; padding:4px 7px; border:1px solid #d2dce5; border-radius:7px; color:#2e5984; background:#f7fafe; cursor:pointer; font-size:9px; font-weight:850; }
+.assistant-quick__history-item { display:grid; gap:3px; width:100%; padding:9px 8px; border:0; border-bottom:1px solid #f0f3f6; color:inherit; background:#fff; cursor:pointer; text-align:left; }.assistant-quick__history-item:hover,.assistant-quick__history-item.is-current{background:#f2f7fc}.assistant-quick__history-item strong{overflow:hidden;color:#354b61;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.assistant-quick__history-item span{color:var(--app-muted);font-size:8px}
+.assistant-quick__history-empty { margin:0; padding:14px 8px; color:var(--app-muted); font-size:10px; line-height:1.55; text-align:center; }
+.assistant-quick__case-session { display:flex; align-items:flex-start; gap:6px; margin-top:6px; padding:8px; border-radius:7px; color:#526b82; background:#f5f8fb; font-size:9px; line-height:1.45; }
+.assistant-quick__context,.assistant-quick__empty,.assistant-quick__exchange { border:1px solid #e0e6ed; border-radius:10px; background:#fff; }
+.assistant-quick__context { display:flex; align-items:center; gap:10px; padding:10px 12px; color:#2e5984; background:#f7fafe; }.assistant-quick__context div{display:grid;gap:2px}.assistant-quick__context strong{color:var(--app-ink);font-size:11px}.assistant-quick__context span{color:var(--app-muted);font-size:9px;line-height:1.45}
+.assistant-quick__notice,.assistant-quick__error { margin:0; padding:10px 12px; border-radius:9px; font-size:10px; line-height:1.55; }.assistant-quick__notice{color:var(--app-ink-soft);background:#f2f6fa}.assistant-quick__error{color:#8a3c34;background:#fff5f3}
+.assistant-quick__messages { display:grid; gap:12px; }.assistant-quick__exchange{display:grid;gap:10px;padding:12px}.assistant-quick__user{display:grid;gap:4px;justify-items:end}.assistant-quick__user span{color:var(--app-muted);font-size:8px;font-weight:850}.assistant-quick__user p{max-width:88%;margin:0;padding:9px 11px;border-radius:10px 10px 2px 10px;color:#fff;background:#2e5984;font-size:11px;line-height:1.55}
+.assistant-quick__thinking,.assistant-quick__failed { margin:0; color:var(--app-muted); font-size:10px; }.assistant-quick__empty{display:grid;gap:6px;min-height:220px;place-items:center;align-content:center;padding:32px 22px;color:#60778e;text-align:center}.assistant-quick__empty strong{color:var(--app-ink);font-size:12px}.assistant-quick__empty span{max-width:320px;color:var(--app-muted);font-size:10px;line-height:1.6}
+.assistant-quick__sources { display:grid; gap:6px; padding:8px 10px; border:1px solid #e1e8ee; border-radius:8px; background:#f8fafc; }.assistant-quick__sources-heading{display:flex;align-items:center;gap:5px;color:#536b83}.assistant-quick__sources-heading strong{color:#40576e;font-size:9px}.assistant-quick__sources-heading span{margin-left:auto;color:var(--app-muted);font-size:8px}.assistant-quick__sources ul{display:grid;gap:3px;margin:0;padding-left:17px;color:#627589;font-size:8px;line-height:1.45}
+.assistant-quick__footer { display:grid; gap:7px; }.assistant-quick__composer{display:grid;gap:8px}.assistant-quick__composer textarea{width:100%;min-height:72px;max-height:140px;padding:9px 10px;border:1px solid #cdd8e3;border-radius:9px;color:var(--app-ink);background:#fff;font:inherit;font-size:11px;line-height:1.5;resize:vertical}.assistant-quick__composer textarea:focus{outline:0;border-color:#2e5984;box-shadow:0 0 0 3px rgba(46,89,132,.1)}
+.assistant-quick__composer-actions{display:flex;align-items:center;gap:6px}.assistant-quick__composer-actions button{cursor:pointer;font-weight:850}.assistant-quick__icon-action{display:grid;width:32px;height:32px;place-items:center;border:1px solid #d4dde6;border-radius:8px;color:#607388;background:#fff}.assistant-quick__send{min-width:68px;min-height:32px;margin-left:auto;padding:0 12px;border:1px solid #2e5984;border-radius:8px;color:#fff;background:#2e5984}.assistant-quick__composer-actions button:disabled{cursor:not-allowed;opacity:.5}.assistant-quick__full{margin-left:3px;color:#2e5984;font-size:9px;font-weight:850;text-decoration:none}.assistant-quick__disclaimer{margin:0;color:var(--app-muted);font-size:8px;line-height:1.4;text-align:center}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(max-width:640px){.assistant-quick__history{position:fixed;top:116px;right:16px;left:16px;width:auto;max-height:45vh}.assistant-quick__full{display:none}}
 </style>

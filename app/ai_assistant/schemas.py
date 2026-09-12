@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.ai_assistant.routing import AssistantAnswerRoute
 from app.knowledge.schemas import KnowledgeAnswerStatus, KnowledgeUnreadableSource
 from app.valuation.facilities.schemas import NearestFacilityRequest
 
@@ -81,6 +82,7 @@ class AssistantQuestionResponse(BaseModel):
     assistant_session_id: UUID
     answer_status: KnowledgeAnswerStatus
     answer: str
+    answer_route: AssistantAnswerRoute = AssistantAnswerRoute.KNOWLEDGE
     generation_mode: str
     next_action: str
     clarification_question: str | None = None

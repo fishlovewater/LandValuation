@@ -57,8 +57,11 @@ class DocumentService:
         file: UploadFile,
         user: User,
         document_group_id: UUID | None = None,
+        *,
+        _skip_case_access: bool = False,
     ) -> DocumentRecord:
-        await self.valuation._owned_editable_case(case_id, user)
+        if not _skip_case_access:
+            await self.valuation._owned_editable_case(case_id, user)
         if not file.content_type:
             raise AppError("MIME_TYPE_REQUIRED", "上傳檔案必須提供 MIME type", 422)
         if (

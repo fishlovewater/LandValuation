@@ -8,8 +8,9 @@ const props = withDefaults(
     open?: boolean
     title: string
     width?: string
+    floating?: boolean
   }>(),
-  { open: false, width: '460px' },
+  { open: false, width: '460px', floating: false },
 )
 
 const emit = defineEmits<{ close: [] }>()
@@ -34,7 +35,7 @@ function onKeydown(event: KeyboardEvent): void {
     close()
     return
   }
-  if (event.key !== 'Tab') return
+  if (props.floating || event.key !== 'Tab') return
   const items = focusable()
   if (!items.length) {
     event.preventDefault()
@@ -57,7 +58,7 @@ watch(
   (open) => {
     if (open) {
       previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
-      document.documentElement.classList.add('drawer-open')
+      if (!props.floating) document.documentElement.classList.add('drawer-open')
       void nextTick(() => focusable()[0]?.focus())
     } else {
       document.documentElement.classList.remove('drawer-open')
@@ -67,13 +68,14 @@ watch(
 )
 
 onBeforeUnmount(() => document.documentElement.classList.remove('drawer-open'))
+
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="glass-drawer">
-      <div v-if="open" class="glass-drawer-layer">
-        <button class="glass-drawer-backdrop" type="button" aria-label="關閉側邊面板" @click="close" />
+      <div v-if="open" :class="['glass-drawer-layer', { 'is-floating': floating }]">
+        <button v-if="!floating" class="glass-drawer-backdrop" type="button" aria-label="關閉側邊面板" @click="close" />
         <aside
           id="global-assistant-drawer"
           ref="panel"
@@ -81,9 +83,10 @@ onBeforeUnmount(() => document.documentElement.classList.remove('drawer-open'))
           data-lg
           class="glass-drawer lg"
           role="dialog"
-          aria-modal="true"
+          :aria-modal="floating ? undefined : 'true'"
           :aria-label="title"
           :style="{ '--drawer-width': width }"
+          data-testid="assistant-floating-window"
           tabindex="-1"
           @keydown="onKeydown"
         >
@@ -120,6 +123,8 @@ onBeforeUnmount(() => document.documentElement.classList.remove('drawer-open'))
   backdrop-filter: blur(2px);
 }
 
+.glass-drawer-layer.is-floating { pointer-events: none; }
+
 .glass-drawer {
   position: absolute;
   top: 12px;
@@ -133,6 +138,19 @@ onBeforeUnmount(() => document.documentElement.classList.remove('drawer-open'))
   border-radius: 24px;
   background: rgba(248, 251, 255, .76);
   box-shadow: 0 24px 70px rgba(31, 48, 78, .22);
+}
+
+.glass-drawer-layer.is-floating .glass-drawer {
+  top: 76px;
+  right: 22px;
+  bottom: auto;
+  width: min(var(--drawer-width), calc(100vw - 44px));
+  height: min(720px, calc(100vh - 100px));
+  pointer-events: auto;
+  border: 1px solid rgba(194, 207, 221, .92);
+  border-radius: 16px;
+  background: rgba(250, 252, 255, .97);
+  box-shadow: 0 18px 52px rgba(31, 48, 78, .22);
 }
 
 .glass-drawer__header,
@@ -197,6 +215,7 @@ onBeforeUnmount(() => document.documentElement.classList.remove('drawer-open'))
 
 @media (max-width: 640px) {
   .glass-drawer { top: 6px; right: 6px; bottom: 6px; width: calc(100vw - 12px); border-radius: 18px; }
+  .glass-drawer-layer.is-floating .glass-drawer { top: 64px; right: 8px; bottom: auto; width: calc(100vw - 16px); height: calc(100vh - 72px); border-radius: 14px; }
   .glass-drawer__body { padding: 14px; }
 }
 </style>

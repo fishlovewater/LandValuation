@@ -36,9 +36,16 @@ ASSISTANT_SYSTEM_PROMPT = (
 
 
 class BedrockConverseProvider:
-    def __init__(self, settings: Settings, tools: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        tools: list[dict[str, Any]],
+        *,
+        system_prompt: str = ASSISTANT_SYSTEM_PROMPT,
+    ) -> None:
         self.settings = settings
         self.tools = tools
+        self.system_prompt = system_prompt
         try:
             import boto3
             from botocore.config import Config
@@ -60,17 +67,17 @@ class BedrockConverseProvider:
 
     async def converse(self, messages: list[dict[str, Any]]) -> ProviderResponse:
         try:
+            request: dict[str, Any] = {
+                "modelId": self.settings.bedrock_model_id,
+                "messages": messages,
+                "system": [{"text": self.system_prompt}],
+                "inferenceConfig": {"temperature": 0, "maxTokens": 800},
+            }
+            if self.tools:
+                request["toolConfig"] = {"tools": self.tools}
             result = await run_in_threadpool(
                 self.client.converse,
-                modelId=self.settings.bedrock_model_id,
-                messages=messages,
-                system=[
-                    {
-                        "text": ASSISTANT_SYSTEM_PROMPT
-                    }
-                ],
-                toolConfig={"tools": self.tools},
-                inferenceConfig={"temperature": 0, "maxTokens": 800},
+                **request,
             )
         except Exception as exc:
             raise AppError("BEDROCK_UNAVAILABLE", "Bedrock 暫時無法使用", 503) from exc
@@ -94,21 +101,29 @@ class BedrockConverseProvider:
 
 
 class OllamaChatProvider:
-    def __init__(self, settings: Settings, tools: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        tools: list[dict[str, Any]],
+        *,
+        system_prompt: str = ASSISTANT_SYSTEM_PROMPT,
+    ) -> None:
         self.settings = settings
         self.tools = tools
+        self.system_prompt = system_prompt
 
     async def converse(self, messages: list[dict[str, Any]]) -> ProviderResponse:
         request_body = {
             "model": self.settings.ollama_model,
             "messages": [
-                {"role": "system", "content": ASSISTANT_SYSTEM_PROMPT},
+                {"role": "system", "content": self.system_prompt},
                 *messages,
             ],
-            "tools": self.tools,
             "stream": False,
             "options": {"temperature": 0},
         }
+        if self.tools:
+            request_body["tools"] = self.tools
         try:
             async with httpx.AsyncClient(
                 timeout=self.settings.ollama_timeout_seconds

@@ -1,12 +1,31 @@
+from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.valuation.models import CaseRecord
+
+
+EXTERNAL_REVIEW_CASE_TYPE = "EXTERNAL_REVIEW"
+
 
 class WorkbenchRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
+
+    async def case_no_exists(self, case_no: str) -> bool:
+        result = await self.session.scalar(
+            text("SELECT EXISTS(SELECT 1 FROM valuation.cases WHERE case_no = :case_no)"),
+            {"case_no": case_no},
+        )
+        return bool(result)
+
+    async def create_external_case(self, record: CaseRecord) -> CaseRecord:
+        self.session.add(record)
+        await self.session.flush()
+        await self.session.refresh(record)
+        return record
 
     async def summary(self) -> dict:
         row = (
@@ -61,6 +80,13 @@ class WorkbenchRepository:
         status_filter: str | None,
         risk_level: str | None,
         status_group: str | None,
+        *,
+        case_source: str | None = None,
+        district: str | None = None,
+        urgency_level: str | None = None,
+        urgency_now: datetime | None = None,
+        urgent_days: int = 3,
+        due_soon_days: int = 7,
     ):
         clauses = []
         parameters: dict[str, object] = {}
@@ -73,6 +99,15 @@ class WorkbenchRepository:
         if risk_level:
             clauses.append("r.current_risk_level = :risk_level")
             parameters["risk_level"] = risk_level
+        if case_source == "PLATFORM":
+            clauses.append("c.case_type <> :external_review_case_type")
+            parameters["external_review_case_type"] = EXTERNAL_REVIEW_CASE_TYPE
+        elif case_source == "EXTERNAL":
+            clauses.append("c.case_type = :external_review_case_type")
+            parameters["external_review_case_type"] = EXTERNAL_REVIEW_CASE_TYPE
+        if district:
+            clauses.append("c.district_code = :district")
+            parameters["district"] = district
         status_groups = {
             "pending": ("RECEIVED", "PREPROCESSING", "READY_FOR_REVIEW"),
             "in_progress": ("ANALYZING", "REVIEW_REQUIRED", "EXPERT_REVIEW"),
@@ -88,6 +123,39 @@ class WorkbenchRepository:
         elif status_group in status_groups:
             clauses.append("r.review_status = ANY(:group_statuses)")
             parameters["group_statuses"] = list(status_groups[status_group])
+
+        if urgency_level:
+            if urgency_level == "NOT_SET":
+                clauses.append("r.due_at IS NULL")
+            elif urgency_now is not None:
+                parameters.update(
+                    {
+                        "urgency_now": urgency_now,
+                        "urgent_days": urgent_days,
+                        "due_soon_days": due_soon_days,
+                    }
+                )
+                remaining_days = (
+                    "floor(extract(epoch from (r.due_at - :urgency_now)) / 86400)"
+                )
+                if urgency_level == "OVERDUE":
+                    clauses.append("r.due_at IS NOT NULL AND r.due_at < :urgency_now")
+                elif urgency_level == "URGENT":
+                    clauses.append(
+                        "r.due_at >= :urgency_now AND "
+                        f"{remaining_days} <= :urgent_days"
+                    )
+                elif urgency_level == "DUE_SOON":
+                    clauses.append(
+                        "r.due_at >= :urgency_now AND "
+                        f"{remaining_days} > :urgent_days AND "
+                        f"{remaining_days} <= :due_soon_days"
+                    )
+                elif urgency_level == "NORMAL":
+                    clauses.append(
+                        "r.due_at >= :urgency_now AND "
+                        f"{remaining_days} > :due_soon_days"
+                    )
         return (" AND " + " AND ".join(clauses)) if clauses else "", parameters
 
     async def list_cases(
@@ -98,10 +166,40 @@ class WorkbenchRepository:
         status_group: str | None,
         limit: int,
         offset: int,
+        *,
+        case_source: str | None = None,
+        district: str | None = None,
+        urgency_level: str | None = None,
+        urgency_now: datetime | None = None,
+        urgent_days: int = 3,
+        due_soon_days: int = 7,
+        sort_by: str = "received_at",
+        sort_direction: str = "desc",
     ) -> tuple[list[dict], int]:
         filters, parameters = self._case_filters(
-            q, status_filter, risk_level, status_group
+            q,
+            status_filter,
+            risk_level,
+            status_group,
+            case_source=case_source,
+            district=district,
+            urgency_level=urgency_level,
+            urgency_now=urgency_now,
+            urgent_days=urgent_days,
+            due_soon_days=due_soon_days,
         )
+        order_columns = {
+            "case_no": "c.case_no",
+            "case_title": "c.case_title",
+            "status": "r.review_status",
+            "received_at": "r.received_at",
+            "due_at": "r.due_at",
+            "risk": "CASE r.current_risk_level WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 1 ELSE 0 END",
+        }
+        order_column = order_columns.get(sort_by, "r.received_at")
+        direction = "ASC" if sort_direction == "asc" else "DESC"
+        nulls = " NULLS LAST" if sort_by in {"due_at", "risk"} else ""
+        order_by = f"{order_column} {direction}{nulls}, r.review_id ASC"
         total = await self.session.scalar(
             text(
                 """
@@ -119,7 +217,10 @@ class WorkbenchRepository:
                 text(
                     """
                     SELECT r.review_id, r.case_id, c.case_no, c.case_title,
-                           c.district_code, r.review_status,
+                           c.district_code,
+                           CASE WHEN c.case_type = 'EXTERNAL_REVIEW'
+                                THEN 'EXTERNAL' ELSE 'PLATFORM' END AS case_source,
+                           r.review_status,
                            r.current_risk_level, r.missing_item_count,
                            r.high_count, r.medium_count, r.low_count,
                            r.manual_priority,
@@ -146,11 +247,8 @@ class WorkbenchRepository:
                     WHERE true
                     """
                     + filters
-                    + """
-                    ORDER BY r.manual_priority DESC,
-                             r.due_at ASC NULLS LAST,
-                             r.received_at ASC,
-                             r.review_id ASC
+                    + f"""
+                    ORDER BY r.manual_priority DESC, {order_by}
                     LIMIT :limit OFFSET :offset
                     """
                 ),
@@ -172,7 +270,8 @@ class WorkbenchRepository:
                     SELECT c.case_id, c.case_no, c.case_title, c.district_code,
                            c.valuation_base_date, c.case_status
                     FROM valuation.cases c
-                    WHERE NOT EXISTS (
+                    WHERE c.case_type <> 'EXTERNAL_REVIEW'
+                      AND NOT EXISTS (
                         SELECT 1 FROM review.reviews r WHERE r.case_id = c.case_id
                     )
                     """
@@ -192,7 +291,7 @@ class WorkbenchRepository:
             await self.session.execute(
                 text(
                     """
-                    SELECT c.case_id, c.case_no, c.case_title, c.district_code,
+                    SELECT c.case_id, c.case_no, c.case_title, c.case_type, c.district_code,
                            c.valuation_base_date, c.case_status
                     FROM review.reviews r
                     JOIN valuation.cases c ON c.case_id = r.case_id
@@ -229,7 +328,7 @@ class WorkbenchRepository:
             await self.session.execute(
                 text(
                     """
-                    SELECT document_id, document_type, original_filename,
+                    SELECT document_id, document_group_id, document_type, original_filename,
                            mime_type, version_no, is_active, uploaded_at
                     FROM valuation.documents
                     WHERE case_id = :case_id

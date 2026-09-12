@@ -1,16 +1,21 @@
 from collections import defaultdict
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from app.core.exceptions import ResourceNotFoundError
+from fastapi import UploadFile
+
+from app.auth.models import User
+from app.core.exceptions import AppError, ResourceNotFoundError
 from app.review.correction_repository import CorrectionRepository
 from app.review.repository import ReviewRepository
-from app.review.schemas import ReviewUpdate
+from app.review.schemas import ReviewCreate, ReviewUpdate
 from app.review.schemas import CorrectionRequestItemRead, CorrectionRequestRead
 from app.review.urgency import UrgencyThresholds, classify_urgency
-from app.review.workbench_repository import WorkbenchRepository
+from app.review.workbench_repository import EXTERNAL_REVIEW_CASE_TYPE, WorkbenchRepository
 from app.review.workbench_schemas import (
     EligibleCaseRead,
+    ExternalReviewCaseCreate,
+    ExternalReviewCaseCreatedRead,
     FieldVersionDiffRead,
     WorkbenchCaseDetailRead,
     WorkbenchCaseList,
@@ -24,6 +29,16 @@ from app.review.workbench_schemas import (
     WorkbenchStartRead,
     WorkbenchSummaryRead,
 )
+from app.valuation.documents.schemas import DocumentCategory
+from app.valuation.extraction.schemas import ExtractionConfirmRequest
+from app.valuation.models import CaseRecord
+
+
+EXTERNAL_REVIEW_DOCUMENT_CATEGORIES = {
+    category
+    for category in DocumentCategory
+    if category != DocumentCategory.COMPLETE_VALUATION_REPORT
+}
 
 
 class WorkbenchService:
@@ -40,6 +55,156 @@ class WorkbenchService:
     async def summary(self) -> WorkbenchSummaryRead:
         return WorkbenchSummaryRead(**(await self.repository.summary()))
 
+    async def create_external_case(
+        self,
+        payload: ExternalReviewCaseCreate,
+        actor_id: UUID,
+    ) -> ExternalReviewCaseCreatedRead:
+        case_no = (payload.case_no or "").strip()
+        if not case_no:
+            case_no = (
+                f"EXT-{payload.valuation_base_date:%Y%m%d}-"
+                f"{uuid4().hex[:6].upper()}"
+            )
+        if await self.repository.case_no_exists(case_no):
+            raise AppError(
+                "EXTERNAL_REVIEW_CASE_NO_CONFLICT",
+                "案件編號已存在，請改用其他案件編號或留空由系統產生",
+                409,
+            )
+
+        record = await self.repository.create_external_case(
+            CaseRecord(
+                case_no=case_no,
+                case_title=payload.case_title.strip(),
+                case_type=EXTERNAL_REVIEW_CASE_TYPE,
+                requesting_agency=(
+                    payload.source_organization.strip()
+                    if payload.source_organization
+                    else None
+                ),
+                valuation_base_date=payload.valuation_base_date,
+                valuation_due_date=None,
+                city_code="65000000",
+                district_code=payload.district_code,
+                land_use_type=None,
+                case_status="IN_REVIEW",
+                created_by_user_id=actor_id,
+                updated_by_user_id=actor_id,
+            )
+        )
+        review = await self.review_repository.create(
+            ReviewCreate(
+                case_id=record.case_id,
+                received_at=payload.received_at,
+                due_at=payload.due_at,
+            ),
+            actor_id,
+        )
+        review.assigned_reviewer_id = actor_id
+        await self.review_repository.session.flush()
+        return ExternalReviewCaseCreatedRead(
+            review_id=review.review_id,
+            case_id=record.case_id,
+            case_no=record.case_no,
+            review_status=review.review_status,
+        )
+
+    async def _external_case(self, review_id: UUID) -> tuple[object, dict]:
+        review = await self.review_repository.get(review_id)
+        case = await self.repository.get_case_summary(review_id)
+        if review is None or case is None:
+            raise ResourceNotFoundError("審查案件")
+        if case["case_type"] != EXTERNAL_REVIEW_CASE_TYPE:
+            raise AppError(
+                "EXTERNAL_REVIEW_OPERATION_NOT_ALLOWED",
+                "此操作僅適用於外部審查案件",
+                409,
+            )
+        return review, case
+
+    async def upload_external_document(
+        self,
+        review_id: UUID,
+        category: DocumentCategory,
+        file: UploadFile,
+        user: User,
+        storage,
+        document_group_id: UUID | None = None,
+    ) -> WorkbenchDocumentRead:
+        _review, case = await self._external_case(review_id)
+        if category not in EXTERNAL_REVIEW_DOCUMENT_CATEGORIES:
+            raise AppError(
+                "EXTERNAL_REVIEW_DOCUMENT_CATEGORY_INVALID",
+                "外部審查案件不可上傳系統產出的正式報告類型",
+                422,
+            )
+        from app.valuation.documents.service import DocumentService
+
+        record = await DocumentService(self.repository.session, storage).upload(
+            case["case_id"],
+            category,
+            file,
+            user,
+            document_group_id,
+            _skip_case_access=True,
+        )
+        return WorkbenchDocumentRead.model_validate(record)
+
+    async def start_external_document_extraction(
+        self,
+        review_id: UUID,
+        document_id: UUID,
+        user: User,
+        storage,
+    ):
+        _review, case = await self._external_case(review_id)
+        from app.valuation.extraction.service import ExtractionService
+
+        return await ExtractionService(self.repository.session, storage).start(
+            case["case_id"],
+            document_id,
+            user,
+            _skip_case_access=True,
+        )
+
+    async def get_external_document_extraction(
+        self,
+        review_id: UUID,
+        document_id: UUID,
+        user: User,
+        storage,
+    ):
+        _review, case = await self._external_case(review_id)
+        from app.valuation.extraction.service import ExtractionService
+
+        return await ExtractionService(self.repository.session, storage).get_latest(
+            case["case_id"],
+            document_id,
+            user,
+            _skip_case_access=True,
+        )
+
+    async def confirm_external_document_extraction(
+        self,
+        review_id: UUID,
+        document_id: UUID,
+        payload: ExtractionConfirmRequest,
+        user: User,
+        storage,
+    ):
+        _review, case = await self._external_case(review_id)
+        from app.valuation.extraction.service import ExtractionService
+
+        return await ExtractionService(self.repository.session, storage).confirm(
+            case["case_id"],
+            document_id,
+            payload,
+            user,
+            _skip_case_access=True,
+            _apply_for_review=True,
+        )
+
     async def list_cases(
         self,
         q: str | None,
@@ -48,10 +213,13 @@ class WorkbenchService:
         status_group: str | None,
         limit: int,
         offset: int,
+        *,
+        case_source: str | None = None,
+        district: str | None = None,
+        urgency_level: str | None = None,
+        sort_by: str = "received_at",
+        sort_direction: str = "desc",
     ) -> WorkbenchCaseList:
-        rows, total = await self.repository.list_cases(
-            q, status_filter, risk_level, status_group, limit, offset
-        )
         # One settings snapshot per request; urgency is never persisted on rows.
         thresholds = (
             await self.corrections.urgency_thresholds()
@@ -59,6 +227,22 @@ class WorkbenchService:
             else UrgencyThresholds()
         )
         now = datetime.now(UTC)
+        rows, total = await self.repository.list_cases(
+            q,
+            status_filter,
+            risk_level,
+            status_group,
+            limit,
+            offset,
+            case_source=case_source,
+            district=district,
+            urgency_level=urgency_level,
+            urgency_now=now,
+            urgent_days=thresholds.urgent_days,
+            due_soon_days=thresholds.due_soon_days,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+        )
         items = []
         for row in rows:
             latest_run = None
@@ -131,7 +315,10 @@ class WorkbenchService:
         return diffs
 
     def _run_projection(
-        self, run, provenance_by_submission_id: dict[UUID, dict]
+        self,
+        run,
+        provenance_by_submission_id: dict[UUID, dict],
+        external_snapshot_by_id: dict[UUID, dict] | None = None,
     ) -> WorkbenchRunRead:
         run_submission_id = getattr(run, "submission_id", None)
         submission = (
@@ -169,6 +356,21 @@ class WorkbenchService:
                     "input_fingerprint": submission["input_fingerprint"],
                 }
             )
+        external_snapshot_id = getattr(run, "external_input_snapshot_id", None)
+        external_snapshot = (
+            (external_snapshot_by_id or {}).get(external_snapshot_id)
+            if external_snapshot_id is not None
+            else None
+        )
+        if external_snapshot is not None:
+            values.update(
+                {
+                    "external_input_snapshot_id": external_snapshot_id,
+                    "external_input_snapshot_no": external_snapshot["snapshot_no"],
+                    "external_input_snapshot_created_at": external_snapshot["created_at"],
+                    "external_input_fingerprint": external_snapshot["input_fingerprint"],
+                }
+            )
         return WorkbenchRunRead(**values)
 
     async def _submitted_snapshot(self, review) -> dict | None:
@@ -204,6 +406,17 @@ class WorkbenchService:
                     run.submission_id
                     for run in raw_runs
                     if run.submission_id is not None
+                },
+                review_id=review.review_id,
+                case_id=review.case_id,
+            )
+        )
+        external_snapshot_by_id = (
+            await self.review_repository.get_external_input_snapshot_metadata_by_ids(
+                {
+                    run.external_input_snapshot_id
+                    for run in raw_runs
+                    if getattr(run, "external_input_snapshot_id", None) is not None
                 },
                 review_id=review.review_id,
                 case_id=review.case_id,
@@ -257,12 +470,17 @@ class WorkbenchService:
                     )
                 )
         runs = [
-            self._run_projection(run, provenance_by_submission_id)
+            self._run_projection(
+                run,
+                provenance_by_submission_id,
+                external_snapshot_by_id,
+            )
             for run in raw_runs
         ]
         return WorkbenchCaseDetailRead(
             case=case,
             review=review,
+            case_source=("EXTERNAL" if case["case_type"] == EXTERNAL_REVIEW_CASE_TYPE else "PLATFORM"),
             submission_id=(
                 None if submission is None else submission["submission_id"]
             ),
@@ -311,10 +529,23 @@ class WorkbenchService:
         provenance_by_submission_id = (
             {} if submission is None else {submission["submission_id"]: submission}
         )
+        external_snapshot_by_id = (
+            await self.review_repository.get_external_input_snapshot_metadata_by_ids(
+                {run.external_input_snapshot_id}
+                if getattr(run, "external_input_snapshot_id", None) is not None
+                else set(),
+                review_id=review.review_id,
+                case_id=review.case_id,
+            )
+        )
         return WorkbenchStartRead(
             outcome="COMPLETED",
             completeness=preflight.completeness,
-            run=self._run_projection(run, provenance_by_submission_id),
+            run=self._run_projection(
+                run,
+                provenance_by_submission_id,
+                external_snapshot_by_id,
+            ),
             findings=findings,
             risk_summary=risk_summary,
         )

@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.review.schemas import (
     CompletenessResponse,
@@ -18,6 +18,36 @@ from app.review.schemas import (
 WorkbenchStatusGroup = Literal[
     "pending", "in_progress", "needs_input", "completed", "risk"
 ]
+WorkbenchCaseSource = Literal["PLATFORM", "EXTERNAL"]
+WorkbenchCaseSort = Literal[
+    "case_no", "case_title", "status", "received_at", "due_at", "risk"
+]
+WorkbenchSortDirection = Literal["asc", "desc"]
+WorkbenchUrgency = Literal["OVERDUE", "URGENT", "DUE_SOON", "NORMAL", "NOT_SET"]
+
+
+class ExternalReviewCaseCreate(BaseModel):
+    case_no: str | None = Field(default=None, max_length=50)
+    case_title: str = Field(min_length=1, max_length=200)
+    source_organization: str | None = Field(default=None, max_length=200)
+    district_code: str = Field(min_length=1, max_length=20)
+    valuation_base_date: date
+    received_at: datetime | None = None
+    due_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_dates(self):
+        if self.received_at and self.due_at and self.due_at < self.received_at:
+            raise ValueError("due_at 不得早於 received_at")
+        return self
+
+
+class ExternalReviewCaseCreatedRead(BaseModel):
+    review_id: UUID
+    case_id: UUID
+    case_no: str
+    case_source: WorkbenchCaseSource = "EXTERNAL"
+    review_status: str
 
 
 class WorkbenchSummaryRead(BaseModel):
@@ -39,6 +69,7 @@ class WorkbenchCaseListItem(BaseModel):
     case_no: str
     case_title: str
     district_code: str
+    case_source: WorkbenchCaseSource
     review_status: str
     current_risk_level: str | None
     missing_item_count: int
@@ -76,6 +107,7 @@ class WorkbenchCaseSummaryRead(BaseModel):
     case_id: UUID
     case_no: str
     case_title: str
+    case_type: str
     district_code: str
     valuation_base_date: date
     case_status: str
@@ -111,10 +143,17 @@ class WorkbenchRunRead(BaseModel):
     submission_no: int | None = None
     submitted_at: datetime | None = None
     input_fingerprint: str | None = None
+    external_input_snapshot_id: UUID | None = None
+    external_input_snapshot_no: int | None = None
+    external_input_snapshot_created_at: datetime | None = None
+    external_input_fingerprint: str | None = None
 
 
 class WorkbenchDocumentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     document_id: UUID
+    document_group_id: UUID | None = None
     document_type: str
     original_filename: str
     mime_type: str
@@ -145,6 +184,7 @@ class FieldVersionDiffRead(BaseModel):
 class WorkbenchCaseDetailRead(BaseModel):
     case: WorkbenchCaseSummaryRead
     review: ReviewRead
+    case_source: WorkbenchCaseSource
     # Safe Submission metadata only; the immutable input body stays server-side.
     submission_id: UUID | None = None
     submission_no: int | None = None

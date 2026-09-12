@@ -19,6 +19,7 @@ from app.review.reports import ReviewReport
 TAIPEI = timezone(timedelta(hours=8))
 
 SHEET_SUMMARY = "案件摘要"
+SHEET_PROVENANCE = "審查依據版本"
 SHEET_FINDINGS = "疑點與修正要求"
 SHEET_RECHECK = "新版重檢結果"
 SHEET_HISTORY = "審查歷程"
@@ -136,6 +137,7 @@ def build_review_xlsx(report: ReviewReport) -> bytes:
     workbook.remove(workbook.active)
 
     _build_summary(workbook.create_sheet(SHEET_SUMMARY), report)
+    _build_provenance(workbook.create_sheet(SHEET_PROVENANCE), report)
     _build_findings(workbook.create_sheet(SHEET_FINDINGS), report)
     _build_recheck(workbook.create_sheet(SHEET_RECHECK), report)
     _build_history(workbook.create_sheet(SHEET_HISTORY), report)
@@ -147,6 +149,12 @@ def build_review_xlsx(report: ReviewReport) -> bytes:
 
 def _build_summary(sheet, report: ReviewReport) -> None:
     urgency = report.urgency
+    provenance = report.input_provenance
+    provenance_source = {
+        "PLATFORM": "平台送審",
+        "EXTERNAL": "外部案件",
+        "LEGACY": "舊版相容資料",
+    }.get(provenance.source, provenance.source) if provenance else ""
     rows = [
         ("案件編號", report.case.case_no),
         ("案件名稱", report.case.case_title),
@@ -157,6 +165,13 @@ def _build_summary(sheet, report: ReviewReport) -> None:
         ("檢核狀態", report.run.run_status),
         ("檢核開始", _local(report.run.started_at)),
         ("檢核完成", _local(report.run.completed_at)),
+        ("審查依據來源", provenance_source),
+        (
+            "審查輸入版本",
+            f"v{provenance.version_no}"
+            if provenance and provenance.version_no is not None
+            else "",
+        ),
         ("內容風險等級", report.risk_summary.overall_risk_level),
         ("高風險疑點數", report.risk_summary.high_count),
         ("中風險疑點數", report.risk_summary.medium_count),
@@ -178,6 +193,66 @@ def _build_summary(sheet, report: ReviewReport) -> None:
         for cell in row:
             cell.font = Font(bold=True)
     _autosize(sheet, [22, 60])
+
+
+def _build_provenance(sheet, report: ReviewReport) -> None:
+    provenance = report.input_provenance
+    source_label = {
+        "PLATFORM": "平台送審",
+        "EXTERNAL": "外部案件",
+        "LEGACY": "舊版相容資料",
+    }.get(provenance.source, provenance.source) if provenance else ""
+    metadata = [
+        ("資料來源", source_label),
+        (
+            "輸入版本",
+            f"v{provenance.version_no}"
+            if provenance and provenance.version_no is not None
+            else "",
+        ),
+        ("凍結時間", _local(provenance.frozen_at) if provenance else ""),
+        ("內容指紋", provenance.fingerprint if provenance else ""),
+        ("快照格式", provenance.schema_version if provenance else ""),
+        (
+            "平台送審識別碼",
+            str(provenance.submission_id)
+            if provenance and provenance.submission_id
+            else "",
+        ),
+        (
+            "外部輸入快照識別碼",
+            str(provenance.external_input_snapshot_id)
+            if provenance and provenance.external_input_snapshot_id
+            else "",
+        ),
+    ]
+    sheet.append(["項目", "內容"])
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+    for label, value in metadata:
+        sheet.append([label, value or ""])
+
+    sheet.append([])
+    document_header_row = sheet.max_row + 1
+    sheet.append(["文件名稱", "文件類型", "文件版本", "SHA-256", "文件識別碼"])
+    for cell in sheet[document_header_row]:
+        cell.font = Font(bold=True)
+    if provenance:
+        for document in provenance.documents:
+            sheet.append(
+                [
+                    document.original_filename or "",
+                    document.document_type,
+                    document.version_no,
+                    document.checksum_sha256,
+                    str(document.document_id),
+                ]
+            )
+    for row in sheet.iter_rows():
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    sheet.freeze_panes = "A2"
+    _autosize(sheet, [28, 24, 12, 68, 38])
 
 
 def _build_findings(sheet, report: ReviewReport) -> None:

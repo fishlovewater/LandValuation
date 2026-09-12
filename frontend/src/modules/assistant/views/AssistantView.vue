@@ -7,28 +7,25 @@ import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
 import PageHeader from '../../../components/common/PageHeader.vue'
 import GlassCard from '../../../components/glass/GlassCard.vue'
 import { useAuthStore } from '../../../stores/auth.store'
+import { valuationStageRoute } from '../../valuation/valuation.navigation'
 import AnswerMessage from '../components/AnswerMessage.vue'
 import AssistantDrawer from '../components/AssistantDrawer.vue'
 import {
   ASSISTANT_QUESTION_MIN_LENGTH,
   ASSISTANT_QUESTION_VALIDATION_MESSAGE,
   assistantApi,
+  canAccessLegacyAssistantSession,
   canAskAssistantQuestion,
-  canAskGeneralAssistantQuestion,
-  canStartAssistantSession,
+  canUseAssistant,
   canUpdateAssistantValuation,
   mapKnowledgeQuestionResponse,
   safeAssistantErrorMessage,
 } from '../assistant.api'
-import {
-  isUsableAssistantContext,
-  mapAssistantQuestion,
-  sanitizeAssistantContext,
-} from '../assistant.mappers'
+import { mapAssistantQuestion } from '../assistant.mappers'
 import type {
   AssistantAnswerModel,
   AssistantChatMessage,
-  AssistantContext,
+  AssistantConversationContextDto,
   AssistantMessageRequestDto,
   AssistantMessageResponseDto,
   AssistantQuestionRequestDto,
@@ -58,16 +55,15 @@ const messageSerial = ref(0)
 let activeController: AbortController | null = null
 let activeMessageController: AbortController | null = null
 let activeWorkflowController: AbortController | null = null
-let skipSessionReload: string | null = null
 
 const routeSessionId = computed(() => {
   const value = route.params.sessionId
   return typeof value === 'string' ? value.trim() : ''
 })
 
-const canStartSession = computed(() => canStartAssistantSession(authStore.permissions))
+const canAccessLegacySession = computed(() => canAccessLegacyAssistantSession(authStore.permissions))
 const canAskCaseQuestion = computed(() => canAskAssistantQuestion(authStore.permissions))
-const canAskGeneralQuestion = computed(() => canAskGeneralAssistantQuestion(authStore.permissions))
+const canUseConversation = computed(() => canUseAssistant(authStore.permissions))
 const canUpdateValuation = computed(() => canUpdateAssistantValuation(authStore.permissions))
 const canRunWorkflow = computed(() => Boolean(session.value && canUpdateValuation.value))
 const permissionKey = computed(() => authStore.permissions.join('|'))
@@ -84,28 +80,13 @@ function queryValue(...names: string[]): string {
   return ''
 }
 
-const context = computed<AssistantContext>(() => {
-  const acceptedFields = canStartSession.value
-    ? (['caseId', 'formId', 'routeName'] as const)
-    : (['routeName'] as const)
-  return sanitizeAssistantContext(
-    {
-      caseId: queryValue('caseId', 'case_id'),
-      formId: queryValue('formId', 'form_id'),
-      routeName: String(route.name ?? 'assistant'),
-    },
-    acceptedFields,
-  )
-})
-
-const hasContext = computed(() => isUsableAssistantContext(context.value))
-const generalKnowledgeMode = computed(() => !routeSessionId.value && !hasContext.value)
+const conversationContext = computed(() => conversationContextPayload())
+const hasConversationContext = computed(() => Boolean(conversationContext.value.case_id))
+const isGeneralConversation = computed(() => !hasConversationContext.value)
 const canAskQuestion = computed(() => (
   session.value
     ? canAskCaseQuestion.value
-    : generalKnowledgeMode.value
-      && canAskGeneralQuestion.value
-      && Boolean(knowledgeConversationId.value)
+    : canUseConversation.value && Boolean(knowledgeConversationId.value)
 ))
 const latestAnswer = computed<AssistantAnswerModel | null>(() => {
   for (let index = messages.value.length - 1; index >= 0; index -= 1) {
@@ -114,7 +95,7 @@ const latestAnswer = computed<AssistantAnswerModel | null>(() => {
   }
   return null
 })
-const suggestedQuestions = computed(() => generalKnowledgeMode.value
+const suggestedQuestions = computed(() => isGeneralConversation.value
   ? [
       '土地徵收補償市價查估的主要流程是什麼？',
       '比準地在查估流程中的用途是什麼？',
@@ -127,12 +108,12 @@ const suggestedQuestions = computed(() => generalKnowledgeMode.value
     ])
 const assistantContextText = computed(() => {
   if (session.value) return '目前案件資料已載入'
-  if (generalKnowledgeMode.value) return '可查詢法規、條文與知識文件'
-  return '尚未帶入案件資料'
+  if (hasConversationContext.value) return '系統會依問題決定使用案件資料、知識資料或兩者'
+  return '系統會依問題決定是否需要查詢知識資料'
 })
-const emptyConversationDescription = computed(() => generalKnowledgeMode.value
-  ? '可直接詢問法規、條文、查估流程或知識文件內容；回答會附上可核對來源。'
-  : '可詢問目前案件缺件、處理進度、來源依據或下一步作業。')
+const emptyConversationDescription = computed(() => isGeneralConversation.value
+  ? '直接輸入問題；一般問答會直接回答，需要正式依據時才會查詢相關資料。'
+  : '直接輸入問題；需要目前案件資料或正式依據時，系統會自動取得相關內容。')
 
 function assistantStepLabel(step: string): string {
   return ({
@@ -147,16 +128,37 @@ function isCurrent(serial: number): boolean {
   return serial === loadSerial.value
 }
 
-function currentQuery(): Record<string, string> {
-  const query: Record<string, string> = {}
-  const caseId = context.value.caseId
-  const formId = context.value.formId
-  if (caseId) query.caseId = caseId
-  if (formId) query.formId = formId
-  return query
+const routeConversationId = computed(() => queryValue('conversationId', 'conversation_id'))
+
+function conversationContextPayload(): AssistantConversationContextDto {
+  const routeName = String(route.name ?? '')
+  const workspace = queryValue('workspace')
+    || (routeName.startsWith('review-') ? 'review' : routeName.startsWith('valuation-') ? 'valuation' : '')
+  const caseId = queryValue('caseId', 'case_id')
+  return {
+    case_id: caseId || null,
+    review_id: caseId ? queryValue('reviewId', 'review_id') || null : null,
+    finding_id: caseId ? queryValue('findingId', 'finding_id', 'finding') || null : null,
+    workspace: workspace || null,
+  }
 }
 
-const routeConversationId = computed(() => queryValue('conversationId', 'conversation_id'))
+function conversationMatchesContext(conversation: KnowledgeConversationDto): boolean {
+  const expected = conversationContextPayload()
+  return (conversation.case_id ?? '') === (expected.case_id ?? '')
+    && (conversation.review_id ?? '') === (expected.review_id ?? '')
+    && (conversation.finding_id ?? '') === (expected.finding_id ?? '')
+    && (conversation.workspace ?? '') === (expected.workspace ?? '')
+}
+
+function conversationRouteQuery(conversation: KnowledgeConversationDto): Record<string, string> {
+  const query: Record<string, string> = { conversationId: conversation.conversation_id }
+  if (conversation.case_id) query.caseId = conversation.case_id
+  if (conversation.review_id) query.reviewId = conversation.review_id
+  if (conversation.finding_id) query.findingId = conversation.finding_id
+  if (conversation.workspace) query.workspace = conversation.workspace
+  return query
+}
 
 function restoreKnowledgeMessages(rows: Awaited<ReturnType<typeof assistantApi.getKnowledgeConversationMessages>>): void {
   messages.value = rows.flatMap((row): AssistantChatMessage[] => {
@@ -177,31 +179,38 @@ async function loadKnowledgeConversation(controller: AbortController, serial: nu
   if (!isCurrent(serial)) return
   knowledgeConversations.value = conversations
   const requestedId = routeConversationId.value
-  let selected = conversations.find((item) => item.conversation_id === requestedId) ?? conversations[0]
+  let selected = conversations.find((item) => item.conversation_id === requestedId)
+    ?? conversations.find(conversationMatchesContext)
   if (!selected) {
-    selected = await assistantApi.createKnowledgeConversation(controller.signal)
+    selected = await assistantApi.createKnowledgeConversation(conversationContextPayload(), controller.signal)
     if (!isCurrent(serial)) return
-    knowledgeConversations.value = [selected]
+    knowledgeConversations.value = [selected, ...conversations]
   }
   knowledgeConversationId.value = selected.conversation_id
   const rows = await assistantApi.getKnowledgeConversationMessages(selected.conversation_id, controller.signal)
   if (!isCurrent(serial)) return
   restoreKnowledgeMessages(rows)
-  if (routeConversationId.value !== selected.conversation_id) {
-    await router.replace({ name: 'assistant', query: { conversationId: selected.conversation_id } })
+  if (
+    routeConversationId.value !== selected.conversation_id
+    || queryValue('caseId', 'case_id') !== (selected.case_id ?? '')
+    || queryValue('reviewId', 'review_id') !== (selected.review_id ?? '')
+    || queryValue('findingId', 'finding_id', 'finding') !== (selected.finding_id ?? '')
+    || queryValue('workspace') !== (selected.workspace ?? '')
+  ) {
+    await router.replace({ name: 'assistant', query: conversationRouteQuery(selected) })
   }
 }
 
 async function createNewKnowledgeConversation(): Promise<void> {
-  if (loading.value || sending.value || !canAskGeneralQuestion.value) return
+  if (loading.value || sending.value || !canUseConversation.value) return
   loading.value = true
   error.value = ''
   try {
-    const created = await assistantApi.createKnowledgeConversation()
+    const created = await assistantApi.createKnowledgeConversation(conversationContextPayload())
     knowledgeConversations.value = [created, ...knowledgeConversations.value]
     knowledgeConversationId.value = created.conversation_id
     messages.value = []
-    await router.replace({ name: 'assistant', query: { conversationId: created.conversation_id } })
+    await router.replace({ name: 'assistant', query: conversationRouteQuery(created) })
   } catch (caught: unknown) {
     error.value = safeAssistantErrorMessage(caught)
   } finally {
@@ -213,7 +222,11 @@ async function selectKnowledgeConversation(event: Event): Promise<void> {
   const target = event.target as HTMLSelectElement
   const conversationId = target.value
   if (!conversationId || conversationId === knowledgeConversationId.value) return
-  await router.replace({ name: 'assistant', query: { conversationId } })
+  const selected = knowledgeConversations.value.find((item) => item.conversation_id === conversationId)
+  await router.replace({
+    name: 'assistant',
+    query: selected ? conversationRouteQuery(selected) : { conversationId },
+  })
 }
 
 function restoreCaseMessages(rows: Awaited<ReturnType<typeof assistantApi.getSessionMessages>>): void {
@@ -234,11 +247,6 @@ function restoreCaseMessages(rows: Awaited<ReturnType<typeof assistantApi.getSes
 async function loadSession(): Promise<void> {
   const serial = ++loadSerial.value
   const requestedSessionId = routeSessionId.value
-  if (requestedSessionId && skipSessionReload === requestedSessionId && session.value?.assistantSessionId === requestedSessionId) {
-    skipSessionReload = null
-    loading.value = false
-    return
-  }
   activeController?.abort()
   activeMessageController?.abort()
   activeWorkflowController?.abort()
@@ -256,32 +264,20 @@ async function loadSession(): Promise<void> {
   knowledgeConversationId.value = ''
 
   try {
-    if (generalKnowledgeMode.value) {
-      if (!canAskGeneralQuestion.value) return
+    if (!requestedSessionId) {
+      if (!canUseConversation.value) return
       await loadKnowledgeConversation(controller, serial)
       return
     }
 
-    if (!canStartSession.value) return
+    if (!canAccessLegacySession.value) return
 
-    if (requestedSessionId) {
-      const loaded = await assistantApi.getSession(requestedSessionId, controller.signal)
-      if (!isCurrent(serial)) return
-      session.value = loaded
-      const rows = await assistantApi.getSessionMessages(loaded.assistantSessionId, controller.signal)
-      if (!isCurrent(serial)) return
-      restoreCaseMessages(rows)
-    } else if (hasContext.value) {
-      const created = await assistantApi.createSession(context.value, controller.signal)
-      if (!isCurrent(serial)) return
-      session.value = created
-      skipSessionReload = created.assistantSessionId
-      await router.replace({
-        name: 'assistant-session',
-        params: { sessionId: created.assistantSessionId },
-        query: currentQuery(),
-      })
-    }
+    const loaded = await assistantApi.getSession(requestedSessionId, controller.signal)
+    if (!isCurrent(serial)) return
+    session.value = loaded
+    const rows = await assistantApi.getSessionMessages(loaded.assistantSessionId, controller.signal)
+    if (!isCurrent(serial)) return
+    restoreCaseMessages(rows)
   } catch (caught: unknown) {
     if (isCurrent(serial) && !controller.signal.aborted) error.value = safeAssistantErrorMessage(caught)
   } finally {
@@ -307,14 +303,17 @@ async function sendQuestion(value = question.value): Promise<void> {
   const controller = new AbortController()
   activeMessageController = controller
   const serial = loadSerial.value
-  const request: AssistantQuestionRequestDto = { question: content }
+  const request: AssistantQuestionRequestDto = {
+    question: content,
+    ...conversationContextPayload(),
+  }
   try {
     const response = currentSession
       ? await assistantApi.askQuestion(currentSession.assistantSessionId, request, controller.signal)
       : await assistantApi.askKnowledgeConversation(knowledgeConversationId.value, request, controller.signal)
     if (!isCurrent(serial)) return
     if (currentSession && session.value?.assistantSessionId !== currentSession.assistantSessionId) return
-    if (!currentSession && !generalKnowledgeMode.value) return
+    if (!currentSession && !knowledgeConversationId.value) return
     const answer = mapAssistantQuestion(response)
     messages.value.push({ id: `assistant-answer-${messageSerial.value}`, role: 'assistant', answer })
     if (!currentSession) {
@@ -432,7 +431,20 @@ function submitDrawerQuestion(value: string): void {
 }
 
 watch(
-  [routeSessionId, () => route.query.caseId, () => route.query.case_id, () => route.query.formId, () => route.query.form_id, routeConversationId, permissionKey],
+  [
+    routeSessionId,
+    () => route.query.caseId,
+    () => route.query.case_id,
+    () => route.query.formId,
+    () => route.query.form_id,
+    () => route.query.reviewId,
+    () => route.query.review_id,
+    () => route.query.findingId,
+    () => route.query.finding_id,
+    () => route.query.workspace,
+    routeConversationId,
+    permissionKey,
+  ],
   () => { void loadSession() },
   { immediate: true },
 )
@@ -449,16 +461,16 @@ onBeforeUnmount(() => {
     <PageHeader
       eyebrow="智能助理"
       title="智能助理"
-      :description="generalKnowledgeMode
-        ? '可直接查詢法規、條文與知識文件，回答會附上可核對來源。'
-        : '可針對目前案件提問，並以系統中的案件資料與來源協助核對。'"
+      :description="isGeneralConversation
+        ? '直接輸入問題；需要正式依據時，系統會自動查詢可核對的知識來源。'
+        : '已連結目前案件；系統會依問題自動判斷是否需要案件資料、知識來源或兩者。'"
       >
       <template #actions>
         <RouterLink
-          v-if="session && context.caseId"
+          v-if="conversationContext.case_id"
           class="assistant-view__case-link"
           data-testid="assistant-return-case"
-          :to="{ name: 'valuation-prepare', params: { caseId: context.caseId } }"
+          :to="valuationStageRoute(conversationContext.case_id, 'case')"
         >
           返回目前案件
         </RouterLink>
@@ -480,41 +492,30 @@ onBeforeUnmount(() => {
     <GlassCard class="assistant-frame">
       <template #title>智能助理問答</template>
       <template #meta>
-        {{ generalKnowledgeMode
-          ? '只使用知識庫中可核對的來源回答。'
-          : '目前已帶入案件資料；回答仍以可核對的系統資料與來源為準。' }}
+        {{ isGeneralConversation
+          ? '一般問題直接回答；涉及正式依據時才查詢知識資料。'
+          : '一般問題直接回答；涉及目前案件或正式依據時才讀取對應資料。' }}
       </template>
 
       <LoadingSkeleton v-if="loading" :rows="4" label="正在載入智能助理" />
-      <ErrorState v-else-if="error && !session && !generalKnowledgeMode" :message="error" @retry="loadSession" />
+      <ErrorState v-else-if="error && !session && !knowledgeConversationId" :message="error" @retry="loadSession" />
       <EmptyState
-        v-else-if="!generalKnowledgeMode && !hasContext && !session"
-        title="尚未選取可用的比準地地價估計表案件"
-        :description="canStartSession ? '請先從可查看的估價案件開啟智能助理。' : '目前帳號沒有查看估價案件的權限。'"
+        v-else-if="!session && !canUseConversation"
+        title="目前帳號無法使用智能助理"
+        description="請使用具有 AI 助手權限的帳號，或聯絡系統管理者確認權限設定。"
       >
         <template #action>
-          <RouterLink class="assistant-view__back-link" to="/app/valuation/dashboard">回到估價作業</RouterLink>
+          <RouterLink class="assistant-view__back-link" to="/app">回到工作台</RouterLink>
         </template>
       </EmptyState>
       <template v-else>
         <div class="assistant-context" data-testid="assistant-context" role="status">
           <span class="assistant-context__dot" aria-hidden="true" />
-          <span>{{ session ? '案件模式' : '知識模式' }}｜{{ assistantContextText }}</span>
+          <span>{{ session || hasConversationContext ? '已連結目前案件' : '自動判斷資料來源' }}｜{{ assistantContextText }}</span>
           <span v-if="session" class="assistant-context__step">目前進度：{{ assistantStepLabel(session.currentStep) }}</span>
         </div>
 
-        <section class="assistant-mode-guide" data-testid="assistant-mode-guide" aria-label="智能助理使用方式">
-          <article :data-active="session ? 'true' : 'false'">
-            <strong>案件模式</strong>
-            <span>針對目前案件詢問缺件、進度、來源與下一步；可直接返回案件繼續作業。</span>
-          </article>
-          <article :data-active="generalKnowledgeMode ? 'true' : 'false'">
-            <strong>知識模式</strong>
-            <span>查詢法規、條文、查估流程與知識文件；回答會附上可核對來源。</span>
-          </article>
-        </section>
-
-        <div v-if="generalKnowledgeMode" class="assistant-history" data-testid="assistant-history">
+        <div v-if="!session" class="assistant-history" data-testid="assistant-history">
           <label for="assistant-history-select">對話紀錄</label>
           <select
             id="assistant-history-select"
@@ -532,7 +533,7 @@ onBeforeUnmount(() => {
           </select>
           <button
             type="button"
-            :disabled="loading || sending || !canAskGeneralQuestion"
+            :disabled="loading || sending || !canUseConversation"
             @click="createNewKnowledgeConversation"
           >
             新增對話
@@ -575,9 +576,7 @@ onBeforeUnmount(() => {
             :disabled="!canAskQuestion || loading || sending"
             :aria-invalid="questionValidationMessage ? 'true' : undefined"
             :aria-describedby="questionValidationMessage ? 'assistant-question-validation' : undefined"
-            :placeholder="generalKnowledgeMode
-              ? '例如：請查詢土地估價相關條文與適用依據。'
-              : '例如：請說明目前這筆案件還缺少哪些資料？'"
+            placeholder="輸入問題；需要案件或正式依據時會自動查找…"
           />
           <p
             v-if="!canAskQuestion"
@@ -585,9 +584,7 @@ onBeforeUnmount(() => {
             data-testid="assistant-permission-required"
             role="status"
           >
-            {{ generalKnowledgeMode
-              ? '目前帳號沒有查詢法規與知識文件的權限。'
-              : '目前帳號沒有查看案件資料與來源文件的權限。' }}
+            目前帳號沒有使用 AI 助手的權限，或目前工作情境尚未準備完成。
           </p>
           <p
             v-if="questionValidationMessage"
@@ -770,12 +767,6 @@ onBeforeUnmount(() => {
   font-size: 12px;
   font-weight: 600;
 }
-
-.assistant-mode-guide { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.assistant-mode-guide article { display: grid; gap: 4px; padding: 12px 14px; border: 1px solid var(--app-line); border-radius: 10px; background: #fafbfd; }
-.assistant-mode-guide article[data-active="true"] { border-color: #bfd0e2; background: #f4f8fc; box-shadow: inset 3px 0 0 #2e5984; }
-.assistant-mode-guide strong { color: var(--app-ink); font-size: 12px; }
-.assistant-mode-guide span { color: var(--app-muted); font-size: 10px; line-height: 1.55; }
 
 .assistant-history {
   display: grid;

@@ -200,6 +200,15 @@ function displayFieldValue(key: string, value: unknown): DisplayValue {
     }
     return { value: labels[source] ?? '系統資料' }
   }
+  if (key === 'source') {
+    const source = typeof value === 'string' ? value.trim().toUpperCase() : ''
+    const labels: Readonly<Record<string, string>> = {
+      PLATFORM: '平台送審',
+      EXTERNAL: '外部案件',
+      LEGACY: '舊版相容資料',
+    }
+    return { value: labels[source] ?? '審查輸入' }
+  }
   return { value: readableValue(value) }
 }
 
@@ -238,6 +247,8 @@ function reviewRecords(review: HistoryReviewModel | null): DisplayRecord[] {
   if (!review) return []
   return [
     ...displayRecords(review.reviews, ['review_type', 'review_status'], '審查案件'),
+    ...displayRecords(review.inputSnapshots, ['source', 'input_version'], '審查輸入版本'),
+    ...displayRecords(review.validationRuns, ['run_status', 'run_no'], '審查檢核批次'),
     ...displayRecords(review.riskSummaries, ['overall_risk_level', 'summary'], '風險摘要'),
     ...displayRecords(review.findings, ['title', 'finding_code'], '審查疑點'),
     ...displayRecords(review.decisions, ['decision'], '審查決定'),

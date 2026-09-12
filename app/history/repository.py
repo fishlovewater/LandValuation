@@ -421,13 +421,142 @@ class HistoryRepository:
             case_id,
         )
         if not reviews:
-            return {"reviews": [], "findings": [], "risk_summaries": [], "decisions": []}
+            return {
+                "reviews": [],
+                "validation_runs": [],
+                "input_snapshots": [],
+                "findings": [],
+                "risk_summaries": [],
+                "decisions": [],
+            }
         review_ids = tuple(row["review_id"] for row in reviews)
+        validation_runs = (
+            await self.session.execute(
+                text(
+                    """SELECT validation_run_id, review_id, run_no, run_status,
+                              passed_count, warning_count, failed_count,
+                              started_at, completed_at, submission_id,
+                              external_input_snapshot_id
+                       FROM valuation.validation_runs
+                       WHERE review_id IN :review_ids
+                       ORDER BY run_no DESC, started_at DESC,
+                                validation_run_id DESC"""
+                ).bindparams(bindparam("review_ids", expanding=True)),
+                {"review_ids": review_ids},
+            )
+        ).mappings().all()
+        platform_snapshots = (
+            await self.session.execute(
+                text(
+                    """SELECT 'PLATFORM' AS source, s.review_id,
+                              s.submission_id, NULL::uuid AS external_input_snapshot_id,
+                              s.submission_no AS input_version,
+                              s.submitted_at AS frozen_at,
+                              s.input_fingerprint AS fingerprint,
+                              CASE
+                                  WHEN jsonb_typeof(s.input_snapshot -> 'documents') = 'array'
+                                  THEN jsonb_array_length(s.input_snapshot -> 'documents')
+                                  ELSE 0
+                              END AS document_count,
+                              primary_document.document_row ->> 'original_filename'
+                                  AS primary_document_name,
+                              CASE
+                                  WHEN primary_document.document_row ->> 'version_no' ~ '^[0-9]+$'
+                                  THEN (primary_document.document_row ->> 'version_no')::integer
+                                  ELSE NULL
+                              END AS primary_document_version,
+                              primary_document.document_row ->> 'checksum_sha256'
+                                  AS primary_document_checksum,
+                              CASE
+                                  WHEN jsonb_typeof(s.input_snapshot -> 'documents') = 'array'
+                                  THEN (
+                                      SELECT array_to_string(
+                                          ARRAY(
+                                              SELECT concat(
+                                                  coalesce(document_row ->> 'original_filename', '未命名文件'),
+                                                  ' · v',
+                                                  coalesce(document_row ->> 'version_no', '?')
+                                              )
+                                              FROM jsonb_array_elements(s.input_snapshot -> 'documents') AS document_row
+                                              ORDER BY document_row ->> 'document_type',
+                                                       document_row ->> 'original_filename'
+                                          ),
+                                          '； '
+                                      )
+                                  )
+                                  ELSE NULL
+                              END AS document_versions
+                       FROM valuation.review_submissions s
+                       LEFT JOIN LATERAL (
+                           SELECT document_row
+                           FROM jsonb_array_elements(
+                               CASE
+                                   WHEN jsonb_typeof(s.input_snapshot -> 'documents') = 'array'
+                                   THEN s.input_snapshot -> 'documents'
+                                   ELSE '[]'::jsonb
+                               END
+                           ) AS document_row
+                           WHERE document_row ->> 'document_id' = s.source_report_document_id::text
+                           LIMIT 1
+                       ) AS primary_document ON true
+                       WHERE s.review_id IN :review_ids
+                       ORDER BY s.submission_no DESC, s.submitted_at DESC"""
+                ).bindparams(bindparam("review_ids", expanding=True)),
+                {"review_ids": review_ids},
+            )
+        ).mappings().all()
+        external_snapshots = (
+            await self.session.execute(
+                text(
+                    """SELECT 'EXTERNAL' AS source, s.review_id,
+                              NULL::uuid AS submission_id,
+                              s.external_input_snapshot_id,
+                              s.snapshot_no AS input_version,
+                              s.created_at AS frozen_at,
+                              s.input_fingerprint AS fingerprint,
+                              CASE
+                                  WHEN jsonb_typeof(s.input_snapshot -> 'documents') = 'array'
+                                  THEN jsonb_array_length(s.input_snapshot -> 'documents')
+                                  ELSE 0
+                              END AS document_count,
+                              NULL::text AS primary_document_name,
+                              NULL::integer AS primary_document_version,
+                              NULL::text AS primary_document_checksum,
+                              CASE
+                                  WHEN jsonb_typeof(s.input_snapshot -> 'documents') = 'array'
+                                  THEN (
+                                      SELECT array_to_string(
+                                          ARRAY(
+                                              SELECT concat(
+                                                  coalesce(document_row ->> 'original_filename', '未命名文件'),
+                                                  ' · v',
+                                                  coalesce(document_row ->> 'version_no', '?')
+                                              )
+                                              FROM jsonb_array_elements(s.input_snapshot -> 'documents') AS document_row
+                                              ORDER BY document_row ->> 'document_type',
+                                                       document_row ->> 'original_filename'
+                                          ),
+                                          '； '
+                                      )
+                                  )
+                                  ELSE NULL
+                              END AS document_versions
+                       FROM review.external_input_snapshots s
+                       WHERE s.review_id IN :review_ids
+                       ORDER BY s.snapshot_no DESC, s.created_at DESC"""
+                ).bindparams(bindparam("review_ids", expanding=True)),
+                {"review_ids": review_ids},
+            )
+        ).mappings().all()
         findings = await self._review_rows("review.findings", review_ids)
         risks = await self._risk_summary_rows(review_ids)
         decisions = await self._review_rows("review.decisions", review_ids)
         return {
             "reviews": reviews,
+            "validation_runs": [dict(row) for row in validation_runs],
+            "input_snapshots": [
+                dict(row) for row in (*platform_snapshots, *external_snapshots)
+            ],
             "findings": findings,
             "risk_summaries": risks,
             "decisions": decisions,

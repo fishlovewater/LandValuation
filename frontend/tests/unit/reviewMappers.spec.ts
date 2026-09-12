@@ -65,6 +65,7 @@ describe('review mappers', () => {
         latest_validation_run_id: ids.run,
         latest_submission_id: null,
       },
+      case_source: 'PLATFORM',
       submission_id: null,
       submission_no: null,
       submitted_at: null,
@@ -133,6 +134,8 @@ describe('review mappers', () => {
     })
 
     expect(detail.unresolvedFindingCount).toBe(1)
+    expect(detail.caseSourceCode).toBe('PLATFORM')
+    expect(detail.caseSourceLabel).toBe('平台送審')
     expect(detail.findings[0].sourceEvidence[0].title).toBe('資料來源｜調整率')
     expect(detail.findings[0].sourceEvidence[0].title).not.toContain('internal-extracted-field-id')
   })
@@ -185,6 +188,7 @@ describe('review mappers', () => {
         missing_item_count: 0,
         latest_validation_run_id: ids.run,
       },
+      case_source: 'EXTERNAL',
       submission_id: null,
       submission_no: null,
       submitted_at: null,
@@ -234,6 +238,8 @@ describe('review mappers', () => {
         currentValue: '-5',
       }),
     ])
+    expect(detail.caseSourceCode).toBe('EXTERNAL')
+    expect(detail.caseSourceLabel).toBe('外部案件')
   })
 
   it('summarizes structured version-diff values without exposing backend field names', () => {

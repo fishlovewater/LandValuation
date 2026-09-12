@@ -1,12 +1,10 @@
 import type {
   AssistantAnswerModel,
+  AssistantAnswerRoute,
   AssistantCitationModel,
   AssistantCitationResponseDto,
   AssistantClaimModel,
-  AssistantContext,
-  AssistantContextField,
   AssistantQuestionResponseDto,
-  AssistantSessionCreateDto,
   AssistantSessionModel,
   AssistantSessionResponseDto,
 } from './assistant.types'
@@ -25,38 +23,6 @@ function nullableNumber(value: unknown): number | null {
 
 function nullableDate(value: unknown): string | null {
   return nonEmptyString(value)
-}
-
-function normalizedContextValue(value: unknown): string | undefined {
-  const result = nonEmptyString(value)
-  return result ?? undefined
-}
-
-/**
- * Keep only fields explicitly allowed by the caller. Route/user/case data is
- * never copied implicitly, and the session adapter only serializes caseId and
- * formId because those are the verified create-session fields.
- */
-export function sanitizeAssistantContext(
-  context: AssistantContext,
-  acceptedFields: readonly AssistantContextField[] = ['caseId', 'formId'],
-): AssistantContext {
-  const accepted = new Set(acceptedFields)
-  return {
-    caseId: accepted.has('caseId') ? normalizedContextValue(context.caseId) : undefined,
-    parcelId: accepted.has('parcelId') ? normalizedContextValue(context.parcelId) : undefined,
-    formId: accepted.has('formId') ? normalizedContextValue(context.formId) : undefined,
-    findingId: accepted.has('findingId') ? normalizedContextValue(context.findingId) : undefined,
-    routeName: accepted.has('routeName') ? normalizedContextValue(context.routeName) ?? '' : '',
-  }
-}
-
-export function buildAssistantContextPayload(context: AssistantContext): AssistantSessionCreateDto {
-  return {
-    case_id: context.caseId?.trim() ?? '',
-    form_instance_id: context.formId?.trim() ?? '',
-    selected_form_type: 'F03',
-  }
 }
 
 export function mapAssistantSession(dto: AssistantSessionResponseDto): AssistantSessionModel {
@@ -96,6 +62,7 @@ function unsupportedAnswer(dto: AssistantQuestionResponseDto): AssistantAnswerMo
   return {
     answerStatus: dto.answer_status,
     text: ASSISTANT_UNSUPPORTED_QUESTION_COPY,
+    answerRoute: normalizeAnswerRoute(dto.answer_route),
     generationMode: dto.generation_mode,
     nextAction: dto.next_action,
     clarificationQuestion: nonEmptyString(dto.clarification_question),
@@ -103,6 +70,12 @@ function unsupportedAnswer(dto: AssistantQuestionResponseDto): AssistantAnswerMo
     citations: [],
     supported: false,
   }
+}
+
+function normalizeAnswerRoute(value: unknown): AssistantAnswerRoute {
+  return value === 'CHAT' || value === 'CASE' || value === 'HYBRID' || value === 'KNOWLEDGE'
+    ? value
+    : 'KNOWLEDGE'
 }
 
 function completeClaimGraph(
@@ -146,6 +119,26 @@ function completeClaimGraph(
 }
 
 export function mapAssistantQuestion(dto: AssistantQuestionResponseDto): AssistantAnswerModel {
+  const answerRoute = normalizeAnswerRoute(dto.answer_route)
+  const directAnswer = nonEmptyString(dto.answer)
+  if (
+    dto.answer_status === 'SUPPORTED'
+    && directAnswer
+    && (answerRoute === 'CHAT' || answerRoute === 'CASE')
+  ) {
+    return {
+      answerStatus: dto.answer_status,
+      text: directAnswer,
+      answerRoute,
+      generationMode: dto.generation_mode,
+      nextAction: dto.next_action,
+      clarificationQuestion: nonEmptyString(dto.clarification_question),
+      claims: [],
+      citations: [],
+      supported: true,
+    }
+  }
+
   const citations = (Array.isArray(dto.citations) ? dto.citations : []).map(mapAssistantCitation)
   const graph = completeClaimGraph(dto, citations)
   if (!graph.supported) return unsupportedAnswer(dto)
@@ -153,6 +146,7 @@ export function mapAssistantQuestion(dto: AssistantQuestionResponseDto): Assista
   return {
     answerStatus: dto.answer_status,
     text: nonEmptyString(dto.answer) ?? ASSISTANT_UNSUPPORTED_QUESTION_COPY,
+    answerRoute,
     generationMode: dto.generation_mode,
     nextAction: dto.next_action,
     clarificationQuestion: nonEmptyString(dto.clarification_question),
@@ -164,7 +158,3 @@ export function mapAssistantQuestion(dto: AssistantQuestionResponseDto): Assista
 
 /** Compatibility name for callers that render a mapped Assistant answer. */
 export const mapAssistantAnswer = mapAssistantQuestion
-
-export function isUsableAssistantContext(context: AssistantContext | null | undefined): context is AssistantContext & { caseId: string; formId: string } {
-  return Boolean(context?.caseId?.trim() && context?.formId?.trim())
-}

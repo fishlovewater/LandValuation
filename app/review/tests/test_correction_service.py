@@ -1,6 +1,15 @@
 """Pure behavior tests for correction snapshot building and gates."""
 
+import asyncio
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+
+from app.core.exceptions import AppError
 from app.review.corrections import build_correction_item_snapshot
+from app.review.correction_service import CorrectionService
+from app.review.schemas import CorrectionResubmissionCreate
 
 
 class _Finding:
@@ -46,3 +55,141 @@ def test_snapshot_never_contains_formal_value_or_selection_source():
     assert "after_value" not in snapshot
     assert "selection_source" not in snapshot
     assert "value" not in snapshot
+
+
+def _external_resubmission_fixture(extraction_state):
+    case_id = uuid4()
+    review_id = uuid4()
+    request_id = uuid4()
+    base_document_id = uuid4()
+    response_document_id = uuid4()
+    actor_id = uuid4()
+    request = SimpleNamespace(
+        correction_request_id=request_id,
+        review_id=review_id,
+        status="SENT",
+        base_document_id=base_document_id,
+        base_document_version=1,
+        response_document_id=None,
+        response_document_version=None,
+        resubmitted_by_user_id=None,
+        resubmitted_at=None,
+    )
+    review = SimpleNamespace(
+        review_id=review_id,
+        case_id=case_id,
+        review_status="RETURNED_FOR_REVISION",
+    )
+    case = SimpleNamespace(case_id=case_id, case_type="EXTERNAL_REVIEW")
+
+    class FakeSession:
+        def __init__(self):
+            self.flush_count = 0
+
+        async def flush(self):
+            self.flush_count += 1
+
+    class FakeCorrections:
+        def __init__(self):
+            self.session = FakeSession()
+
+        async def valid_resubmission_document(self, **values):
+            assert values["case_id"] == case_id
+            assert values["base_document_id"] == base_document_id
+            assert values["base_document_version"] == 1
+            assert values["document_id"] == response_document_id
+            assert values["document_version"] == 2
+            return {
+                "document_id": response_document_id,
+                "version_no": 2,
+                "document_group_id": uuid4(),
+            }
+
+        async def external_resubmission_extraction_state(self, requested_case_id, document_id):
+            assert requested_case_id == case_id
+            assert document_id == response_document_id
+            return extraction_state
+
+    corrections = FakeCorrections()
+    service = CorrectionService(SimpleNamespace(), corrections)
+    payload = CorrectionResubmissionCreate(
+        document_id=response_document_id,
+        document_version=2,
+    )
+    return service, corrections, request, payload, actor_id, case, review, response_document_id
+
+
+def test_external_resubmission_requires_completed_extraction_before_registration():
+    service, corrections, request, payload, actor_id, case, review, _ = (
+        _external_resubmission_fixture(None)
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        asyncio.run(
+            service._register_locked_resubmission(
+                request,
+                payload,
+                actor_id,
+                case=case,
+                review=review,
+            )
+        )
+
+    assert exc_info.value.code == "EXTERNAL_RESUBMISSION_EXTRACTION_REQUIRED"
+    assert request.status == "SENT"
+    assert corrections.session.flush_count == 0
+
+
+def test_external_resubmission_requires_all_extracted_candidates_to_be_resolved():
+    state = {
+        "extraction_id": uuid4(),
+        "extraction_status": "COMPLETED",
+        "pending_candidate_count": 2,
+    }
+    service, corrections, request, payload, actor_id, case, review, _ = (
+        _external_resubmission_fixture(state)
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        asyncio.run(
+            service._register_locked_resubmission(
+                request,
+                payload,
+                actor_id,
+                case=case,
+                review=review,
+            )
+        )
+
+    assert exc_info.value.code == "EXTERNAL_RESUBMISSION_CONFIRMATION_REQUIRED"
+    assert request.status == "SENT"
+    assert corrections.session.flush_count == 0
+
+
+def test_external_resubmission_registers_only_after_extraction_and_confirmation():
+    state = {
+        "extraction_id": uuid4(),
+        "extraction_status": "COMPLETED",
+        "pending_candidate_count": 0,
+    }
+    service, corrections, request, payload, actor_id, case, review, document_id = (
+        _external_resubmission_fixture(state)
+    )
+
+    result = asyncio.run(
+        service._register_locked_resubmission(
+            request,
+            payload,
+            actor_id,
+            case=case,
+            review=review,
+        )
+    )
+
+    assert result is request
+    assert request.status == "RESUBMITTED"
+    assert request.response_document_id == document_id
+    assert request.response_document_version == 2
+    assert request.resubmitted_by_user_id == actor_id
+    assert request.resubmitted_at is not None
+    assert corrections.session.flush_count == 1

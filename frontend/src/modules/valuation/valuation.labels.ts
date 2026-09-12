@@ -6,6 +6,8 @@ export const LAND_USE_OPTIONS = [
   { value: 'OTHER', label: '其他用途' },
 ] as const
 
+export const VALUATION_CASE_TYPE = 'LAND' as const
+
 const CASE_TYPE_LABELS: Readonly<Record<string, string>> = {
   LAND: '土地徵收補償市價查估',
   LAND_ACQUISITION: '土地徵收補償市價查估',

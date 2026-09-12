@@ -13,6 +13,7 @@ const props = withDefaults(
     canSendCorrection?: boolean
     canRecheckCorrection?: boolean
     correctionStatus?: string | null
+    caseSourceCode?: string
     correctionActionReason?: string
     reviewStatusCode?: string
     totalFindingCount?: number
@@ -32,6 +33,7 @@ const props = withDefaults(
     canSendCorrection: false,
     canRecheckCorrection: false,
     correctionStatus: null,
+    caseSourceCode: 'PLATFORM',
     correctionActionReason: '請先完成所有疑點判定；至少一項確認為需修正後，才能送出修正通知。',
     reviewStatusCode: '',
     totalFindingCount: 0,
@@ -54,6 +56,13 @@ const emit = defineEmits<{
 }>()
 
 const finalState = computed(() => ['APPROVED', 'REVIEW_COMPLETED'].includes(props.reviewStatusCode))
+const externalCase = computed(() => props.caseSourceCode === 'EXTERNAL')
+const requestCorrectionLabel = computed(() => externalCase.value ? '建立修正通知' : '要求修正')
+const sendCorrectionLabel = computed(() => externalCase.value ? '確認已對外通知' : '送出修正通知')
+const awaitingCorrectionLabel = computed(() => externalCase.value ? '等待外部回件' : '等待補正回件')
+const awaitingCorrectionTitle = computed(() => externalCase.value
+  ? '修正通知已記錄為對外通知，等待外部廠商回傳新版文件。'
+  : '已退回估價端，等待較新的正式版本重新送審。')
 const correctionActionIsPrimary = computed(() => ['DRAFT', 'RESUBMITTED'].includes(props.correctionStatus ?? ''))
 const finalizeIsPrimary = computed(() => !finalState.value && !correctionActionIsPrimary.value)
 const resolvedFindingCount = computed(() => Math.max(0, props.totalFindingCount - props.unresolvedFindingCount))
@@ -91,7 +100,7 @@ const findingProgress = computed(() => props.totalFindingCount > 0
         :title="correctionActionReason"
         @click="emit('correction-request')"
       >
-        要求修正
+        {{ requestCorrectionLabel }}
       </GlassButton>
       <GlassButton
         v-else-if="correctionStatus === 'DRAFT'"
@@ -101,15 +110,15 @@ const findingProgress = computed(() => props.totalFindingCount > 0
         :title="correctionActionReason"
         @click="emit('send-correction')"
       >
-        送出修正通知
+        {{ sendCorrectionLabel }}
       </GlassButton>
       <GlassButton
         v-else-if="correctionStatus === 'SENT'"
         data-testid="awaiting-correction"
         :disabled="true"
-        title="已退回估價端，等待較新的正式版本重新送審。"
+        :title="awaitingCorrectionTitle"
       >
-        等待補正回件
+        {{ awaitingCorrectionLabel }}
       </GlassButton>
       <GlassButton
         v-else-if="correctionStatus === 'RESUBMITTED'"
