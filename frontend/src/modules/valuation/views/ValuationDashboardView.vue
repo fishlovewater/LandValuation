@@ -107,6 +107,7 @@ function caseStatusTone(row: ValuationCaseModel): 'neutral' | 'active' | 'warnin
 }
 
 type CaseActionKind = 'supplement' | 'valuation' | 'view'
+type CaseProgress = { value: number; label: string }
 
 function caseActionKind(row: ValuationCaseModel): CaseActionKind {
   if (['CORRECTION', 'REVISION_REQUIRED'].includes(row.status)) return 'supplement'
@@ -119,6 +120,25 @@ function caseNextAction(row: ValuationCaseModel): string {
   if (kind === 'supplement') return '補件'
   if (kind === 'view') return '查看'
   return '估價'
+}
+
+function caseProgress(row: ValuationCaseModel): CaseProgress {
+  if (['COMPLETED', 'REVIEW_COMPLETED', 'ARCHIVED'].includes(row.status)) {
+    return { value: 100, label: row.status === 'ARCHIVED' ? '案件封存' : '案件完成' }
+  }
+  if (['IN_REVIEW', 'REVIEWING'].includes(row.status)) return { value: 95, label: '審查中' }
+  if (['CORRECTION', 'REVISION_REQUIRED'].includes(row.status)) return { value: 90, label: '審查補正' }
+  if (!row.basicInfoConfirmedAt) return { value: 10, label: '案件資料' }
+
+  const progressByStage: Partial<Record<NonNullable<ValuationCaseModel['lastWorkspaceStage']>, CaseProgress>> = {
+    case: { value: 15, label: '案件資料' },
+    documents: { value: 30, label: '來源資料' },
+    'ai-review': { value: 45, label: '辨識確認' },
+    data: { value: 60, label: '估價資料' },
+    calculation: { value: 80, label: '計算與檢核' },
+    report: { value: 90, label: '查估書與送審' },
+  }
+  return progressByStage[row.lastWorkspaceStage] ?? { value: 15, label: '案件資料' }
 }
 
 function caseNextDetail(row: ValuationCaseModel): string {
@@ -243,6 +263,22 @@ onMounted(() => {
               <span class="case-status" :data-tone="caseStatusTone(row)">{{ caseDisplayStatus(row) }}</span>
             </div>
             <p class="case-card__next"><FileText :size="15" weight="duotone" aria-hidden="true" />{{ caseNextDetail(row) }}</p>
+            <div class="case-card__progress" :data-tone="caseStatusTone(row)">
+              <div class="case-card__progress-heading">
+                <span>案件進度</span>
+                <strong>{{ caseProgress(row).value }}% · {{ caseProgress(row).label }}</strong>
+              </div>
+              <div
+                class="case-card__progress-track"
+                role="progressbar"
+                :aria-label="`${row.name}案件進度`"
+                :aria-valuenow="caseProgress(row).value"
+                aria-valuemin="0"
+                aria-valuemax="100"
+              >
+                <span :style="{ width: `${caseProgress(row).value}%` }"></span>
+              </div>
+            </div>
           </div>
           <div class="case-card__deadline">
             <template v-if="row.valuationDueDate">
@@ -406,6 +442,14 @@ onMounted(() => {
 .case-status[data-tone="success"] { color:#2f745b; background:#edf8f3; }
 .case-card__next { display:flex; align-items:flex-start; gap:6px; margin:0; color:#66798d; font-size:11px; line-height:1.55; }
 .case-card__next > svg { flex:0 0 auto; margin-top:1px; }
+.case-card__progress { display:grid; gap:6px; width:min(100%,560px); }
+.case-card__progress-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; color:#748598; font-size:10px; font-weight:800; }
+.case-card__progress-heading strong { color:#425970; font-size:10px; font-weight:900; }
+.case-card__progress-track { height:6px; overflow:hidden; border-radius:999px; background:#e9eef3; }
+.case-card__progress-track > span { display:block; height:100%; border-radius:inherit; background:#5f83a6; transition:width .2s ease; }
+.case-card__progress[data-tone="warning"] .case-card__progress-track > span { background:#d98a2f; }
+.case-card__progress[data-tone="success"] .case-card__progress-track > span { background:#4f8c70; }
+.case-card__progress[data-tone="neutral"] .case-card__progress-track > span { background:#8a9bad; }
 .case-card__deadline { display:flex; align-items:center; justify-content:flex-end; gap:5px; color:#687b8f; font-size:10px; font-weight:800; white-space:nowrap; }
 .case-action-button { display:inline-flex; min-width:86px; min-height:40px; align-items:center; justify-content:center; gap:7px; padding:8px 13px; border:1px solid transparent; border-radius:8px; cursor:pointer; font-size:12px; font-weight:900; letter-spacing:.04em; white-space:nowrap; transition:background-color .16s ease,border-color .16s ease,box-shadow .16s ease,transform .16s ease; }
 .case-action-button > svg { flex:0 0 auto; }
