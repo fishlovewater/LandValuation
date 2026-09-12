@@ -126,7 +126,7 @@ const activeCandidate = computed(() => (
               <FileSearch v-else :size="15" weight="regular" aria-hidden="true" />
             </span>
             <span class="candidate-queue__copy">
-              <strong>{{ candidate.field_label || fieldDisplayLabel(candidate.form_code, candidate.field_name) }}</strong>
+              <strong>{{ fieldDisplayLabel(candidate.form_code, candidate.field_name) }}</strong>
               <small>{{ candidate.form_code }} · {{ candidateConfidenceLabel(candidate) }}</small>
             </span>
           </button>
@@ -141,7 +141,7 @@ const activeCandidate = computed(() => (
         <header class="candidate-detail__heading">
           <div>
             <span>{{ activeCandidate.form_code }} · {{ candidateProviderLabel(activeCandidate.analysis_provider) }}</span>
-            <h3>{{ activeCandidate.field_label || fieldDisplayLabel(activeCandidate.form_code, activeCandidate.field_name) }}</h3>
+            <h3>{{ fieldDisplayLabel(activeCandidate.form_code, activeCandidate.field_name) }}</h3>
             <small>{{ candidateDocumentName(activeCandidate.document_id) }}{{ activeCandidate.source_page ? ` · 第 ${activeCandidate.source_page} 頁` : '' }}</small>
           </div>
           <span class="candidate-detail__confidence">信心度 {{ candidateConfidenceLabel(activeCandidate) }}</span>
@@ -191,7 +191,7 @@ const activeCandidate = computed(() => (
               :data-testid="`candidate-value-${activeCandidate.extracted_field_id}`"
               :type="candidateInputType(activeCandidate)"
               :inputmode="candidateInputMode(activeCandidate)"
-              :placeholder="`請填寫：${activeCandidate.field_label || fieldDisplayLabel(activeCandidate.form_code, activeCandidate.field_name)}`"
+              :placeholder="`請填寫：${fieldDisplayLabel(activeCandidate.form_code, activeCandidate.field_name)}`"
               :disabled="candidateDecision[activeCandidate.extracted_field_id] === 'REJECT'"
               @input="emit('updateValue', activeCandidate.extracted_field_id, ($event.target as HTMLInputElement).value)"
             >
@@ -236,7 +236,7 @@ const activeCandidate = computed(() => (
       <ul>
         <li v-for="candidate in processedCandidates" :key="`processed-${candidate.extracted_field_id}`">
           <div>
-            <strong>{{ candidate.field_label || fieldDisplayLabel(candidate.form_code, candidate.field_name) }}</strong>
+            <strong>{{ fieldDisplayLabel(candidate.form_code, candidate.field_name) }}</strong>
             <span>{{ candidateStatusLabel(candidate.field_status) }} · {{ displayCandidateValue(candidate.confirmed_value ?? candidate.extracted_value) || '未採用值' }}</span>
           </div>
           <button v-if="!candidateDecision[candidate.extracted_field_id]" class="candidate-history__reopen" type="button" :data-testid="`reopen-candidate-${candidate.extracted_field_id}`" @click="emit('reopen', candidate)">

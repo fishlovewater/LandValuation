@@ -21,6 +21,59 @@ const LAND_USE_LABELS: Readonly<Record<string, string>> = Object.fromEntries(
   LAND_USE_OPTIONS.map((option) => [option.value, option.label]),
 )
 
+const FORM_FIELD_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  'F02-RF': {
+    urban_plan_status: '都市計畫（內、外）',
+    land_use_zone: '使用分區（使用地類別）',
+    building_coverage_rate: '建蔽率',
+    floor_area_ratio: '容積率',
+    prohibited_building: '有無禁止建築',
+    restricted_building: '有無限制建築',
+    main_road_width: '主要道路寬度',
+    average_road_width: '區段內道路平均寬度',
+    mass_transit_proximity: '接近大型車站之程度',
+    station_proximity: '站牌之接近程度或密集程度',
+    interchange_proximity: '交流道之有無及接近程度',
+    road_plan: '區段內道路規劃及闢建程度',
+    drainage: '排水之良否',
+    terrain: '地勢',
+    market_proximity: '接近市場之程度',
+    park_proximity: '接近公園、廣場、徒步區之程度',
+    tourist_facility_proximity: '接近觀光遊憩設施之程度',
+    parking_convenience: '停車場地之便利程度',
+    power_gas_facility: '電業及公用氣體燃料設施之有無及接近程度',
+    funeral_facility: '殯葬設施之有無及接近程度',
+    waste_facility: '廢棄物處理設施之有無及接近程度',
+    environmental_pollution: '水、噪音、廢氣及廢棄物污染之有無及接近程度',
+    department_store: '百貨公司之有無、數量及接近程度',
+    financial_institution: '金融機構之有無、數量及接近程度',
+    entertainment_facility: '娛樂設施之有無、數量及接近程度',
+    exhibition_hotel: '大型展示中心或觀光飯店之有無、數量及接近程度',
+    pedestrian_flow: '顧客通行量之多寡',
+    vacancy_rate: '店舖之毗連狀態',
+    other: '其他影響因素',
+    status: '都市計畫狀態',
+    price_zone_no: '地價區段號',
+  },
+  F01: {
+    case_and_instance_refs: '年度、區段號及實例編號',
+    construction_unit_adjustment: '建築單價調整率',
+    normal_land_unit_price_raw: '土地正常買賣單價',
+    normal_total_price_raw: '正常買賣總價',
+    status: '交易狀態',
+    other: '其他交易資料',
+  },
+  F02: {
+    basic_description: '基本資料／土地標示',
+    subject_role: '比較標的角色',
+    status: '比較標的狀態',
+    other: '其他比較條件',
+  },
+  F03: { status: '估價狀態', other: '其他估價資料' },
+  F04: { status: '估價狀態', other: '其他估價資料' },
+  S01: { status: '區段狀態', other: '其他區段資料' },
+}
+
 const VALUATION_FIELD_LABELS: Readonly<Record<string, string>> = {
   administrative_area: '行政區',
   area_sqm: '土地面積',
@@ -99,7 +152,18 @@ export function valuationFieldLabel(value: string | null | undefined): string {
   const normalized = normalizedFieldName(raw)
   if (VALUATION_FIELD_LABELS[normalized]) return VALUATION_FIELD_LABELS[normalized]
   const generic = userFieldLabel(raw)
-  return generic === '其他資料' ? '其他估價欄位' : generic
+  return generic === '其他資料' || /^[a-z0-9_]+$/i.test(raw) ? '其他估價欄位' : generic
+}
+
+export function valuationFormFieldLabel(
+  formCode: string | null | undefined,
+  fieldName: string | null | undefined,
+): string {
+  const normalizedForm = formCode?.trim().toUpperCase() ?? ''
+  const normalizedField = normalizedFieldName(fieldName?.trim() ?? '')
+  const formLabel = FORM_FIELD_LABELS[normalizedForm]?.[normalizedField]
+  if (formLabel) return formLabel
+  return valuationFieldLabel(fieldName)
 }
 
 export function extractionStatusLabel(value: string | null | undefined): string {

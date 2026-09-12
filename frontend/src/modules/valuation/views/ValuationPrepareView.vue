@@ -15,6 +15,7 @@ import {
   analysisProviderLabel,
   extractedFieldStatusLabel,
   valuationFieldLabel,
+  valuationFormFieldLabel,
 } from '../valuation.labels'
 import {
   mapBenchmarkLandResponse,
@@ -577,7 +578,7 @@ function fieldDisplayLabel(formCode: string, fieldName: string): string {
   if (manualLabel) return manualLabel
   const known = FIELD_LABELS[fieldName]?.replace(/^比準地地價估計表 → /, '')
   if (known) return known
-  return valuationFieldLabel(fieldName)
+  return valuationFormFieldLabel(formCode, fieldName)
 }
 
 function candidateStatusLabel(status: string): string {
