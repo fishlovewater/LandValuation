@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import {
+  PhArchiveBox as ArchiveBox,
+  PhCheckCircle as CheckCircle,
   PhDownloadSimple as DownloadSimple,
   PhFilePdf as FilePdf,
   PhFileText as FileText,
@@ -28,7 +30,7 @@ function isDownloading(documentId: string): boolean {
 <template>
   <section
     v-if="props.formalReport"
-    class="report-artifact"
+    class="report-artifact report-artifact--formal"
     data-testid="formal-pdf-result"
     aria-labelledby="formal-pdf-title"
   >
@@ -40,15 +42,26 @@ function isDownloading(documentId: string): boolean {
         <div>
           <p>正式文件</p>
           <h2 id="formal-pdf-title">完整送審 PDF</h2>
+          <span>本案送審時使用的主要正式文件。</span>
         </div>
       </div>
-      <span class="report-artifact__marker">正式版本</span>
+      <span class="report-artifact__marker report-artifact__marker--ready">
+        <CheckCircle :size="14" weight="fill" aria-hidden="true" />
+        正式版本
+      </span>
     </div>
 
     <div class="report-artifact__file">
-      <strong>{{ props.formalReport.filename }}</strong>
-      <span>第 {{ props.formalReport.versionNo }} 版｜檔案大小 {{ fileSizeKb(props.formalReport.fileSizeBytes) }} KB</span>
-      <small>這是主要送審產物。頁數依本案實際查估書表與附圖內容產生，不以固定頁數作為流程條件。</small>
+      <div class="report-artifact__file-main">
+        <span class="report-artifact__file-icon" aria-hidden="true">
+          <FilePdf :size="24" weight="duotone" />
+        </span>
+        <div>
+          <strong>{{ props.formalReport.filename }}</strong>
+          <span>PDF · 第 {{ props.formalReport.versionNo }} 版 · {{ fileSizeKb(props.formalReport.fileSizeBytes) }} KB</span>
+        </div>
+      </div>
+      <small>頁數依本案實際查估書表與附圖內容產生，不以固定頁數作為流程條件。</small>
       <button
         class="is-primary"
         type="button"
@@ -62,7 +75,7 @@ function isDownloading(documentId: string): boolean {
     </div>
   </section>
 
-  <section v-if="props.report" class="report-artifact" aria-labelledby="f03-artifact-title">
+  <section v-if="props.report" class="report-artifact report-artifact--trace" aria-labelledby="f03-artifact-title">
     <div class="report-artifact__heading">
       <div class="report-artifact__title">
         <span class="report-artifact__icon" aria-hidden="true">
@@ -71,15 +84,26 @@ function isDownloading(documentId: string): boolean {
         <div>
           <p>流程附件</p>
           <h2 id="f03-artifact-title">比準地地價估計表單表輸出</h2>
+          <span>保留前段計算結果，供流程追溯與核對使用。</span>
         </div>
       </div>
-      <span class="report-artifact__marker">系統產生</span>
+      <span class="report-artifact__marker">
+        <ArchiveBox :size="14" weight="duotone" aria-hidden="true" />
+        流程附件
+      </span>
     </div>
 
     <div class="report-artifact__file">
-      <strong>{{ props.report.filename }}</strong>
-      <span>第 {{ props.report.versionNo }} 版｜檔案大小 {{ fileSizeKb(props.report.fileSizeBytes) }} KB</span>
-      <small>這是前段比準地地價估計表計算產生的單表輸出，保留作流程追溯；正式送審仍以完整送審 PDF 為主。</small>
+      <div class="report-artifact__file-main">
+        <span class="report-artifact__file-icon report-artifact__file-icon--trace" aria-hidden="true">
+          <FileText :size="23" weight="duotone" />
+        </span>
+        <div>
+          <strong>{{ props.report.filename }}</strong>
+          <span>第 {{ props.report.versionNo }} 版 · {{ fileSizeKb(props.report.fileSizeBytes) }} KB</span>
+        </div>
+      </div>
+      <small>這是比準地地價估計表計算產生的單表輸出；正式送審仍以完整送審 PDF 為主。</small>
       <button
         type="button"
         data-testid="download-f03-report"
@@ -95,17 +119,24 @@ function isDownloading(documentId: string): boolean {
 
 <style scoped>
 .report-artifact { display: grid; gap: 16px; padding: 22px; border: 1px solid var(--app-line); border-radius: var(--app-radius-md); background: #fff; }
+.report-artifact--formal { border-color: #cad9e7; }
+.report-artifact--trace { background: #fcfdfe; }
 .report-artifact__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .report-artifact__title { display: flex; align-items: flex-start; gap: 11px; min-width: 0; }
 .report-artifact__icon { display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; border-radius: 9px; color: #2e5984; background: #edf4fb; }
 .report-artifact__title p { margin: 0 0 5px; color: var(--app-accent-deep); font-size: 11px; font-weight: 800; letter-spacing: .12em; }
 .report-artifact__title h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 22px; font-weight: 600; letter-spacing: -.035em; }
-.report-artifact__marker { display: inline-flex; min-height: 30px; align-items: center; padding: 5px 10px; border: 1px solid rgba(46,89,132,.22); border-radius: var(--app-radius-pill); color: #2e5984; background: #edf4fb; font-size: 11px; font-weight: 800; white-space: nowrap; }
-.report-artifact__file { display: grid; gap: 5px; padding: 16px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #fbfcfe; }
+.report-artifact__title > div > span { display: block; margin-top: 5px; color: var(--app-muted); font-size: 11px; line-height: 1.5; }
+.report-artifact__marker { display: inline-flex; min-height: 30px; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid rgba(46,89,132,.22); border-radius: var(--app-radius-pill); color: #2e5984; background: #edf4fb; font-size: 11px; font-weight: 800; white-space: nowrap; }
+.report-artifact__marker--ready { border-color: #cfe4da; color: #2f7456; background: #f1f8f5; }
+.report-artifact__file { display: grid; gap: 8px; padding: 16px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #fbfcfe; }
+.report-artifact__file-main { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.report-artifact__file-main > div { display: grid; gap: 4px; min-width: 0; }
+.report-artifact__file-icon { display: grid; width: 42px; height: 42px; flex: 0 0 auto; place-items: center; border-radius: 9px; color: #2e5984; background: #eaf2fa; }
+.report-artifact__file-icon--trace { color: #66788a; background: #eef2f5; }
 .report-artifact__file strong { color: var(--app-ink); font-size: 15px; overflow-wrap: anywhere; }
-.report-artifact__file > span,
-.report-artifact__file small { color: var(--app-ink-soft); font-size: 12px; }
-.report-artifact__file small { color: var(--app-muted); line-height: 1.55; }
+.report-artifact__file-main span { color: var(--app-ink-soft); font-size: 11px; }
+.report-artifact__file small { color: var(--app-muted); font-size: 11px; line-height: 1.55; }
 .report-artifact__file button { display: inline-flex; min-height: 42px; width: fit-content; align-items: center; justify-content: center; gap: 7px; margin-top: 8px; padding: 9px 15px; border: 1px solid var(--app-line); border-radius: 9px; color: var(--app-ink-soft); background: #fff; cursor: pointer; font-size: 12px; font-weight: 800; }
 .report-artifact__file button.is-primary { border-color: var(--app-accent); color: #fff; background: var(--app-accent); }
 .report-artifact__file button:disabled { cursor: not-allowed; opacity: .55; }
