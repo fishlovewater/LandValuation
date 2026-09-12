@@ -4,6 +4,7 @@ import {
   PhCheckCircle as CheckCircle,
   PhFileText as FileText,
   PhShieldCheck as ShieldCheck,
+  PhWarningCircle as WarningCircle,
 } from '@phosphor-icons/vue'
 import type {
   DocumentArtifactModel,
@@ -48,25 +49,29 @@ defineProps<{
           <strong>已載入目前案件</strong>
         </div>
       </article>
-      <article>
-        <CheckCircle :size="18" weight="duotone" aria-hidden="true" />
+      <article :data-state="authoritativeF02 ? 'ready' : 'pending'">
+        <CheckCircle v-if="authoritativeF02" :size="18" weight="duotone" aria-hidden="true" />
+        <WarningCircle v-else :size="18" weight="duotone" aria-hidden="true" />
         <div>
-          <span>F02 正式版本</span>
-          <strong>{{ authoritativeF02 ? `第 ${authoritativeF02.versionNo} 版` : '尚未取得' }}</strong>
+          <span>比較法調查估價表（F02）</span>
+          <strong>{{ authoritativeF02 ? `第 ${authoritativeF02.versionNo} 版正式資料` : '尚未取得正式版本' }}</strong>
         </div>
       </article>
-      <article>
+      <article :data-state="formalReport || completeReport ? 'ready' : 'pending'">
         <FileText :size="18" weight="duotone" aria-hidden="true" />
         <div>
           <span>完整送審 PDF</span>
-          <strong>{{ formalReport?.filename || completeReport?.filename || '尚未找到啟用文件' }}</strong>
+          <strong>{{ formalReport?.filename || completeReport?.filename || '尚未產生完整送審 PDF' }}</strong>
         </div>
       </article>
-      <article>
-        <ShieldCheck :size="18" weight="duotone" aria-hidden="true" />
+      <article :data-state="validation ? validation.canGenerateReport ? 'ready' : 'blocked' : 'pending'">
+        <ShieldCheck v-if="validation?.canGenerateReport" :size="18" weight="duotone" aria-hidden="true" />
+        <WarningCircle v-else :size="18" weight="duotone" aria-hidden="true" />
         <div>
           <span>檢核狀態</span>
-          <strong>{{ validation ? '已執行' : '尚未執行' }}</strong>
+          <strong>
+            {{ !validation ? '尚未執行' : validation.canGenerateReport ? '已通過一般檢核' : `仍有 ${validation.failedCount} 項錯誤待修正` }}
+          </strong>
         </div>
       </article>
       <article class="submit-summary__readiness">
@@ -141,6 +146,9 @@ defineProps<{
   color: var(--app-accent-deep);
   background: #fbfcfe;
 }
+.submit-summary__grid article[data-state="ready"] { border-color: #cfe4da; color: #2f7456; background: #f5faf7; }
+.submit-summary__grid article[data-state="pending"] { border-color: #e4dfcf; color: #8a6515; background: #fffaf0; }
+.submit-summary__grid article[data-state="blocked"] { border-color: #edc8c0; color: #a44334; background: #fff5f3; }
 .submit-summary__grid article > div { min-width: 0; display: grid; gap: 4px; }
 .submit-summary__grid span { color: var(--app-muted); font-size: 11px; font-weight: 800; }
 .submit-summary__grid strong { color: var(--app-ink); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }

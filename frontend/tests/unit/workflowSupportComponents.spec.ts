@@ -167,7 +167,8 @@ describe('ValuationSubmitSummary', () => {
 
     const summary = wrapper.get('[data-testid="submit-summary"]')
     expect(summary.text()).toContain('NEWTP-2026-001｜測試估價案件')
-    expect(summary.text()).toContain('第 3 版')
+    expect(summary.text()).toContain('比較法調查估價表（F02）')
+    expect(summary.text()).toContain('第 3 版正式資料')
     expect(summary.text()).toContain('完整送審.pdf')
     expect(summary.text()).toContain('完整送審 PDF 已準備完成，可以送審。')
   })
