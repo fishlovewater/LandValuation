@@ -23,16 +23,16 @@ test('valuation modal and document workspace stay within their visual columns', 
   await page.getByRole('button', { name: '取消' }).click()
 
   if (caseId) {
-    await page.goto(`/app/valuation/cases/${caseId}/prepare`)
+    await page.goto(`/app/valuation/cases/${caseId}/documents`)
+    await expect(page).toHaveURL(new RegExp(`/app/valuation/cases/${caseId}/documents$`))
   } else {
     const targetRow = page.getByRole('row').filter({ hasText: caseNo })
     await expect(targetRow).toBeVisible()
     await targetRow.getByRole('button', { name: '繼續估價' }).click()
-    await expect(page).toHaveURL(/\/app\/valuation\/cases\/[^/]+\/prepare$/)
+    await expect(page).toHaveURL(/\/app\/valuation\/cases\/[^/]+(?:\/(?:documents|ai-review|data|calculation|report))?$/)
+    await page.getByTestId('valuation-step-2').click()
+    await expect(page).toHaveURL(/\/app\/valuation\/cases\/[^/]+\/documents$/)
   }
-  const next = page.getByTestId('wizard-next')
-  await expect(next).toBeVisible()
-  await next.click()
 
   const workspace = page.locator('#valuation-document-workspace')
   await expect(workspace).toBeVisible()

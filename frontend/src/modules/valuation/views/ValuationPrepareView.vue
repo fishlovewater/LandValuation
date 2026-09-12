@@ -94,7 +94,7 @@ const activeManualForm = ref<FieldAnalysisFormCode>('F03')
 const documentAnalysisForm = reactive<Record<string, FieldAnalysisFormCode>>({})
 const landContextSaving = ref(false)
 const editingParcelId = ref<string | null>(null)
-type WizardStep = 1 | 2 | 3 | 4 | 5 | 6
+type WizardStep = 1 | 2 | 3 | 4
 type DataSection = 'overview' | 'manual' | 'land' | 'f03'
 const activeWizardStep = ref<WizardStep>(1)
 const activeIntakeStage = ref<'documents' | 'ai-review'>('documents')
@@ -347,8 +347,7 @@ const workspaceStage = computed<ValuationWorkspaceStage>(() => {
   if (activeWizardStep.value === 1) return 'case'
   if (activeWizardStep.value === 2) return activeIntakeStage.value
   if (activeWizardStep.value === 3) return 'data'
-  if (activeWizardStep.value === 4) return 'calculation'
-  return 'report'
+  return 'calculation'
 })
 const workspaceIssueCounts = computed(() => ({
   documents: flow.documents.length ? 0 : 1,
@@ -381,9 +380,7 @@ const wizardStepTitle = computed(() => {
   if (activeWizardStep.value === 1) return '案件基本資料'
   if (activeWizardStep.value === 2) return activeIntakeStage.value === 'documents' ? '文件與辨識' : 'AI 結果確認'
   if (activeWizardStep.value === 3) return '資料補齊'
-  if (activeWizardStep.value === 4) return '計算與檢核'
-  if (activeWizardStep.value === 5) return '查估書與送審'
-  return '送審'
+  return '計算與檢核'
 })
 const workspaceStepLabel = computed(() => {
   if (workspaceStage.value === 'case') return '案件資料確認'
@@ -397,8 +394,7 @@ const wizardNextLabel = computed(() => {
   if (activeWizardStep.value === 2 && activeIntakeStage.value === 'documents') return allCandidates.value.length ? '下一步：AI 結果確認' : '下一步：資料補齊'
   if (activeWizardStep.value === 2) return pendingCandidates.value.length ? `先處理 ${pendingCandidates.value.length} 筆待確認` : '下一步：資料補齊'
   if (activeWizardStep.value === 3) return dataIssueCounts.value.overview ? `尚有 ${dataIssueCounts.value.overview} 項資料待處理` : '下一步：計算與檢核'
-  if (activeWizardStep.value === 4) return canProceedToSubmit.value ? '下一步：查估書確認' : '通過檢核後才能繼續'
-  return '前往查估書確認'
+  return canProceedToSubmit.value ? '下一步：查估書確認' : '通過檢核後才能繼續'
 })
 const SOURCE_DOCUMENT_CATEGORIES: readonly DocumentCategory[] = [
   'parcel-factor-list',
