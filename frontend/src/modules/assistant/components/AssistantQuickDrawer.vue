@@ -13,6 +13,7 @@ import GlassDrawer from '../../../components/glass/GlassDrawer.vue'
 import { useAuthStore } from '../../../stores/auth.store'
 import { reviewApi } from '../../review/review.api'
 import AnswerMessage from './AnswerMessage.vue'
+import { assistantRouteContext, conversationMatchesAssistantContext } from '../assistant.context'
 import {
   ASSISTANT_QUESTION_MIN_LENGTH,
   assistantApi,
@@ -53,24 +54,15 @@ let serial = 0
 
 const canUse = computed(() => canUseAssistant(auth.permissions))
 
+const routeContext = computed(() => assistantRouteContext(route, resolvedReviewCaseId.value))
 const context = computed(() => {
-  const routeName = String(route.name ?? '')
-  const caseId = routeString(route.query.caseId)
-    || routeString(route.query.case_id)
-    || routeString(route.params.caseId)
-    || resolvedReviewCaseId.value
-  const reviewId = routeString(route.params.reviewId)
-    || routeString(route.query.reviewId)
-    || routeString(route.query.review_id)
-  const findingId = routeString(route.query.finding)
-    || routeString(route.query.findingId)
-    || routeString(route.query.finding_id)
-  const workspace = routeName.startsWith('review-')
-    ? 'review'
-    : routeName.startsWith('valuation-')
-      ? 'valuation'
-      : ''
-  return { caseId, reviewId, findingId, workspace }
+  const value = routeContext.value
+  return {
+    caseId: value.case_id ?? '',
+    reviewId: value.review_id ?? '',
+    findingId: value.finding_id ?? '',
+    workspace: value.workspace ?? '',
+  }
 })
 
 const currentContextLabel = computed(() => {
@@ -85,12 +77,15 @@ const currentContextLabel = computed(() => {
       ? '已連結目前審查案件與選取疑點；系統會依問題自動判斷是否需要案件資料、知識資料或兩者。'
       : '已連結目前審查案件；系統會依問題自動判斷資料來源。'
   }
+  if (context.value.caseId && context.value.workspace === 'history') {
+    return '已連結目前案件歷程；系統會依問題自動判斷是否需要歷程案件資料、知識來源或兩者。'
+  }
   if (context.value.caseId) return '已連結目前案件；一般問答直接回答，涉及案件或正式依據時會自動取得可用資料。'
   return '一般問題直接回答；需要正式依據時，系統會自動查詢可用知識資料。'
 })
 const emptyTitle = computed(() => '開始對話')
 const emptyCopy = computed(() => context.value.caseId
-  ? '直接輸入問題。你不需要選擇模式；系統會自行判斷要使用一般對話、案件資料、知識庫或混合資料。'
+  ? '直接輸入問題。系統會依問題與目前工作情境，自動判斷是否需要案件資料、知識來源或兩者。'
   : '直接輸入問題。一般問答不會啟動知識檢索；需要正式依據時才會自動查詢知識資料。')
 
 function routeString(value: unknown): string {
@@ -98,15 +93,7 @@ function routeString(value: unknown): string {
 }
 
 function contextPayload(): AssistantConversationContextDto {
-  const payload: AssistantConversationContextDto = {
-    case_id: context.value.caseId || null,
-    workspace: context.value.workspace || null,
-  }
-  if (context.value.caseId && context.value.reviewId) payload.review_id = context.value.reviewId
-  if (context.value.caseId && context.value.reviewId && context.value.findingId) {
-    payload.finding_id = context.value.findingId
-  }
-  return payload
+  return { ...routeContext.value }
 }
 
 const activeConversation = computed(() =>
@@ -114,16 +101,7 @@ const activeConversation = computed(() =>
 )
 
 function conversationMatchesContext(conversation: KnowledgeConversationDto): boolean {
-  if (context.value.caseId) {
-    if (conversation.case_id !== context.value.caseId) return false
-    if ((conversation.review_id ?? '') !== context.value.reviewId) return false
-    if ((conversation.finding_id ?? '') !== context.value.findingId) return false
-    return (conversation.workspace ?? '') === context.value.workspace
-  }
-  return !conversation.case_id
-    && !conversation.review_id
-    && !conversation.finding_id
-    && (conversation.workspace ?? '') === context.value.workspace
+  return conversationMatchesAssistantContext(conversation, routeContext.value)
 }
 
 function activeQuestionContext(): AssistantConversationContextDto {
@@ -287,6 +265,7 @@ function conversationTitle(conversation: KnowledgeConversationDto): string {
 function conversationContextLabel(conversation: KnowledgeConversationDto): string {
   if (conversation.workspace === 'review') return '審查案件'
   if (conversation.workspace === 'valuation') return '估價案件'
+  if (conversation.workspace === 'history') return '案件歷程'
   if (conversation.case_id) return '案件對話'
   return '一般對話'
 }

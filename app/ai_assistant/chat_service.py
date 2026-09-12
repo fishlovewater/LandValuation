@@ -22,7 +22,7 @@ CASE_ASSISTANT_SYSTEM_PROMPT = (
 
 HYBRID_ASSISTANT_SYSTEM_PROMPT = (
     "你是土地估價系統內的 AI 助手。請使用繁體中文，以一份連貫回答整合目前案件事實與正式知識證據。"
-    "CASE_CONTEXT 是後端依登入權限取得的結構化案件資料，只能用來陳述本案事實；"
+    "CASE_CONTEXT 與 case_summary 是後端依登入權限取得或整理的案件資料，只能用來陳述本案事實；"
     "KNOWLEDGE_RESULT 是後端知識檢索與來源驗證後的結果，只能用來陳述法規、手冊、程序或正式依據。"
     "不得把 CASE_CONTEXT 當成法規證據，也不得用模型記憶補造 KNOWLEDGE_RESULT 沒有支持的正式結論。"
     "KNOWLEDGE_RESULT.answer 若含【來源1】等標記，引用相關正式結論時必須原樣保留這些標記，不得新增不存在的來源編號。"
@@ -172,6 +172,7 @@ async def answer_structured_case_chat(
     review_id: str | None = None,
     finding_id: str | None = None,
     conversation_history: list[dict[str, str]] | None = None,
+    fallback_answer: str | None = None,
 ) -> tuple[str, str | None]:
     """Explain permission-checked structured case data without treating it as law."""
 
@@ -181,7 +182,7 @@ async def answer_structured_case_chat(
         finding_id=finding_id,
     )
 
-    fallback = _case_fallback_reply(question, scoped_context)
+    fallback = fallback_answer or _case_fallback_reply(question, scoped_context)
     settings = get_settings()
     provider_name = settings.ai_provider.upper()
     history = (conversation_history or [])[-6:]
@@ -221,6 +222,7 @@ async def answer_hybrid_chat(
     review_id: str | None = None,
     finding_id: str | None = None,
     conversation_history: list[dict[str, str]] | None = None,
+    case_summary: str | None = None,
 ) -> tuple[str, str | None]:
     """Create one final answer from authorized case data plus verified knowledge evidence."""
 
@@ -229,7 +231,7 @@ async def answer_hybrid_chat(
         review_id=review_id,
         finding_id=finding_id,
     )
-    case_fallback = _case_fallback_reply(question, scoped_context)
+    case_fallback = case_summary or _case_fallback_reply(question, scoped_context)
     knowledge_answer = str(knowledge_result.get("answer") or "").strip()
     fallback = case_fallback
     if knowledge_answer:
@@ -241,6 +243,7 @@ async def answer_hybrid_chat(
     synthesis_input = {
         "question": question,
         "case_context": scoped_context,
+        "case_summary": case_summary,
         "knowledge_result": {
             "answer_status": knowledge_result.get("answer_status"),
             "answer": knowledge_answer,

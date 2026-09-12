@@ -4,10 +4,14 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai_assistant.chat_service import answer_general_chat
+from app.ai_assistant.chat_service import (
+    answer_general_chat,
+    answer_hybrid_chat,
+    answer_structured_case_chat,
+)
 from app.ai_assistant.provider import BedrockConverseProvider, OllamaChatProvider
 from app.ai_assistant.repository import AssistantRepository
-from app.ai_assistant.routing import AssistantAnswerRoute, route_assistant_question
+from app.ai_assistant.routing import AssistantAnswerRoute, analyze_assistant_question
 from app.ai_assistant.schemas import (
     AssistantClaim,
     AssistantCitation,
@@ -172,10 +176,12 @@ class AssistantService:
             role="USER",
             content=payload.question,
         )
-        route = route_assistant_question(
+        route = await analyze_assistant_question(
             payload.question,
             has_case_context=True,
+            workspace="valuation",
             previous_route=previous_route,
+            conversation_history=history,
         )
 
         if route == AssistantAnswerRoute.CHAT:
@@ -193,7 +199,25 @@ class AssistantService:
             )
             response_model_id = model_id or record.model_id
         elif route == AssistantAnswerRoute.CASE:
-            answer = await self._answer_case_question(record, payload.question, user)
+            case_summary = await self._answer_case_question(
+                record, payload.question, user
+            )
+            answer, model_id = await answer_structured_case_chat(
+                payload.question,
+                case_context={
+                    "valuation_session": {
+                        "case_id": str(record.case_id),
+                        "form_instance_id": (
+                            str(record.form_instance_id)
+                            if record.form_instance_id
+                            else None
+                        ),
+                        "workflow_summary": case_summary,
+                    }
+                },
+                conversation_history=history,
+                fallback_answer=case_summary,
+            )
             response = AssistantQuestionResponse(
                 assistant_session_id=record.assistant_session_id,
                 answer_status=KnowledgeAnswerStatus.SUPPORTED,
@@ -202,13 +226,13 @@ class AssistantService:
                 generation_mode="STRUCTURED_CASE_DATA",
                 next_action="REVIEW_CASE",
             )
-            response_model_id = record.model_id
+            response_model_id = model_id or record.model_id
         else:
             if "knowledge.read" not in permission_codes(user):
                 raise PermissionDeniedError("沒有查看法規知識的權限")
             request = KnowledgeSearchRequest(
                 question=payload.question,
-                case_id=(record.case_id if route == AssistantAnswerRoute.HYBRID else None),
+                case_id=None,
                 as_of_date=payload.as_of_date,
                 document_types=payload.document_types,
                 limit=payload.limit,
@@ -223,9 +247,32 @@ class AssistantService:
                 )
             ).model_copy(update={"answer_route": route.value})
             if route == AssistantAnswerRoute.HYBRID:
-                case_answer = await self._answer_case_question(record, payload.question, user)
+                case_summary = await self._answer_case_question(
+                    record, payload.question, user
+                )
+                hybrid_answer, hybrid_model_id = await answer_hybrid_chat(
+                    payload.question,
+                    case_context={
+                        "valuation_session": {
+                            "case_id": str(record.case_id),
+                            "form_instance_id": (
+                                str(record.form_instance_id)
+                                if record.form_instance_id
+                                else None
+                            ),
+                            "workflow_summary": case_summary,
+                        }
+                    },
+                    case_summary=case_summary,
+                    knowledge_result=result.model_dump(mode="json"),
+                    conversation_history=history,
+                )
                 result = result.model_copy(
-                    update={"answer": f"{case_answer}\n\n{result.answer}"}
+                    update={
+                        "answer": hybrid_answer,
+                        "generation_mode": "HYBRID_SYNTHESIS",
+                        "model_id": hybrid_model_id or result.model_id,
+                    }
                 )
             response = self._question_response(record, result)
             response_model_id = result.model_id or record.model_id

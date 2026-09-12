@@ -11,6 +11,11 @@ import { valuationStageRoute } from '../../valuation/valuation.navigation'
 import AnswerMessage from '../components/AnswerMessage.vue'
 import AssistantDrawer from '../components/AssistantDrawer.vue'
 import {
+  assistantConversationRouteQuery,
+  assistantRouteContext,
+  conversationMatchesAssistantContext,
+} from '../assistant.context'
+import {
   ASSISTANT_QUESTION_MIN_LENGTH,
   ASSISTANT_QUESTION_VALIDATION_MESSAGE,
   assistantApi,
@@ -108,6 +113,9 @@ const suggestedQuestions = computed(() => isGeneralConversation.value
     ])
 const assistantContextText = computed(() => {
   if (session.value) return '目前案件資料已載入'
+  if (conversationContext.value.workspace === 'history' && hasConversationContext.value) {
+    return '系統會依問題決定使用案件歷程資料、知識資料或兩者'
+  }
   if (hasConversationContext.value) return '系統會依問題決定使用案件資料、知識資料或兩者'
   return '系統會依問題決定是否需要查詢知識資料'
 })
@@ -131,34 +139,28 @@ function isCurrent(serial: number): boolean {
 const routeConversationId = computed(() => queryValue('conversationId', 'conversation_id'))
 
 function conversationContextPayload(): AssistantConversationContextDto {
-  const routeName = String(route.name ?? '')
-  const workspace = queryValue('workspace')
-    || (routeName.startsWith('review-') ? 'review' : routeName.startsWith('valuation-') ? 'valuation' : '')
-  const caseId = queryValue('caseId', 'case_id')
-  return {
-    case_id: caseId || null,
-    review_id: caseId ? queryValue('reviewId', 'review_id') || null : null,
-    finding_id: caseId ? queryValue('findingId', 'finding_id', 'finding') || null : null,
-    workspace: workspace || null,
-  }
+  return assistantRouteContext(route)
 }
 
 function conversationMatchesContext(conversation: KnowledgeConversationDto): boolean {
-  const expected = conversationContextPayload()
-  return (conversation.case_id ?? '') === (expected.case_id ?? '')
-    && (conversation.review_id ?? '') === (expected.review_id ?? '')
-    && (conversation.finding_id ?? '') === (expected.finding_id ?? '')
-    && (conversation.workspace ?? '') === (expected.workspace ?? '')
+  return conversationMatchesAssistantContext(conversation, conversationContextPayload())
 }
 
 function conversationRouteQuery(conversation: KnowledgeConversationDto): Record<string, string> {
-  const query: Record<string, string> = { conversationId: conversation.conversation_id }
-  if (conversation.case_id) query.caseId = conversation.case_id
-  if (conversation.review_id) query.reviewId = conversation.review_id
-  if (conversation.finding_id) query.findingId = conversation.finding_id
-  if (conversation.workspace) query.workspace = conversation.workspace
-  return query
+  return assistantConversationRouteQuery(conversation)
 }
+
+const assistantReturnRoute = computed(() => {
+  const context = conversationContext.value
+  if (!context.case_id) return { name: 'home' }
+  if (context.workspace === 'history') {
+    return { name: 'history-case', params: { caseId: context.case_id } }
+  }
+  if (context.workspace === 'review' && context.review_id) {
+    return { name: 'review-workbench', params: { reviewId: context.review_id } }
+  }
+  return valuationStageRoute(context.case_id, 'case')
+})
 
 function restoreKnowledgeMessages(rows: Awaited<ReturnType<typeof assistantApi.getKnowledgeConversationMessages>>): void {
   messages.value = rows.flatMap((row): AssistantChatMessage[] => {
@@ -470,9 +472,9 @@ onBeforeUnmount(() => {
           v-if="conversationContext.case_id"
           class="assistant-view__case-link"
           data-testid="assistant-return-case"
-          :to="valuationStageRoute(conversationContext.case_id, 'case')"
+          :to="assistantReturnRoute"
         >
-          返回目前案件
+          {{ conversationContext.workspace === 'history' ? '返回案件歷程' : conversationContext.workspace === 'review' ? '返回案件審查' : '返回目前案件' }}
         </RouterLink>
         <button
           v-if="session"
