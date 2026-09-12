@@ -39,8 +39,14 @@ async function submitValuation(page: Page): Promise<string> {
   await page.getByTestId('go-to-submit').click()
   await expect(page).toHaveURL(new RegExp(`/app/valuation/cases/${encodeURIComponent(demo.caseId)}/report$`))
   await expect(page.getByTestId('report-package-draft-flow')).toBeVisible()
+  await page.getByTestId('open-report-page-editors').click()
+  await expect(page.getByTestId('report-page-s01-confirm')).toBeVisible()
   await page.getByTestId('report-page-s01-confirm').check()
+  await page.getByTestId('report-next-page').click()
+  await expect(page.getByTestId('report-page-f02-rf-confirm')).toBeVisible()
   await page.getByTestId('report-page-f02-rf-confirm').check()
+  await page.getByTestId('report-next-page').click()
+  await expect(page.getByTestId('report-page-f02-confirm')).toBeVisible()
   await page.getByTestId('report-page-f02-confirm').check()
 
   const saveResponses = ['/S01', '/F02-RF', '/F02'].map((suffix) => page.waitForResponse((response) => {

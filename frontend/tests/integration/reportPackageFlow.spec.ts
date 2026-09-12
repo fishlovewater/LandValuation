@@ -183,8 +183,16 @@ describe('persistent report-package form transition', () => {
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.get('[data-testid="report-package-draft-flow"]').exists()).toBe(true))
 
+    await wrapper.get('[data-testid="open-report-page-editors"]').trigger('click')
+    await flushPromises()
     await wrapper.get('[data-testid="report-page-s01-confirm"]').setValue(true)
+    await flushPromises()
+    await wrapper.get('[data-testid="report-next-page"]').trigger('click')
+    await flushPromises()
     await wrapper.get('[data-testid="report-page-f02-rf-confirm"]').setValue(true)
+    await flushPromises()
+    await wrapper.get('[data-testid="report-next-page"]').trigger('click')
+    await flushPromises()
     await wrapper.get('[data-testid="report-page-f02-confirm"]').setValue(true)
     await wrapper.get('[data-testid="save-report-pages"]').trigger('click')
     await flushPromises()
@@ -195,15 +203,15 @@ describe('persistent report-package form transition', () => {
 
     await vi.waitFor(() => expect(wrapper.get('[data-testid="report-package-authoritative"]').exists()).toBe(true))
     expect(wrapper.get('[data-testid="formal-validation-result"]').exists()).toBe(true)
-    expect(requests.filter((item) => item.includes('/pages/'))).toEqual([
-      `get /valuation/cases/${ids.case}/reports/${ids.report}/pages/S01`,
-      `get /valuation/cases/${ids.case}/reports/${ids.report}/pages/F02-RF`,
-      `get /valuation/cases/${ids.case}/reports/${ids.report}/pages/F02`,
+    for (const pageCode of ['S01', 'F02-RF', 'F02']) {
+      expect(requests).toContain(`get /valuation/cases/${ids.case}/reports/${ids.report}/pages/${pageCode}`)
+    }
+    expect(requests.filter((item) => item.startsWith('patch ') && item.includes('/pages/'))).toEqual([
       `patch /valuation/cases/${ids.case}/reports/${ids.report}/pages/S01`,
       `patch /valuation/cases/${ids.case}/reports/${ids.report}/pages/F02-RF`,
       `patch /valuation/cases/${ids.case}/reports/${ids.report}/pages/F02`,
     ])
-    expect(wrapper.get('[data-testid="report-package-authoritative"]').text()).toContain('三頁已完成正式檢核')
+    expect(wrapper.get('[data-testid="report-package-authoritative"]').text()).toContain('查估書內容已完成確認')
     expect(wrapper.get('[data-testid="report-package-authoritative"]').text()).not.toContain(ids.report)
     wrapper.unmount()
   })

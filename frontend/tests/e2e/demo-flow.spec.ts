@@ -149,8 +149,14 @@ async function submitPreparedValuation(page: Page): Promise<string> {
   ])
 
   await expect(page.getByTestId('report-package-draft-flow')).toBeVisible()
+  await page.getByTestId('open-report-page-editors').click()
+  await expect(page.getByTestId('report-page-s01-confirm')).toBeVisible()
   await page.getByTestId('report-page-s01-confirm').check()
+  await page.getByTestId('report-next-page').click()
+  await expect(page.getByTestId('report-page-f02-rf-confirm')).toBeVisible()
   await page.getByTestId('report-page-f02-rf-confirm').check()
+  await page.getByTestId('report-next-page').click()
+  await expect(page.getByTestId('report-page-f02-confirm')).toBeVisible()
   await page.getByTestId('report-page-f02-confirm').check()
   const savedPages = ['/S01', '/F02-RF', '/F02'].map((pageCode) => page.waitForResponse((response) => {
     const path = new URL(response.url()).pathname
@@ -180,7 +186,7 @@ async function submitPreparedValuation(page: Page): Promise<string> {
   const reportPageValidation = await reportPageValidationResponse
   expect(reportPageValidation.status()).toBe(201)
   const authoritativePackage = page.getByTestId('report-package-authoritative')
-  await expect(authoritativePackage).toContainText('三頁已完成正式檢核')
+  await expect(authoritativePackage).toContainText('查估書內容已完成確認')
   await expect(authoritativePackage).toContainText('F02 第')
 
   await expect(page.getByTestId('formal-validation-result')).toBeVisible()

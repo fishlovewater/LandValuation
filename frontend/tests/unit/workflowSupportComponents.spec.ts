@@ -177,7 +177,7 @@ describe('ValuationSubmitReadiness', () => {
 })
 
 describe('ValuationReportPackageWorkspace', () => {
-  it('keeps three-page confirmation, calculation, and validation as explicit gated actions', async () => {
+  it('guides the user through report pages one at a time before calculation and validation', async () => {
     const wrapper = mount(ValuationReportPackageWorkspace, {
       props: {
         caseId: 'case-1',
@@ -198,7 +198,7 @@ describe('ValuationReportPackageWorkspace', () => {
       },
     })
 
-    expect(wrapper.get('[data-testid="report-package-draft-flow"]').text()).toContain('完整查估書三頁確認')
+    expect(wrapper.get('[data-testid="report-package-draft-flow"]').text()).toContain('逐頁確認查估書內容')
     expect(wrapper.get('[data-testid="save-report-pages"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-testid="run-formal-calculation"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-testid="run-report-formal-validation"]').attributes('disabled')).toBeDefined()
@@ -206,8 +206,22 @@ describe('ValuationReportPackageWorkspace', () => {
     await wrapper.get('[data-testid="open-report-page-editors"]').trigger('click')
     expect(wrapper.emitted('loadEditors')).toHaveLength(1)
 
+    await wrapper.setProps({
+      editors: {
+        S01: {
+          page_code: 'S01',
+          version_no: 1,
+          form_status: 'DRAFT',
+          data: {},
+        } as any,
+      },
+    })
     await wrapper.get('[data-testid="report-page-s01-confirm"]').setValue(true)
     expect(wrapper.emitted('updateConfirmation')?.[0]).toEqual(['s01', true])
+    expect(wrapper.emitted('update:activePageCode')).toBeUndefined()
+    await wrapper.setProps({ confirmations: { s01: true, f02Rf: false, f02: false } })
+    await wrapper.get('[data-testid="report-next-page"]').trigger('click')
+    expect(wrapper.emitted('update:activePageCode')?.[0]).toEqual(['F02-RF'])
   })
 })
 
