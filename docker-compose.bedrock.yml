@@ -1,0 +1,8 @@
+services:
+  api:
+    environment:
+      AI_PROVIDER: bedrock
+      KNOWLEDGE_ANSWER_PROVIDER: bedrock
+      BEDROCK_REGION: ${BEDROCK_REGION:-ap-northeast-1}
+      BEDROCK_MODEL_ID: ${BEDROCK_MODEL_ID:-global.anthropic.claude-sonnet-4-5-20250929-v1:0}
+      AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:?Set AWS_BEARER_TOKEN_BEDROCK before starting the Bedrock demo}

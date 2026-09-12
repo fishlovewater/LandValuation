@@ -1,6 +1,9 @@
 [CmdletBinding()]
 param(
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$Bedrock,
+    [string]$BedrockRegion = 'ap-northeast-1',
+    [string]$BedrockModelId = 'global.anthropic.claude-sonnet-4-5-20250929-v1:0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,6 +21,19 @@ $ComposeArgs = @(
     '-f', 'docker-compose.demo.yml',
     '--env-file', '.env.example'
 )
+
+if ($Bedrock) {
+    if ([string]::IsNullOrWhiteSpace($env:AWS_BEARER_TOKEN_BEDROCK)) {
+        throw @"
+Bedrock Demo requires AWS_BEARER_TOKEN_BEDROCK in this process environment.
+Do not paste the key into source files. Set it in the terminal before launching this script.
+"@
+    }
+
+    $env:BEDROCK_REGION = $BedrockRegion
+    $env:BEDROCK_MODEL_ID = $BedrockModelId
+    $ComposeArgs += @('-f', 'docker-compose.bedrock.yml')
+}
 
 function Invoke-DemoCompose {
     param(
@@ -145,6 +161,9 @@ Use the documented project-scoped teardown procedure before starting a fresh Dem
     Write-Host "API:      $ApiUrl"
     Write-Host "Swagger:  $ApiUrl/docs"
     Write-Host "Frontend: $FrontendUrl"
+    if ($Bedrock) {
+        Write-Host "AI:       Amazon Bedrock ($BedrockRegion / $BedrockModelId)"
+    }
     Write-Host ''
     Write-Host 'Start the frontend in another PowerShell window:'
     Write-Host '  cd frontend'
