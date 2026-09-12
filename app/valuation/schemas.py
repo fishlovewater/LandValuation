@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.valuation.rule_packs.coverage import NEW_TAIPEI_DISTRICT_CODES
+from app.valuation.rule_packs.schemas import LandUseType
 
 
 VALUATION_CASE_TYPE = "LAND"
@@ -27,6 +28,25 @@ NEW_TAIPEI_CITY_CODE_ALIASES = frozenset(
         "NWT",
     }
 )
+LAND_USE_TYPE_ALIASES: dict[str, LandUseType] = {
+    "RESIDENTIAL": LandUseType.RESIDENTIAL,
+    "住宅用地": LandUseType.RESIDENTIAL,
+    "住宅區": LandUseType.RESIDENTIAL,
+    "COMMERCIAL": LandUseType.COMMERCIAL,
+    "商業用地": LandUseType.COMMERCIAL,
+    "商業區": LandUseType.COMMERCIAL,
+    "INDUSTRIAL": LandUseType.INDUSTRIAL,
+    "工業用地": LandUseType.INDUSTRIAL,
+    "工業區": LandUseType.INDUSTRIAL,
+    "AGRICULTURAL": LandUseType.AGRICULTURAL,
+    "農業用地": LandUseType.AGRICULTURAL,
+    "農業區": LandUseType.AGRICULTURAL,
+    "OTHER": LandUseType.OTHER,
+    "其他用途": LandUseType.OTHER,
+    "其他": LandUseType.OTHER,
+}
+
+
 def normalize_valuation_case_type(value: str) -> str:
     normalized = value.strip()
     alias = normalized.upper() if normalized.isascii() else normalized
@@ -47,6 +67,15 @@ def validate_new_taipei_district_code(value: str) -> str:
     if normalized not in NEW_TAIPEI_DISTRICT_CODES:
         raise ValueError("請提供有效的新北市行政區代碼")
     return normalized
+
+
+def normalize_land_use_type(value: str) -> str:
+    normalized = value.strip()
+    alias = normalized.upper() if normalized.isascii() else normalized
+    land_use = LAND_USE_TYPE_ALIASES.get(alias)
+    if land_use is None:
+        raise ValueError("土地用途不在目前支援的分類中")
+    return land_use.value
 
 
 class CaseStatus(StrEnum):
@@ -117,6 +146,13 @@ class CaseCreate(RequestModel):
     def validate_district_code(cls, value: str) -> str:
         return validate_new_taipei_district_code(value)
 
+    @field_validator("land_use_type")
+    @classmethod
+    def normalize_land_use(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_land_use_type(value)
+
 
 class CaseUpdate(RequestModel):
     case_title: str | None = Field(default=None, min_length=1, max_length=200)
@@ -148,6 +184,13 @@ class CaseUpdate(RequestModel):
         if value is None:
             return None
         return validate_new_taipei_district_code(value)
+
+    @field_validator("land_use_type")
+    @classmethod
+    def normalize_land_use(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_land_use_type(value)
 
     @model_validator(mode="after")
     def require_update_field(self):

@@ -159,6 +159,70 @@ def test_case_rejects_locations_outside_new_taipei_scope() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("land_use_type", "expected"),
+    [
+        ("RESIDENTIAL", "RESIDENTIAL"),
+        ("residential", "RESIDENTIAL"),
+        ("住宅用地", "RESIDENTIAL"),
+        ("住宅區", "RESIDENTIAL"),
+        ("COMMERCIAL", "COMMERCIAL"),
+        ("商業用地", "COMMERCIAL"),
+        ("商業區", "COMMERCIAL"),
+        ("INDUSTRIAL", "INDUSTRIAL"),
+        ("工業用地", "INDUSTRIAL"),
+        ("工業區", "INDUSTRIAL"),
+        ("AGRICULTURAL", "AGRICULTURAL"),
+        ("農業用地", "AGRICULTURAL"),
+        ("農業區", "AGRICULTURAL"),
+        ("OTHER", "OTHER"),
+        ("其他用途", "OTHER"),
+        ("其他", "OTHER"),
+    ],
+)
+def test_case_land_use_aliases_are_normalized_to_rule_categories(
+    land_use_type: str,
+    expected: str,
+) -> None:
+    payload = CaseCreate(
+        case_no="VAL-2026-LAND-USE",
+        case_title="土地用途正規化測試",
+        case_type="LAND",
+        valuation_base_date=date(2026, 9, 12),
+        district_code="65000010",
+        land_use_type=land_use_type,
+    )
+
+    assert payload.land_use_type == expected
+    assert CaseUpdate(land_use_type=land_use_type).land_use_type == expected
+
+
+def test_case_land_use_remains_optional_but_rejects_unknown_values() -> None:
+    payload = CaseCreate(
+        case_no="VAL-2026-LAND-USE-OPTIONAL",
+        case_title="土地用途可稍後補齊",
+        case_type="LAND",
+        valuation_base_date=date(2026, 9, 12),
+        district_code="65000010",
+    )
+
+    assert payload.land_use_type is None
+    assert CaseUpdate(land_use_type=None).land_use_type is None
+
+    with pytest.raises(ValidationError, match="土地用途不在目前支援的分類中"):
+        CaseCreate(
+            case_no="VAL-2026-UNKNOWN-LAND-USE",
+            case_title="不支援土地用途",
+            case_type="LAND",
+            valuation_base_date=date(2026, 9, 12),
+            district_code="65000010",
+            land_use_type="MIXED_FUTURE_TYPE",
+        )
+
+    with pytest.raises(ValidationError, match="土地用途不在目前支援的分類中"):
+        CaseUpdate(land_use_type="MIXED_FUTURE_TYPE")
+
+
 @pytest.mark.asyncio
 async def test_case_bootstrap_uses_same_request_to_create_initial_f03() -> None:
     payload = CaseCreate(
