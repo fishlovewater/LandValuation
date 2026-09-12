@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.valuation.rule_packs.coverage import NEW_TAIPEI_DISTRICT_CODES
+
 
 VALUATION_CASE_TYPE = "LAND"
 VALUATION_CASE_TYPE_ALIASES = frozenset(
@@ -25,11 +27,6 @@ NEW_TAIPEI_CITY_CODE_ALIASES = frozenset(
         "NWT",
     }
 )
-NEW_TAIPEI_DISTRICT_CODES = frozenset(
-    f"65000{district:02d}0" for district in range(1, 30)
-)
-
-
 def normalize_valuation_case_type(value: str) -> str:
     normalized = value.strip()
     alias = normalized.upper() if normalized.isascii() else normalized
