@@ -669,6 +669,12 @@ describe('review demo flow', () => {
           }],
         }, config)
       }
+      if (
+        config.method === 'get'
+        && config.url === `/review/workbench/cases/${idsWithDetail.review}/documents/${idsWithDetail.document}/content`
+      ) {
+        return response(new Blob(['pdf'], { type: 'application/pdf' }), config)
+      }
       throw new Error(`Unexpected request ${config.method} ${config.url}`)
     }) as unknown as typeof originalAdapter
 
@@ -677,6 +683,13 @@ describe('review demo flow', () => {
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
 
     await vi.waitFor(() => expect(wrapper.get('[data-testid="external-review-intake"]').text()).toContain('已納入審查'))
+    expect(wrapper.get('[data-testid="external-candidate-source-preview"]').text()).toContain('選取欄位查看來源')
+    const contentRequest = `get /review/workbench/cases/${idsWithDetail.review}/documents/${idsWithDetail.document}/content`
+    const contentRequestCountBeforeSourceOpen = requests.filter((request) => request === contentRequest).length
+    await wrapper.get('[data-testid="view-external-field-source-67676767-6767-4676-8676-676767676767"]').trigger('click')
+    await vi.waitFor(() => expect(requests.filter((request) => request === contentRequest).length)
+      .toBeGreaterThan(contentRequestCountBeforeSourceOpen))
+    expect(wrapper.get('[data-testid="external-candidate-source-preview"]').text()).toContain('第 3 頁')
     expect(requests).toContain(
       `get /review/workbench/cases/${idsWithDetail.review}/external-documents/${idsWithDetail.document}/extraction`,
     )

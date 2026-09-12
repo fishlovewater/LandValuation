@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { isAxiosError } from 'axios'
 import {
   PhCheckCircle as CheckCircle,
+  PhEye as Eye,
   PhFileArrowUp as FileArrowUp,
   PhFileText as FileText,
   PhScan as Scan,
@@ -20,6 +21,7 @@ import {
   valuationFieldLabel,
 } from '../../valuation/valuation.labels'
 import { userStructuredValue } from '../../../utils/fieldLabels'
+import EvidenceViewer from './EvidenceViewer.vue'
 import { reviewApi, safeReviewErrorMessage } from '../review.api'
 import type { CorrectionRequestDto, ReviewDocumentModel } from '../review.types'
 
@@ -54,6 +56,7 @@ const documentCategory = ref<ExternalDocumentCategory>('original')
 const uploadFile = ref<File | null>(null)
 const correctionUploadFile = ref<File | null>(null)
 const selectedDocumentId = ref('')
+const selectedCandidateId = ref('')
 const extraction = ref<ExtractionResponseDto | null>(null)
 const candidateFilter = ref<CandidateFilter>('all')
 const candidateEdits = ref<Record<string, string>>({})
@@ -69,6 +72,12 @@ const notice = ref('')
 const selectedDocument = computed(() =>
   props.documents.find((document) => document.documentId === selectedDocumentId.value) ?? null,
 )
+const selectedCandidate = computed(() =>
+  extraction.value?.candidates.find((candidate) => candidate.extracted_field_id === selectedCandidateId.value) ?? null,
+)
+const selectedCandidateFieldPath = computed(() => selectedCandidate.value
+  ? `${selectedCandidate.value.form_code}.${selectedCandidate.value.field_name}`
+  : null)
 
 const correctionAwaitingReturn = computed(() => props.correctionRequest?.status === 'SENT')
 const correctionBaseDocument = computed(() => {
@@ -150,6 +159,10 @@ function editValue(candidate: ExtractedFieldResponseDto): string {
 
 function updateEdit(candidateId: string, value: string): void {
   candidateEdits.value = { ...candidateEdits.value, [candidateId]: value }
+}
+
+function viewCandidateSource(candidate: ExtractedFieldResponseDto): void {
+  selectedCandidateId.value = candidate.extracted_field_id
 }
 
 function onFileChange(event: Event): void {
@@ -313,6 +326,7 @@ async function decideCandidate(candidate: ExtractedFieldResponseDto, decision: '
 
 watch(selectedDocumentId, (documentId) => {
   extraction.value = null
+  selectedCandidateId.value = ''
   candidateEdits.value = {}
   resetMessages()
   if (documentId && extractionSupported.value) void loadExtraction(documentId)
@@ -516,31 +530,61 @@ watch(
               </div>
             </div>
 
-            <div v-if="filteredCandidates.length" class="external-intake__table-wrap">
-              <table class="external-intake__table">
-                <thead><tr><th>欄位</th><th>擷取結果</th><th>來源</th><th>狀態</th><th>操作</th></tr></thead>
-                <tbody>
-                  <tr v-for="candidate in filteredCandidates" :key="candidate.extracted_field_id">
-                    <td><strong>{{ candidateFieldLabel(candidate) }}</strong><small>{{ candidate.form_code }} · 信心 {{ confidenceLabel(candidate.confidence) }}</small></td>
-                    <td>
-                      <input
-                        :value="editValue(candidate)"
-                        :disabled="!canMutate || candidate.field_status === 'REJECTED' || confirmingId === candidate.extracted_field_id"
-                        :aria-label="`${candidateFieldLabel(candidate)}確認值`"
-                        @input="updateEdit(candidate.extracted_field_id, ($event.target as HTMLInputElement).value)"
-                      >
-                    </td>
-                    <td><span>{{ candidate.source_page ? `第 ${candidate.source_page} 頁` : '頁碼未辨識' }}</span><small :title="candidate.source_text || ''">{{ candidate.source_text || '沒有擷取到來源片段' }}</small></td>
-                    <td><span class="external-intake__status" :data-status="candidate.field_status">{{ candidateStatusLabel(candidate.field_status) }}</span></td>
-                    <td>
-                      <div class="external-intake__row-actions">
-                        <button type="button" :data-testid="`confirm-external-field-${candidate.extracted_field_id}`" :disabled="!canMutate || confirmingId === candidate.extracted_field_id" @click="decideCandidate(candidate, 'CONFIRM')"><CheckCircle :size="16" weight="bold" aria-hidden="true" />確認</button>
-                        <button type="button" class="is-reject" :data-testid="`reject-external-field-${candidate.extracted_field_id}`" :disabled="!canMutate || confirmingId === candidate.extracted_field_id" @click="decideCandidate(candidate, 'REJECT')"><XCircle :size="16" aria-hidden="true" />排除</button>
-                      </div>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+            <div v-if="filteredCandidates.length" class="external-intake__candidate-review">
+              <section
+                class="external-intake__source-pane"
+                data-testid="external-candidate-source-preview"
+                aria-label="候選欄位來源文件"
+              >
+                <div v-if="selectedCandidate" class="external-intake__source-location">
+                  <span>來源定位</span>
+                  <strong>{{ selectedCandidate.source_page ? `第 ${selectedCandidate.source_page} 頁` : '頁碼未辨識' }}</strong>
+                  <small>{{ candidateFieldLabel(selectedCandidate) }}</small>
+                </div>
+                <EvidenceViewer
+                  v-if="selectedCandidate && selectedDocument"
+                  :review-id="reviewId"
+                  :document="selectedDocument"
+                  :page-number="selectedCandidate.source_page"
+                  :field-path="selectedCandidateFieldPath"
+                />
+                <div v-else class="external-intake__source-empty">
+                  <Eye :size="26" aria-hidden="true" />
+                  <strong>選取欄位查看來源</strong>
+                  <p>按「查看來源」後，系統會開啟該欄位實際引用的文件與頁碼，避免只看擷取文字就直接確認。</p>
+                </div>
+              </section>
+              <div class="external-intake__table-wrap">
+                <table class="external-intake__table">
+                  <thead><tr><th>欄位</th><th>擷取結果</th><th>來源</th><th>狀態</th><th>操作</th></tr></thead>
+                  <tbody>
+                    <tr
+                      v-for="candidate in filteredCandidates"
+                      :key="candidate.extracted_field_id"
+                      :class="{ 'is-source-selected': candidate.extracted_field_id === selectedCandidateId }"
+                    >
+                      <td><strong>{{ candidateFieldLabel(candidate) }}</strong><small>{{ candidate.form_code }} · 信心 {{ confidenceLabel(candidate.confidence) }}</small></td>
+                      <td>
+                        <input
+                          :value="editValue(candidate)"
+                          :disabled="!canMutate || candidate.field_status === 'REJECTED' || confirmingId === candidate.extracted_field_id"
+                          :aria-label="`${candidateFieldLabel(candidate)}確認值`"
+                          @input="updateEdit(candidate.extracted_field_id, ($event.target as HTMLInputElement).value)"
+                        >
+                      </td>
+                      <td><span>{{ candidate.source_page ? `第 ${candidate.source_page} 頁` : '頁碼未辨識' }}</span><small :title="candidate.source_text || ''">{{ candidate.source_text || '沒有擷取到來源片段' }}</small></td>
+                      <td><span class="external-intake__status" :data-status="candidate.field_status">{{ candidateStatusLabel(candidate.field_status) }}</span></td>
+                      <td>
+                        <div class="external-intake__row-actions">
+                          <button type="button" class="is-source" :data-testid="`view-external-field-source-${candidate.extracted_field_id}`" @click="viewCandidateSource(candidate)"><Eye :size="16" aria-hidden="true" />查看來源</button>
+                          <button type="button" :data-testid="`confirm-external-field-${candidate.extracted_field_id}`" :disabled="!canMutate || confirmingId === candidate.extracted_field_id" @click="decideCandidate(candidate, 'CONFIRM')"><CheckCircle :size="16" weight="bold" aria-hidden="true" />確認</button>
+                          <button type="button" class="is-reject" :data-testid="`reject-external-field-${candidate.extracted_field_id}`" :disabled="!canMutate || confirmingId === candidate.extracted_field_id" @click="decideCandidate(candidate, 'REJECT')"><XCircle :size="16" aria-hidden="true" />排除</button>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
             <div v-else class="external-intake__empty external-intake__empty--compact">
               <strong>{{ extraction.candidates.length ? '目前篩選條件沒有欄位' : '沒有找到可自動辨識的欄位' }}</strong>
@@ -567,6 +611,9 @@ watch(
 .external-intake__error,.external-intake__notice{margin:-4px 0 0;padding:9px 11px;border-radius:8px;font-size:11px}.external-intake__error{color:#a53934;background:#fff0ef}.external-intake__notice{color:#356148;background:#eef8f1}.external-intake__body{display:grid;grid-template-columns:minmax(230px,290px) minmax(0,1fr);gap:14px;min-height:330px}.external-intake__documents{min-width:0;padding-right:14px;border-right:1px solid var(--app-line)}.external-intake__subheading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}.external-intake__subheading strong{color:var(--app-ink);font-size:12px}.external-intake__subheading small{color:var(--app-muted);font-size:9px}.external-intake__document-list{display:grid;gap:5px}.external-intake__document-list button{display:grid;grid-template-columns:20px minmax(0,1fr);align-items:start;gap:8px;width:100%;padding:9px;border:1px solid transparent;border-radius:8px;color:var(--app-muted);background:transparent;cursor:pointer;text-align:left}.external-intake__document-list button:hover{background:#f7f9fb}.external-intake__document-list button.is-selected{border-color:color-mix(in srgb,var(--app-accent) 24%,var(--app-line));color:var(--app-accent-deep);background:var(--app-accent-soft)}.external-intake__document-list button span{display:grid;min-width:0;gap:3px}.external-intake__document-list strong{overflow:hidden;color:var(--app-ink-soft);font-size:10px;text-overflow:ellipsis;white-space:nowrap}.external-intake__document-list small{color:var(--app-muted);font-size:8.5px}
 .external-intake__workspace{min-width:0}.external-intake__selected-document{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-bottom:12px;border-bottom:1px solid var(--app-line)}.external-intake__selected-document>div{display:grid;min-width:0;gap:3px}.external-intake__selected-document>div span{color:var(--app-accent-deep);font-size:9px;font-weight:850}.external-intake__selected-document>div strong{overflow:hidden;color:var(--app-ink);font-size:13px;text-overflow:ellipsis;white-space:nowrap}.external-intake__selected-document>div small,.external-intake__unsupported{color:var(--app-muted);font-size:9px}.external-intake__loading{padding:30px 8px;color:var(--app-muted);font-size:11px;text-align:center}.external-intake__extraction-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:12px 0}.external-intake__extraction-summary>div{display:grid;gap:3px;padding:9px 10px;border-radius:8px;background:#f7f9fb}.external-intake__extraction-summary span{color:var(--app-muted);font-size:8.5px}.external-intake__extraction-summary strong{color:var(--app-ink-soft);font-size:11px}.external-intake__extraction-error{margin-bottom:10px;padding:10px;border-radius:8px;color:#a53934;background:#fff0ef;font-size:10px}
 .external-intake__candidate-toolbar{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;padding:5px 0 9px}.external-intake__candidate-toolbar>div:first-child{display:grid;gap:2px}.external-intake__candidate-toolbar strong{color:var(--app-ink);font-size:12px}.external-intake__candidate-toolbar small{color:var(--app-muted);font-size:9px}.external-intake__filters{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px}.external-intake__filters button{min-height:29px;padding:5px 8px;border:1px solid transparent;border-radius:999px;color:var(--app-muted);background:#f3f5f7;cursor:pointer;font-size:9px;font-weight:800}.external-intake__filters button.is-active{border-color:color-mix(in srgb,var(--app-accent) 25%,transparent);color:var(--app-accent-deep);background:var(--app-accent-soft)}.external-intake__table-wrap{overflow-x:auto;border:1px solid var(--app-line);border-radius:9px}.external-intake__table{width:100%;border-collapse:collapse;min-width:760px}.external-intake__table th{padding:8px 9px;border-bottom:1px solid var(--app-line);color:var(--app-muted);background:#f8fafc;font-size:8.5px;font-weight:850;text-align:left}.external-intake__table td{padding:9px;border-bottom:1px solid #edf0f3;vertical-align:top}.external-intake__table tbody tr:last-child td{border-bottom:0}.external-intake__table td:first-child{display:grid;gap:3px;min-width:150px}.external-intake__table td:first-child strong{color:var(--app-ink);font-size:10px}.external-intake__table td:first-child small{color:var(--app-muted);font-size:8px}.external-intake__table td:nth-child(2) input{min-height:34px;width:100%;min-width:150px;padding:6px 8px;border:1px solid var(--app-line);border-radius:6px;color:var(--app-ink);background:#fff;font:inherit;font-size:10px}.external-intake__table td:nth-child(3){max-width:260px}.external-intake__table td:nth-child(3)>span{display:block;color:var(--app-ink-soft);font-size:9px;font-weight:800}.external-intake__table td:nth-child(3)>small{display:-webkit-box;overflow:hidden;margin-top:3px;color:var(--app-muted);font-size:8px;line-height:1.45;-webkit-box-orient:vertical;-webkit-line-clamp:2}.external-intake__status{display:inline-flex;padding:4px 6px;border-radius:999px;color:#7e601d;background:#fff3d8;font-size:8px;font-weight:850;white-space:nowrap}.external-intake__status[data-status="APPLIED"],.external-intake__status[data-status="CONFIRMED"]{color:#356148;background:#eaf6ee}.external-intake__status[data-status="REJECTED"]{color:#6d7075;background:#eff1f3}.external-intake__row-actions{display:flex;flex-wrap:wrap;gap:4px;min-width:130px}.external-intake__row-actions button{display:inline-flex;min-height:31px;align-items:center;gap:4px;padding:5px 7px;border:1px solid #b9d7c4;border-radius:6px;color:#356148;background:#f2faf5;cursor:pointer;font-size:8.5px;font-weight:850}.external-intake__row-actions button.is-reject{border-color:var(--app-line);color:var(--app-muted);background:#fff}.external-intake__row-actions button:disabled{cursor:not-allowed;opacity:.5}.external-intake__empty{display:grid;justify-items:center;gap:5px;padding:28px 12px;color:var(--app-muted);text-align:center}.external-intake__empty strong{color:var(--app-ink-soft);font-size:11px}.external-intake__empty p{max-width:340px;margin:0;font-size:9px;line-height:1.55}.external-intake__empty--workspace{min-height:220px;align-content:center}.external-intake__empty--compact{padding:24px 12px;border:1px dashed var(--app-line);border-radius:8px}
+.external-intake__candidate-review{display:grid;grid-template-columns:minmax(300px,.9fr) minmax(0,1.35fr);align-items:start;gap:12px}.external-intake__source-pane{position:sticky;top:76px;min-width:0}.external-intake__source-pane :deep(.evidence-viewer){padding:14px;box-shadow:none}.external-intake__source-pane :deep(.evidence-viewer h2){font-size:17px}.external-intake__source-pane :deep(.evidence-viewer__surface){min-height:430px}.external-intake__source-pane :deep(.evidence-viewer__pdf){min-height:380px}.external-intake__source-empty{display:grid;min-height:430px;align-content:center;justify-items:center;gap:7px;padding:24px;border:1px dashed var(--app-line);border-radius:10px;color:var(--app-muted);background:#fafbfc;text-align:center}.external-intake__source-empty strong{color:var(--app-ink-soft);font-size:11px}.external-intake__source-empty p{max-width:300px;margin:0;font-size:9px;line-height:1.6}.external-intake__table tr.is-source-selected td{background:#f6f9fc}.external-intake__row-actions button.is-source{border-color:#c6d7e8;color:var(--app-accent-deep);background:#f4f8fc}
+.external-intake__source-location{display:flex;align-items:center;gap:7px;margin-bottom:7px;padding:8px 10px;border:1px solid #d7e2ed;border-radius:8px;background:#f6f9fc}.external-intake__source-location span,.external-intake__source-location small{color:var(--app-muted);font-size:9px}.external-intake__source-location strong{color:var(--app-accent-deep);font-size:10px}.external-intake__source-location small{margin-left:auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:1180px){.external-intake__candidate-review{grid-template-columns:1fr}.external-intake__source-pane{position:static}.external-intake__source-pane :deep(.evidence-viewer__surface),.external-intake__source-empty{min-height:360px}.external-intake__source-pane :deep(.evidence-viewer__pdf){min-height:310px}}
 @media(max-width:920px){.external-intake__upload{grid-template-columns:1fr 1fr}.external-intake__upload>button{grid-column:1/-1}.external-intake__body{grid-template-columns:1fr}.external-intake__documents{padding-right:0;padding-bottom:12px;border-right:0;border-bottom:1px solid var(--app-line)}.external-intake__document-list{grid-template-columns:repeat(2,minmax(0,1fr))}.external-intake__correction-upload{grid-template-columns:1fr}.external-intake__correction-upload button{width:100%}}
 @media(max-width:620px){.external-intake{padding:14px}.external-intake__heading,.external-intake__selected-document,.external-intake__candidate-toolbar,.external-intake__correction-heading,.external-intake__correction-next{align-items:stretch;flex-direction:column}.external-intake__summary,.external-intake__filters{justify-content:flex-start}.external-intake__upload,.external-intake__extraction-summary,.external-intake__document-list,.external-intake__version-lineage{grid-template-columns:1fr}.external-intake__version-lineage>span{justify-self:center;transform:rotate(90deg)}.external-intake__correction-next button{width:100%}}
 </style>
