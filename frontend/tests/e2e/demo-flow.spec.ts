@@ -53,7 +53,7 @@ type PermissionAction = 'revoke' | 'restore'
 
 type ResponseLike = Awaited<ReturnType<Page['waitForResponse']>>
 
-type SafeAnswerStep = 'PRE_SUBMISSION' | 'BASELINE' | 'RESTORED'
+type SafeAnswerStep = 'PRE_SUBMISSION' | 'RESTORED'
 type SafeAnswerAspect = 'STATUS' | 'CITATIONS' | 'COPY' | 'UI'
 
 const ASSISTANT_DENIED_STATUS_FAILURE = 'ASSISTANT_DENIED_STATUS'

@@ -4,8 +4,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends
 
-from app.ai_assistant.chat_service import answer_general_chat, answer_structured_case_chat
-from app.ai_assistant.routing import AssistantAnswerRoute, route_assistant_question
+from app.ai_assistant.chat_service import (
+    answer_general_chat,
+    answer_hybrid_chat,
+    answer_structured_case_chat,
+)
+from app.ai_assistant.routing import AssistantAnswerRoute, analyze_assistant_question
 from app.auth.dependencies import CurrentUser, DbSession, require_permissions
 from app.auth.models import User
 from app.auth.service import permission_codes
@@ -39,7 +43,7 @@ router = APIRouter()
 KnowledgeReader = Annotated[User, Depends(require_permissions("knowledge.read"))]
 AssistantConversationUser = Annotated[User, Depends(require_permissions("assistant.use"))]
 
-_ASSISTANT_WORKSPACES = frozenset({"valuation", "review"})
+_ASSISTANT_WORKSPACES = frozenset({"valuation", "review", "history"})
 
 
 def get_storage_service() -> StorageService:
@@ -131,7 +135,7 @@ def _normalize_workspace(workspace: str | None) -> str | None:
     if normalized is not None and normalized not in _ASSISTANT_WORKSPACES:
         raise AppError(
             "ASSISTANT_CONTEXT_INVALID",
-            "AI 助手工作區僅支援估價或審查情境。",
+            "AI 助手工作區僅支援估價、審查或案件歷程情境。",
             422,
         )
     return normalized
@@ -314,10 +318,12 @@ async def ask_conversation(
         content=payload.question,
     )
     await repository.rename_conversation_if_new(conversation, payload.question)
-    route = route_assistant_question(
+    route = await analyze_assistant_question(
         payload.question,
         has_case_context=case_id is not None,
+        workspace=workspace,
         previous_route=_previous_answer_route(existing),
+        conversation_history=history,
     )
     if route == AssistantAnswerRoute.CHAT:
         answer, model_id = await answer_general_chat(
@@ -380,36 +386,36 @@ async def ask_conversation(
                 "目前頁面沒有可供查詢的案件資料。",
                 422,
             )
-        case_answer, case_model_id = await answer_structured_case_chat(
-            payload.question,
-            case_context=case_context.model_dump(mode="json"),
-            review_id=str(review_id) if review_id else None,
-            finding_id=str(finding_id) if finding_id else None,
-            conversation_history=history,
-        )
         knowledge_result = await answer_knowledge_question(
             session=session,
             storage=storage,
             user=user,
-            request=payload.model_copy(update={"case_id": case_id}),
+            request=payload.model_copy(
+                update={
+                    "case_id": None,
+                    "review_id": None,
+                    "finding_id": None,
+                }
+            ),
             conversation_history=history,
         )
-        if knowledge_result.answer_status.value == "SUPPORTED":
-            result = knowledge_result.model_copy(
-                update={
-                    "answer": f"{case_answer}\n\n{knowledge_result.answer}",
-                    "answer_route": route.value,
-                    "case_context": case_context,
-                    "model_id": knowledge_result.model_id or case_model_id,
-                }
-            )
-        else:
-            result = knowledge_result.model_copy(
-                update={
-                    "answer_route": route.value,
-                    "case_context": case_context,
-                }
-            )
+        hybrid_answer, hybrid_model_id = await answer_hybrid_chat(
+            payload.question,
+            case_context=case_context.model_dump(mode="json"),
+            knowledge_result=knowledge_result.model_dump(mode="json"),
+            review_id=str(review_id) if review_id else None,
+            finding_id=str(finding_id) if finding_id else None,
+            conversation_history=history,
+        )
+        result = knowledge_result.model_copy(
+            update={
+                "answer": hybrid_answer,
+                "answer_route": route.value,
+                "generation_mode": "HYBRID_SYNTHESIS",
+                "case_context": case_context,
+                "model_id": hybrid_model_id or knowledge_result.model_id,
+            }
+        )
     await repository.add_conversation_message(
         conversation,
         role="ASSISTANT",

@@ -20,6 +20,15 @@ CASE_ASSISTANT_SYSTEM_PROMPT = (
     "若資料不足，直接說明缺少哪些資訊。不得把案件資料描述成法規或正式規範。"
 )
 
+HYBRID_ASSISTANT_SYSTEM_PROMPT = (
+    "你是土地估價系統內的 AI 助手。請使用繁體中文，以一份連貫回答整合目前案件事實與正式知識證據。"
+    "CASE_CONTEXT 是後端依登入權限取得的結構化案件資料，只能用來陳述本案事實；"
+    "KNOWLEDGE_RESULT 是後端知識檢索與來源驗證後的結果，只能用來陳述法規、手冊、程序或正式依據。"
+    "不得把 CASE_CONTEXT 當成法規證據，也不得用模型記憶補造 KNOWLEDGE_RESULT 沒有支持的正式結論。"
+    "KNOWLEDGE_RESULT.answer 若含【來源1】等標記，引用相關正式結論時必須原樣保留這些標記，不得新增不存在的來源編號。"
+    "如果正式來源不足，應把已知案件事實與無法判定的原因一起說清楚，而不是猜測案件是否合規。"
+)
+
 
 def _mock_reply(question: str) -> str:
     normalized = question.strip().lower()
@@ -131,16 +140,12 @@ def _case_fallback_reply(question: str, context: dict[str, Any]) -> str:
     return "".join(parts)
 
 
-async def answer_structured_case_chat(
-    question: str,
-    *,
+def _scoped_case_context(
     case_context: dict[str, Any],
+    *,
     review_id: str | None = None,
     finding_id: str | None = None,
-    conversation_history: list[dict[str, str]] | None = None,
-) -> tuple[str, str | None]:
-    """Explain permission-checked structured case data without treating it as law."""
-
+) -> dict[str, Any]:
     scoped_context = dict(case_context)
     latest_review = scoped_context.get("latest_review")
     if isinstance(latest_review, dict):
@@ -157,6 +162,24 @@ async def answer_structured_case_chat(
                 None,
             )
             scoped_context["selected_finding"] = selected
+    return scoped_context
+
+
+async def answer_structured_case_chat(
+    question: str,
+    *,
+    case_context: dict[str, Any],
+    review_id: str | None = None,
+    finding_id: str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> tuple[str, str | None]:
+    """Explain permission-checked structured case data without treating it as law."""
+
+    scoped_context = _scoped_case_context(
+        case_context,
+        review_id=review_id,
+        finding_id=finding_id,
+    )
 
     fallback = _case_fallback_reply(question, scoped_context)
     settings = get_settings()
@@ -190,4 +213,67 @@ async def answer_structured_case_chat(
     return fallback, "mock-assistant-router-v1"
 
 
-__all__ = ["answer_general_chat", "answer_structured_case_chat"]
+async def answer_hybrid_chat(
+    question: str,
+    *,
+    case_context: dict[str, Any],
+    knowledge_result: dict[str, Any],
+    review_id: str | None = None,
+    finding_id: str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> tuple[str, str | None]:
+    """Create one final answer from authorized case data plus verified knowledge evidence."""
+
+    scoped_context = _scoped_case_context(
+        case_context,
+        review_id=review_id,
+        finding_id=finding_id,
+    )
+    case_fallback = _case_fallback_reply(question, scoped_context)
+    knowledge_answer = str(knowledge_result.get("answer") or "").strip()
+    fallback = case_fallback
+    if knowledge_answer:
+        fallback = f"{case_fallback}\n\n{knowledge_answer}"
+
+    settings = get_settings()
+    provider_name = settings.ai_provider.upper()
+    history = (conversation_history or [])[-6:]
+    synthesis_input = {
+        "question": question,
+        "case_context": scoped_context,
+        "knowledge_result": {
+            "answer_status": knowledge_result.get("answer_status"),
+            "answer": knowledge_answer,
+            "clarification_question": knowledge_result.get("clarification_question"),
+            "citations": knowledge_result.get("citations") or [],
+            "unreadable_sources": knowledge_result.get("unreadable_sources") or [],
+        },
+    }
+    prompt = json.dumps(synthesis_input, ensure_ascii=False, default=str)
+
+    if provider_name == "OLLAMA":
+        provider = OllamaChatProvider(settings, [], system_prompt=HYBRID_ASSISTANT_SYSTEM_PROMPT)
+        messages: list[dict[str, Any]] = [
+            {"role": item["role"], "content": item["content"]}
+            for item in history
+            if item.get("role") in {"user", "assistant"} and item.get("content")
+        ]
+        messages.append({"role": "user", "content": prompt})
+        response = await provider.converse(messages)
+        return response.text.strip() or fallback, settings.ollama_model
+
+    if provider_name == "BEDROCK":
+        provider = BedrockConverseProvider(settings, [], system_prompt=HYBRID_ASSISTANT_SYSTEM_PROMPT)
+        messages = [
+            {"role": item["role"], "content": [{"text": item["content"]}]}
+            for item in history
+            if item.get("role") in {"user", "assistant"} and item.get("content")
+        ]
+        messages.append({"role": "user", "content": [{"text": prompt}]})
+        response = await provider.converse(messages)
+        return response.text.strip() or fallback, settings.bedrock_model_id
+
+    return fallback, "mock-assistant-router-v2"
+
+
+__all__ = ["answer_general_chat", "answer_hybrid_chat", "answer_structured_case_chat"]

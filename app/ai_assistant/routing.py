@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import json
+import logging
 import re
 from enum import StrEnum
+from typing import Any
+
+
+logger = logging.getLogger(__name__)
 
 
 class AssistantAnswerRoute(StrEnum):
@@ -9,6 +15,22 @@ class AssistantAnswerRoute(StrEnum):
     CASE = "CASE"
     KNOWLEDGE = "KNOWLEDGE"
     HYBRID = "HYBRID"
+
+
+SEMANTIC_ROUTER_SYSTEM_PROMPT = """你是土地估價系統 AI 助手的內部分流器。你的工作不是回答問題，而是判斷回答問題最低限度需要哪些已授權資料。
+
+只回傳 JSON，不要 Markdown，也不要解釋推理：
+{"route":"CHAT|CASE|KNOWLEDGE|HYBRID"}
+
+判斷規則：
+- CHAT：一般聊天、改寫、說明或不需要目前案件資料與正式知識來源即可回答的問題。
+- CASE：必須讀取目前已連結案件／審查／案件歷程的結構化資料，但不需要法規、手冊或正式知識來源。
+- KNOWLEDGE：必須查詢法規、手冊、正式依據、定義或土地估價知識，但不需要目前案件資料。
+- HYBRID：同時需要目前案件資料與正式知識來源，例如判斷本案作法、數值、文件或審查結果是否符合規定。
+
+「這筆、這案、目前、它、剛剛那個」等自然指涉，在 HAS_CASE_CONTEXT=true 且對話內容合理指向目前案件時，應視為案件情境，不要求使用者一定說出「案件」兩字。
+只有真正承接上一輪問題的追問才沿用 PREVIOUS_ROUTE。工作區 valuation、review、history 都使用相同判斷規則；history 只是唯讀情境，不代表不能讀案件資料。
+你只負責選資料路徑，不負責授權。不可因為某路徑可能沒有權限就改判其他路徑。"""
 
 
 _SMALLTALK_PATTERN = re.compile(
@@ -127,4 +149,113 @@ def route_assistant_question(
     return AssistantAnswerRoute.CHAT
 
 
-__all__ = ["AssistantAnswerRoute", "route_assistant_question"]
+def _semantic_router_payload(
+    question: str,
+    *,
+    has_case_context: bool,
+    workspace: str | None,
+    previous_route: AssistantAnswerRoute | str | None,
+    conversation_history: list[dict[str, str]] | None,
+) -> str:
+    recent = [
+        {
+            "role": item.get("role"),
+            "content": str(item.get("content") or "")[:1200],
+        }
+        for item in (conversation_history or [])[-4:]
+        if item.get("role") in {"user", "assistant"} and item.get("content")
+    ]
+    payload = {
+        "question": question,
+        "has_case_context": has_case_context,
+        "workspace": workspace,
+        "previous_route": str(previous_route) if previous_route else None,
+        "recent_conversation": recent,
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _parse_semantic_route(output: str, *, has_case_context: bool) -> AssistantAnswerRoute:
+    cleaned = output.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    parsed: Any = json.loads(cleaned)
+    raw_route = parsed.get("route") if isinstance(parsed, dict) else None
+    route = AssistantAnswerRoute(str(raw_route).strip().upper())
+    if has_case_context:
+        return route
+    if route == AssistantAnswerRoute.CASE:
+        return AssistantAnswerRoute.CHAT
+    if route == AssistantAnswerRoute.HYBRID:
+        return AssistantAnswerRoute.KNOWLEDGE
+    return route
+
+
+async def analyze_assistant_question(
+    question: str,
+    *,
+    has_case_context: bool,
+    workspace: str | None = None,
+    previous_route: AssistantAnswerRoute | str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> AssistantAnswerRoute:
+    """Semantically classify one Assistant turn, with deterministic fallback.
+
+    The classifier chooses only a data path. Authorization is enforced later by
+    the concrete CASE/KNOWLEDGE/HYBRID handlers, so a model can never grant
+    itself access to additional data.
+    """
+
+    fallback = route_assistant_question(
+        question,
+        has_case_context=has_case_context,
+        previous_route=previous_route,
+    )
+    if not question.strip() or _SMALLTALK_PATTERN.fullmatch(question.strip()):
+        return fallback
+
+    try:
+        from app.ai_assistant.provider import BedrockConverseProvider, OllamaChatProvider
+        from app.core.config import get_settings
+
+        settings = get_settings()
+        provider_name = settings.ai_provider.upper()
+        router_input = _semantic_router_payload(
+            question,
+            has_case_context=has_case_context,
+            workspace=workspace,
+            previous_route=previous_route,
+            conversation_history=conversation_history,
+        )
+        if provider_name == "OLLAMA":
+            provider = OllamaChatProvider(
+                settings,
+                [],
+                system_prompt=SEMANTIC_ROUTER_SYSTEM_PROMPT,
+            )
+            response = await provider.converse([{"role": "user", "content": router_input}])
+        elif provider_name == "BEDROCK":
+            provider = BedrockConverseProvider(
+                settings,
+                [],
+                system_prompt=SEMANTIC_ROUTER_SYSTEM_PROMPT,
+            )
+            response = await provider.converse(
+                [{"role": "user", "content": [{"text": router_input}]}]
+            )
+        else:
+            return fallback
+        return _parse_semantic_route(response.text, has_case_context=has_case_context)
+    except Exception as exc:  # semantic routing must never make chat unavailable
+        logger.warning(
+            "Assistant semantic routing failed; using deterministic fallback: %s",
+            type(exc).__name__,
+        )
+        return fallback
+
+
+__all__ = [
+    "AssistantAnswerRoute",
+    "analyze_assistant_question",
+    "route_assistant_question",
+]

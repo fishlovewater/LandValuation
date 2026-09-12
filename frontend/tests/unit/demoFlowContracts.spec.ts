@@ -118,7 +118,7 @@ describe('persistent Demo browser-flow contracts', () => {
 
   it('tags every local safe-answer step and aspect without retaining raw assertion data', () => {
     const source = readFileSync(resolve(import.meta.dirname, '../e2e/demo-flow.spec.ts'), 'utf8')
-    expect(source).toContain("type SafeAnswerStep = 'PRE_SUBMISSION' | 'BASELINE' | 'RESTORED'")
+    expect(source).toContain("type SafeAnswerStep = 'PRE_SUBMISSION' | 'RESTORED'")
     expect(source).toContain("type SafeAnswerAspect = 'STATUS' | 'CITATIONS' | 'COPY' | 'UI'")
     expect(source).toContain('function assistantFailureCode(step: SafeAnswerStep, aspect: SafeAnswerAspect)')
     expect(source).toContain('throw new Error(assistantFailureCode(step, aspect))')
@@ -130,9 +130,9 @@ describe('persistent Demo browser-flow contracts', () => {
     }
 
     expect(source).toContain("await expectNonStrictProviderOutcome(page, payload, 'PRE_SUBMISSION')")
-    expect(source).toContain("await expectNonStrictProviderOutcome(page, initial.payload, 'BASELINE')")
     expect(source).toContain("await expectNonStrictProviderOutcome(page, restored.payload, 'RESTORED')")
-    expect(source).toContain('await expectAssistantPermissionDenied(page, denied)')
+    expect(source).not.toContain("'BASELINE'")
+    expect(source).toContain('await expectAssistantPermissionDenied(denied)')
     expect(source).not.toContain("await expectSafeAssistantRefusal(page, denied.payload)")
   })
 
@@ -143,24 +143,17 @@ describe('persistent Demo browser-flow contracts', () => {
     const helper = source.slice(helperStart, helperEnd)
 
     expect(source).toContain("const ASSISTANT_DENIED_STATUS_FAILURE = 'ASSISTANT_DENIED_STATUS'")
-    expect(source).toContain("const ASSISTANT_DENIED_ALERT_FAILURE = 'ASSISTANT_DENIED_ALERT'")
     expect(source).toContain("const ASSISTANT_DENIED_NO_SIDE_EFFECT_FAILURE = 'ASSISTANT_DENIED_NO_SIDE_EFFECT'")
     expect(helper).toContain('expect(response.status()).toBe(403)')
-    expect(helper).toContain("expectAssistantPermissionDenied")
-    expect(helper).toContain("getByRole('heading', { name: '目前無法開啟這個功能' })")
-    expect(helper).toContain('你的帳號目前沒有使用此功能的權限')
+    expect(helper).toContain('throw new Error(ASSISTANT_DENIED_STATUS_FAILURE)')
+    expect(helper).not.toContain('response.json()')
     expect(helper).not.toContain('ASSISTANT_HTTP_403')
     expect(helper).not.toContain('error.message')
     expect(helper).not.toContain('cause: error')
 
-    const failureIndexes = [
-      helper.indexOf('throw new Error(ASSISTANT_DENIED_STATUS_FAILURE)'),
-      helper.indexOf('throw new Error(ASSISTANT_DENIED_ALERT_FAILURE)'),
-    ]
-    expect(failureIndexes.every((index) => index >= 0)).toBe(true)
-    expect(failureIndexes[0]).toBeLessThan(failureIndexes[1])
     expect(source).toContain("toHaveCount(answersBeforeDenied)")
     expect(source).toContain('throw new Error(ASSISTANT_DENIED_NO_SIDE_EFFECT_FAILURE)')
+    expect(source).not.toContain('ASSISTANT_DENIED_ALERT_FAILURE')
   })
 
   it('uses an independent question for the true no-source path', () => {
@@ -184,24 +177,23 @@ describe('persistent Demo browser-flow contracts', () => {
     expect(firstSubmissionIndex).toBe(-1)
 
     const permissionJourney = source.slice(permissionJourneyStart)
+    expect(permissionJourney).toContain('!persistentInputsReady || !permissionGateReady || !sharedAssistantSessionId')
     const flowMarkers = [
       'const sessionId = await openAssistantSession(page, sharedAssistantSessionId)',
-      "const initial = await askAssistantQuestion(page, sessionId, '請先確認目前案件的可讀來源。')",
-      "expect(initial.payload.answer_status).toBe('SUPPORTED')",
-      'expect(initial.payload.citations.length).toBeGreaterThan(0)',
-      "await expectNonStrictProviderOutcome(page, initial.payload, 'BASELINE')",
       "const answersBeforeDenied = await page.locator('.assistant-conversation').getByTestId('assistant-answer').count()",
+      'expect(answersBeforeDenied).toBeGreaterThan(0)',
       "await invokePermissionOperator('revoke')",
-      "const denied = await askAssistantQuestionDirect(page, sessionId, '請再確認目前案件的可讀來源。')",
+      "const denied = await askAssistantQuestionDirect(page, sessionId, '請依現行法規再次確認本案的估價依據是否適用。')",
+      'await expectAssistantPermissionDenied(denied)',
       'await page.reload()',
-      'await expectAssistantPermissionDenied(page, denied)',
-      "await invokePermissionOperator('restore')",
       "await expect(page.getByTestId('assistant-question')).toBeEnabled()",
       "toHaveCount(answersBeforeDenied)",
-      "const restored = await askAssistantQuestion(page, sessionId, '權限恢復後請再次確認目前案件的可讀來源。')",
+      "await invokePermissionOperator('restore')",
+      'await page.goto(assistantUrl)',
+      "const restored = await askAssistantQuestion(page, sessionId, '權限恢復後請依現行法規再次確認本案的估價依據是否適用。')",
       'expect(restored.payload.assistant_session_id).toBe(sessionId)',
       "await expectNonStrictProviderOutcome(page, restored.payload, 'RESTORED')",
-      'await submitPreparedValuation(page)',
+      'const reviewId = await submitPreparedValuation(page)',
     ]
 
     let previousMarkerIndex = -1
