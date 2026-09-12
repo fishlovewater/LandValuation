@@ -1,5 +1,14 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import {
+  PhArrowClockwise as ArrowClockwise,
+  PhCheckCircle as CheckCircle,
+  PhInfo as Info,
+  PhMapPin as MapPin,
+  PhPlusCircle as PlusCircle,
+  PhScales as Scales,
+  PhWarningCircle as WarningCircle,
+} from '@phosphor-icons/vue'
 import { safeValuationErrorMessage, valuationApi } from '../valuation.api'
 import type { ComparisonSetupContextDto, ComparisonSetupTargetDto, ReportPageResponseDto } from '../valuation.types'
 
@@ -167,31 +176,80 @@ watch(targetCount, syncTargetCount)
 <template>
   <section class="comparison-setup" data-testid="comparison-setup" tabindex="-1" aria-labelledby="comparison-setup-title">
     <header class="comparison-setup__header">
-      <div>
-        <p>比較法資料</p>
-        <h3 id="comparison-setup-title">比較法設定</h3>
-        <span>請選擇比準地、交易案例與權重；系統會自動處理必要的資料關聯。</span>
+      <div class="comparison-setup__title">
+        <span class="comparison-setup__title-icon" aria-hidden="true">
+          <Scales :size="20" weight="duotone" />
+        </span>
+        <div>
+          <p>比較法資料</p>
+          <h3 id="comparison-setup-title">比較法設定</h3>
+          <span>選擇比準地、交易案例與權重；系統會自動處理必要的資料關聯。</span>
+        </div>
       </div>
       <label class="comparison-setup__toggle">
         <input :checked="enabled" type="checkbox" data-testid="comparison-workflow-enabled" :disabled="busy || page.form_status !== 'DRAFT'" @change="setEnabled(($event.target as HTMLInputElement).checked)">
         <span>啟用比較分析</span>
       </label>
     </header>
-    <p class="comparison-setup__rule-note">適用的正式規則會依案件類型、行政區、土地使用與有效日期自動選用，不需要手動指定。</p>
-    <p v-if="loading" class="comparison-setup__muted">正在載入比較分析資料…</p>
-    <p v-if="error" class="comparison-setup__error" role="alert">{{ error }}</p>
-    <p v-if="notice" class="comparison-setup__notice" role="status">{{ notice }}</p>
+    <div class="comparison-setup__rule-note">
+      <Info :size="16" weight="duotone" aria-hidden="true" />
+      <span>正式規則會依案件類型、行政區、土地使用與有效日期自動選用，不需要手動指定。</span>
+    </div>
+    <div v-if="loading" class="comparison-setup__muted">
+      <ArrowClockwise :size="15" weight="bold" aria-hidden="true" />
+      <span>正在載入比較分析資料…</span>
+    </div>
+    <div v-if="error" class="comparison-setup__error" role="alert">
+      <WarningCircle :size="16" weight="fill" aria-hidden="true" />
+      <span>{{ error }}</span>
+    </div>
+    <div v-if="notice" class="comparison-setup__notice" role="status">
+      <CheckCircle :size="16" weight="fill" aria-hidden="true" />
+      <span>{{ notice }}</span>
+    </div>
 
     <template v-if="!loading && context">
-      <div v-if="!enabled" class="comparison-setup__disabled" data-testid="comparison-disabled-note">本報告目前不使用比較標的，因此不需要建立比準地、比較分析或比較案例。</div>
+      <div class="comparison-setup__availability" aria-label="比較法可用資料">
+        <div :data-state="context.benchmark_lands.length ? 'ready' : 'attention'">
+          <MapPin :size="17" weight="duotone" aria-hidden="true" />
+          <span><strong>{{ context.benchmark_lands.length }}</strong><small>可用比準地</small></span>
+        </div>
+        <div :data-state="context.analyses.length ? 'ready' : 'neutral'">
+          <Scales :size="17" weight="duotone" aria-hidden="true" />
+          <span><strong>{{ context.analyses.length }}</strong><small>既有比較分析</small></span>
+        </div>
+        <div :data-state="currentAnalysisId ? 'ready' : 'neutral'">
+          <CheckCircle v-if="currentAnalysisId" :size="17" weight="fill" aria-hidden="true" />
+          <Info v-else :size="17" weight="duotone" aria-hidden="true" />
+          <span><strong>{{ currentAnalysisId ? '已套用' : '未套用' }}</strong><small>目前報告版本</small></span>
+        </div>
+      </div>
+
+      <div v-if="!enabled" class="comparison-setup__disabled" data-testid="comparison-disabled-note">
+        <Info :size="17" weight="duotone" aria-hidden="true" />
+        <span>本報告目前不使用比較標的，因此不需要建立比準地、比較分析或比較案例。</span>
+      </div>
       <template v-else>
         <section class="comparison-setup__existing" aria-labelledby="existing-comparison-title">
-          <div><strong id="existing-comparison-title">套用既有分析</strong><span>{{ currentAnalysisId ? '目前正式頁面已連結一組比較分析。' : '若此案件已有可用分析，可直接套用到目前報告版本。' }}</span></div>
+          <div class="comparison-setup__existing-copy">
+            <strong id="existing-comparison-title">套用既有分析</strong>
+            <span>{{ currentAnalysisId ? '目前報告版本已連結一組比較分析；若需更換，可重新選擇。' : '若此案件已有可用分析，可直接套用，不必重新輸入交易案例。' }}</span>
+          </div>
           <select v-model="existingAnalysisId" data-testid="comparison-existing-analysis"><option value="">請選擇既有分析</option><option v-for="analysis in context.analyses" :key="analysis.comparison_analysis_id" :value="analysis.comparison_analysis_id">{{ analysis.label }} · {{ analysisStatusLabel(analysis.analysis_status) }}</option></select>
-          <button type="button" data-testid="apply-comparison-setup" :disabled="busy || !existingAnalysisId || page.form_status !== 'DRAFT'" @click="applyExisting">套用既有分析</button>
+          <button type="button" data-testid="apply-comparison-setup" :disabled="busy || !existingAnalysisId || page.form_status !== 'DRAFT'" @click="applyExisting">
+            <ArrowClockwise :size="15" weight="bold" aria-hidden="true" />
+            <span>套用既有分析</span>
+          </button>
         </section>
 
         <form class="comparison-setup__form" @submit.prevent="createSetup">
+          <div class="comparison-setup__new-heading">
+            <div>
+              <PlusCircle :size="18" weight="duotone" aria-hidden="true" />
+              <strong>建立新的比較分析</strong>
+            </div>
+            <span>若沒有適合的既有分析，再於此新增交易案例。</span>
+          </div>
           <div class="comparison-setup__base-grid">
             <label><span>比準地 *</span><select v-model="benchmarkLandId" data-testid="comparison-benchmark-land" required><option value="">請選擇比準地</option><option v-for="benchmark in context.benchmark_lands" :key="benchmark.benchmark_land_id" :value="benchmark.benchmark_land_id">{{ benchmark.label }}</option></select></label>
             <label><span>比較案例數 *</span><select v-model.number="targetCount" data-testid="comparison-target-count"><option :value="1">1 筆</option><option :value="2">2 筆</option><option :value="3">3 筆</option></select></label>
@@ -213,8 +271,15 @@ watch(targetCount, syncTargetCount)
             </fieldset>
           </div>
           <footer class="comparison-setup__footer">
-            <div :data-valid="weightsValid ? 'true' : 'false'"><strong>權重合計 {{ weightTotal.toFixed(6) }}</strong><span>{{ weightsValid ? '符合 1.000000' : '所有權重須大於 0、最多 1，且合計必須等於 1' }}</span></div>
-            <button type="submit" data-testid="create-comparison-setup" :disabled="busy || !createReady || page.form_status !== 'DRAFT'">{{ busy ? '處理中…' : '建立比較分析並套用' }}</button>
+            <div :data-valid="weightsValid ? 'true' : 'false'">
+              <CheckCircle v-if="weightsValid" :size="17" weight="fill" aria-hidden="true" />
+              <WarningCircle v-else :size="17" weight="fill" aria-hidden="true" />
+              <span><strong>權重合計 {{ weightTotal.toFixed(6) }}</strong><small>{{ weightsValid ? '符合 1.000000，可以建立分析。' : '所有權重須大於 0、最多 1，且合計必須等於 1。' }}</small></span>
+            </div>
+            <button type="submit" data-testid="create-comparison-setup" :disabled="busy || !createReady || page.form_status !== 'DRAFT'">
+              <PlusCircle v-if="!busy" :size="16" weight="bold" aria-hidden="true" />
+              <span>{{ busy ? '處理中…' : '建立比較分析並套用' }}</span>
+            </button>
           </footer>
         </form>
       </template>
@@ -223,26 +288,36 @@ watch(targetCount, syncTargetCount)
 </template>
 
 <style scoped>
-.comparison-setup { display:grid; gap:14px; margin-bottom:14px; padding:16px; border:1px solid var(--app-line); border-radius:var(--app-radius-sm); background:rgba(246,250,255,.78); }
+.comparison-setup { display:grid; gap:14px; margin-bottom:14px; padding:16px; border:1px solid var(--app-line); border-radius:var(--app-radius-sm); background:#f9fbfd; }
 .comparison-setup__header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+.comparison-setup__title { display:flex; align-items:flex-start; gap:10px; min-width:0; }
+.comparison-setup__title-icon { display:grid; width:36px; height:36px; flex:0 0 auto; place-items:center; border-radius:9px; color:#2e5984; background:#eaf2fa; }
 .comparison-setup__header p { margin:0 0 4px; color:#2e5984; font-size:9px; font-weight:900; letter-spacing:.13em; }
 .comparison-setup__header h3 { margin:0; color:var(--app-ink); font-size:17px; }
-.comparison-setup__header div > span { display:block; max-width:680px; margin-top:5px; color:var(--app-muted); font-size:11px; line-height:1.55; }
+.comparison-setup__title > div > span { display:block; max-width:680px; margin-top:5px; color:var(--app-muted); font-size:11px; line-height:1.55; }
 .comparison-setup__toggle { display:flex; align-items:center; gap:7px; min-height:38px; padding:7px 10px; border:1px solid var(--app-line); border-radius:8px; background:#fff; color:var(--app-ink-soft); font-size:11px; font-weight:900; white-space:nowrap; }
-.comparison-setup__toggle input { width:16px; height:16px; }
-.comparison-setup__rule-note,.comparison-setup__disabled { margin:0; padding:10px 12px; border-radius:8px; color:#2e5984; background:#edf4fb; font-size:11px; line-height:1.6; }
-.comparison-setup__disabled { color:var(--app-ink-soft); background:#f7f8fb; }
-.comparison-setup__muted { margin:0; color:var(--app-muted); font-size:11px; }
-.comparison-setup__error,.comparison-setup__notice { margin:0; padding:9px 11px; border-radius:8px; font-size:11px; line-height:1.55; }
+.comparison-setup__toggle input { width:16px; height:16px; accent-color:var(--app-accent); }
+.comparison-setup__rule-note,.comparison-setup__disabled,.comparison-setup__muted,.comparison-setup__error,.comparison-setup__notice { display:flex; align-items:flex-start; gap:7px; margin:0; padding:10px 12px; border-radius:8px; font-size:11px; line-height:1.6; }
+.comparison-setup__rule-note { color:#2e5984; background:#edf4fb; }
+.comparison-setup__disabled { border:1px solid #e1e7ee; color:var(--app-ink-soft); background:#f7f8fb; }
+.comparison-setup__muted { padding:4px 0; color:var(--app-muted); background:transparent; }
 .comparison-setup__error { color:#a44334; background:#fff0ed; }.comparison-setup__notice { color:var(--app-green); background:rgba(59,129,102,.08); }
-.comparison-setup__existing { display:grid; grid-template-columns:minmax(190px,1fr) minmax(220px,1fr) auto; align-items:end; gap:10px; padding:12px; border:1px solid var(--app-line); border-radius:9px; background:rgba(255,255,255,.72); }
-.comparison-setup__existing > div { display:grid; gap:3px; }.comparison-setup__existing strong { color:var(--app-ink); font-size:12px; }.comparison-setup__existing span { color:var(--app-muted); font-size:10px; }
+.comparison-setup__rule-note > svg,.comparison-setup__disabled > svg,.comparison-setup__muted > svg,.comparison-setup__error > svg,.comparison-setup__notice > svg { flex:0 0 auto; margin-top:1px; }
+.comparison-setup__availability { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+.comparison-setup__availability > div { display:flex; align-items:center; gap:8px; min-height:44px; padding:9px 10px; border:1px solid #e1e7ee; border-radius:8px; color:#66788a; background:#fff; }
+.comparison-setup__availability > div[data-state="ready"] { border-color:#cfe4da; color:#2f7456; background:#f3f9f6; }
+.comparison-setup__availability > div[data-state="attention"] { border-color:#ead9b2; color:#8a6515; background:#fffaf0; }
+.comparison-setup__availability span { display:grid; gap:1px; }.comparison-setup__availability strong { color:currentColor; font-size:12px; }.comparison-setup__availability small { color:var(--app-muted); font-size:9px; }
+.comparison-setup__existing { display:grid; grid-template-columns:minmax(220px,1fr) minmax(220px,1fr) auto; align-items:end; gap:10px; padding:12px; border:1px solid var(--app-line); border-radius:9px; background:#fff; }
+.comparison-setup__existing-copy { display:grid; gap:3px; }.comparison-setup__existing strong { color:var(--app-ink); font-size:12px; }.comparison-setup__existing span { color:var(--app-muted); font-size:10px; line-height:1.5; }
 .comparison-setup__existing select,.comparison-setup__existing button,.comparison-setup input,.comparison-setup select,.comparison-setup textarea { min-height:40px; padding:7px 9px; border:1px solid var(--app-line); border-radius:8px; color:var(--app-ink); background:#fff; font:inherit; font-size:11px; }
-.comparison-setup button { cursor:pointer; font-weight:900; }.comparison-setup button:disabled { cursor:not-allowed; opacity:.5; }
-.comparison-setup__form { display:grid; gap:12px; }.comparison-setup__base-grid,.comparison-setup__target-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
+.comparison-setup button { display:inline-flex; align-items:center; justify-content:center; gap:6px; cursor:pointer; font-weight:900; }.comparison-setup button:disabled { cursor:not-allowed; opacity:.5; }
+.comparison-setup__form { display:grid; gap:12px; padding-top:2px; }.comparison-setup__new-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding-top:4px; border-top:1px solid var(--app-line); }.comparison-setup__new-heading > div { display:flex; align-items:center; gap:6px; color:#2e5984; }.comparison-setup__new-heading strong { color:var(--app-ink); font-size:12px; }.comparison-setup__new-heading > span { color:var(--app-muted); font-size:10px; line-height:1.5; text-align:right; }
+.comparison-setup__base-grid,.comparison-setup__target-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
 .comparison-setup label { display:grid; gap:5px; color:var(--app-ink-soft); font-size:10px; font-weight:800; }.comparison-setup__wide { grid-column:1 / -1; }
-.comparison-setup__targets { display:grid; gap:10px; }.comparison-setup fieldset { margin:0; padding:12px; border:1px solid var(--app-line); border-radius:9px; background:rgba(255,255,255,.76); }.comparison-setup legend { padding:0 6px; color:var(--app-ink); font-size:11px; font-weight:900; }.comparison-setup textarea { resize:vertical; }
-.comparison-setup__footer { display:flex; align-items:center; justify-content:space-between; gap:14px; padding-top:12px; border-top:1px solid var(--app-line); }.comparison-setup__footer > div { display:grid; gap:3px; }.comparison-setup__footer strong { color:var(--app-ink); font-size:12px; }.comparison-setup__footer span { color:var(--app-muted); font-size:10px; }.comparison-setup__footer [data-valid="false"] strong { color:#a44334; }
+.comparison-setup__targets { display:grid; gap:10px; }.comparison-setup fieldset { margin:0; padding:12px; border:1px solid var(--app-line); border-radius:9px; background:#fff; }.comparison-setup legend { padding:0 6px; color:var(--app-ink); font-size:11px; font-weight:900; }.comparison-setup textarea { resize:vertical; }
+.comparison-setup__footer { display:flex; align-items:center; justify-content:space-between; gap:14px; padding-top:12px; border-top:1px solid var(--app-line); }.comparison-setup__footer > div { display:flex; align-items:center; gap:8px; }.comparison-setup__footer > div > span { display:grid; gap:2px; }.comparison-setup__footer strong { color:var(--app-ink); font-size:12px; }.comparison-setup__footer small { color:var(--app-muted); font-size:10px; }.comparison-setup__footer [data-valid="true"] { color:var(--app-green); }.comparison-setup__footer [data-valid="false"] { color:#a44334; }.comparison-setup__footer [data-valid="false"] strong { color:#a44334; }
 .comparison-setup__footer button,.comparison-setup__existing button { min-height:40px; padding:8px 12px; border:1px solid var(--app-accent); border-radius:8px; color:#fff; background:var(--app-accent); }
-@media (max-width:760px) { .comparison-setup__header,.comparison-setup__footer { align-items:stretch; flex-direction:column; }.comparison-setup__toggle { justify-content:flex-start; }.comparison-setup__existing,.comparison-setup__base-grid,.comparison-setup__target-grid { grid-template-columns:1fr; }.comparison-setup__wide { grid-column:auto; }.comparison-setup__footer button,.comparison-setup__existing button { width:100%; } }
+@media (max-width:900px) { .comparison-setup__availability { grid-template-columns:1fr; }.comparison-setup__existing { grid-template-columns:1fr; }.comparison-setup__existing button { width:100%; } }
+@media (max-width:760px) { .comparison-setup__header,.comparison-setup__footer,.comparison-setup__new-heading { align-items:stretch; flex-direction:column; }.comparison-setup__new-heading > span { text-align:left; }.comparison-setup__toggle { justify-content:flex-start; }.comparison-setup__base-grid,.comparison-setup__target-grid { grid-template-columns:1fr; }.comparison-setup__wide { grid-column:auto; }.comparison-setup__footer button { width:100%; } }
 </style>
