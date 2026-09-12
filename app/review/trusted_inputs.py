@@ -106,6 +106,7 @@ class TrustedRunContext:
     validation_rules: tuple[dict, ...]
     rule_source: dict
     prepared_rules: tuple["PreparedRule", ...]
+    skipped_rules: tuple["SkippedRule", ...] = ()
     extraction_run: dict | None = None
     documents: dict[str, dict] = field(default_factory=dict)
     # Submitted Reviews carry the immutable case projection needed to build a
@@ -140,6 +141,14 @@ class RuleContract:
     tolerance: Decimal | None = None
     system_grade: str | None = None
     expected_total: Decimal | None = None
+
+
+@dataclass(frozen=True)
+class SkippedRule:
+    rule: dict
+    reason_code: str
+    reason: str
+    missing_field_codes: tuple[str, ...] = ()
 
 
 def trusted_fields_by_code(fields):
@@ -387,3 +396,63 @@ def prepare_trusted_rules(
                 )
             )
     return tuple(prepared)
+
+
+def prepare_available_rules(
+    contracts: tuple[RuleContract, ...],
+    fields: dict[str, TrustedField],
+    *,
+    blocked_rule_codes: frozenset[str] = frozenset(),
+) -> tuple[tuple[PreparedRule, ...], tuple[SkippedRule, ...]]:
+    """Prepare every rule that can run with the evidence currently available.
+
+    Missing or unusable case evidence is a coverage limitation, not a whole-run
+    failure. Rule-definition/configuration errors still fail closed before this
+    helper (or propagate from ``prepare_trusted_rules``).
+    """
+    prepared: list[PreparedRule] = []
+    skipped: list[SkippedRule] = []
+    for contract in contracts:
+        rule = contract.rule
+        if rule["rule_code"] in blocked_rule_codes:
+            skipped.append(
+                SkippedRule(
+                    rule=rule,
+                    reason_code="EVIDENCE_UNAVAILABLE",
+                    reason="缺少此檢核需要的外部佐證資料",
+                )
+            )
+            continue
+
+        problems = required_field_problems(contract.required_field_codes, fields)
+        if problems:
+            missing_codes = tuple(problem.field_code for problem in problems)
+            skipped.append(
+                SkippedRule(
+                    rule=rule,
+                    reason_code="INPUT_UNAVAILABLE",
+                    reason="查估書 OCR 未取得此檢核需要的可用欄位",
+                    missing_field_codes=missing_codes,
+                )
+            )
+            continue
+
+        try:
+            prepared.extend(prepare_trusted_rules((contract,), fields))
+        except AppError as error:
+            if error.code != "TRUSTED_INPUT_UNVERIFIED":
+                raise
+            field_code = (
+                error.details.get("field_code")
+                if isinstance(error.details, dict)
+                else None
+            )
+            skipped.append(
+                SkippedRule(
+                    rule=rule,
+                    reason_code="INPUT_UNVERIFIED",
+                    reason="查估書 OCR 欄位格式不足以安全執行此檢核",
+                    missing_field_codes=((str(field_code),) if field_code else ()),
+                )
+            )
+    return tuple(prepared), tuple(skipped)

@@ -1288,8 +1288,6 @@ def test_run_rejects_caller_owned_authoritative_fields(
 @pytest.mark.parametrize(
     "runnable_review, expected_code",
     [
-        ({"with_extraction": False}, "TRUSTED_INPUT_MISSING"),
-        ({"adjustment_status": "NEEDS_CONFIRMATION"}, "TRUSTED_INPUT_MISSING"),
         ({"source_publication_status": "DRAFT"}, "RULE_SOURCE_UNAVAILABLE"),
         ({"source_extraction_status": "PENDING"}, "RULE_SOURCE_UNAVAILABLE"),
         ({"tied_rule_versions": True}, "RULE_SELECTION_CONFLICT"),
@@ -1311,6 +1309,31 @@ def test_run_preflight_fails_closed_without_creating_a_run(
         f"/api/v1/review/cases/{runnable_review.review_id}"
     ).json()
     assert review["review_status"] == "READY_FOR_REVIEW"
+
+
+@pytest.mark.parametrize(
+    "runnable_review, expected_skipped",
+    [
+        ({"with_extraction": False}, {"ADJUSTMENT_RATE", "EXPERT_GRADE"}),
+        ({"adjustment_status": "NEEDS_CONFIRMATION"}, {"ADJUSTMENT_RATE"}),
+    ],
+    indirect=["runnable_review"],
+)
+def test_run_completes_and_records_coverage_when_ocr_evidence_is_unavailable(
+    authorized_client, runnable_review, postgres_connection, expected_skipped
+):
+    response = authorized_client.post(
+        f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_status"] == "COMPLETED"
+    coverage = body["input_snapshot"]["review_coverage"]
+    assert coverage["skipped_rule_count"] == len(expected_skipped)
+    assert {item["rule_code"] for item in coverage["skipped_rules"]} == expected_skipped
+    assert set(body["input_snapshot"]["skipped_rule_codes"]) == expected_skipped
+    assert run_count(postgres_connection, runnable_review.review_id) == 1
 
 
 def test_run_snapshot_preserves_zero_server_extracted_value(
@@ -1385,22 +1408,23 @@ def test_run_snapshot_serializes_database_decimal_confidence_exactly(
 
 
 @pytest.mark.parametrize(
-    ("field_code", "confirmed_value"),
+    ("field_code", "confirmed_value", "expected_skipped_rule"),
     [
-        ("adjustment_rate", True),
-        ("adjustment_rate", ["-5"]),
-        ("adjustment_rate", "NaN"),
-        ("adjustment_rate", "Infinity"),
-        ("adjustment_rate", "1E+999999"),
-        ("expert_grade", ["A"]),
+        ("adjustment_rate", True, "ADJUSTMENT_RATE"),
+        ("adjustment_rate", ["-5"], "ADJUSTMENT_RATE"),
+        ("adjustment_rate", "NaN", "ADJUSTMENT_RATE"),
+        ("adjustment_rate", "Infinity", "ADJUSTMENT_RATE"),
+        ("adjustment_rate", "1E+999999", "ADJUSTMENT_RATE"),
+        ("expert_grade", ["A"], "EXPERT_GRADE"),
     ],
 )
-def test_run_rejects_invalid_trusted_normalized_value_before_mutation(
+def test_run_skips_rule_with_unusable_ocr_value_instead_of_failing_whole_run(
     authorized_client,
     runnable_review,
     postgres_connection,
     field_code,
     confirmed_value,
+    expected_skipped_rule,
 ):
     with postgres_connection.cursor() as cursor:
         cursor.execute(
@@ -1421,12 +1445,13 @@ def test_run_rejects_invalid_trusted_normalized_value_before_mutation(
         f"/api/v1/review/cases/{runnable_review.review_id}/runs", json={}
     )
 
-    assert response.status_code == 409
-    assert response.json()["error"]["code"] == "TRUSTED_INPUT_UNVERIFIED"
-    assert run_count(postgres_connection, runnable_review.review_id) == 0
-    assert authorized_client.get(
-        f"/api/v1/review/cases/{runnable_review.review_id}"
-    ).json()["review_status"] == "READY_FOR_REVIEW"
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_status"] == "COMPLETED"
+    skipped = body["input_snapshot"]["review_coverage"]["skipped_rules"]
+    assert {item["rule_code"] for item in skipped} == {expected_skipped_rule}
+    assert skipped[0]["reason_code"] == "INPUT_UNVERIFIED"
+    assert run_count(postgres_connection, runnable_review.review_id) == 1
 
 
 @pytest.mark.parametrize(

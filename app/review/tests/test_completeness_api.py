@@ -263,7 +263,7 @@ def authorized_client(trusted_case):
 @pytest.mark.parametrize(
     "trusted_case", [{"with_extraction": False}], indirect=True
 )
-def test_completeness_blocks_when_completed_extraction_is_missing(
+def test_completeness_allows_review_when_completed_extraction_is_missing(
     authorized_client, trusted_case
 ):
     response = authorized_client.post(
@@ -271,8 +271,8 @@ def test_completeness_blocks_when_completed_extraction_is_missing(
     )
 
     assert response.status_code == 200
-    assert response.json()["review_status"] == "PENDING_MATERIALS"
-    assert "TRUSTED_INPUT_MISSING_ADJUSTMENT_RATE" in {
+    assert response.json()["review_status"] == "READY_FOR_REVIEW"
+    assert "TRUSTED_INPUT_MISSING_ADJUSTMENT_RATE" not in {
         item["item_code"] for item in response.json()["items"]
     }
 
@@ -280,7 +280,7 @@ def test_completeness_blocks_when_completed_extraction_is_missing(
 @pytest.mark.parametrize(
     "trusted_case", [{"adjustment_status": "NEEDS_CONFIRMATION"}], indirect=True
 )
-def test_completeness_blocks_auto_extracted_high_impact_field(
+def test_completeness_allows_unconfirmed_ocr_high_impact_field(
     authorized_client, trusted_case
 ):
     response = authorized_client.post(
@@ -288,8 +288,8 @@ def test_completeness_blocks_auto_extracted_high_impact_field(
     )
 
     assert response.status_code == 200
-    assert response.json()["review_status"] == "PENDING_MATERIALS"
-    assert "TRUSTED_INPUT_MISSING_ADJUSTMENT_RATE" in {
+    assert response.json()["review_status"] == "READY_FOR_REVIEW"
+    assert "TRUSTED_INPUT_MISSING_ADJUSTMENT_RATE" not in {
         item["item_code"] for item in response.json()["items"]
     }
 
@@ -411,7 +411,7 @@ def test_completeness_blocks_invalid_rule_configuration(
     }
 
 
-def test_completeness_blocks_invalid_trusted_normalized_value(
+def test_completeness_allows_invalid_ocr_value_for_rule_level_skipping(
     authorized_client, trusted_case, postgres_connection
 ):
     with postgres_connection.cursor() as cursor:
@@ -430,8 +430,8 @@ def test_completeness_blocks_invalid_trusted_normalized_value(
     )
 
     assert response.status_code == 200
-    assert response.json()["review_status"] == "PENDING_MATERIALS"
-    assert "TRUSTED_INPUT_UNVERIFIED_ADJUSTMENT_RATE" in {
+    assert response.json()["review_status"] == "READY_FOR_REVIEW"
+    assert "TRUSTED_INPUT_UNVERIFIED_ADJUSTMENT_RATE" not in {
         item["item_code"] for item in response.json()["items"]
     }
 

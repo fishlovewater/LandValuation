@@ -7,6 +7,7 @@ from app.review.repository import ReviewRepository
 from app.review.service import ReviewService
 from app.review.trusted_inputs import (
     TrustedField,
+    prepare_available_rules,
     prepare_trusted_rules,
     required_field_problems,
     trusted_fields_by_code,
@@ -73,6 +74,54 @@ def test_float_confirmed_value_is_not_a_trusted_decimal():
         prepare_trusted_rules(contracts, {"adjustment_rate": field(value=0.1 + 0.2)})
 
     assert raised.value.code == "TRUSTED_INPUT_UNVERIFIED"
+
+
+def test_available_rules_skip_only_checks_whose_ocr_fields_are_missing():
+    contracts = validate_rule_contracts(
+        [
+            {
+                "rule_code": "ADJUSTMENT_RATE",
+                "target_field_code": "adjustment_rate",
+                "rule_expression": '{"system_rate":"-5","tolerance":"0"}',
+            },
+            {
+                "rule_code": "EXPERT_GRADE",
+                "target_field_code": "expert_grade",
+                "rule_expression": '{"system_grade":"A"}',
+            },
+        ]
+    )
+
+    prepared, skipped = prepare_available_rules(
+        contracts,
+        {"expert_grade": field("expert_grade", value="A")},
+    )
+
+    assert [item.rule["rule_code"] for item in prepared] == ["EXPERT_GRADE"]
+    assert [item.rule["rule_code"] for item in skipped] == ["ADJUSTMENT_RATE"]
+    assert skipped[0].reason_code == "INPUT_UNAVAILABLE"
+    assert skipped[0].missing_field_codes == ("adjustment_rate",)
+
+
+def test_available_rules_skip_unusable_ocr_value_instead_of_failing_whole_run():
+    contracts = validate_rule_contracts(
+        [
+            {
+                "rule_code": "ADJUSTMENT_RATE",
+                "target_field_code": "adjustment_rate",
+                "rule_expression": '{"system_rate":"-5","tolerance":"0"}',
+            }
+        ]
+    )
+
+    prepared, skipped = prepare_available_rules(
+        contracts,
+        {"adjustment_rate": field(value=0.1 + 0.2)},
+    )
+
+    assert prepared == ()
+    assert skipped[0].reason_code == "INPUT_UNVERIFIED"
+    assert skipped[0].missing_field_codes == ("adjustment_rate",)
 
 
 def test_rule_json_numbers_are_parsed_as_exact_decimals():

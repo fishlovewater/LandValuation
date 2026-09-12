@@ -14,7 +14,6 @@ from app.review.completeness import (
     evaluate_completeness,
     trusted_context_missing_requirement,
     trusted_preflight_to_missing,
-    trusted_problem_to_missing,
 )
 from app.review.risks import FindingRisk, risk_level_for_findings
 from app.review.decisions import (
@@ -57,10 +56,9 @@ from app.review.rule_selection import (
 )
 from app.review.trusted_inputs import (
     TrustedField,
-    required_field_problems,
+    prepare_available_rules,
     trusted_fields_by_code,
     TrustedRunContext,
-    prepare_trusted_rules,
     validate_rule_contracts,
 )
 from app.valuation.submissions.snapshot import (
@@ -1020,7 +1018,7 @@ class ReviewService:
 
         fields = trusted_fields_by_code(official_fields)
         contracts = validate_rule_contracts(copied_rules)
-        prepared_rules = prepare_trusted_rules(contracts, fields)
+        prepared_rules, skipped_rules = prepare_available_rules(contracts, fields)
         case_projection = {
             key: case_context[key]
             for key in (
@@ -1039,6 +1037,7 @@ class ReviewService:
             validation_rules=tuple(copied_rules),
             rule_source=dict(rule_source),
             prepared_rules=prepared_rules,
+            skipped_rules=skipped_rules,
             documents=documents,
             case=case_projection,
         )
@@ -1139,19 +1138,8 @@ class ReviewService:
             contracts = validate_rule_contracts(active_rules)
         except AppError as error:
             return (trusted_preflight_to_missing(error),)
-        required_codes = {
-            field_code
-            for contract in contracts
-            for field_code in contract.required_field_codes
-        }
-        problems = required_field_problems(required_codes, fields)
-        if problems:
-            return tuple(
-                trusted_problem_to_missing(problem)
-                for problem in problems
-            )
         try:
-            prepare_trusted_rules(contracts, fields)
+            prepare_available_rules(contracts, fields)
         except AppError as error:
             return (trusted_preflight_to_missing(error),)
         return ()
@@ -1269,31 +1257,14 @@ class ReviewService:
             )
 
         contracts = validate_rule_contracts(validation_rules)
-        required_codes = {
-            field_code
-            for contract in contracts
-            for field_code in contract.required_field_codes
-        }
-        problems = required_field_problems(required_codes, fields)
-        if await self._demo_advisory(review):
-            completeness = evaluate_completeness(
-                await self.repository.load_case_snapshot(review.case_id)
-            )
-            contracts = tuple(
-                contract for contract in contracts
-                if not required_field_problems(contract.required_field_codes, fields)
-                and contract.rule["rule_code"] not in completeness.blocked_rule_codes
-            )
-            problems = ()
-        if problems:
-            problem = problems[0]
-            raise AppError(
-                problem.code,
-                f"正式抽取欄位不可用：{problem.field_code}",
-                409,
-                {"field_code": problem.field_code},
-            )
-        prepared_rules = prepare_trusted_rules(contracts, fields)
+        completeness = evaluate_completeness(
+            await self.repository.load_case_snapshot(review.case_id)
+        )
+        prepared_rules, skipped_rules = prepare_available_rules(
+            contracts,
+            fields,
+            blocked_rule_codes=completeness.blocked_rule_codes,
+        )
 
         return TrustedRunContext(
             document=document,
@@ -1303,6 +1274,7 @@ class ReviewService:
             validation_rules=validation_rules,
             rule_source=rule_source,
             prepared_rules=prepared_rules,
+            skipped_rules=skipped_rules,
             documents=documents,
         )
 
@@ -1532,6 +1504,26 @@ class ReviewService:
             "validation_rule_ids": [
                 str(rule["validation_rule_id"]) for rule in context.validation_rules
             ],
+            "review_coverage": {
+                "total_rule_count": len(context.validation_rules),
+                "executed_rule_count": len(context.prepared_rules),
+                "skipped_rule_count": len(context.skipped_rules),
+                "skipped_rules": [
+                    {
+                        "validation_rule_id": str(item.rule["validation_rule_id"]),
+                        "rule_code": item.rule["rule_code"],
+                        "rule_name": item.rule["rule_name"],
+                        "reason_code": item.reason_code,
+                        "reason": item.reason,
+                        "missing_field_codes": list(item.missing_field_codes),
+                        "status": "SKIPPED",
+                    }
+                    for item in context.skipped_rules
+                ],
+            },
+            "skipped_rule_codes": [
+                item.rule["rule_code"] for item in context.skipped_rules
+            ],
             "checks": checks,
         }
 
@@ -1601,14 +1593,6 @@ class ReviewService:
             # the existing canonical live-data fallback.
             case = await self.repository.get_case_report_data(review.case_id)
         input_snapshot = self._input_snapshot(review, case, context)
-        demo_advisory = await self._demo_advisory(review)
-        if demo_advisory:
-            executed = {str(item.rule["validation_rule_id"]) for item in context.prepared_rules}
-            input_snapshot["demo_notice"] = "Demo：缺件不阻擋流程；資料不足的規則未執行，不代表通過。"
-            input_snapshot["skipped_rule_codes"] = [
-                rule["rule_code"] for rule in context.validation_rules
-                if str(rule["validation_rule_id"]) not in executed
-            ]
         external_snapshot = await self._freeze_external_review_input(
             review,
             actor_id,
@@ -1803,6 +1787,12 @@ class ReviewService:
         risk = risk_level_for_findings(
             [FindingRisk(item.finding_type, item.severity) for item in findings]
         )
+        skipped_rule_codes = input_snapshot.get("skipped_rule_codes", [])
+        coverage_note = (
+            f"{len(skipped_rule_codes)} 項規則因資料不足未執行，不代表通過。"
+            if skipped_rule_codes
+            else ""
+        )
         summary = await self.repository.create_risk_summary(
             review_id=review.review_id,
             validation_run_id=run.validation_run_id,
@@ -1810,20 +1800,14 @@ class ReviewService:
             risk_score={"LOW": 20, "MEDIUM": 50, "HIGH": 80, "CRITICAL": 100}.get(
                 risk.level, 0
             ),
-            summary=(
-                (f"Demo：缺件不阻擋流程；{len(input_snapshot.get('skipped_rule_codes', []))} 項規則因資料不足未執行，不代表通過。"
-                 if demo_advisory else "")
-                + f"本次檢核產生 {len(findings)} 筆未解決疑點。"
-            ),
+            summary=coverage_note + f"本次檢核產生 {len(findings)} 筆未解決疑點。",
             category_scores={"deterministic_findings": len(findings)},
             high_count=risk.high_count,
             medium_count=risk.medium_count,
             low_count=risk.low_count,
             missing_item_count=review.missing_item_count,
-            risk_reasons=sorted({item.finding_type for item in findings}) + (
-                [input_snapshot["demo_notice"], "未執行規則：" + ", ".join(input_snapshot["skipped_rule_codes"])]
-                if demo_advisory else []
-            ),
+            risk_reasons=sorted({item.finding_type for item in findings})
+            + ([coverage_note, "未執行規則：" + ", ".join(skipped_rule_codes)] if skipped_rule_codes else []),
         )
         now = datetime.now(UTC)
         run.run_status = "COMPLETED"
