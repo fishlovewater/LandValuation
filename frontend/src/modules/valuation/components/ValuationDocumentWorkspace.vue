@@ -100,10 +100,6 @@ const emit = defineEmits<{
   upload: []
 }>()
 
-function analysisFormValue(documentId: string): FieldAnalysisFormCode {
-  return props.documentAnalysisForm[documentId] ?? 'F03'
-}
-
 function categoryValue(documentId: string): DocumentCategory {
   return props.documentCategoryDraft[documentId] ?? 'original'
 }
@@ -268,19 +264,6 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
                 <MagicWand :size="14" weight="bold" aria-hidden="true" />
                 <span>解析宗地清冊</span>
               </button>
-              <label v-if="canExtractDocument(document)" class="document-list__analysis-form">
-                <span>優先辨識表單</span>
-                <select
-                  :value="analysisFormValue(document.documentId)"
-                  :data-testid="`document-analysis-form-${document.documentId}`"
-                  :disabled="Boolean(extractionBusyDocumentId)"
-                  @change="emit('updateAnalysisForm', document.documentId, ($event.target as HTMLSelectElement).value as FieldAnalysisFormCode)"
-                >
-                  <option v-for="code in analysisFormCodes" :key="code" :value="code">
-                    {{ formDisplayName(code) }}
-                  </option>
-                </select>
-              </label>
               <button
                 v-if="canExtractDocument(document)"
                 class="document-action document-action--primary"
@@ -291,7 +274,7 @@ function canPrepareParcelImport(document: DocumentArtifactModel): boolean {
               >
                 <MagicWand v-if="!documentCandidateCount(document.documentId)" :size="14" weight="bold" aria-hidden="true" />
                 <ArrowClockwise v-else :size="14" weight="bold" aria-hidden="true" />
-                <span>{{ extractionBusyDocumentId === document.documentId ? '辨識中…' : documentCandidateCount(document.documentId) ? '重新辨識' : '開始辨識' }}</span>
+                <span>{{ extractionBusyDocumentId === document.documentId ? '辨識中…' : documentCandidateCount(document.documentId) ? '重新辨識' : '自動辨識' }}</span>
               </button>
               <div v-if="canManageSourceDocument(document)" class="document-list__manage">
                 <label :for="`document-category-${document.documentId}`"><Tag :size="13" weight="bold" aria-hidden="true" />文件分類</label>

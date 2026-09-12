@@ -289,7 +289,7 @@ onMounted(() => {
             <div class="create-case-more__grid">
               <label><span>估價作業期限</span><input v-model="createDraft.valuationDueDate" type="date" /></label>
               <label><span>申請機關</span><input v-model.trim="createDraft.requestingAgency" maxlength="200" /></label>
-              <div class="create-case-fixed-field">
+              <div class="create-case-fixed-field" data-testid="create-case-type-fixed">
                 <span>案件類型</span>
                 <strong>{{ valuationCaseTypeLabel(VALUATION_CASE_TYPE) }}</strong>
                 <small>系統固定辦理土地徵收補償市價查估，不需另外選擇。</small>

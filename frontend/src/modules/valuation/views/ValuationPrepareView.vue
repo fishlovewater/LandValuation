@@ -776,6 +776,13 @@ function goToWorkflowIssue(target: string): void {
   }
 }
 
+function openCandidateReview(): void {
+  navigateWorkspaceStage('ai-review')
+  selectedCandidateId.value = pendingCandidates.value[0]?.extracted_field_id
+    ?? allCandidates.value[0]?.extracted_field_id
+    ?? null
+}
+
 async function downloadSourceDocument(document: DocumentArtifactModel): Promise<void> {
   error.value = ''
   try {
@@ -1524,7 +1531,7 @@ async function addLocation(): Promise<void> {
     locations.value = [...locations.value, created]
     newLocationLabel.value = ''
     await changeActiveLocation(created.location_id)
-    notice.value = `${created.label} 已建立；後續文件、AI 辨識與宗地資料會歸屬這個地點。`
+    notice.value = `${created.label} 已建立；後續文件、辨識結果與宗地資料會歸屬這個資料位置。`
   } catch (caught: unknown) {
     error.value = safeValuationErrorMessage(caught)
   }
@@ -1540,7 +1547,7 @@ async function chooseBenchmarkLocation(): Promise<void> {
       ...item,
       is_benchmark_location: item.location_id === updated.location_id,
     }))
-    notice.value = `${updated.label} 已設為比準地來源地點。`
+    notice.value = `${updated.label} 已設為比準地來源位置。`
   } catch (caught: unknown) {
     error.value = safeValuationErrorMessage(caught)
   }
@@ -2293,17 +2300,17 @@ onBeforeUnmount(clearPreviewUrl)
       <section
         v-if="activeWizardStep === 2 || activeWizardStep === 3"
         class="location-context"
-        aria-label="目前估價地點"
+        aria-label="目前資料位置"
       >
         <div class="location-context__copy">
-          <strong>目前估價地點</strong>
-          <span>來源文件、AI 辨識、人工補充與宗地資料會依地點分開保存。</span>
+          <strong>資料位置</strong>
+          <span>來源文件、辨識結果與宗地資料會依資料位置分開保存；正式比準地仍在估價資料階段設定。</span>
         </div>
         <label class="location-context__select">
-          <span>切換地點</span>
+          <span>切換資料位置</span>
           <select :value="activeLocationId ?? ''" data-testid="valuation-location-select" @change="handleLocationChange">
             <option v-for="location in locations" :key="location.location_id" :value="location.location_id">
-              地點 {{ location.display_order }}｜{{ location.label }}{{ location.is_benchmark_location ? '（比準地）' : '' }}
+              {{ location.label }}{{ location.is_benchmark_location ? '（比準地來源位置）' : '' }}
             </option>
           </select>
         </label>
@@ -2311,17 +2318,17 @@ onBeforeUnmount(clearPreviewUrl)
           <input
             v-model="newLocationLabel"
             type="text"
-            placeholder="新增地點名稱"
-            aria-label="新增估價地點名稱"
+            placeholder="新增資料位置名稱"
+            aria-label="新增資料位置名稱"
             @keyup.enter="addLocation"
           >
-          <button type="button" :disabled="!newLocationLabel.trim()" @click="addLocation">新增地點</button>
+          <button type="button" :disabled="!newLocationLabel.trim()" @click="addLocation">新增位置</button>
           <button
             type="button"
             :disabled="!activeLocationId || activeLocation?.is_benchmark_location"
             @click="chooseBenchmarkLocation"
           >
-            {{ activeLocation?.is_benchmark_location ? '目前為比準地' : '設為比準地' }}
+            {{ activeLocation?.is_benchmark_location ? '目前為比準地來源位置' : '設為比準地來源位置' }}
           </button>
         </div>
       </section>
@@ -2378,6 +2385,7 @@ onBeforeUnmount(clearPreviewUrl)
         @choose-upload="chooseUpload"
         @upload="uploadSourceDocument"
         @import-parcels="importParcelRows"
+        @review-candidates="openCandidateReview"
       />
 
       <ValuationCandidateWorkspace

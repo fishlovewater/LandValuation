@@ -68,6 +68,7 @@ const emit = defineEmits<{
   chooseUpload: [event: Event | File]
   upload: []
   importParcels: [rows: ParcelImportRowDto[]]
+  reviewCandidates: []
 }>()
 </script>
 
@@ -75,33 +76,18 @@ const emit = defineEmits<{
   <section class="document-stage" aria-labelledby="documents-stage-title">
     <div class="document-stage__heading">
       <div>
-        <p class="document-stage__eyebrow">文件與辨識</p>
-        <h2 id="documents-stage-title">來源文件與智能辨識</h2>
+        <p class="document-stage__eyebrow">來源資料</p>
+        <h2 id="documents-stage-title">準備估價需要的原始資料</h2>
+        <span class="document-stage__description">上傳並整理原始資料，系統會自動辨識可用欄位；辨識結果仍由人工確認後才會套用。</span>
       </div>
-      <span class="document-stage__count">{{ props.documents.length }} 份來源文件</span>
+      <div class="document-stage__heading-actions">
+        <span class="document-stage__count">{{ props.documents.length }} 份來源文件</span>
+        <button v-if="props.pendingCandidateCount" class="document-stage__review" type="button" @click="emit('reviewCandidates')">
+          確認待處理資料（{{ props.pendingCandidateCount }}）
+          <ArrowRight :size="14" weight="bold" aria-hidden="true" />
+        </button>
+      </div>
     </div>
-
-    <section
-      class="document-ai-process"
-      data-testid="document-ai-process-guide"
-      aria-label="文件辨識處理順序"
-    >
-      <article>
-        <span class="document-ai-process__step">1</span>
-        <div>
-          <strong>先確認來源文件並執行辨識</strong>
-          <small>目前有 {{ props.documents.length }} 份來源文件；可先預覽，再選擇目標表單進行文件文字辨識與智能欄位分析。</small>
-        </div>
-      </article>
-      <ArrowRight class="document-ai-process__arrow" :size="18" weight="bold" aria-hidden="true" />
-      <article :data-state="props.pendingCandidateCount ? 'attention' : 'ready'">
-        <span class="document-ai-process__step">2</span>
-        <div>
-          <strong>再人工確認辨識結果</strong>
-          <small>{{ props.pendingCandidateCount ? `還有 ${props.pendingCandidateCount} 筆待確認；確認後才會寫入正式資料。` : '目前沒有待確認的辨識結果。' }}</small>
-        </div>
-      </article>
-    </section>
 
     <ValuationDocumentWorkspace
       :documents="props.documents"
@@ -186,6 +172,10 @@ const emit = defineEmits<{
   font-weight: 600;
   letter-spacing: -.04em;
 }
+.document-stage__description { display:block; max-width:760px; margin-top:6px; color:var(--app-muted); font-size:11px; line-height:1.6; }
+.document-stage__heading-actions { display:flex; align-items:center; flex-wrap:wrap; justify-content:flex-end; gap:8px; }
+.document-stage__review { display:inline-flex; min-height:36px; align-items:center; justify-content:center; gap:6px; padding:6px 10px; border:1px solid #2e5984; border-radius:8px; color:#fff; background:#2e5984; cursor:pointer; font-size:10px; font-weight:900; white-space:nowrap; }
+.document-stage__review:hover { background:#244d73; }
 
 .document-stage__eyebrow {
   margin: 0 0 6px;
@@ -209,73 +199,6 @@ const emit = defineEmits<{
   white-space: nowrap;
 }
 
-.document-ai-process {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: stretch;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid #d9e4ef;
-  border-radius: 12px;
-  background: #f8fbfe;
-}
-
-.document-ai-process article {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  min-width: 0;
-  padding: 11px 12px;
-  border: 1px solid #e1e8ef;
-  border-radius: 10px;
-  background: #fff;
-}
-
-.document-ai-process article[data-state="attention"] {
-  border-color: #ead7b0;
-  background: #fffaf0;
-}
-
-.document-ai-process article[data-state="ready"] {
-  border-color: #cfe0d6;
-  background: #f5faf7;
-}
-
-.document-ai-process article > div {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.document-ai-process strong {
-  color: var(--app-ink);
-  font-size: 12px;
-}
-
-.document-ai-process small {
-  color: var(--app-muted);
-  font-size: 10px;
-  line-height: 1.55;
-}
-
-.document-ai-process__step {
-  display: grid;
-  width: 26px;
-  height: 26px;
-  flex: 0 0 26px;
-  place-items: center;
-  border-radius: 999px;
-  color: #fff;
-  background: #2e5984;
-  font-size: 11px;
-  font-weight: 900;
-}
-
-.document-ai-process__arrow {
-  align-self: center;
-  color: #708399;
-}
-
 @media (max-width: 760px) {
   .document-stage {
     padding: 16px;
@@ -289,14 +212,7 @@ const emit = defineEmits<{
   .document-stage__count {
     width: fit-content;
   }
-
-  .document-ai-process {
-    grid-template-columns: 1fr;
-  }
-
-  .document-ai-process__arrow {
-    justify-self: center;
-    transform: rotate(90deg);
-  }
+  .document-stage__heading-actions { justify-content:flex-start; }
+  .document-stage__review { width:100%; }
 }
 </style>

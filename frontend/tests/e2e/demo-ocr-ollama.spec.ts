@@ -24,7 +24,6 @@ test.describe('persistent Demo OCR + Ollama field analysis', () => {
 
     const documentRow = page.locator('li').filter({ hasText: sourceFilename }).first()
     await expect(documentRow).toBeVisible()
-    await documentRow.locator('select[data-testid^="document-analysis-form-"]').selectOption('F03')
 
     const extractionResponsePromise = page.waitForResponse((response) => {
       const path = new URL(response.url()).pathname

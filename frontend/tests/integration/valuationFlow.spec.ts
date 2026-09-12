@@ -646,9 +646,10 @@ describe('valuation demo flow', () => {
     expect(wrapper.text()).toContain('繼續估價')
     expect(wrapper.get('[data-testid="valuation-dashboard-header"]').text()).toContain('估價案件')
     const dashboardSummary = wrapper.get('[data-testid="valuation-dashboard-summary"]')
-    expect(dashboardSummary.text()).toContain('目前 1 件案件')
-    expect(dashboardSummary.text()).toContain('1 件已設定作業期限')
-    expect(dashboardSummary.text()).toContain('預設依作業期限由近到遠排列')
+    expect(dashboardSummary.text()).toContain('待處理')
+    expect(dashboardSummary.text()).toContain('1')
+    expect(dashboardSummary.text()).toContain('補正中')
+    expect(dashboardSummary.text()).toContain('7 日內到期')
     expect(wrapper.get('[data-testid="valuation-case-list"]').text()).toContain('案件列表')
     await wrapper.get('[data-testid="create-case"]').trigger('click')
     const fixedCaseType = wrapper.get('[data-testid="create-case-type-fixed"]')
@@ -1549,6 +1550,24 @@ describe('valuation demo flow', () => {
           candidates: [candidate],
         }, config)
       }
+      if (
+        config.method === 'post'
+        && config.url === `/valuation/cases/${ids.case}/documents/${ids.sourceDocument}/extraction/analyze-fields`
+      ) {
+        return response({
+          extraction_id: extractionId,
+          case_id: ids.case,
+          document_id: ids.sourceDocument,
+          provider: 'PDF_TEXT',
+          extraction_status: 'COMPLETED',
+          page_count: 3,
+          extracted_text: null,
+          error_message: null,
+          started_at: '2026-09-11T00:00:00Z',
+          completed_at: '2026-09-11T00:00:01Z',
+          candidates: [candidate],
+        }, config)
+      }
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/auto-workflow/confirm`) {
         confirmationBodies.push(requestBody(config.data))
         candidatePending = false
@@ -1563,18 +1582,16 @@ describe('valuation demo flow', () => {
     await vi.waitFor(() => expect(wrapper.find('[data-testid="valuation-step-2"]').exists()).toBe(true))
     await wrapper.get('[data-testid="valuation-step-2"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.find(`[data-testid="extract-document-${ids.sourceDocument}"]`).exists()).toBe(true))
-    const processGuide = wrapper.get('[data-testid="document-ai-process-guide"]')
-    expect(processGuide.text()).toContain('先確認來源文件並執行辨識')
-    expect(processGuide.text()).toContain('再人工確認辨識結果')
-    expect(processGuide.text()).toContain('目前沒有待確認的辨識結果')
+    expect(wrapper.get('#documents-stage-title').text()).toContain('準備估價需要的原始資料')
+    expect(wrapper.find('[data-testid="document-ai-process-guide"]').exists()).toBe(false)
 
     await wrapper.get(`[data-testid="extract-document-${ids.sourceDocument}"]`).trigger('click')
     await vi.waitFor(() => expect(wrapper.find(`[data-testid="candidate-${candidateId}"]`).exists()).toBe(true))
     expect(wrapper.find('[data-testid="document-ai-process-guide"]').exists()).toBe(false)
-    const aiReviewStage = wrapper.get('[data-workspace-stage="ai-review"]')
-    expect(aiReviewStage.attributes('aria-current')).toBe('step')
-    expect(aiReviewStage.text()).toContain('AI 結果確認')
-    expect(aiReviewStage.text()).toContain('1')
+    const sourceStage = wrapper.get('[data-workspace-stage="documents"]')
+    expect(sourceStage.attributes('aria-current')).toBe('step')
+    expect(sourceStage.text()).toContain('來源資料')
+    expect(sourceStage.text()).toContain('1')
     const candidateCard = wrapper.get(`[data-testid="candidate-${candidateId}"]`)
     expect(candidateCard.text()).toContain('source-valuation.pdf')
     expect(candidateCard.text()).toContain('96%')
@@ -1582,7 +1599,7 @@ describe('valuation demo flow', () => {
 
     await wrapper.get(`[data-testid="candidate-source-${candidateId}"]`).trigger('click')
     await vi.waitFor(() => expect(wrapper.find('[data-testid="candidate-source-preview"]').exists()).toBe(true))
-    expect(wrapper.get('[data-workspace-stage="ai-review"]').attributes('aria-current')).toBe('step')
+    expect(wrapper.get('[data-workspace-stage="documents"]').attributes('aria-current')).toBe('step')
     expect(wrapper.get('[data-testid="candidate-source-preview"]').text()).toContain('source-valuation.pdf')
 
     await wrapper.get(`[data-testid="candidate-value-${candidateId}"]`).setValue('2026-08-03')
