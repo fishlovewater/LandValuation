@@ -1,4 +1,14 @@
 <script setup lang="ts">
+import {
+  PhCheckCircle as CheckCircle,
+  PhFileText as FileText,
+  PhMapPin as MapPin,
+  PhMapTrifold as MapTrifold,
+  PhPencilSimple as PencilSimple,
+  PhPlus as Plus,
+  PhTarget as Target,
+  PhX as X,
+} from '@phosphor-icons/vue'
 import type { BenchmarkLandModel, DocumentArtifactModel, ParcelResponseDto } from '../valuation.types'
 import { newTaipeiDistrictName } from '../newTaipei'
 
@@ -48,98 +58,258 @@ const emit = defineEmits<{
 <template>
   <section
     id="valuation-land-context"
-    class="valuation-surface land-context"
+    class="land-context"
     data-testid="valuation-land-context"
     tabindex="-1"
     aria-labelledby="land-context-title"
   >
-    <div class="surface-heading">
-      <div>
-        <p class="valuation-eyebrow">土地資料</p>
-        <h2 id="land-context-title">宗地與比準地</h2>
+    <header class="land-context__heading">
+      <div class="land-context__title">
+        <span class="land-context__title-icon" aria-hidden="true">
+          <MapTrifold :size="22" weight="duotone" />
+        </span>
+        <div>
+          <p>土地資料</p>
+          <h2 id="land-context-title">宗地與比準地</h2>
+          <span>先確認本案宗地，再建立並指定後續查估採用的比準地。</span>
+        </div>
       </div>
-      <span class="value-kind">宗地 {{ parcels.length }} · 比準地 {{ benchmarks.length }}</span>
-    </div>
+      <div class="land-context__summary" aria-label="土地資料統計">
+        <span><MapPin :size="15" weight="fill" aria-hidden="true" />宗地 {{ parcels.length }}</span>
+        <span><Target :size="15" weight="fill" aria-hidden="true" />比準地 {{ benchmarks.length }}</span>
+      </div>
+    </header>
 
     <div class="land-context__grid">
-      <section class="land-context__panel">
-        <div class="land-context__panel-heading"><strong>宗地資料</strong><span>可新增或修改</span></div>
-        <p class="land-context__help">宗地是本案要記錄與估價的土地資料。先確認段名、地號、面積與使用分區；資料有誤可直接修改既有宗地。</p>
-        <ul v-if="parcels.length" class="land-context__records">
-          <li v-for="parcel in parcels" :key="parcel.parcel_id">
+      <section class="land-panel" aria-labelledby="parcel-panel-title">
+        <div class="land-panel__heading">
+          <div class="land-panel__heading-title">
+            <span class="land-panel__icon" aria-hidden="true"><MapPin :size="19" weight="duotone" /></span>
             <div>
+              <strong id="parcel-panel-title">宗地資料</strong>
+              <span>本案實際要記錄與估價的土地</span>
+            </div>
+          </div>
+          <span class="land-panel__count">{{ parcels.length }} 筆</span>
+        </div>
+
+        <p class="land-panel__help">
+          確認段名、地號、面積與使用分區。既有資料有誤時可直接修改，不需要重複新增。
+        </p>
+
+        <ul v-if="parcels.length" class="land-records">
+          <li v-for="parcel in parcels" :key="parcel.parcel_id">
+            <div class="land-records__content">
               <strong>{{ parcel.section_name }} {{ parcel.land_no }}</strong>
               <span>{{ parcel.area_sqm }} m² · {{ newTaipeiDistrictName(parcel.district_code) }}</span>
             </div>
-            <button v-if="canEditLandContext" type="button" :data-testid="`edit-parcel-${parcel.parcel_id}`" @click="emit('editParcel', parcel)">修改</button>
+            <button
+              v-if="canEditLandContext"
+              class="land-records__action"
+              type="button"
+              :data-testid="`edit-parcel-${parcel.parcel_id}`"
+              @click="emit('editParcel', parcel)"
+            >
+              <PencilSimple :size="14" weight="bold" aria-hidden="true" />
+              修改
+            </button>
           </li>
         </ul>
-        <p v-else class="empty-copy">尚未建立宗地；請直接使用下方表單建立。</p>
+        <div v-else class="land-panel__empty">
+          <MapPin :size="20" weight="duotone" aria-hidden="true" />
+          <span>尚未建立宗地，請使用下方表單新增。</span>
+        </div>
 
-        <form id="parcel-editor" class="land-context__form" tabindex="-1" @submit.prevent="emit('saveParcel')">
-          <h3>{{ editingParcelId ? '修改宗地' : '新增宗地' }}</h3>
-          <div class="land-context__fields">
+        <form
+          id="parcel-editor"
+          class="land-form"
+          tabindex="-1"
+          @submit.prevent="emit('saveParcel')"
+        >
+          <div class="land-form__heading">
+            <div>
+              <span>{{ editingParcelId ? '編輯既有資料' : '新增土地資料' }}</span>
+              <h3>{{ editingParcelId ? '修改宗地' : '新增宗地' }}</h3>
+            </div>
+            <PencilSimple v-if="editingParcelId" :size="18" weight="duotone" aria-hidden="true" />
+            <Plus v-else :size="18" weight="duotone" aria-hidden="true" />
+          </div>
+
+          <div class="land-form__fields">
             <label>
               <span>行政區 *</span>
-              <input :value="newTaipeiDistrictName(props.parcelDraft.districtCode)" data-testid="parcel-district-code" disabled>
-              <small>宗地行政區固定為目前案件行政區。</small>
+              <input
+                :value="newTaipeiDistrictName(props.parcelDraft.districtCode)"
+                data-testid="parcel-district-code"
+                disabled
+              >
+              <small>依案件行政區自動帶入，不需重複選擇。</small>
             </label>
-            <label><span>段名 *</span><input v-model="props.parcelDraft.sectionName" data-testid="parcel-section-name" required></label>
-            <label><span>小段</span><input v-model="props.parcelDraft.subsectionName"></label>
-            <label><span>地號 *</span><input v-model="props.parcelDraft.landNo" data-testid="parcel-land-no" required></label>
-            <label><span>面積 m² *</span><input v-model="props.parcelDraft.areaSqm" data-testid="parcel-area-sqm" inputmode="decimal" required></label>
-            <label><span>使用分區</span><input v-model="props.parcelDraft.landUseZone"></label>
-            <label><span>指定用途</span><input v-model="props.parcelDraft.designatedUse"></label>
-            <label><span>來源文件</span>
-              <select v-model="props.parcelDraft.sourceDocumentId">
-                <option value="">不指定</option>
-                <option v-for="document in documents" :key="document.documentId" :value="document.documentId">{{ document.filename }}</option>
-              </select>
+            <label>
+              <span>段名 *</span>
+              <input v-model="props.parcelDraft.sectionName" data-testid="parcel-section-name" required>
+            </label>
+            <label>
+              <span>小段</span>
+              <input v-model="props.parcelDraft.subsectionName">
+            </label>
+            <label>
+              <span>地號 *</span>
+              <input v-model="props.parcelDraft.landNo" data-testid="parcel-land-no" required>
+            </label>
+            <label>
+              <span>面積 m² *</span>
+              <input v-model="props.parcelDraft.areaSqm" data-testid="parcel-area-sqm" inputmode="decimal" required>
+            </label>
+            <label>
+              <span>使用分區</span>
+              <input v-model="props.parcelDraft.landUseZone">
+            </label>
+            <label>
+              <span>指定用途</span>
+              <input v-model="props.parcelDraft.designatedUse">
+            </label>
+            <label>
+              <span>來源文件</span>
+              <div class="land-form__select-with-icon">
+                <FileText :size="15" weight="duotone" aria-hidden="true" />
+                <select v-model="props.parcelDraft.sourceDocumentId">
+                  <option value="">不指定</option>
+                  <option
+                    v-for="document in documents"
+                    :key="document.documentId"
+                    :value="document.documentId"
+                  >
+                    {{ document.filename }}
+                  </option>
+                </select>
+              </div>
             </label>
           </div>
-          <div class="land-context__form-actions">
-            <button v-if="editingParcelId" type="button" class="solid-button" @click="emit('resetParcel')">取消修改</button>
-            <button class="solid-button solid-button--primary" type="submit" data-testid="save-parcel" :disabled="!canEditLandContext || saving">
+
+          <div class="land-form__actions">
+            <button
+              v-if="editingParcelId"
+              type="button"
+              class="land-button"
+              @click="emit('resetParcel')"
+            >
+              <X :size="15" weight="bold" aria-hidden="true" />
+              取消修改
+            </button>
+            <button
+              class="land-button land-button--primary"
+              type="submit"
+              data-testid="save-parcel"
+              :disabled="!canEditLandContext || saving"
+            >
+              <CheckCircle v-if="editingParcelId && !saving" :size="16" weight="bold" aria-hidden="true" />
+              <Plus v-else-if="!saving" :size="16" weight="bold" aria-hidden="true" />
               {{ saving ? '儲存中…' : editingParcelId ? '儲存宗地修改' : '建立宗地' }}
             </button>
           </div>
         </form>
       </section>
 
-      <section class="land-context__panel">
-        <div class="land-context__panel-heading"><strong>比準地資料</strong><span>如需更換比準地資料，請新增一筆，再明確指定給比準地地價估計表；既有紀錄不直接覆寫</span></div>
-        <p class="land-context__help">比準地是後續查估所使用的比較基準。此系統建立時需指定來源宗地、比準地編號與地價區段；要改用另一筆時，新增後按「採用此比準地」。</p>
-        <ul v-if="benchmarks.length" class="land-context__records">
-          <li v-for="benchmark in benchmarks" :key="benchmark.benchmarkLandId">
+      <section class="land-panel" aria-labelledby="benchmark-panel-title">
+        <div class="land-panel__heading">
+          <div class="land-panel__heading-title">
+            <span class="land-panel__icon land-panel__icon--benchmark" aria-hidden="true">
+              <Target :size="19" weight="duotone" />
+            </span>
             <div>
+              <strong id="benchmark-panel-title">比準地資料</strong>
+              <span>後續查估使用的比較基準</span>
+            </div>
+          </div>
+          <span class="land-panel__count">{{ benchmarks.length }} 筆</span>
+        </div>
+
+        <p class="land-panel__help">
+          更換比準地時請新增一筆，再明確指定給比準地地價估計表；既有紀錄保留，不直接覆寫。
+        </p>
+
+        <ul v-if="benchmarks.length" class="land-records land-records--benchmark">
+          <li v-for="benchmark in benchmarks" :key="benchmark.benchmarkLandId">
+            <div class="land-records__content">
               <strong>{{ benchmark.benchmarkLandNo }}</strong>
               <span>地價區段 {{ benchmark.priceZoneNo }}</span>
             </div>
-            <div class="land-context__record-actions">
-              <span v-if="selectedBenchmarkLandId === benchmark.benchmarkLandId" class="benchmark-current">目前比準地地價估計表採用</span>
-              <button v-else-if="hasF03 && canEditF03" type="button" :data-testid="`choose-benchmark-${benchmark.benchmarkLandId}`" @click="emit('chooseBenchmark', benchmark.benchmarkLandId)">採用此比準地</button>
+            <div class="land-records__benchmark-actions">
+              <span
+                v-if="selectedBenchmarkLandId === benchmark.benchmarkLandId"
+                class="benchmark-current"
+              >
+                <CheckCircle :size="14" weight="fill" aria-hidden="true" />
+                目前採用
+              </span>
+              <button
+                v-else-if="hasF03 && canEditF03"
+                class="land-records__action"
+                type="button"
+                :data-testid="`choose-benchmark-${benchmark.benchmarkLandId}`"
+                @click="emit('chooseBenchmark', benchmark.benchmarkLandId)"
+              >
+                <Target :size="14" weight="bold" aria-hidden="true" />
+                採用此比準地
+              </button>
             </div>
           </li>
         </ul>
-        <p v-else class="empty-copy">尚未建立比準地；建立後才能初始化／選擇比準地地價估計表的比準地。</p>
+        <div v-else class="land-panel__empty">
+          <Target :size="20" weight="duotone" aria-hidden="true" />
+          <span>尚未建立比準地；建立後才能初始化或指定比準地地價估計表。</span>
+        </div>
 
-        <form class="land-context__form" @submit.prevent="emit('saveBenchmark')">
-          <h3>新增比準地</h3>
-          <div class="land-context__fields">
-            <label><span>來源宗地 *</span>
+        <form class="land-form" @submit.prevent="emit('saveBenchmark')">
+          <div class="land-form__heading">
+            <div>
+              <span>新增比較基準</span>
+              <h3>新增比準地</h3>
+            </div>
+            <Plus :size="18" weight="duotone" aria-hidden="true" />
+          </div>
+
+          <div class="land-form__fields">
+            <label>
+              <span>來源宗地 *</span>
               <select v-model="props.benchmarkDraft.parcelId" data-testid="benchmark-parcel" required>
                 <option value="">請選擇宗地</option>
-                <option v-for="parcel in parcels" :key="parcel.parcel_id" :value="parcel.parcel_id">{{ parcel.section_name }} {{ parcel.land_no }}</option>
+                <option v-for="parcel in parcels" :key="parcel.parcel_id" :value="parcel.parcel_id">
+                  {{ parcel.section_name }} {{ parcel.land_no }}
+                </option>
               </select>
             </label>
-            <label><span>比準地編號 *</span><input v-model="props.benchmarkDraft.benchmarkLandNo" data-testid="benchmark-no" required></label>
-            <label><span>地價區段 *</span><input v-model="props.benchmarkDraft.priceZoneNo" data-testid="benchmark-zone" required></label>
-            <label><span>重劃序號</span><input v-model="props.benchmarkDraft.landConsolidationSerial"></label>
-            <label><span>緯度</span><input v-model="props.benchmarkDraft.latitude" inputmode="decimal"></label>
-            <label><span>經度</span><input v-model="props.benchmarkDraft.longitude" inputmode="decimal"></label>
+            <label>
+              <span>比準地編號 *</span>
+              <input v-model="props.benchmarkDraft.benchmarkLandNo" data-testid="benchmark-no" required>
+            </label>
+            <label>
+              <span>地價區段 *</span>
+              <input v-model="props.benchmarkDraft.priceZoneNo" data-testid="benchmark-zone" required>
+            </label>
+            <label>
+              <span>重劃序號</span>
+              <input v-model="props.benchmarkDraft.landConsolidationSerial">
+            </label>
+            <label>
+              <span>緯度</span>
+              <input v-model="props.benchmarkDraft.latitude" inputmode="decimal">
+            </label>
+            <label>
+              <span>經度</span>
+              <input v-model="props.benchmarkDraft.longitude" inputmode="decimal">
+            </label>
           </div>
-          <div class="land-context__form-actions">
-            <button class="solid-button solid-button--primary" type="submit" data-testid="save-benchmark" :disabled="!canEditLandContext || !parcels.length || saving">
+
+          <div class="land-form__actions">
+            <button
+              class="land-button land-button--primary"
+              type="submit"
+              data-testid="save-benchmark"
+              :disabled="!canEditLandContext || !parcels.length || saving"
+            >
+              <Plus v-if="!saving" :size="16" weight="bold" aria-hidden="true" />
               {{ saving ? '儲存中…' : '建立比準地' }}
             </button>
           </div>
@@ -150,5 +320,216 @@ const emit = defineEmits<{
 </template>
 
 <style scoped>
-.valuation-surface{padding:22px;border:1px solid var(--app-line);border-radius:var(--app-radius-md);background:var(--app-paper-strong);box-shadow:var(--app-shadow-soft)}.surface-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}.surface-heading h2{margin:0;color:var(--app-ink);font-family:var(--app-font-display);font-size:24px;font-weight:600;letter-spacing:-.04em}.valuation-eyebrow{margin:0 0 6px;color:var(--app-accent-deep);font-size:11px;font-weight:800;letter-spacing:.12em}.value-kind{display:inline-flex;min-height:30px;align-items:center;padding:5px 10px;border:1px solid var(--app-line);border-radius:var(--app-radius-pill);color:var(--app-ink-soft);background:#f7f8fb;font-size:11px;font-weight:800;white-space:nowrap}.land-context__grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.land-context__panel{display:grid;align-content:start;gap:12px;padding:15px;border:1px solid var(--app-line);border-radius:11px;background:#fbfcfe}.land-context__panel-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.land-context__panel-heading strong{color:var(--app-ink);font-size:13px}.land-context__panel-heading span{color:var(--app-muted);font-size:10px;text-align:right}.land-context__help{margin:-4px 0 0;color:var(--app-ink-soft);font-size:10px;line-height:1.6}.land-context__records{display:grid;gap:7px;margin:0;padding:0;list-style:none}.land-context__records li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px;border-radius:8px;background:#fff}.land-context__records li>div{display:grid;gap:3px;min-width:0}.land-context__records strong{color:var(--app-ink);font-size:12px}.land-context__records span{color:var(--app-muted);font-size:10px}.land-context__records button{min-height:34px;padding:5px 9px;border:1px solid var(--app-line);border-radius:7px;color:var(--app-accent-deep);background:#fff;cursor:pointer;font-size:10px;font-weight:900}.land-context__record-actions{display:flex!important;flex:0 0 auto;align-items:center;gap:6px!important}.land-context__record-actions .benchmark-current{padding:5px 8px;border-radius:999px;color:var(--app-green);background:rgba(59,129,102,.09);font-size:9px;font-weight:900;white-space:nowrap}.land-context__form{display:grid;gap:10px;padding-top:11px;border-top:1px solid var(--app-line)}.land-context__form h3{margin:0;color:var(--app-ink);font-size:13px}.land-context__fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.land-context__fields label{display:grid;gap:5px;color:var(--app-ink-soft);font-size:10px;font-weight:800}.land-context__fields label small{color:var(--app-muted);font-size:9px;font-weight:500;line-height:1.45}.land-context__fields input,.land-context__fields select{width:100%;min-height:42px;padding:8px 9px;border:1px solid var(--app-line);border-radius:8px;color:var(--app-ink);background:#fff}.land-context__fields input:disabled{color:#52657a;background:#f1f4f7}.land-context__form-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}.solid-button{min-height:44px;padding:10px 16px;border:1px solid var(--app-line);border-radius:9px;color:var(--app-ink-soft);background:var(--app-paper-strong);cursor:pointer;font-size:13px;font-weight:800}.solid-button--primary{border-color:var(--app-accent);color:#fff;background:var(--app-accent)}.solid-button:disabled{cursor:not-allowed;opacity:.55}.empty-copy{margin:0;color:var(--app-muted);font-size:13px}@media(max-width:760px){.valuation-surface{padding:16px}.surface-heading{align-items:stretch;flex-direction:column}.land-context__grid,.land-context__fields{grid-template-columns:1fr}.solid-button{width:100%}}
+.land-context {
+  padding: 22px;
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-md);
+  background: #fff;
+}
+
+.land-context__heading,
+.land-context__title,
+.land-context__summary,
+.land-context__summary span,
+.land-panel__heading,
+.land-panel__heading-title,
+.land-records li,
+.land-records__action,
+.land-records__benchmark-actions,
+.benchmark-current,
+.land-form__heading,
+.land-form__actions,
+.land-button,
+.land-form__select-with-icon,
+.land-panel__empty {
+  display: flex;
+  align-items: center;
+}
+
+.land-context__heading {
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+.land-context__title { align-items: flex-start; gap: 11px; }
+.land-context__title-icon,
+.land-panel__icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--app-accent-deep);
+  background: #edf4fb;
+}
+.land-context__title-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+}
+.land-context__title p { margin: 0 0 4px; color: var(--app-accent-deep); font-size: 11px; font-weight: 800; letter-spacing: .12em; }
+.land-context__title h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 23px; font-weight: 650; letter-spacing: -.035em; }
+.land-context__title > div > span { display: block; margin-top: 5px; color: var(--app-muted); font-size: 12px; line-height: 1.5; }
+.land-context__summary { flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.land-context__summary span {
+  min-height: 30px;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid var(--app-line);
+  border-radius: var(--app-radius-pill);
+  color: var(--app-ink-soft);
+  background: #f7f9fc;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.land-context__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.land-panel {
+  display: grid;
+  align-content: start;
+  gap: 13px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--app-line);
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+.land-panel__heading { justify-content: space-between; gap: 12px; }
+.land-panel__heading-title { align-items: flex-start; gap: 9px; }
+.land-panel__icon { width: 32px; height: 32px; border-radius: 8px; }
+.land-panel__icon--benchmark { color: #6546a5; background: #f2edfb; }
+.land-panel__heading-title > div { display: grid; gap: 3px; }
+.land-panel__heading-title strong { color: var(--app-ink); font-size: 13px; }
+.land-panel__heading-title span { color: var(--app-muted); font-size: 10px; }
+.land-panel__count {
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: var(--app-ink-soft);
+  background: #eef2f7;
+  font-size: 10px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+.land-panel__help { margin: -3px 0 0; color: var(--app-ink-soft); font-size: 11px; line-height: 1.65; }
+.land-panel__empty {
+  min-height: 54px;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px dashed #cfd9e5;
+  border-radius: 8px;
+  color: var(--app-muted);
+  background: #fff;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.land-records { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.land-records li {
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 11px;
+  border: 1px solid #edf0f4;
+  border-radius: 8px;
+  background: #fff;
+}
+.land-records__content { display: grid; min-width: 0; gap: 3px; }
+.land-records__content strong { color: var(--app-ink); font-size: 12px; overflow-wrap: anywhere; }
+.land-records__content span { color: var(--app-muted); font-size: 10px; }
+.land-records__action {
+  flex: 0 0 auto;
+  min-height: 34px;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border: 1px solid var(--app-line);
+  border-radius: 7px;
+  color: var(--app-accent-deep);
+  background: #fff;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 850;
+}
+.land-records__benchmark-actions { flex: 0 0 auto; gap: 6px; }
+.benchmark-current {
+  gap: 5px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #2f7456;
+  background: #edf8f2;
+  font-size: 9px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.land-form {
+  display: grid;
+  gap: 11px;
+  padding-top: 13px;
+  border-top: 1px solid var(--app-line);
+}
+.land-form__heading { justify-content: space-between; gap: 10px; color: var(--app-accent-deep); }
+.land-form__heading > div { display: grid; gap: 2px; }
+.land-form__heading span { color: var(--app-muted); font-size: 9px; font-weight: 750; letter-spacing: .06em; }
+.land-form__heading h3 { margin: 0; color: var(--app-ink); font-size: 13px; }
+.land-form__fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+.land-form__fields label { display: grid; gap: 5px; color: var(--app-ink-soft); font-size: 10px; font-weight: 800; }
+.land-form__fields label small { color: var(--app-muted); font-size: 9px; font-weight: 500; line-height: 1.45; }
+.land-form__fields input,
+.land-form__fields select {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 9px;
+  border: 1px solid var(--app-line);
+  border-radius: 8px;
+  color: var(--app-ink);
+  background: #fff;
+  outline: none;
+}
+.land-form__fields input:focus,
+.land-form__fields select:focus { border-color: rgba(46, 89, 132, .48); box-shadow: 0 0 0 3px rgba(46, 89, 132, .08); }
+.land-form__fields input:disabled { color: #52657a; background: #f1f4f7; }
+.land-form__select-with-icon { position: relative; color: var(--app-muted); }
+.land-form__select-with-icon > svg { position: absolute; z-index: 1; left: 9px; pointer-events: none; }
+.land-form__select-with-icon select { padding-left: 30px; }
+.land-form__actions { flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.land-button {
+  min-height: 40px;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 13px;
+  border: 1px solid var(--app-line);
+  border-radius: 8px;
+  color: var(--app-ink-soft);
+  background: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 850;
+}
+.land-button--primary { border-color: var(--app-accent); color: #fff; background: var(--app-accent); }
+.land-button:disabled { cursor: not-allowed; opacity: .55; }
+
+@media (max-width: 980px) {
+  .land-context__grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 640px) {
+  .land-context { padding: 16px; }
+  .land-context__heading { align-items: flex-start; flex-direction: column; }
+  .land-context__summary { justify-content: flex-start; }
+  .land-panel { padding: 14px; }
+  .land-form__fields { grid-template-columns: 1fr; }
+  .land-records li { align-items: flex-start; flex-direction: column; }
+  .land-records__benchmark-actions { width: 100%; }
+  .land-records__action { width: 100%; }
+  .land-form__actions { flex-direction: column-reverse; }
+  .land-button { width: 100%; }
+}
 </style>
