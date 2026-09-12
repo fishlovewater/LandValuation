@@ -46,6 +46,7 @@ import {
   type ReportPageCode,
   type ReportProgressResponseDto,
   type ValidationFindingModel,
+  type ValuationLocationDto,
   type ValuationReviewHandoffDto,
   type ValuationFormModel,
 } from '../valuation.types'
@@ -85,6 +86,9 @@ const revisionInitializing = ref(false)
 const uploadCategory = ref<DocumentCategory>('original')
 const uploadFile = ref<File | null>(null)
 const parcels = ref<ParcelResponseDto[]>([])
+const locations = ref<ValuationLocationDto[]>([])
+const activeLocationId = ref<string | null>(null)
+const newLocationLabel = ref('')
 const extractionCandidates = ref<ExtractedFieldResponseDto[]>([])
 const extractionBusyDocumentId = ref<string | null>(null)
 const confirmingCandidates = ref(false)
@@ -120,6 +124,15 @@ const selectedCandidateId = ref<string | null>(null)
 const parcelImportPreview = ref<ParcelImportPreviewDto | null>(null)
 const parcelImportLoading = ref(false)
 const parcelImporting = ref(false)
+const activeLocation = computed(() => (
+  locations.value.find((item) => item.location_id === activeLocationId.value) ?? null
+))
+const locationDocuments = computed(() => activeLocationId.value
+  ? flow.documents.filter((item) => item.locationId === activeLocationId.value)
+  : flow.documents)
+const locationParcels = computed(() => activeLocationId.value
+  ? parcels.value.filter((item) => item.location_id === activeLocationId.value)
+  : parcels.value)
 
 const FORM_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   S01: '地價區段勘查表',
@@ -262,7 +275,9 @@ const allCandidates = computed(() => {
   for (const candidate of extractionCandidates.value) {
     merged.set(candidate.extracted_field_id, candidate)
   }
-  return [...merged.values()]
+  const candidates = [...merged.values()]
+  if (!activeLocationId.value) return candidates
+  return candidates.filter((candidate) => candidate.location_id === activeLocationId.value)
 })
 const pendingCandidates = computed(() => allCandidates.value.filter(
   (candidate) => candidate.field_status === 'NEEDS_CONFIRMATION',
@@ -332,9 +347,9 @@ const manualEditableEntries = computed(() => manualFieldEntries.value.filter(
   (entry) => !(entry.formCode === 'F03' && entry.fieldName === 'benchmark_land_id'),
 ))
 const dataIssueCounts = computed(() => ({
-  overview: unresolvedF03RequiredFields.value.length + (!parcels.value.length ? 1 : 0) + (!flow.benchmarks.length ? 1 : 0),
+  overview: unresolvedF03RequiredFields.value.length + (!locationParcels.value.length ? 1 : 0) + (!flow.benchmarks.length ? 1 : 0),
   manual: allManualFieldEntries.value.length,
-  land: (!parcels.value.length ? 1 : 0) + (!flow.benchmarks.length ? 1 : 0),
+  land: (!locationParcels.value.length ? 1 : 0) + (!flow.benchmarks.length ? 1 : 0),
   f03: unresolvedF03RequiredFields.value.length,
 }))
 const preCalculationIssueCount = computed(() => dataIssueCounts.value.overview + pendingCandidates.value.length)
@@ -541,7 +556,7 @@ function resetParcelDraft(): void {
 
 function resetBenchmarkDraft(): void {
   Object.assign(benchmarkDraft, {
-    parcelId: parcels.value[0]?.parcel_id ?? '',
+    parcelId: locationParcels.value[0]?.parcel_id ?? '',
     benchmarkLandNo: '',
     priceZoneNo: '',
     landConsolidationSerial: '',
@@ -576,6 +591,14 @@ function candidateProviderLabel(provider: string): string {
 }
 
 function initializeManualFieldInputs(response: AutomatedWorkflowResponseDto): void {
+  const scopedValues = activeLocationId.value
+    ? response.manual_field_values_by_location?.[activeLocationId.value] ?? {}
+    : {}
+  for (const [formCode, fields] of Object.entries(scopedValues)) {
+    for (const [fieldName, value] of Object.entries(fields)) {
+      manualFieldValue[`${formCode}.${fieldName}`] = displayCandidateValue(value)
+    }
+  }
   for (const [formCode, fields] of Object.entries(response.manual_field_values ?? {})) {
     for (const [fieldName, value] of Object.entries(fields)) {
       const key = `${formCode}.${fieldName}`
@@ -1371,6 +1394,9 @@ async function loadData(): Promise<void> {
   reviewHandoff.value = null
   reportProgress.value = null
   parcels.value = []
+  locations.value = []
+  activeLocationId.value = null
+  newLocationLabel.value = ''
   extractionCandidates.value = []
   extractionBusyDocumentId.value = null
   confirmingCandidates.value = false
@@ -1400,13 +1426,14 @@ async function loadData(): Promise<void> {
 
   loading.value = true
   try {
-    const [caseDto, parcelDtos, formDtos, benchmarkDtos, documentDtos, reportProgressDto] = await Promise.all([
+    const [caseDto, parcelDtos, formDtos, benchmarkDtos, documentDtos, reportProgressDto, locationDtos] = await Promise.all([
       valuationApi.getCase(requestedCaseId),
       valuationApi.listParcels(requestedCaseId),
       valuationApi.listForms(requestedCaseId),
       valuationApi.listBenchmarkLands(requestedCaseId),
       valuationApi.listDocuments(requestedCaseId),
       valuationApi.getReportProgress(requestedCaseId),
+      valuationApi.listLocations(requestedCaseId).catch(() => [] as ValuationLocationDto[]),
     ])
     if (!isCurrentCase(token, requestedCaseId)) return
 
@@ -1422,12 +1449,19 @@ async function loadData(): Promise<void> {
 
     flow.case = mapCaseResponse(caseDto)
     parcels.value = parcelDtos
+    locations.value = locationDtos
+    activeLocationId.value = locationDtos.find((item) => item.is_benchmark_location)?.location_id
+      ?? locationDtos[0]?.location_id
+      ?? null
     resetParcelDraft()
     resetBenchmarkDraft()
     flow.forms = forms
     flow.benchmarks = benchmarkDtos.map(mapBenchmarkLandResponse)
     flow.documents = documents
-    previewDocumentId.value = documents.find((document) => document.isActive)?.documentId ?? null
+    previewDocumentId.value = documents.find((document) => (
+      document.isActive
+      && (!activeLocationId.value || document.locationId === activeLocationId.value)
+    ))?.documentId ?? null
     initializeDocumentCategories()
     flow.authoritativeF02 = authoritative.form
     flow.completeReport = authoritative.completeReport
@@ -1478,6 +1512,60 @@ async function loadData(): Promise<void> {
   }
 }
 
+async function addLocation(): Promise<void> {
+  if (!flow.case || !newLocationLabel.value.trim()) return
+  error.value = ''
+  notice.value = ''
+  try {
+    const created = await valuationApi.createLocation(flow.case.caseId, {
+      label: newLocationLabel.value.trim(),
+    })
+    locations.value = [...locations.value, created]
+    newLocationLabel.value = ''
+    await changeActiveLocation(created.location_id)
+    notice.value = `${created.label} 已建立；後續文件、AI 辨識與宗地資料會歸屬這個地點。`
+  } catch (caught: unknown) {
+    error.value = safeValuationErrorMessage(caught)
+  }
+}
+
+async function chooseBenchmarkLocation(): Promise<void> {
+  if (!flow.case || !activeLocationId.value || activeLocation.value?.is_benchmark_location) return
+  error.value = ''
+  notice.value = ''
+  try {
+    const updated = await valuationApi.setBenchmarkLocation(flow.case.caseId, activeLocationId.value)
+    locations.value = locations.value.map((item) => ({
+      ...item,
+      is_benchmark_location: item.location_id === updated.location_id,
+    }))
+    notice.value = `${updated.label} 已設為比準地來源地點。`
+  } catch (caught: unknown) {
+    error.value = safeValuationErrorMessage(caught)
+  }
+}
+
+async function changeActiveLocation(locationId: string): Promise<void> {
+  activeLocationId.value = locationId
+  clearPreviewUrl()
+  previewPage.value = null
+  selectedCandidateId.value = null
+  parcelImportPreview.value = null
+  previewDocumentId.value = flow.documents.find(
+    (document) => document.isActive && document.locationId === locationId,
+  )?.documentId ?? null
+  resetParcelDraft()
+  resetBenchmarkDraft()
+  clearReactiveRecord(manualFieldValue)
+  await loadWorkflowGuidance()
+}
+
+function handleLocationChange(event: Event): void {
+  const target = event.target as HTMLSelectElement
+  if (!target.value || target.value === activeLocationId.value) return
+  void changeActiveLocation(target.value)
+}
+
 function chooseUpload(event: Event | File): void {
   if (event instanceof File) {
     uploadFile.value = event
@@ -1494,7 +1582,12 @@ async function uploadSourceDocument(): Promise<void> {
   error.value = ''
   notice.value = ''
   try {
-    const uploaded = await valuationApi.uploadDocument(flow.case.caseId, selectedCategory, uploadFile.value)
+    const uploaded = await valuationApi.uploadDocument(
+      flow.case.caseId,
+      selectedCategory,
+      uploadFile.value,
+      activeLocationId.value,
+    )
     flow.documents = [mapDocumentResponse(uploaded), ...flow.documents.filter((item) => item.documentId !== uploaded.document_id)]
     previewDocumentId.value = uploaded.document_id
     initializeDocumentCategories()
@@ -1742,7 +1835,10 @@ async function saveManualFields(): Promise<void> {
   error.value = ''
   notice.value = ''
   try {
-    const response = await valuationApi.saveWorkflowManualFields(requestedCaseId, { values })
+    const response = await valuationApi.saveWorkflowManualFields(requestedCaseId, {
+      ...(activeLocationId.value ? { location_id: activeLocationId.value } : {}),
+      values,
+    })
     if (!isCurrentCase(token, requestedCaseId)) return
     workflowGuidance.value = response
     extractionCandidates.value = response.candidates
@@ -1877,6 +1973,7 @@ function parcelPayload(): ParcelCreateDto {
     land_use_zone: parcelDraft.landUseZone.trim() || null,
     designated_use: parcelDraft.designatedUse.trim() || null,
     source_document_id: parcelDraft.sourceDocumentId || null,
+    location_id: activeLocationId.value,
   }
 }
 
@@ -2192,9 +2289,45 @@ onBeforeUnmount(clearPreviewUrl)
         :district-label="newTaipeiDistrictName(flow.case.districtCode)"
       />
 
+      <section
+        v-if="activeWizardStep === 2 || activeWizardStep === 3"
+        class="location-context"
+        aria-label="目前估價地點"
+      >
+        <div class="location-context__copy">
+          <strong>目前估價地點</strong>
+          <span>來源文件、AI 辨識、人工補充與宗地資料會依地點分開保存。</span>
+        </div>
+        <label class="location-context__select">
+          <span>切換地點</span>
+          <select :value="activeLocationId ?? ''" data-testid="valuation-location-select" @change="handleLocationChange">
+            <option v-for="location in locations" :key="location.location_id" :value="location.location_id">
+              地點 {{ location.display_order }}｜{{ location.label }}{{ location.is_benchmark_location ? '（比準地）' : '' }}
+            </option>
+          </select>
+        </label>
+        <div v-if="canEditLandContext" class="location-context__actions">
+          <input
+            v-model="newLocationLabel"
+            type="text"
+            placeholder="新增地點名稱"
+            aria-label="新增估價地點名稱"
+            @keyup.enter="addLocation"
+          >
+          <button type="button" :disabled="!newLocationLabel.trim()" @click="addLocation">新增地點</button>
+          <button
+            type="button"
+            :disabled="!activeLocationId || activeLocation?.is_benchmark_location"
+            @click="chooseBenchmarkLocation"
+          >
+            {{ activeLocation?.is_benchmark_location ? '目前為比準地' : '設為比準地' }}
+          </button>
+        </div>
+      </section>
+
       <ValuationDocumentStage
         v-if="activeWizardStep === 2 && activeIntakeStage === 'documents'"
-        :documents="flow.documents"
+        :documents="locationDocuments"
         :pending-candidate-count="pendingCandidates.length"
         :preview-document-id="previewDocumentId"
         :preview-document="previewDocument"
@@ -2293,7 +2426,7 @@ onBeforeUnmount(clearPreviewUrl)
         v-if="activeWizardStep === 3"
         :active-section="activeDataSection"
         :issue-counts="dataIssueCounts"
-        :parcel-count="parcels.length"
+        :parcel-count="locationParcels.length"
         :benchmark-count="flow.benchmarks.length"
         :has-f03="Boolean(flow.f03)"
         @select="jumpToDataSection"
@@ -2316,9 +2449,9 @@ onBeforeUnmount(clearPreviewUrl)
 
       <ValuationLandContext
         v-if="activeWizardStep === 3 && activeDataSection === 'land'"
-        :parcels="parcels"
+        :parcels="locationParcels"
         :benchmarks="flow.benchmarks"
-        :documents="flow.documents"
+        :documents="locationDocuments"
         :parcel-draft="parcelDraft"
         :benchmark-draft="benchmarkDraft"
         :editing-parcel-id="editingParcelId"
