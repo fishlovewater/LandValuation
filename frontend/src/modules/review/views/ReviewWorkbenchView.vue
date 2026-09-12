@@ -714,7 +714,7 @@ onBeforeUnmount(() => {
     <PageHeader
       eyebrow="案件審查"
       :title="detail?.caseTitle ?? '案件審查'"
-      :description="detail ? `${detail.caseNo} · ${detail.districtCode} · 評價基準日 ${detail.valuationBaseDate}` : '讀取審查案件與證據。'"
+      :description="detail ? `${detail.caseNo} · ${detail.districtLabel} · 評價基準日 ${detail.valuationBaseDate}` : '讀取審查案件與證據。'"
     >
       <template #actions>
         <button type="button" class="review-workbench__back" data-testid="review-back-to-queue" @click="backToQueue">

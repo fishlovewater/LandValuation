@@ -6,6 +6,7 @@ import {
   latestGeneratedReport,
   mapDocument,
   mapVersionDiff,
+  mapWorkbenchCase,
   mapWorkbenchDetail,
   mimeTypeLabel,
   missingItemStatusLabel,
@@ -134,10 +135,38 @@ describe('review mappers', () => {
     })
 
     expect(detail.unresolvedFindingCount).toBe(1)
+    expect(detail.districtLabel).toBe('新店區')
     expect(detail.caseSourceCode).toBe('PLATFORM')
     expect(detail.caseSourceLabel).toBe('平台送審')
     expect(detail.findings[0].sourceEvidence[0].title).toBe('資料來源｜調整率')
     expect(detail.findings[0].sourceEvidence[0].title).not.toContain('internal-extracted-field-id')
+  })
+
+  it('maps district codes to readable names in the review queue', () => {
+    const item = mapWorkbenchCase({
+      review_id: ids.review,
+      case_id: ids.case,
+      case_no: 'NB-2026-0009',
+      case_title: '行政區顯示測試',
+      district_code: '65000060',
+      case_source: 'PLATFORM',
+      review_status: 'REVIEW_REQUIRED',
+      current_risk_level: 'LOW',
+      high_count: 0,
+      medium_count: 0,
+      low_count: 1,
+      missing_item_count: 0,
+      received_at: '2026-09-07T01:00:00Z',
+      due_at: null,
+      assigned_reviewer_display_name: null,
+      urgency_level: 'NORMAL',
+      remaining_days: null,
+      correction_round: 0,
+      latest_correction_status: null,
+      latest_run: null,
+    })
+
+    expect(item.district).toBe('新店區')
   })
 
   it('chooses the latest active original PDF and never falls back to correction files', () => {

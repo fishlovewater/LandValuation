@@ -18,6 +18,7 @@ import type {
 } from './review.types'
 import { decisionLabel as sharedDecisionLabel, statusLabel as sharedStatusLabel } from '../../utils/enumLabels'
 import { userStructuredValue } from '../../utils/fieldLabels'
+import { newTaipeiDistrictName } from '../valuation/newTaipei'
 
 const STATUS_LABELS: Readonly<Record<string, string>> = {
   RECEIVED: '已收件',
@@ -274,7 +275,7 @@ export function mapWorkbenchCase(dto: WorkbenchCaseListItemDto): ReviewQueueItem
     reviewId: dto.review_id,
     caseNo: dto.case_no,
     name: dto.case_title,
-    district: dto.district_code,
+    district: newTaipeiDistrictName(dto.district_code),
     status: reviewStatusCode,
     updatedAt: dto.received_at,
     caseSourceCode,
@@ -530,6 +531,7 @@ export function mapWorkbenchDetail(dto: WorkbenchCaseDetailDto): ReviewDetailMod
     caseNo: dto.case.case_no,
     caseTitle: dto.case.case_title,
     districtCode: dto.case.district_code,
+    districtLabel: newTaipeiDistrictName(dto.case.district_code),
     valuationBaseDate: dto.case.valuation_base_date,
     caseStatusCode: dto.case.case_status,
     caseStatusLabel: reviewStatusLabel(dto.case.case_status),

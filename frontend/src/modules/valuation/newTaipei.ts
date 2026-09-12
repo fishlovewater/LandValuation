@@ -34,5 +34,10 @@ export const NEW_TAIPEI_DISTRICTS = [
 
 export function newTaipeiDistrictName(code: string | null | undefined): string {
   if (!code) return ''
-  return NEW_TAIPEI_DISTRICTS.find((district) => district.code === code)?.name ?? '行政區待確認'
+  const normalized = code.trim()
+  if (!normalized) return ''
+  const district = NEW_TAIPEI_DISTRICTS.find(
+    (item) => item.code === normalized || item.name === normalized,
+  )
+  return district?.name ?? '行政區待確認'
 }

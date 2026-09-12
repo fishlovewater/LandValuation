@@ -16,6 +16,7 @@ describe('New Taipei valuation jurisdiction', () => {
 
   it('does not expose an unknown administrative code as user-facing text', () => {
     expect(newTaipeiDistrictName('65000060')).toBe('新店區')
+    expect(newTaipeiDistrictName('新店區')).toBe('新店區')
     expect(newTaipeiDistrictName('65000990')).toBe('行政區待確認')
     expect(newTaipeiDistrictName(null)).toBe('')
   })

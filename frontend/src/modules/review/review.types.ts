@@ -521,6 +521,7 @@ export interface ReviewDetailModel {
   caseNo: string
   caseTitle: string
   districtCode: string
+  districtLabel: string
   valuationBaseDate: string
   caseStatusCode: string
   caseStatusLabel: string
