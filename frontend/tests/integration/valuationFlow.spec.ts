@@ -69,6 +69,9 @@ const caseDto = {
   district_code: '65000030',
   land_use_type: '住宅區',
   case_status: 'PROCESSING',
+  basic_info_confirmed_at: '2026-09-07T01:30:00Z',
+  basic_info_confirmed_by_user_id: appraiser.id,
+  last_workspace_stage: 'case',
   created_by_user_id: appraiser.id,
   updated_by_user_id: appraiser.id,
   created_at: '2026-09-07T01:00:00Z',
@@ -407,6 +410,155 @@ describe('valuation demo flow', () => {
     vi.restoreAllMocks()
   })
 
+  it('requires first-time case confirmation, persists it, and then opens document intake', async () => {
+    const unconfirmedCase = {
+      ...caseDto,
+      basic_info_confirmed_at: null,
+      basic_info_confirmed_by_user_id: null,
+      last_workspace_stage: 'case',
+    }
+    const workspaceBodies: Array<Record<string, unknown>> = []
+    http.defaults.adapter = vi.fn(async (config) => {
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}`) return response(unconfirmedCase, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/parcels`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) return response(reportProgressDto, config)
+      if (config.method === 'patch' && config.url === `/valuation/cases/${ids.case}/workspace`) {
+        const body = requestBody(config.data)
+        workspaceBodies.push(body)
+        return response({
+          ...unconfirmedCase,
+          basic_info_confirmed_at: '2026-09-12T05:00:00Z',
+          basic_info_confirmed_by_user_id: appraiser.id,
+          last_workspace_stage: 'documents',
+          updated_at: '2026-09-12T05:00:00Z',
+        }, config)
+      }
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/valuation/cases/${ids.case}/prepare`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="valuation-workflow-guide"]').text()).toContain('案件基本資料'))
+
+    expect(wrapper.get('[data-testid="wizard-next"]').text()).toContain('確認並開始估價')
+    expect(wrapper.find('[data-testid="valuation-issue-drawer"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="valuation-step-3"]').trigger('click')
+    expect(wrapper.get('[data-testid="valuation-workflow-guide"]').text()).toContain('案件基本資料')
+    expect(wrapper.text()).toContain('請先確認案件基本資料')
+    expect(workspaceBodies).toHaveLength(0)
+
+    await wrapper.get('[data-testid="wizard-next"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.get('[data-workspace-stage="documents"]').attributes('aria-current')).toBe('step'))
+    expect(workspaceBodies).toEqual([{
+      confirm_basic_info: true,
+      last_workspace_stage: 'documents',
+    }])
+    expect(wrapper.text()).toContain('案件基本資料已確認')
+    expect(wrapper.find('#valuation-document-workspace').exists()).toBe(true)
+    wrapper.unmount()
+  }, 10_000)
+
+  it('restores the last persisted valuation workspace stage when reopening a confirmed case', async () => {
+    const resumedCase = {
+      ...caseDto,
+      last_workspace_stage: 'documents',
+    }
+    const workspaceRequests: string[] = []
+    http.defaults.adapter = vi.fn(async (config) => {
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}`) return response(resumedCase, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/parcels`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) return response(reportProgressDto, config)
+      if (config.method === 'patch' && config.url === `/valuation/cases/${ids.case}/workspace`) {
+        workspaceRequests.push(String(config.url))
+        return response(resumedCase, config)
+      }
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/valuation/cases/${ids.case}/prepare`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+
+    await vi.waitFor(() => expect(wrapper.get('[data-workspace-stage="documents"]').attributes('aria-current')).toBe('step'))
+    expect(wrapper.get('[data-testid="valuation-workflow-guide"]').text()).toContain('文件與辨識')
+    expect(wrapper.find('#valuation-document-workspace').exists()).toBe(true)
+    expect(workspaceRequests).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('uses the canonical documents deep link as the active stage and persists that explicit navigation', async () => {
+    const storedCase = {
+      ...caseDto,
+      last_workspace_stage: 'data',
+    }
+    const workspaceBodies: Array<Record<string, unknown>> = []
+    http.defaults.adapter = vi.fn(async (config) => {
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}`) return response(storedCase, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/parcels`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) return response(reportProgressDto, config)
+      if (config.method === 'patch' && config.url === `/valuation/cases/${ids.case}/workspace`) {
+        const body = requestBody(config.data)
+        workspaceBodies.push(body)
+        return response({ ...storedCase, last_workspace_stage: body.last_workspace_stage }, config)
+      }
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/valuation/cases/${ids.case}/documents`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+
+    await vi.waitFor(() => expect(wrapper.get('[data-workspace-stage="documents"]').attributes('aria-current')).toBe('step'))
+    expect(router.currentRoute.value.path).toBe(`/app/valuation/cases/${ids.case}/documents`)
+    expect(wrapper.find('#valuation-document-workspace').exists()).toBe(true)
+    await vi.waitFor(() => expect(workspaceBodies).toContainEqual({ last_workspace_stage: 'documents' }))
+    wrapper.unmount()
+  })
+
+  it('returns an unconfirmed canonical deep link to the case confirmation route without persisting a later stage', async () => {
+    const unconfirmedCase = {
+      ...caseDto,
+      basic_info_confirmed_at: null,
+      basic_info_confirmed_by_user_id: null,
+      last_workspace_stage: 'case',
+    }
+    const workspaceRequests: string[] = []
+    http.defaults.adapter = vi.fn(async (config) => {
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}`) return response(unconfirmedCase, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/parcels`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response([], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) return response(reportProgressDto, config)
+      if (config.method === 'patch' && config.url === `/valuation/cases/${ids.case}/workspace`) {
+        workspaceRequests.push(String(config.url))
+        return response(unconfirmedCase, config)
+      }
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/valuation/cases/${ids.case}/documents`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+
+    await vi.waitFor(() => expect(router.currentRoute.value.path).toBe(`/app/valuation/cases/${ids.case}`))
+    expect(wrapper.get('[data-testid="valuation-workflow-guide"]').text()).toContain('案件基本資料')
+    expect(wrapper.get('[data-testid="wizard-next"]').text()).toContain('確認並開始估價')
+    expect(workspaceRequests).toHaveLength(0)
+    wrapper.unmount()
+  })
+
   it('follows the real F03 state machine and submits the authoritative F02 report', async () => {
     const requests: Array<{ method?: string; url?: string; params?: unknown; data?: unknown }> = []
     const patchBodies: Array<Record<string, any>> = []
@@ -492,20 +644,18 @@ describe('valuation demo flow', () => {
     expect(wrapper.text()).toContain('NB-2026-0001')
     expect(wrapper.text()).toContain('作業期限')
     expect(wrapper.text()).toContain('繼續估價')
-    const dashboardWorkflow = wrapper.get('[data-testid="valuation-dashboard-workflow"]')
-    expect(dashboardWorkflow.text()).toContain('建立案件')
-    expect(dashboardWorkflow.text()).toContain('文件與 AI 辨識')
-    expect(dashboardWorkflow.text()).toContain('資料確認')
-    expect(dashboardWorkflow.text()).toContain('計算與檢核')
-    expect(dashboardWorkflow.text()).toContain('正式文件與送審')
-    const dashboardOverview = wrapper.get('[data-testid="valuation-dashboard-overview"]')
-    expect(dashboardOverview.text()).toContain('目前案件')
-    expect(dashboardOverview.text()).toContain('已設定作業期限')
-    expect(dashboardOverview.text()).toContain('建議先處理')
-    expect(dashboardOverview.text()).toContain('NB-2026-0001')
-    expect(wrapper.get('[data-testid="priority-case-open"]').exists()).toBe(true)
-    await wrapper.get('[data-testid="priority-case-open"]').trigger('click')
-    await vi.waitFor(() => expect(router.currentRoute.value.path).toBe(`/app/valuation/cases/${ids.case}/prepare`))
+    expect(wrapper.get('[data-testid="valuation-dashboard-header"]').text()).toContain('估價案件')
+    const dashboardSummary = wrapper.get('[data-testid="valuation-dashboard-summary"]')
+    expect(dashboardSummary.text()).toContain('目前 1 件案件')
+    expect(dashboardSummary.text()).toContain('1 件已設定作業期限')
+    expect(dashboardSummary.text()).toContain('預設依作業期限由近到遠排列')
+    expect(wrapper.get('[data-testid="valuation-case-list"]').text()).toContain('案件列表')
+    expect(wrapper.get(`[data-testid="case-open-${ids.case}"]`).exists()).toBe(true)
+    await wrapper.get(`[data-testid="case-open-${ids.case}"]`).trigger('click')
+    await vi.waitFor(
+      () => expect(router.currentRoute.value.path).toBe(`/app/valuation/cases/${ids.case}`),
+      { timeout: 3000 },
+    )
     expect(wrapper.text()).toContain('來源：案件原始資料')
     expect(wrapper.get('[data-testid="case-context"]').text()).toContain('NB-2026-0001')
     expect(wrapper.text()).toContain('比準地地價估計表')
@@ -569,8 +719,10 @@ describe('valuation demo flow', () => {
     expect(wrapper.text()).not.toContain('object-key-must-not-render')
 
     await wrapper.get('[data-testid="go-to-submit"]').trigger('click')
-    await vi.waitFor(() => expect(router.currentRoute.value.path).toBe(`/app/valuation/cases/${ids.case}/submit`))
-    expect(wrapper.text()).toContain('送審確認')
+    await vi.waitFor(() => expect(router.currentRoute.value.path).toBe(`/app/valuation/cases/${ids.case}/report`))
+    const reportStage = wrapper.get('[data-workspace-stage="report"]')
+    expect(reportStage.attributes('aria-current')).toBe('step')
+    expect(reportStage.text()).toContain('查估書與送審')
     const submitReadiness = wrapper.get('[data-testid="submit-readiness-steps"]')
     expect(submitReadiness.text()).toContain('送審進度')
     expect(submitReadiness.text()).toContain('確認完整查估書')
@@ -637,6 +789,13 @@ describe('valuation demo flow', () => {
       }
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) {
         return response(reportProgressDto, config)
+      }
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-status`) {
+        return response({
+          validation: formalValidationNoWarningsDto,
+          report: formalReportDto,
+          requires_revalidation_for_submission: false,
+        }, config)
       }
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-validation`) {
         return response(formalValidationDto, config, 201)
@@ -1010,6 +1169,13 @@ describe('valuation demo flow', () => {
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) {
         return response(reportProgressDto, config)
       }
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-status`) {
+        return response({
+          validation: formalValidationNoWarningsDto,
+          report: formalReportDto,
+          requires_revalidation_for_submission: false,
+        }, config)
+      }
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-validation`) {
         return response(formalValidationDto, config, 201)
       }
@@ -1340,6 +1506,9 @@ describe('valuation demo flow', () => {
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/parcels`) return response([parcelDto], config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([benchmarkDto], config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response([sourceDocument], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents/${ids.sourceDocument}/download`) {
+        return response(new Blob(['%PDF-1.4 test'], { type: 'application/pdf' }), config)
+      }
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) {
         return response({ ...reportProgressDto, report_id: null, version_no: null }, config)
       }
@@ -1393,11 +1562,20 @@ describe('valuation demo flow', () => {
 
     await wrapper.get(`[data-testid="extract-document-${ids.sourceDocument}"]`).trigger('click')
     await vi.waitFor(() => expect(wrapper.find(`[data-testid="candidate-${candidateId}"]`).exists()).toBe(true))
-    expect(wrapper.get('[data-testid="document-ai-process-guide"]').text()).toContain('還有 1 筆待確認')
+    expect(wrapper.find('[data-testid="document-ai-process-guide"]').exists()).toBe(false)
+    const aiReviewStage = wrapper.get('[data-workspace-stage="ai-review"]')
+    expect(aiReviewStage.attributes('aria-current')).toBe('step')
+    expect(aiReviewStage.text()).toContain('AI 結果確認')
+    expect(aiReviewStage.text()).toContain('1')
     const candidateCard = wrapper.get(`[data-testid="candidate-${candidateId}"]`)
     expect(candidateCard.text()).toContain('source-valuation.pdf')
     expect(candidateCard.text()).toContain('96%')
     expect(candidateCard.text()).toContain('valuation base date: 2026-08-02')
+
+    await wrapper.get(`[data-testid="candidate-source-${candidateId}"]`).trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="candidate-source-preview"]').exists()).toBe(true))
+    expect(wrapper.get('[data-workspace-stage="ai-review"]').attributes('aria-current')).toBe('step')
+    expect(wrapper.get('[data-testid="candidate-source-preview"]').text()).toContain('source-valuation.pdf')
 
     await wrapper.get(`[data-testid="candidate-value-${candidateId}"]`).setValue('2026-08-03')
     await wrapper.get(`[data-testid="candidate-confirm-${candidateId}"]`).trigger('click')

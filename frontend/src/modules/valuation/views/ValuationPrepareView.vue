@@ -3,14 +3,13 @@ import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ErrorState from '../../../components/common/ErrorState.vue'
 import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
-import PageHeader from '../../../components/common/PageHeader.vue'
-import { liquidGlass as vLiquidGlass } from '../../../directives/liquidGlass'
 import { useAuthStore } from '../../../stores/auth.store'
 import type { DocumentTextPreviewDto } from '../../../types/documentPreview'
 import type { SpreadsheetPreviewDto } from '../../../types/spreadsheet'
 import { statusLabel } from '../../../utils/enumLabels'
 import { userStructuredValue } from '../../../utils/fieldLabels'
 import { safeValuationErrorMessage, valuationApi } from '../valuation.api'
+import { valuationStageFromRouteName, valuationStageRoute } from '../valuation.navigation'
 import { newTaipeiDistrictName } from '../newTaipei'
 import {
   mapBenchmarkLandResponse,
@@ -45,14 +44,23 @@ import {
   type ValuationReviewHandoffDto,
   type ValuationFormModel,
 } from '../valuation.types'
-import ValuationStepNavigator from '../components/ValuationStepNavigator.vue'
+import ValuationCaseWorkspaceHeader, { type ValuationWorkspaceStage } from '../components/ValuationCaseWorkspaceHeader.vue'
+import ValuationCaseOverview from '../components/ValuationCaseOverview.vue'
+import ValuationDataStageNavigator from '../components/ValuationDataStageNavigator.vue'
 import ValuationIssueDrawer from '../components/ValuationIssueDrawer.vue'
-import ValuationDocumentWorkspace from '../components/ValuationDocumentWorkspace.vue'
-import ValuationParcelImportPanel from '../components/ValuationParcelImportPanel.vue'
+import ValuationWizardFooter from '../components/ValuationWizardFooter.vue'
+import ValuationWorkflowStatus from '../components/ValuationWorkflowStatus.vue'
+import ValuationDocumentStage from '../components/ValuationDocumentStage.vue'
 import ValuationCandidateWorkspace from '../components/ValuationCandidateWorkspace.vue'
+import ValuationManualFieldsSection from '../components/ValuationManualFieldsSection.vue'
 import ValuationLandContext from '../components/ValuationLandContext.vue'
 import ValuationF03Section from '../components/ValuationF03Section.vue'
 import ValuationValidationSection from '../components/ValuationValidationSection.vue'
+import ValuationReviewHandoffPanel from '../components/ValuationReviewHandoffPanel.vue'
+
+const props = defineProps<{
+  stage?: Exclude<ValuationWorkspaceStage, 'report'>
+}>()
 
 const route = useRoute()
 const router = useRouter()
@@ -89,7 +97,13 @@ const editingParcelId = ref<string | null>(null)
 type WizardStep = 1 | 2 | 3 | 4 | 5 | 6
 type DataSection = 'overview' | 'manual' | 'land' | 'f03'
 const activeWizardStep = ref<WizardStep>(1)
+const activeIntakeStage = ref<'documents' | 'ai-review'>('documents')
 const activeDataSection = ref<DataSection>('overview')
+const confirmingCaseInfo = ref(false)
+const workspacePersistenceReady = ref(false)
+const lastPersistedWorkspaceStage = ref<ValuationWorkspaceStage | null>(null)
+let workspaceUrlSyncSerial = 0
+let workspaceUrlSyncInFlight = false
 const previewDocumentId = ref<string | null>(null)
 const previewUrl = ref('')
 const previewLoading = ref(false)
@@ -144,6 +158,10 @@ function setDocumentCategory(documentId: string, category: DocumentCategory): vo
 
 function setCandidateValue(candidateId: string, value: string): void {
   candidateValue[candidateId] = value
+}
+
+function setManualFieldValue(key: string, value: string): void {
+  manualFieldValue[key] = value
 }
 
 const parcelDraft = reactive({
@@ -216,6 +234,11 @@ const formalSupplementMissingItems = computed(() =>
 )
 const calculatedSource = sourceForCalculatedValue()
 const canUpload = computed(() => auth.permissions.includes('document.upload'))
+const canPersistWorkspace = computed(() => Boolean(
+  flow.case
+    && auth.permissions.includes('valuation.update')
+    && ['DRAFT', 'PROCESSING', 'CORRECTION', 'REVISION_REQUIRED'].includes(flow.case.status),
+))
 const canReadAutomatedWorkflow = computed(() => [
   'case.create',
   'case.read',
@@ -320,6 +343,28 @@ const wizardIssueCounts = computed<Partial<Record<WizardStep, number>>>(() => ({
   3: dataIssueCounts.value.overview,
   4: flow.validation?.failedCount ?? 0,
 }))
+const workspaceStage = computed<ValuationWorkspaceStage>(() => {
+  if (activeWizardStep.value === 1) return 'case'
+  if (activeWizardStep.value === 2) return activeIntakeStage.value
+  if (activeWizardStep.value === 3) return 'data'
+  if (activeWizardStep.value === 4) return 'calculation'
+  return 'report'
+})
+const workspaceIssueCounts = computed(() => ({
+  documents: flow.documents.length ? 0 : 1,
+  'ai-review': pendingCandidates.value.length,
+  data: dataIssueCounts.value.overview,
+  calculation: flow.validation?.failedCount ?? 0,
+  report: canProceedToSubmit.value ? 0 : 1,
+}))
+const caseProgressPercent = computed(() => {
+  let progress = 0
+  if (flow.documents.length) progress += 20
+  if (allCandidates.value.length && pendingCandidates.value.length === 0) progress += 20
+  if (dataIssueCounts.value.overview === 0) progress += 20
+  if (flow.validation?.canGenerateReport && flow.report) progress += 20
+  return progress
+})
 const workflowIssues = computed(() => {
   const items: Array<{ id: string; title: string; detail: string; target: string; severity: 'error' | 'warning' | 'pending' }> = []
   if (!flow.documents.length) items.push({ id: 'documents', title: '尚未上傳案件啟動資料', detail: '建議先上傳宗地個別因素清冊、預定徵收範圍地籍圖與土地登記資料；系統會保留來源並協助辨識可用欄位。', target: 'documents', severity: 'pending' })
@@ -332,26 +377,25 @@ const workflowIssues = computed(() => {
   if ((flow.validation?.failedCount ?? 0) > 0) items.push({ id: 'validation-errors', title: '正式檢核仍有阻擋錯誤', detail: `有 ${flow.validation?.failedCount ?? 0} 個阻擋錯誤必須修正後才能產出查估書。`, target: 'validation', severity: 'error' })
   return items
 })
-const wizardAvailableSteps = computed<number[]>(() => [1, 2, 3, ...(canRunValuation.value ? [4] : []), ...(canProceedToSubmit.value ? [5] : [])])
-const wizardStepTitle = computed(() => ({
-  1: '案件設定',
-  2: '文件上傳與智能辨識',
-  3: '資料確認',
-  4: '計算與檢核',
-  5: '查估書確認',
-  6: '送審',
-}[activeWizardStep.value]))
-const wizardStepDescription = computed(() => ({
-  1: '先確認案件基本資料與目前查估表版本。',
-  2: '集中管理來源文件、預覽原文並執行文件文字辨識與智能欄位分析，再逐筆確認辨識結果。',
-  3: '依待處理狀態確認人工補充、宗地、比準地與比準地地價估計表正式採用值。',
-  4: '執行公式計算與正式檢核；若有錯誤可直接跳回對應欄位修正。',
-  5: '前往查估書三頁確認與正式 PDF。',
-  6: '完成正式送審。',
-}[activeWizardStep.value]))
+const wizardStepTitle = computed(() => {
+  if (activeWizardStep.value === 1) return '案件基本資料'
+  if (activeWizardStep.value === 2) return activeIntakeStage.value === 'documents' ? '文件與辨識' : 'AI 結果確認'
+  if (activeWizardStep.value === 3) return '資料補齊'
+  if (activeWizardStep.value === 4) return '計算與檢核'
+  if (activeWizardStep.value === 5) return '查估書與送審'
+  return '送審'
+})
+const workspaceStepLabel = computed(() => {
+  if (workspaceStage.value === 'case') return '案件資料確認'
+  const index = ['documents', 'ai-review', 'data', 'calculation', 'report'].indexOf(workspaceStage.value)
+  return index >= 0 ? `流程 ${index + 1} / 5` : '案件流程'
+})
 const wizardNextLabel = computed(() => {
-  if (activeWizardStep.value === 1) return '下一步：文件與智能辨識'
-  if (activeWizardStep.value === 2) return pendingCandidates.value.length ? `先處理 ${pendingCandidates.value.length} 筆待確認` : '下一步：資料確認'
+  if (activeWizardStep.value === 1) {
+    return flow.case?.basicInfoConfirmedAt ? '下一步：文件與辨識' : '確認並開始估價'
+  }
+  if (activeWizardStep.value === 2 && activeIntakeStage.value === 'documents') return allCandidates.value.length ? '下一步：AI 結果確認' : '下一步：資料補齊'
+  if (activeWizardStep.value === 2) return pendingCandidates.value.length ? `先處理 ${pendingCandidates.value.length} 筆待確認` : '下一步：資料補齊'
   if (activeWizardStep.value === 3) return dataIssueCounts.value.overview ? `尚有 ${dataIssueCounts.value.overview} 項資料待處理` : '下一步：計算與檢核'
   if (activeWizardStep.value === 4) return canProceedToSubmit.value ? '下一步：查估書確認' : '通過檢核後才能繼續'
   return '前往查估書確認'
@@ -636,13 +680,20 @@ function clearPreviewUrl(): void {
   textPreview.value = null
 }
 
-async function openDocumentPreview(documentId: string, page: number | null = null): Promise<void> {
+async function openDocumentPreview(
+  documentId: string,
+  page: number | null = null,
+  switchToDocumentStage = true,
+): Promise<void> {
   const requestedCaseId = caseId.value
   const token = activeCaseToken
   const source = flow.documents.find((item) => item.documentId === documentId)
   if (!source || !isCurrentCase(token, requestedCaseId)) return
 
-  activeWizardStep.value = 2
+  if (switchToDocumentStage) {
+    activeWizardStep.value = 2
+    activeIntakeStage.value = 'documents'
+  }
   previewDocumentId.value = documentId
   previewPage.value = page
   previewError.value = ''
@@ -683,11 +734,13 @@ async function openDocumentPreview(documentId: string, page: number | null = nul
 function goToWorkflowIssue(target: string): void {
   if (target === 'documents') {
     activeWizardStep.value = 2
+    activeIntakeStage.value = 'documents'
     void focusElementById('valuation-document-workspace')
     return
   }
   if (target === 'candidates') {
     activeWizardStep.value = 2
+    activeIntakeStage.value = 'ai-review'
     selectedCandidateId.value = pendingCandidates.value[0]?.extracted_field_id ?? null
     void focusElementById('valuation-candidate-workspace')
     return
@@ -754,25 +807,143 @@ function candidateUnit(candidate: ExtractedFieldResponseDto): string {
 
 async function openCandidateSource(candidate: ExtractedFieldResponseDto): Promise<void> {
   selectedCandidateId.value = candidate.extracted_field_id
-  await openDocumentPreview(candidate.document_id, candidate.source_page ?? null)
+  await openDocumentPreview(candidate.document_id, candidate.source_page ?? null, false)
 }
 
-function setWizardStep(step: WizardStep): void {
-  if (step === 4 && !canRunValuation.value) {
-    notice.value = `計算前還有 ${preCalculationIssueCount.value} 項前置資料待處理；請先完成資料確認。`
-    jumpToFirstDataIssue()
-    return
+function selectCandidate(candidateId: string): void {
+  selectedCandidateId.value = candidateId
+  const candidate = allCandidates.value.find((item) => item.extracted_field_id === candidateId)
+  if (!candidate) return
+  if (
+    previewDocumentId.value === candidate.document_id
+    && previewPage.value === (candidate.source_page ?? null)
+  ) return
+  void openDocumentPreview(candidate.document_id, candidate.source_page ?? null, false)
+}
+
+function backToDashboard(): void {
+  void router.push({ name: 'valuation-dashboard' })
+}
+
+function hasExplicitWorkflowTarget(): boolean {
+  return ['step', 'focus', 'field'].some((key) => typeof route.query[key] === 'string')
+}
+
+function canonicalRouteStage(): ValuationWorkspaceStage | null {
+  return props.stage ?? valuationStageFromRouteName(route.name)
+}
+
+function syncWorkspaceUrl(stage: ValuationWorkspaceStage): void {
+  if (!caseId.value || canonicalRouteStage() === stage) return
+  const serial = ++workspaceUrlSyncSerial
+  workspaceUrlSyncInFlight = true
+  void router.replace(valuationStageRoute(caseId.value, stage, route.query))
+    .catch(() => undefined)
+    .finally(() => {
+      if (serial !== workspaceUrlSyncSerial) return
+      workspaceUrlSyncInFlight = false
+      const currentStage = workspaceStage.value
+      if (canonicalRouteStage() !== currentStage) syncWorkspaceUrl(currentStage)
+    })
+}
+
+function applyWorkspaceStage(stage: ValuationWorkspaceStage): ValuationWorkspaceStage {
+  if (stage === 'case') {
+    activeWizardStep.value = 1
+    return 'case'
   }
-  if (step >= 5) {
-    if (canProceedToSubmit.value) goToSubmit()
-    else {
-      activeWizardStep.value = 4
-      notice.value = '必須先完成資料、計算並通過檢核，才能進入查估書確認與送審。'
+  if (stage === 'documents') {
+    activeWizardStep.value = 2
+    activeIntakeStage.value = 'documents'
+    return 'documents'
+  }
+  if (stage === 'ai-review') {
+    activeWizardStep.value = 2
+    activeIntakeStage.value = 'ai-review'
+    selectedCandidateId.value = pendingCandidates.value[0]?.extracted_field_id ?? selectedCandidateId.value
+    return 'ai-review'
+  }
+  if (stage === 'data') {
+    activeWizardStep.value = 3
+    activeDataSection.value = 'overview'
+    return 'data'
+  }
+  if (stage === 'calculation') {
+    if (!canRunValuation.value) {
+      activeWizardStep.value = 3
+      activeDataSection.value = 'overview'
+      return 'data'
     }
+    activeWizardStep.value = 4
+    return 'calculation'
+  }
+  if (!canProceedToSubmit.value) {
+    return applyWorkspaceStage(canRunValuation.value ? 'calculation' : 'data')
+  }
+  return 'report'
+}
+
+async function persistWorkspaceStage(stage: ValuationWorkspaceStage): Promise<void> {
+  if (
+    stage === 'case'
+    || !workspacePersistenceReady.value
+    || !flow.case?.basicInfoConfirmedAt
+    || !canPersistWorkspace.value
+    || lastPersistedWorkspaceStage.value === stage
+  ) return
+  try {
+    const updated = await valuationApi.updateCaseWorkspace(caseId.value, {
+      last_workspace_stage: stage,
+    })
+    flow.case = mapCaseResponse(updated)
+    lastPersistedWorkspaceStage.value = stage
+  } catch {
+    // Navigation must remain usable if the case changes to a non-editable state
+    // while it is open. The next successful editable transition will retry.
+  }
+}
+
+async function confirmCaseInfoAndStart(): Promise<void> {
+  if (!flow.case || confirmingCaseInfo.value || !canPersistWorkspace.value) return
+  confirmingCaseInfo.value = true
+  error.value = ''
+  notice.value = ''
+  try {
+    const updated = await valuationApi.updateCaseWorkspace(caseId.value, {
+      confirm_basic_info: true,
+      last_workspace_stage: 'documents',
+    })
+    flow.case = mapCaseResponse(updated)
+    lastPersistedWorkspaceStage.value = 'documents'
+    activeWizardStep.value = 2
+    activeIntakeStage.value = 'documents'
+    notice.value = '案件基本資料已確認，可以開始上傳與辨識來源文件。'
+  } catch (caught: unknown) {
+    error.value = safeValuationErrorMessage(caught)
+  } finally {
+    confirmingCaseInfo.value = false
+  }
+}
+
+function navigateWorkspaceStage(stage: ValuationWorkspaceStage): void {
+  if (stage !== 'case' && !flow.case?.basicInfoConfirmedAt) {
+    notice.value = '請先確認案件基本資料，再開始估價流程。'
+    activeWizardStep.value = 1
     return
   }
-  activeWizardStep.value = step
-  if (step === 3 && !activeDataSection.value) activeDataSection.value = 'overview'
+  const applied = applyWorkspaceStage(stage)
+  if (applied === 'documents') {
+    void focusElementById('valuation-document-workspace')
+  }
+  if (applied === 'ai-review') {
+    void focusElementById('valuation-candidate-workspace')
+  }
+  if (applied === 'report') {
+    void goToSubmit()
+    return
+  }
+  syncWorkspaceUrl(applied)
+  void persistWorkspaceStage(applied)
 }
 
 function jumpToDataSection(section: DataSection): void {
@@ -788,23 +959,39 @@ function jumpToFirstDataIssue(): void {
 
 function wizardPrevious(): void {
   if (activeWizardStep.value <= 1) return
+  if (activeWizardStep.value === 2 && activeIntakeStage.value === 'ai-review') {
+    activeIntakeStage.value = 'documents'
+    return
+  }
   activeWizardStep.value = Math.max(1, activeWizardStep.value - 1) as WizardStep
 }
 
-function wizardNext(): void {
+async function wizardNext(): Promise<void> {
   if (activeWizardStep.value === 1) {
-    activeWizardStep.value = 2
+    if (!flow.case?.basicInfoConfirmedAt) {
+      await confirmCaseInfoAndStart()
+      return
+    }
+    navigateWorkspaceStage('documents')
     return
   }
   if (activeWizardStep.value === 2) {
+    if (activeIntakeStage.value === 'documents') {
+      if (allCandidates.value.length || pendingCandidates.value.length) {
+        navigateWorkspaceStage('ai-review')
+        selectedCandidateId.value = pendingCandidates.value[0]?.extracted_field_id ?? allCandidates.value[0]?.extracted_field_id ?? null
+        return
+      }
+      navigateWorkspaceStage('data')
+      return
+    }
     if (pendingCandidates.value.length) {
       selectedCandidateId.value = pendingCandidates.value[0]?.extracted_field_id ?? null
       notice.value = `還有 ${pendingCandidates.value.length} 筆智能辨識結果待確認，先完成確認再進入正式資料。`
       void focusElementById('valuation-candidate-workspace')
       return
     }
-    activeWizardStep.value = 3
-    activeDataSection.value = 'overview'
+    navigateWorkspaceStage('data')
     return
   }
   if (activeWizardStep.value === 3) {
@@ -813,7 +1000,7 @@ function wizardNext(): void {
       jumpToFirstDataIssue()
       return
     }
-    activeWizardStep.value = 4
+    navigateWorkspaceStage('calculation')
     return
   }
   if (activeWizardStep.value === 4) {
@@ -1045,6 +1232,7 @@ function goToFinding(finding: ValidationFindingModel): void {
   }
   if (fieldCode === 'documents' || fieldCode === 'object_key') {
     activeWizardStep.value = 2
+    activeIntakeStage.value = 'documents'
   } else {
     activeWizardStep.value = 3
     activeDataSection.value = 'f03'
@@ -1065,12 +1253,14 @@ function goToWorkflowNextAction(): void {
   }
   if (workflowGuidance.value?.pending_candidate_count) {
     activeWizardStep.value = 2
+    activeIntakeStage.value = 'ai-review'
     selectedCandidateId.value = pendingCandidates.value[0]?.extracted_field_id ?? null
     void focusElementById('valuation-candidate-workspace', '目前仍有待確認的辨識結果；請逐筆確認、修正後採用，或標記不採用。')
     return
   }
   if (workflowMissingItems.value.some((item) => item.toLowerCase().includes('document'))) {
     activeWizardStep.value = 2
+    activeIntakeStage.value = 'documents'
     void focusElementById('valuation-document-workspace')
     return
   }
@@ -1095,6 +1285,7 @@ function goToWorkflowNextAction(): void {
     void focusElementById('f03-data-section')
   } else {
     activeWizardStep.value = 2
+    activeIntakeStage.value = 'documents'
     void focusElementById('valuation-document-workspace')
   }
 }
@@ -1106,6 +1297,7 @@ async function goToCorrectionItem(item: CorrectionItem): Promise<void> {
   }
   if (item.document_id) {
     activeWizardStep.value = 2
+    activeIntakeStage.value = 'documents'
     await focusElementById('valuation-document-workspace', `修正要求：${item.requested_correction}`)
     return
   }
@@ -1117,6 +1309,7 @@ async function goToCorrectionItem(item: CorrectionItem): Promise<void> {
 function goToMissingItem(item: HandoffMissingItem): void {
   if (item.document_type) {
     activeWizardStep.value = 2
+    activeIntakeStage.value = 'documents'
     void focusElementById(
       'valuation-document-workspace',
       `審查要求補件：${item.item_name}${item.reason ? `｜${item.reason}` : ''}`,
@@ -1140,14 +1333,25 @@ function focusRequestedRouteTarget(): void {
   }
   if (focus === 'documents') {
     activeWizardStep.value = 2
+    activeIntakeStage.value = 'documents'
     void focusElementById('valuation-document-workspace')
+    return
+  }
+  if (focus === 'candidates') {
+    activeWizardStep.value = 2
+    activeIntakeStage.value = 'ai-review'
+    selectedCandidateId.value = pendingCandidates.value[0]?.extracted_field_id ?? allCandidates.value[0]?.extracted_field_id ?? null
+    void focusElementById('valuation-candidate-workspace')
     return
   }
   if (!field) return
   const normalized = field.split(',')[0]?.trim()
   const targetId = normalized ? FIELD_TARGET_IDS[normalized] : undefined
   if (targetId) {
-    if (normalized === 'documents' || normalized === 'object_key') activeWizardStep.value = 2
+    if (normalized === 'documents' || normalized === 'object_key') {
+      activeWizardStep.value = 2
+      activeIntakeStage.value = 'documents'
+    }
     else {
       activeWizardStep.value = 3
       activeDataSection.value = 'f03'
@@ -1173,6 +1377,9 @@ async function loadData(): Promise<void> {
   extractionCandidates.value = []
   extractionBusyDocumentId.value = null
   confirmingCandidates.value = false
+  confirmingCaseInfo.value = false
+  workspacePersistenceReady.value = false
+  lastPersistedWorkspaceStage.value = null
   clearPreviewUrl()
   previewDocumentId.value = null
   previewPage.value = null
@@ -1244,7 +1451,28 @@ async function loadData(): Promise<void> {
       loadWorkflowGuidance(token, requestedCaseId),
       loadReviewHandoff(token, requestedCaseId),
     ])
-    if (isCurrentCase(token, requestedCaseId)) focusRequestedRouteTarget()
+    if (isCurrentCase(token, requestedCaseId)) {
+      const storedStage = flow.case.lastWorkspaceStage
+      let effectiveStage: ValuationWorkspaceStage = 'case'
+      const routeStage = canonicalRouteStage()
+      if (!flow.case.basicInfoConfirmedAt) {
+        applyWorkspaceStage('case')
+        if (routeStage && routeStage !== 'case') syncWorkspaceUrl('case')
+      } else if (hasExplicitWorkflowTarget()) {
+        focusRequestedRouteTarget()
+        effectiveStage = workspaceStage.value
+      } else if (routeStage && routeStage !== 'report') {
+        effectiveStage = applyWorkspaceStage(routeStage)
+      } else {
+        effectiveStage = applyWorkspaceStage(storedStage)
+      }
+      lastPersistedWorkspaceStage.value = storedStage
+      workspacePersistenceReady.value = true
+      if (flow.case.basicInfoConfirmedAt && effectiveStage !== 'case' && effectiveStage !== storedStage) {
+        void persistWorkspaceStage(effectiveStage)
+      }
+      if (effectiveStage === 'report' && canProceedToSubmit.value) goToSubmit()
+    }
   } catch (caught: unknown) {
     if (!isCurrentCase(token, requestedCaseId)) return
     error.value = safeValuationErrorMessage(caught)
@@ -1253,7 +1481,11 @@ async function loadData(): Promise<void> {
   }
 }
 
-function chooseUpload(event: Event): void {
+function chooseUpload(event: Event | File): void {
+  if (event instanceof File) {
+    uploadFile.value = event
+    return
+  }
   const input = event.target as HTMLInputElement
   uploadFile.value = input.files?.[0] ?? null
 }
@@ -1405,7 +1637,10 @@ async function extractDocument(documentId: string): Promise<void> {
       ? `文件文字擷取已完成；表單辨識完成 ${completedCount}/${FIELD_ANALYSIS_FORM_CODES.length}，未完成：${analysisFailures.map(formDisplayName).join('、')}。`
       : `六份正式表單辨識完成，找到 ${pending} 筆需要人工確認的欄位；沒有原文證據的欄位已保持空白。`
     if (firstAnalysisError) error.value = safeValuationErrorMessage(firstAnalysisError)
-    if (pending) void focusElementById('valuation-candidate-workspace')
+    if (pending) {
+      activeIntakeStage.value = 'ai-review'
+      void focusElementById('valuation-candidate-workspace')
+    }
   } catch (caught: unknown) {
     if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
   } finally {
@@ -1865,12 +2100,13 @@ async function runValuation(): Promise<void> {
   }
 }
 
-function goToSubmit(): void {
+async function goToSubmit(): Promise<void> {
   if (!canProceedToSubmit.value) {
     notice.value = '目前仍有待修正項目，必須先完成修正並通過檢核，才能進入輸出與送審。'
     return
   }
-  void router.push({ name: 'valuation-submit', params: { caseId: caseId.value } })
+  await persistWorkspaceStage('report')
+  await router.push(valuationStageRoute(caseId.value, 'report'))
 }
 
 function openRevisionFields(): void {
@@ -1883,259 +2119,138 @@ watch(caseId, () => {
   void loadData()
 }, { immediate: true })
 
+watch(workspaceStage, (stage) => {
+  syncWorkspaceUrl(stage)
+  void persistWorkspaceStage(stage)
+})
+
+watch([() => route.name, () => props.stage], () => {
+  if (!flow.case || !workspacePersistenceReady.value) return
+  if (workspaceUrlSyncInFlight) return
+  const routeStage = canonicalRouteStage()
+  if (!routeStage || routeStage === 'report') return
+  if (!flow.case.basicInfoConfirmedAt && routeStage !== 'case') {
+    applyWorkspaceStage('case')
+    syncWorkspaceUrl('case')
+    return
+  }
+  if (routeStage === workspaceStage.value) return
+  applyWorkspaceStage(routeStage)
+})
+
 onBeforeUnmount(clearPreviewUrl)
 </script>
 
 <template>
   <div class="valuation-view">
-    <ValuationStepNavigator
-      :current-step="activeWizardStep"
-      :available-steps="wizardAvailableSteps"
-      :issue-counts="wizardIssueCounts"
-      @navigate="setWizardStep"
-    />
-    <PageHeader
-      eyebrow="估價作業"
-      :title="wizardStepTitle"
-      :description="wizardStepDescription"
-    />
-    <ValuationIssueDrawer v-if="flow.case" :items="workflowIssues" @select="goToWorkflowIssue" />
-
     <LoadingSkeleton v-if="loading" :rows="7" label="案件估價資料載入中" />
     <ErrorState v-else-if="error && !flow.case" :message="error" @retry="loadData" />
 
     <template v-else-if="flow.case">
-      <section class="case-context-strip" data-testid="case-context" aria-label="目前案件">
-        <div>
-          <span>目前案件</span>
-          <strong>{{ flow.case.caseNo }}</strong>
-          <small>{{ flow.case.name }}</small>
-        </div>
-        <div class="case-context-strip__meta">
-          <span>{{ newTaipeiDistrictName(flow.case.districtCode) }}</span>
-          <span>估價基準日 {{ flow.case.valuationBaseDate }}</span>
-          <span>{{ statusLabel(f03Form?.status ?? 'DRAFT') }}</span>
-        </div>
-      </section>
+      <ValuationCaseWorkspaceHeader
+        :case-model="flow.case"
+        :district-label="newTaipeiDistrictName(flow.case.districtCode)"
+        :status-label="statusLabel(f03Form?.status ?? 'DRAFT')"
+        :current-stage="workspaceStage"
+        :progress-percent="caseProgressPercent"
+        :issue-counts="workspaceIssueCounts"
+        :report-available="canProceedToSubmit"
+        @back="backToDashboard"
+        @navigate="navigateWorkspaceStage"
+      />
 
-      <section
-        v-if="isRevisionRequired && reviewHandoff?.correction"
-        v-liquid-glass
-        data-lg
-        class="valuation-surface revision-panel lg"
-        data-testid="valuation-correction-request"
-        aria-labelledby="revision-panel-title"
-      >
-        <div class="revision-panel__heading">
-          <div>
-            <p class="valuation-eyebrow">補正要求</p>
-            <h2 id="revision-panel-title">第 {{ reviewHandoff.correction.request_no }} 次補正要求</h2>
-          </div>
-          <span>{{ new Date(reviewHandoff.correction.due_at).toLocaleString('zh-TW') }} 前</span>
-        </div>
-        <p class="revision-panel__message">{{ reviewHandoff.correction.message }}</p>
-        <ul class="revision-panel__items">
-          <li v-for="item in reviewHandoff.correction.items" :key="`${item.finding_code}-${item.document_id ?? 'case'}`">
-            <div>
-              <strong>{{ item.issue_summary }}</strong>
-              <span>要求修正：{{ item.requested_correction }}</span>
-              <small v-if="item.page_number">文件頁次：第 {{ item.page_number }} 頁</small>
-            </div>
-            <button class="finding-action" type="button" @click="goToCorrectionItem(item)">
-              {{ item.document_id ? '前往文件處理' : '前往資料修正' }}
-            </button>
-          </li>
-        </ul>
-        <div v-if="formalSupplementMissingItems.length" class="revision-panel__missing">
-          <strong>審查缺件</strong>
-          <span v-for="item in formalSupplementMissingItems" :key="item.item_code">
-            {{ item.item_name }}{{ item.reason ? `：${item.reason}` : '' }}
-          </span>
-        </div>
-        <div class="revision-panel__actions">
-          <button
-            v-if="!revisionDraftReady"
-            class="solid-button solid-button--primary"
-            type="button"
-            data-testid="prepare-revision-draft"
-            :disabled="revisionInitializing"
-            @click="ensureRevisionDrafts"
-          >
-            {{ revisionInitializing ? '建立補正版中…' : '建立補正版並帶入前一版資料' }}
-          </button>
-          <button
-            v-else
-            class="solid-button solid-button--primary"
-            type="button"
-            data-testid="open-revision-fields"
-            @click="openRevisionFields"
-          >
-            補正版已建立，開始修正
-          </button>
-          <small>舊送審版本保持不可變；補正會建立較新的比準地地價估計表與正式報告版本。</small>
-        </div>
-      </section>
+      <ValuationIssueDrawer
+        v-if="flow.case.basicInfoConfirmedAt"
+        :items="workflowIssues"
+        @select="goToWorkflowIssue"
+      />
 
-      <section
-        v-if="formalSupplementMissingItems.length && !reviewHandoff?.correction"
-        v-liquid-glass
-        data-lg
-        class="valuation-surface supplement-panel lg"
-        data-testid="valuation-supplement-request"
-        aria-labelledby="supplement-panel-title"
-      >
-        <div class="surface-heading">
-          <div>
-            <p class="valuation-eyebrow">補件要求</p>
-            <h2 id="supplement-panel-title">審查補件要求</h2>
-          </div>
-          <span class="value-kind">{{ formalSupplementMissingItems.length }} 項待補</span>
-        </div>
-        <p class="supplement-panel__intro">審查端已完成完整性檢查並提出補件要求。請逐項補齊後，再依正常送審流程建立新版送審文件。</p>
-        <ul class="supplement-panel__list">
-          <li v-for="item in formalSupplementMissingItems" :key="item.item_code">
-            <div>
-              <strong>{{ item.item_name }}</strong>
-              <span v-if="item.reason">{{ item.reason }}</span>
-              <small v-if="item.due_at">期限：{{ new Date(item.due_at).toLocaleString('zh-TW') }}</small>
-            </div>
-            <button class="finding-action" type="button" @click="goToMissingItem(item)">
-              {{ item.document_type ? '前往文件補件' : '前往資料補正' }}
-            </button>
-          </li>
-        </ul>
-      </section>
+      <ValuationReviewHandoffPanel
+        v-if="reviewHandoff && (reviewHandoff.correction || formalSupplementMissingItems.length)"
+        :handoff="reviewHandoff"
+        :supplement-missing-items="formalSupplementMissingItems"
+        :revision-draft-ready="revisionDraftReady"
+        :revision-initializing="revisionInitializing"
+        @prepare-revision="ensureRevisionDrafts"
+        @open-revision-fields="openRevisionFields"
+        @correction-item="goToCorrectionItem"
+        @missing-item="goToMissingItem"
+      />
 
-      <section class="wizard-status" data-testid="valuation-workflow-guide" aria-labelledby="workflow-guide-title">
-        <div class="workflow-guide__copy">
-          <div>
-            <p class="valuation-eyebrow">目前進度</p>
-            <h2 id="workflow-guide-title">{{ wizardStepTitle }}</h2>
-          </div>
-          <span class="workflow-guide__step">第 {{ activeWizardStep }} 步 / 6</span>
-        </div>
-        <div class="workflow-guide__stats">
-          <span>來源文件 {{ flow.documents.length }} 份</span>
-          <span v-if="workflowGuidance">辨識結果待確認 {{ workflowGuidance.pending_candidate_count }} 筆</span>
-          <span v-if="f03Guidance">比準地地價估計表缺欄位 {{ unresolvedF03RequiredFields.length }} 項</span>
-          <span v-if="flow.validation">檢核錯誤 {{ flow.validation.failedCount }} 項</span>
-        </div>
-        <button
-          v-if="wizardIssueCounts[activeWizardStep]"
-          class="finding-action"
-          type="button"
-          data-testid="workflow-next-action"
-          @click="goToWorkflowNextAction"
-        >
-          查看第一個待處理項目
-        </button>
-      </section>
+      <ValuationWorkflowStatus
+        :title="wizardStepTitle"
+        :stage-label="workspaceStepLabel"
+        :document-count="flow.documents.length"
+        :pending-candidate-count="workflowGuidance?.pending_candidate_count"
+        :missing-field-count="f03Guidance ? unresolvedF03RequiredFields.length : null"
+        :validation-error-count="flow.validation?.failedCount"
+        :issue-count="wizardIssueCounts[activeWizardStep] ?? 0"
+        @next-action="goToWorkflowNextAction"
+      />
 
-      <section v-if="activeWizardStep === 1 || activeWizardStep === 2" v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="case-summary-title">
-        <div v-if="activeWizardStep === 1" class="surface-heading">
-          <div>
-            <p class="valuation-eyebrow">案件資料</p>
-            <h2 id="case-summary-title">{{ flow.case.caseNo }}｜{{ flow.case.name }}</h2>
-          </div>
-          <span class="source-marker" data-source-kind="automatic">{{ flow.case.source.label }}</span>
-        </div>
-        <div v-if="activeWizardStep === 1" class="summary-grid">
-          <div><span>案件類型</span><strong>{{ flow.case.caseType }}</strong></div>
-          <div><span>申請機關</span><strong>{{ flow.case.requestingAgency || '未提供' }}</strong></div>
-          <div><span>估價基準日</span><strong>{{ flow.case.valuationBaseDate }}</strong></div>
-          <div><span>估價作業期限</span><strong>{{ flow.case.valuationDueDate || '未設定' }}</strong></div>
-          <div><span>行政區</span><strong>{{ newTaipeiDistrictName(flow.case.districtCode) }}</strong></div>
-        </div>
-        <div v-if="activeWizardStep === 1" class="form-list" aria-label="已發現估價表">
-          <div v-for="form in flow.forms" :key="form.formInstanceId" class="form-list__item">
-            <strong>{{ formDisplayName(form.formCode) }}</strong>
-            <span class="form-list__code">{{ form.formCode }}</span>
-            <span>第 {{ form.versionNo }} 版｜{{ statusLabel(form.status) }}</span>
-            <small>{{ form.source.label }}</small>
-          </div>
-        </div>
-        <section
-          v-if="activeWizardStep === 2"
-          class="document-ai-process"
-          data-testid="document-ai-process-guide"
-          aria-label="文件辨識處理順序"
-        >
-          <article>
-            <span class="document-ai-process__step">1</span>
-            <div>
-              <strong>先確認來源文件並執行辨識</strong>
-              <small>目前有 {{ flow.documents.length }} 份來源文件；可先預覽，再選擇目標表單進行文件文字辨識與智能欄位分析。</small>
-            </div>
-          </article>
-          <span class="document-ai-process__arrow" aria-hidden="true">→</span>
-          <article :data-state="pendingCandidates.length ? 'attention' : 'ready'">
-            <span class="document-ai-process__step">2</span>
-            <div>
-              <strong>再人工確認辨識結果</strong>
-              <small>{{ pendingCandidates.length ? `還有 ${pendingCandidates.length} 筆待確認；確認後才會寫入正式資料。` : '目前沒有待確認的辨識結果。' }}</small>
-            </div>
-          </article>
-        </section>
+      <ValuationCaseOverview
+        v-if="activeWizardStep === 1"
+        :case-model="flow.case"
+        :forms="flow.forms"
+        :district-label="newTaipeiDistrictName(flow.case.districtCode)"
+      />
 
-        <ValuationDocumentWorkspace
-          v-if="activeWizardStep === 2"
-          :documents="flow.documents"
-          :preview-document-id="previewDocumentId"
-          :preview-document="previewDocument"
-          :preview-page="previewPage"
-          :preview-loading="previewLoading"
-          :preview-error="previewError"
-          :preview-source-url="previewSourceUrl"
-          :preview-is-pdf="previewIsPdf"
-          :preview-is-image="previewIsImage"
-          :preview-is-spreadsheet="previewIsSpreadsheet"
-          :preview-is-docx="previewIsDocx"
-          :spreadsheet-preview="spreadsheetPreview"
-          :text-preview="textPreview"
-          :selected-candidate="selectedCandidate"
-          :can-upload="canUpload"
-          :uploading="uploading"
-          :upload-file="uploadFile"
-          :upload-category="uploadCategory"
-          :extraction-busy-document-id="extractionBusyDocumentId"
-          :document-action-id="documentActionId"
-          :document-category-draft="documentCategoryDraft"
-          :document-analysis-form="documentAnalysisForm"
-          :analysis-form-codes="FIELD_ANALYSIS_FORM_CODES"
-          :source-categories="SOURCE_DOCUMENT_CATEGORIES"
-          :form-display-name="formDisplayName"
-          :document-category-label="documentCategoryLabel"
-          :format-file-size="formatFileSize"
-          :document-pending-count="documentPendingCount"
-          :document-candidate-count="documentCandidateCount"
-          :document-ai-status="documentAiStatus"
-          :can-extract-document="canExtractDocument"
-          :can-manage-source-document="canManageSourceDocument"
-          @preview="openDocumentPreview"
-          @prepare-parcel-import="prepareParcelImport"
-          @extract="extractDocument"
-          @reclassify="reclassifyDocument"
-          @remove="removeDocument"
-          @download="downloadSourceDocument"
-          @update-analysis-form="setDocumentAnalysisForm"
-          @update-category="setDocumentCategory"
-          @update-upload-category="uploadCategory = $event"
-          @choose-upload="chooseUpload"
-          @upload="uploadSourceDocument"
-        />
-        <ValuationParcelImportPanel
-          v-if="activeWizardStep === 2 && (parcelImportLoading || parcelImportPreview)"
-          :preview="parcelImportPreview"
-          :case-district-code="flow.case.districtCode"
-          :loading="parcelImportLoading"
-          :importing="parcelImporting"
-          :can-import="canEditLandContext"
-          @import="importParcelRows"
-        />
-      </section>
+      <ValuationDocumentStage
+        v-if="activeWizardStep === 2 && activeIntakeStage === 'documents'"
+        :documents="flow.documents"
+        :pending-candidate-count="pendingCandidates.length"
+        :preview-document-id="previewDocumentId"
+        :preview-document="previewDocument"
+        :preview-page="previewPage"
+        :preview-loading="previewLoading"
+        :preview-error="previewError"
+        :preview-source-url="previewSourceUrl"
+        :preview-is-pdf="previewIsPdf"
+        :preview-is-image="previewIsImage"
+        :preview-is-spreadsheet="previewIsSpreadsheet"
+        :preview-is-docx="previewIsDocx"
+        :spreadsheet-preview="spreadsheetPreview"
+        :text-preview="textPreview"
+        :selected-candidate="selectedCandidate"
+        :can-upload="canUpload"
+        :uploading="uploading"
+        :upload-file="uploadFile"
+        :upload-category="uploadCategory"
+        :extraction-busy-document-id="extractionBusyDocumentId"
+        :document-action-id="documentActionId"
+        :document-category-draft="documentCategoryDraft"
+        :document-analysis-form="documentAnalysisForm"
+        :analysis-form-codes="FIELD_ANALYSIS_FORM_CODES"
+        :source-categories="SOURCE_DOCUMENT_CATEGORIES"
+        :parcel-import-preview="parcelImportPreview"
+        :parcel-import-loading="parcelImportLoading"
+        :parcel-importing="parcelImporting"
+        :can-import-parcels="canEditLandContext"
+        :case-district-code="flow.case.districtCode"
+        :form-display-name="formDisplayName"
+        :document-category-label="documentCategoryLabel"
+        :format-file-size="formatFileSize"
+        :document-pending-count="documentPendingCount"
+        :document-candidate-count="documentCandidateCount"
+        :document-ai-status="documentAiStatus"
+        :can-extract-document="canExtractDocument"
+        :can-manage-source-document="canManageSourceDocument"
+        @preview="openDocumentPreview"
+        @prepare-parcel-import="prepareParcelImport"
+        @extract="extractDocument"
+        @reclassify="reclassifyDocument"
+        @remove="removeDocument"
+        @download="downloadSourceDocument"
+        @update-analysis-form="setDocumentAnalysisForm"
+        @update-category="setDocumentCategory"
+        @update-upload-category="uploadCategory = $event"
+        @choose-upload="chooseUpload"
+        @upload="uploadSourceDocument"
+        @import-parcels="importParcelRows"
+      />
 
       <ValuationCandidateWorkspace
-        v-if="activeWizardStep === 2"
+        v-if="activeWizardStep === 2 && activeIntakeStage === 'ai-review'"
         :candidates="candidateDecisionTargets"
         :processed-candidates="processedCandidates"
         :pending-count="pendingCandidates.length"
@@ -2155,7 +2270,19 @@ onBeforeUnmount(clearPreviewUrl)
         :candidate-input-mode="candidateInputMode"
         :candidate-status-label="candidateStatusLabel"
         :display-candidate-value="displayCandidateValue"
-        @select="selectedCandidateId = $event"
+        :preview-document-id="previewDocumentId"
+        :preview-document="previewDocument"
+        :preview-page="previewPage"
+        :preview-loading="previewLoading"
+        :preview-error="previewError"
+        :preview-source-url="previewSourceUrl"
+        :preview-is-pdf="previewIsPdf"
+        :preview-is-image="previewIsImage"
+        :preview-is-spreadsheet="previewIsSpreadsheet"
+        :preview-is-docx="previewIsDocx"
+        :spreadsheet-preview="spreadsheetPreview"
+        :text-preview="textPreview"
+        @select="selectCandidate"
         @open-source="openCandidateSource"
         @choose-decision="chooseCandidateDecision"
         @update-value="setCandidateValue"
@@ -2165,117 +2292,30 @@ onBeforeUnmount(clearPreviewUrl)
         @download-export="downloadConfirmationExport"
       />
 
-      <section v-if="activeWizardStep === 3" class="data-confirmation-nav" aria-labelledby="data-confirmation-title">
-        <div class="data-confirmation-nav__heading">
-          <div>
-            <p class="valuation-eyebrow">資料確認</p>
-            <h2 id="data-confirmation-title">資料確認</h2>
-            <span>只顯示目前要處理的資料類別；有缺漏時可從上方狀態或下方總覽直接跳轉。</span>
-          </div>
-          <span class="value-kind">待處理 {{ dataIssueCounts.overview }} 項</span>
-        </div>
-        <nav class="data-subnav" aria-label="資料確認子選單">
-          <button type="button" :class="{ 'is-active': activeDataSection === 'overview' }" data-testid="data-section-overview" @click="activeDataSection = 'overview'">
-            <strong>總覽</strong><small>{{ dataIssueCounts.overview ? `${dataIssueCounts.overview} 待處理` : '已完成' }}</small>
-          </button>
-          <button type="button" :class="{ 'is-active': activeDataSection === 'manual' }" data-testid="data-section-manual" @click="activeDataSection = 'manual'">
-            <strong>人工補充</strong><small>{{ dataIssueCounts.manual ? `${dataIssueCounts.manual} 可補充` : '無缺漏' }}</small>
-          </button>
-          <button type="button" :class="{ 'is-active': activeDataSection === 'land' }" data-testid="data-section-land" @click="activeDataSection = 'land'">
-            <strong>宗地與比準地</strong><small>{{ dataIssueCounts.land ? `${dataIssueCounts.land} 待處理` : '已建立' }}</small>
-          </button>
-          <button type="button" :class="{ 'is-active': activeDataSection === 'f03' }" data-testid="data-section-f03" @click="activeDataSection = 'f03'">
-            <strong>比準地地價估計表</strong><small>{{ dataIssueCounts.f03 ? `${dataIssueCounts.f03} 缺欄位` : flow.f03 ? '可編輯' : '尚未建立' }}</small>
-          </button>
-        </nav>
+      <ValuationDataStageNavigator
+        v-if="activeWizardStep === 3"
+        :active-section="activeDataSection"
+        :issue-counts="dataIssueCounts"
+        :parcel-count="parcels.length"
+        :benchmark-count="flow.benchmarks.length"
+        :has-f03="Boolean(flow.f03)"
+        @select="jumpToDataSection"
+      />
 
-        <div v-if="activeDataSection === 'overview'" class="data-overview">
-          <article :data-state="dataIssueCounts.manual ? 'attention' : 'ready'">
-            <div><strong>人工補充</strong><span>文件辨識沒有取得的欄位，可在這裡人工補齊。</span></div>
-            <div><small>{{ dataIssueCounts.manual ? `${dataIssueCounts.manual} 項可補充` : '目前沒有缺漏欄位' }}</small><button type="button" @click="jumpToDataSection('manual')">前往</button></div>
-          </article>
-          <article :data-state="dataIssueCounts.land ? 'attention' : 'ready'">
-            <div><strong>宗地與比準地</strong><span>確認宗地基本資料與後續計算使用的比準地。</span></div>
-            <div><small>{{ parcels.length }} 宗地 · {{ flow.benchmarks.length }} 比準地</small><button type="button" @click="jumpToDataSection('land')">前往</button></div>
-          </article>
-          <article :data-state="dataIssueCounts.f03 ? 'attention' : flow.f03 ? 'ready' : 'attention'">
-            <div><strong>比準地地價估計表</strong><span>確認最後會進入公式計算與正式檢核的採用值。</span></div>
-            <div><small>{{ flow.f03 ? dataIssueCounts.f03 ? `${dataIssueCounts.f03} 欄未完成` : '正式資料可編輯' : '尚未建立比準地地價估計表' }}</small><button type="button" @click="jumpToDataSection('f03')">前往</button></div>
-          </article>
-        </div>
-      </section>
-
-      <section
-        v-if="activeWizardStep === 3 && activeDataSection === 'manual' && workflowGuidance && manualFieldEntries.length"
-        v-liquid-glass
-        data-lg
-        class="valuation-surface manual-fields lg"
-        data-testid="manual-field-workspace"
-        aria-labelledby="manual-fields-title"
-      >
-        <div class="surface-heading">
-          <div>
-            <p class="valuation-eyebrow">人工補充</p>
-            <h2 id="manual-fields-title">補齊未辨識到的欄位</h2>
-          </div>
-          <span class="value-kind">{{ manualFieldEntries.length }} 項</span>
-        </div>
-        <p class="manual-fields__intro">只會送出非空欄位。一般欄位可在這裡人工補值；像「比準地」這種關聯資料則必須從既有資料中選擇，不需要另外填寫系統識別資料。</p>
-        <label class="manual-fields__selector">
-          <span>選擇要補填的表單</span>
-          <select v-model="activeManualForm" data-testid="manual-form-selector">
-            <option value="F01">F01－買賣實例調查估價表</option>
-            <option value="F02">F02－比較法調查估價表</option>
-            <option value="F02-RF">F02-RF－影響地價區域因素分析明細表</option>
-            <option value="F03">F03－比準地地價估計表</option>
-            <option value="F04">F04－徵收土地宗地市價估計表</option>
-            <option value="S01">S01－地價區段勘查表</option>
-          </select>
-        </label>
-        <div class="manual-fields__grid">
-          <template v-for="entry in manualFieldEntries" :key="entry.key">
-            <div v-if="entry.formCode === 'F03' && entry.fieldName === 'benchmark_land_id'" class="manual-fields__relation" data-testid="manual-benchmark-helper">
-              <div>
-                <strong>比準地地價估計表 → 比準地</strong>
-                <span>比準地是本案已建立資料的關聯，不是文字欄位。請先在「宗地與比準地」建立或選擇，再回到比準地地價估計表確認正式採用值。</span>
-              </div>
-              <button class="finding-action" type="button" @click="jumpToDataSection('land')">前往宗地與比準地</button>
-            </div>
-            <label v-else>
-              <span>{{ manualFieldMetadata(entry.formCode, entry.fieldName).label }}</span>
-              <input
-                v-model="manualFieldValue[entry.key]"
-                :data-testid="`manual-field-${entry.formCode}-${entry.fieldName}`"
-                :type="manualFieldMetadata(entry.formCode, entry.fieldName).inputType ?? 'text'"
-                :placeholder="`請填寫：${manualFieldMetadata(entry.formCode, entry.fieldName).label}`"
-                autocomplete="off"
-              >
-              <small class="manual-fields__hint">
-                主要填寫：{{ manualFieldMetadata(entry.formCode, entry.fieldName).guidance }}
-              </small>
-              <small v-if="workflowGuidance.manual_field_errors?.[entry.key]" class="manual-fields__error">
-                {{ workflowGuidance.manual_field_errors?.[entry.key] }}
-              </small>
-            </label>
-          </template>
-        </div>
-        <div class="candidate-submit">
-          <span>人工輸入會覆蓋先前同欄位的人工值，並使相關比準地地價估計表單表與送審文件需要重新計算／檢核。</span>
-          <button
-            v-if="manualEditableEntries.length"
-            class="solid-button solid-button--primary"
-            type="button"
-            data-testid="save-manual-fields"
-            :disabled="manualFieldsSaving"
-            @click="saveManualFields"
-          >{{ manualFieldsSaving ? '儲存中…' : '儲存人工補充資料' }}</button>
-        </div>
-      </section>
-
-      <section v-if="activeWizardStep === 3 && activeDataSection === 'manual' && !manualFieldEntries.length" class="valuation-surface data-complete-state">
-        <strong>目前沒有需要人工補充的欄位</strong>
-        <span>智能辨識與既有資料已提供目前可確認的欄位；你可以直接前往宗地與比準地或比準地地價估計表。</span>
-      </section>
+      <ValuationManualFieldsSection
+        v-if="activeWizardStep === 3 && activeDataSection === 'manual' && workflowGuidance"
+        :active-form="activeManualForm"
+        :entries="manualFieldEntries"
+        :editable-count="manualEditableEntries.length"
+        :values="manualFieldValue"
+        :errors="workflowGuidance.manual_field_errors ?? {}"
+        :saving="manualFieldsSaving"
+        :field-metadata="manualFieldMetadata"
+        @update-active-form="activeManualForm = $event"
+        @update-value="setManualFieldValue"
+        @go-land="jumpToDataSection('land')"
+        @save="saveManualFields"
+      />
 
       <ValuationLandContext
         v-if="activeWizardStep === 3 && activeDataSection === 'land'"
@@ -2331,22 +2371,16 @@ onBeforeUnmount(clearPreviewUrl)
       <p v-if="notice" class="inline-notice" role="status">{{ notice }}</p>
       <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
 
-      <footer v-if="activeWizardStep <= 4" class="wizard-footer" aria-label="估價流程導覽">
-        <button class="wizard-footer__secondary" type="button" :disabled="activeWizardStep === 1" @click="wizardPrevious">← 上一步</button>
-        <div class="wizard-footer__status">
-          <strong>第 {{ activeWizardStep }} 步 / 6</strong>
-          <span>{{ wizardNextLabel }}</span>
-        </div>
-        <button
-          class="wizard-footer__primary"
-          type="button"
-          data-testid="wizard-next"
-          :disabled="activeWizardStep === 4 && !canProceedToSubmit"
-          @click="wizardNext"
-        >
-          {{ wizardNextLabel }} →
-        </button>
-      </footer>
+      <ValuationWizardFooter
+        v-if="activeWizardStep <= 4"
+        :title="wizardStepTitle"
+        :next-label="wizardNextLabel"
+        :is-first-step="activeWizardStep === 1"
+        :confirming="confirmingCaseInfo"
+        :next-disabled="activeWizardStep === 4 && !canProceedToSubmit"
+        @previous="wizardPrevious"
+        @next="wizardNext"
+      />
     </template>
   </div>
 </template>
@@ -2355,374 +2389,19 @@ onBeforeUnmount(clearPreviewUrl)
 .valuation-view {
   display: grid;
   gap: 18px;
-  padding: 24px 28px 34px;
+  padding: 0 28px 34px;
 }
 
-.valuation-surface {
-  padding: 22px;
-  border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-md);
-  background: var(--app-paper-strong);
-  box-shadow: var(--app-shadow-soft);
+.valuation-view :deep(.case-workspace-header) {
+  margin-inline: -28px;
 }
 
-.case-context-strip { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:11px 14px; border:1px solid #d9e3ee; border-radius:11px; background:#f8fbfe; }
-.case-context-strip > div:first-child { display:flex; align-items:baseline; flex-wrap:wrap; gap:7px; min-width:0; }
-.case-context-strip > div:first-child > span { color:var(--app-muted); font-size:10px; font-weight:800; }
-.case-context-strip > div:first-child > strong { color:var(--app-ink); font-size:13px; }
-.case-context-strip > div:first-child > small { overflow:hidden; color:var(--app-ink-soft); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
-.case-context-strip__meta { display:flex; align-items:center; flex-wrap:wrap; justify-content:flex-end; gap:6px; }
-.case-context-strip__meta span { padding:5px 8px; border-radius:999px; color:#52657a; background:#edf2f7; font-size:9px; font-weight:800; }
-
-.surface-heading,
-.form-heading,
-.action-row,
-.official-value,
-.calculation-result,
-.report-result {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.surface-heading { margin-bottom: 18px; }
-.surface-heading h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 24px; font-weight: 600; letter-spacing: -0.04em; }
-.valuation-eyebrow { margin: 0 0 6px; color: var(--app-accent-deep); font-size: 11px; font-weight: 800; letter-spacing: 0.12em; }
-.source-marker, .value-kind { display: inline-flex; min-height: 30px; align-items: center; padding: 5px 10px; border: 1px solid var(--app-line); border-radius: var(--app-radius-pill); color: var(--app-ink-soft); background: #f7f8fb; font-size: 11px; font-weight: 800; white-space: nowrap; }
-.source-marker[data-source-kind="automatic"] { border-color: rgba(59, 129, 102, 0.24); color: var(--app-green); background: rgba(59, 129, 102, 0.08); }
-.source-marker[data-source-kind="human-confirmed"] { border-color: rgba(200, 91, 67, 0.24); color: var(--app-accent-deep); background: rgba(200, 91, 67, 0.08); }
-.value-kind[data-source-kind="calculated"] { border-color: rgba(46, 89, 132, 0.22); color: #2e5984; background: #edf4fb; }
-.value-kind[data-value-kind="calculated"] { border-color: rgba(46, 89, 132, 0.22); color: #2e5984; background: #edf4fb; }
-.summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.summary-grid div { display: grid; gap: 5px; padding: 13px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #fbfcfe; }
-.revision-panel { display: grid; gap: 14px; border-color: rgba(200, 91, 67, .26); background: rgba(255, 246, 242, .86); }
-.revision-panel__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-.revision-panel__heading h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 22px; }
-.revision-panel__heading > span { padding: 7px 10px; border-radius: var(--app-radius-pill); color: #a44334; background: #fff0ed; font-size: 11px; font-weight: 900; white-space: nowrap; }
-.revision-panel__message { margin: 0; color: var(--app-ink); font-size: 13px; font-weight: 700; line-height: 1.7; white-space: pre-line; }
-.revision-panel__items { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }
-.revision-panel__items li { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 13px; border-left: 4px solid #c85b43; border-radius: 8px; background: rgba(255,255,255,.8); }
-.revision-panel__items li > div { display: grid; gap: 4px; min-width: 0; }
-.revision-panel__items strong { color: var(--app-ink); font-size: 12px; }
-.revision-panel__items span { color: var(--app-ink-soft); font-size: 12px; line-height: 1.6; }
-.revision-panel__items small { color: var(--app-muted); font-size: 10px; }
-.revision-panel__missing { display: grid; gap: 5px; padding: 11px 12px; border: 1px solid rgba(214,166,62,.28); border-radius: 9px; background: #fffaf0; }
-.revision-panel__missing strong { color: var(--app-ink); font-size: 11px; }
-.revision-panel__missing span { color: var(--app-ink-soft); font-size: 11px; }
-.revision-panel__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
-.revision-panel__actions small { color: var(--app-muted); font-size: 11px; line-height: 1.5; }
-.workflow-guide { display: grid; gap: 14px; border-color: rgba(46, 89, 132, .18); background: rgba(246, 250, 255, .82); }
-.workflow-guide__copy { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-.workflow-guide__copy h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 22px; }
-.workflow-guide__step { padding: 7px 11px; border-radius: var(--app-radius-pill); color: #2e5984; background: #edf4fb; font-size: 11px; font-weight: 900; white-space: nowrap; }
-.workflow-guide__next { margin: 0; color: var(--app-ink); font-size: 14px; font-weight: 800; line-height: 1.6; }
-.workflow-guide__stats { display: flex; flex-wrap: wrap; gap: 8px; }
-.workflow-guide__stats span { padding: 7px 10px; border-radius: 8px; color: var(--app-ink-soft); background: rgba(255,255,255,.82); font-size: 11px; font-weight: 800; }
-.workflow-guide__issues { display: grid; gap: 8px; }
-.workflow-guide__issues div { display: grid; gap: 4px; padding: 10px 12px; border-left: 3px solid #d6a63e; background: #fffaf0; }
-.workflow-guide__issues strong { color: var(--app-ink); font-size: 11px; }
-.workflow-guide__issues span { color: var(--app-ink-soft); font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
-.workflow-guide > .solid-button { justify-self: start; }
-.form-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.form-list__item { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: #fff; font-size: 11px; }
-.form-list__item strong { color: var(--app-ink); font-size: 12px; }
-.form-list__item .form-list__code { color: #2e5984; font-size: 9px; font-weight: 900; letter-spacing: .06em; }
-.form-list__item small { color: var(--app-muted); }
-.document-workspace { display: grid; gap: 12px; margin-top: 16px; padding: 14px; border: 1px solid var(--app-line); border-radius: 14px; background: rgba(255,255,255,.55); }
-.document-workspace__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.document-workspace__heading div { display: grid; gap: 3px; }
-.document-workspace__heading strong { color: var(--app-ink); }
-.document-workspace__heading span { color: var(--app-muted); font-size: 11px; }
-.document-list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
-.document-list li { display: grid; grid-template-columns: minmax(0, 1fr); align-items: stretch; gap: 9px; min-width: 0; padding: 10px 11px; border-radius: 10px; background: rgba(247,249,252,.84); }
-.document-list li div { display: grid; gap: 2px; min-width: 0; }
-.document-list li strong { overflow: hidden; color: var(--app-ink); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.document-list li span { color: var(--app-muted); font-size: 10px; }
-.document-list__actions { display: flex !important; width: 100%; min-width: 0; align-items: center; flex-wrap: wrap; gap: 6px !important; }
-.document-list__actions .finding-action { margin-top: 0; white-space: nowrap; }
-.document-list__analysis-form { display: flex; min-width: 210px; flex: 1 1 240px; align-items: center; gap: 6px; color: var(--app-muted); font-size: 10px; font-weight: 800; }
-.document-list__analysis-form > span { flex: 0 0 auto; }
-.document-list__analysis-form select { width: 100%; min-width: 0; min-height: 36px; padding: 6px 8px; border: 1px solid var(--app-line); border-radius: 7px; color: var(--app-ink); background: #fff; font-size: 11px; }
-.document-list__manage { display: grid !important; grid-template-columns: auto minmax(0, 1fr) auto auto; flex: 1 1 100%; width: 100%; min-width: 0; align-items: center; gap: 6px !important; }
-.document-list__manage label { color: var(--app-muted); font-size: 10px; font-weight: 800; }
-.document-list__manage select { width: 100%; min-width: 0; min-height: 36px; padding: 6px 8px; border: 1px solid var(--app-line); border-radius: 7px; color: var(--app-ink); background: #fff; font-size: 11px; }
-.finding-action--danger { border-color: rgba(164,67,52,.28); color: #a44334; }
-.upload-form { display: grid; grid-template-columns: 180px minmax(0,1fr) auto; align-items: end; gap: 10px; }
-.upload-form label { display: grid; gap: 5px; color: var(--app-ink-soft); font-size: 11px; font-weight: 800; }
-.upload-form select,
-.upload-form input { min-height: 44px; padding: 8px 10px; border: 1px solid var(--app-line); border-radius: 9px; color: var(--app-ink); background: rgba(255,255,255,.82); }
-.supplement-panel { border-color: rgba(214,166,62,.32); background: rgba(255,250,240,.88); }
-.supplement-panel__intro { margin: -4px 0 14px; color: var(--app-ink-soft); font-size: 12px; line-height: 1.65; }
-.supplement-panel__list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.supplement-panel__list li { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 12px; border: 1px solid rgba(214,166,62,.2); border-radius: 9px; background: rgba(255,255,255,.76); }
-.supplement-panel__list li > div { display: grid; gap: 4px; min-width: 0; }
-.supplement-panel__list strong { color: var(--app-ink); font-size: 12px; }
-.supplement-panel__list span { color: var(--app-ink-soft); font-size: 12px; line-height: 1.55; }
-.supplement-panel__list small { color: var(--app-muted); font-size: 10px; }
-.candidate-workspace { border-color: rgba(46,89,132,.18); }
-.candidate-workspace__summary { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.candidate-list { display: grid; gap: 10px; }
-.candidate-card { display: grid; gap: 12px; padding: 15px; border: 1px solid var(--app-line); border-radius: 11px; background: #fbfcfe; }
-.candidate-card__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-.candidate-card__heading > div { display: grid; gap: 4px; min-width: 0; }
-.candidate-card__heading strong { color: var(--app-ink); font-size: 13px; }
-.candidate-card__heading span, .candidate-card__heading small { color: var(--app-muted); font-size: 10px; }
-.candidate-card__source { margin: 0; padding: 10px 12px; border-left: 3px solid rgba(46,89,132,.35); color: var(--app-ink-soft); background: #f3f7fb; font-size: 12px; line-height: 1.65; white-space: pre-wrap; }
-.candidate-card__source-summary { display:grid; gap:6px; }
-.candidate-card__source-summary > span { color:var(--app-muted); font-size:10px; font-weight:850; }
-.candidate-card__value { display: grid; gap: 5px; color: var(--app-ink-soft); font-size: 11px; font-weight: 800; }
-.candidate-card__value input { width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink); background: #fff; }
-.candidate-card__actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.candidate-card__actions button { min-height: 38px; padding: 7px 12px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: #fff; cursor: pointer; font-size: 11px; font-weight: 900; }
-.candidate-card__actions button.is-selected { border-color: rgba(59,129,102,.4); color: var(--app-green); background: rgba(59,129,102,.08); }
-.candidate-card__actions button.is-reject { border-color: rgba(200,91,67,.35); color: var(--app-accent-deep); background: rgba(200,91,67,.07); }
-.candidate-card__actions button.candidate-card__restore { margin-left: auto; border-style: dashed; color: #52657a; background: #f7f9fb; }
-.candidate-submit { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 4px; }
-.candidate-submit > span { color: var(--app-muted); font-size: 11px; }
-.candidate-history { display: grid; gap: 9px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--app-line); }
-.candidate-history__heading { display: grid; gap: 3px; }
-.candidate-history__heading strong { color: var(--app-ink); font-size: 12px; }
-.candidate-history__heading span { color: var(--app-muted); font-size: 11px; }
-.candidate-history ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
-.candidate-history li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 11px; border-radius: 9px; background: rgba(247,249,252,.84); }
-.candidate-history li > div { display: grid; gap: 3px; min-width: 0; }
-.candidate-history li strong { color: var(--app-ink); font-size: 11px; }
-.candidate-history li span { overflow-wrap: anywhere; color: var(--app-muted); font-size: 10px; }
-.manual-fields { border-color: rgba(59,129,102,.2); }
-.manual-fields__intro { margin: -4px 0 14px; color: var(--app-ink-soft); font-size: 12px; line-height: 1.65; }.manual-fields__selector { display:grid; gap:6px; max-width:390px; margin:0 0 14px; color:var(--app-ink-soft); font-size:11px; font-weight:800; }.manual-fields__selector select { min-height:42px; padding:8px 10px; border:1px solid var(--app-line); border-radius:8px; color:var(--app-ink); background:#fff; font:inherit; }
-.manual-fields__grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; }
-.manual-fields__grid label { display: grid; gap: 5px; color: var(--app-ink-soft); font-size: 11px; font-weight: 800; }
-.manual-fields__grid input { min-height: 42px; padding: 8px 10px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink); background: #fff; }
-.manual-fields__relation { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 13px; border: 1px solid rgba(46,89,132,.2); border-radius: 9px; background: #f6faff; }
-.manual-fields__relation > div { display: grid; gap: 4px; min-width: 0; }
-.manual-fields__relation strong { color: var(--app-ink); font-size: 12px; }
-.manual-fields__relation span, .manual-fields__hint { color: var(--app-muted); font-size: 10px; font-weight: 500; line-height: 1.55; }
-.manual-fields__error { color: #a44334; font-size: 10px; line-height: 1.5; }
-.land-context__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-.land-context__panel { display: grid; align-content: start; gap: 12px; padding: 15px; border: 1px solid var(--app-line); border-radius: 11px; background: #fbfcfe; }
-.land-context__panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
-.land-context__panel-heading strong { color: var(--app-ink); font-size: 13px; }
-.land-context__panel-heading span { color: var(--app-muted); font-size: 10px; text-align: right; }
-.land-context__help { margin: -4px 0 0; color: var(--app-ink-soft); font-size: 10px; line-height: 1.6; }
-.land-context__records { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
-.land-context__records li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border-radius: 8px; background: #fff; }
-.land-context__records li > div { display: grid; gap: 3px; min-width: 0; }
-.land-context__records strong { color: var(--app-ink); font-size: 12px; }
-.land-context__records span { color: var(--app-muted); font-size: 10px; }
-.land-context__records button { min-height: 34px; padding: 5px 9px; border: 1px solid var(--app-line); border-radius: 7px; color: var(--app-accent-deep); background: #fff; cursor: pointer; font-size: 10px; font-weight: 900; }
-.land-context__record-actions { display: flex !important; flex: 0 0 auto; align-items: center; gap: 6px !important; }
-.land-context__record-actions .benchmark-current { padding: 5px 8px; border-radius: 999px; color: var(--app-green); background: rgba(59,129,102,.09); font-size: 9px; font-weight: 900; white-space: nowrap; }
-.land-context__form { display: grid; gap: 10px; padding-top: 11px; border-top: 1px solid var(--app-line); }
-.land-context__form h3 { margin: 0; color: var(--app-ink); font-size: 13px; }
-.land-context__fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
-.land-context__fields label { display: grid; gap: 5px; color: var(--app-ink-soft); font-size: 10px; font-weight: 800; }
-.land-context__fields input, .land-context__fields select { width: 100%; min-height: 42px; padding: 8px 9px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink); background: #fff; }
-.land-context__form-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.setup-required { display: grid; gap: 10px; border-color: rgba(214,166,62,.28); background: rgba(255,250,240,.78); }
-.setup-required h2 { margin: 0; color: var(--app-ink); }
-.setup-required p:last-child { margin: 0; color: var(--app-ink-soft); line-height: 1.7; }
-.summary-grid span, .official-value span, .calculation-result span, .report-result span { color: var(--app-muted); font-size: 11px; font-weight: 800; }
-.summary-grid strong { color: var(--app-ink); font-size: 14px; }
-.source-note { margin: 14px 0 0; color: var(--app-muted); font-size: 12px; }
-.official-value { align-items: center; margin-bottom: 20px; padding: 16px; border: 1px solid rgba(46, 89, 132, 0.18); border-radius: var(--app-radius-sm); background: #f5f8fc; }
-.official-value div { display: grid; gap: 6px; }
-.official-value strong { color: #244d73; font-family: var(--app-font-display); font-size: 24px; font-weight: 600; }
-.form-heading { align-items: center; margin-bottom: 12px; }
-.form-heading h3 { margin: 0; color: var(--app-ink); font-size: 16px; }
-.field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; min-width: 0; margin: 0; padding: 0; border: 0; }
-.field-grid:disabled { opacity: .68; }
-.field-grid label { display: grid; gap: 6px; color: var(--app-ink-soft); font-size: 12px; font-weight: 800; }
-.field-grid__wide { grid-column: 1 / -1; }
-.field-grid input, .field-grid select, .field-grid textarea { width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink); background: #fff; font: inherit; font-weight: 500; }
-.field-grid textarea { min-height: 72px; resize: vertical; }
-.field-grid input:focus, .field-grid select:focus, .field-grid textarea:focus { outline: 3px solid rgba(200, 91, 67, 0.18); border-color: var(--app-accent); }
-.action-row { justify-content: flex-end; margin-top: 18px; }
-.solid-button { min-height: 44px; padding: 10px 16px; border: 1px solid var(--app-line); border-radius: 9px; color: var(--app-ink-soft); background: var(--app-paper-strong); cursor: pointer; font-size: 13px; font-weight: 800; }
-.solid-button--primary { border-color: var(--app-accent); color: #fff; background: var(--app-accent); }
-.solid-button:disabled { cursor: not-allowed; opacity: 0.55; }
 .inline-notice, .inline-error { margin: 0; padding: 12px 14px; border-radius: var(--app-radius-sm); font-size: 13px; }
 .inline-notice { color: var(--app-green); background: rgba(59, 129, 102, 0.08); }
 .inline-error { color: #a44334; background: #fff0ed; }
-.validation-counts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
-.validation-counts span { padding: 8px 11px; border-radius: 8px; color: var(--app-ink-soft); background: #f5f7fb; font-size: 12px; font-weight: 800; }
-.finding-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.finding-list li { display: grid; gap: 4px; padding: 12px 14px; border-left: 4px solid #d6a63e; background: #fffaf0; color: var(--app-ink-soft); font-size: 13px; }
-.finding-list li[data-severity="ERROR"] { border-left-color: #c85b43; background: #fff3f0; }
-.finding-list strong { color: var(--app-ink); font-size: 12px; }
-.finding-list b { color: var(--app-ink); }
-.finding-action { justify-self: start; min-height: 36px; margin-top: 5px; padding: 6px 11px; border: 1px solid rgba(200,91,67,.26); border-radius: 8px; color: var(--app-accent-deep); background: #fff; cursor: pointer; font-size: 11px; font-weight: 900; }
-.correction-hints { display: grid; gap: 7px; margin-top: 14px; padding: 12px 14px; border: 1px solid rgba(214,166,62,.26); border-radius: var(--app-radius-sm); background: #fffaf0; }
-.correction-hints > strong { color: var(--app-ink); font-size: 12px; }
-.correction-hints ul { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: var(--app-ink-soft); font-size: 12px; }
-.empty-copy { margin: 0; color: var(--app-muted); font-size: 13px; }
-.calculation-result, .report-result { align-items: center; margin-top: 14px; padding: 14px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #fbfcfe; }
-.calculation-result strong, .report-result strong { margin-left: auto; color: var(--app-ink); font-size: 14px; }
-.calculation-result small, .report-result small { color: var(--app-muted); font-size: 11px; }
-.validation-results > .solid-button { margin-top: 18px; }
-
-.wizard-status {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 16px;
-  border: 1px solid #d9e4ef;
-  border-radius: 12px;
-  background: #f7fbff;
-}
-.wizard-status .workflow-guide__copy { min-width: 190px; }
-.wizard-status .workflow-guide__copy h2 { font-size: 17px; }
-.wizard-status .workflow-guide__stats { flex: 1 1 auto; }
-.wizard-status > .finding-action { flex: 0 0 auto; margin: 0; }
-
-.document-ai-process {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: stretch;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid #d9e4ef;
-  border-radius: 12px;
-  background: #f8fbfe;
-}
-.document-ai-process article {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  min-width: 0;
-  padding: 11px 12px;
-  border: 1px solid #e1e8ef;
-  border-radius: 10px;
-  background: #fff;
-}
-.document-ai-process article[data-state="attention"] { border-color: #ead7b0; background: #fffaf0; }
-.document-ai-process article[data-state="ready"] { border-color: #cfe0d6; background: #f5faf7; }
-.document-ai-process article > div { display: grid; gap: 4px; min-width: 0; }
-.document-ai-process strong { color: var(--app-ink); font-size: 12px; }
-.document-ai-process small { color: var(--app-muted); font-size: 10px; line-height: 1.55; }
-.document-ai-process__step {
-  display: grid;
-  width: 26px;
-  height: 26px;
-  flex: 0 0 26px;
-  place-items: center;
-  border-radius: 999px;
-  color: #fff;
-  background: #2e5984;
-  font-size: 11px;
-  font-weight: 900;
-}
-.document-ai-process__arrow { align-self: center; color: #708399; font-size: 17px; font-weight: 900; }
-
-.document-ai-grid {
-  display: grid;
-  grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
-  gap: 14px;
-  min-height: 460px;
-}
-.document-ai-grid__list { min-width: 0; }
-.document-list li { border: 1px solid transparent; }
-.document-list li.is-selected { border-color: rgba(46,89,132,.36); background: #eef5fc; }
-.document-list__identity small { width: fit-content; margin-top: 3px; padding: 3px 7px; border-radius: 999px; color: #52657a; background: #eef1f5; font-size: 9px; font-weight: 800; }
-.document-list__identity small[data-ai-state="pending"] { color: #925421; background: #fff0df; }
-.finding-action--primary { border-color: rgba(46,89,132,.34); color: #244d73; background: #edf4fb; }
-.document-preview { display: grid; grid-template-rows: auto minmax(340px, 1fr) auto; min-width: 0; overflow: hidden; border: 1px solid #d8e1eb; border-radius: 12px; background: #fff; }
-.document-preview__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; border-bottom: 1px solid #e1e7ee; background: #f8fafc; }
-.document-preview__heading > div { display: grid; gap: 2px; min-width: 0; }
-.document-preview__heading strong { color: var(--app-ink); font-size: 12px; }
-.document-preview__heading span { overflow: hidden; color: var(--app-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.document-preview__body { display: grid; min-height: 340px; place-items: center; overflow: hidden; background: #eef1f4; }
-.document-preview__body iframe { width: 100%; height: 100%; min-height: 460px; border: 0; background: #fff; }
-.document-preview__body img { display: block; max-width: 100%; max-height: 520px; object-fit: contain; }
-.document-preview__empty { display: grid; gap: 5px; max-width: 300px; padding: 26px; color: #6b798a; text-align: center; }
-.document-preview__empty strong { color: #34495f; font-size: 13px; }
-.document-preview__empty span, .document-preview__message { color: #6b798a; font-size: 11px; line-height: 1.6; }
-.document-preview__message { margin: 0; padding: 24px; text-align: center; }
-.document-preview__evidence { display: grid; gap: 6px; padding: 11px 13px; border-top: 1px solid #e1e7ee; background: #fff8ee; }
-.document-preview__evidence strong { color: #8a531e; font-size: 10px; }
-.document-preview__evidence blockquote { margin: 0; color: #3d4a58; font-size: 11px; line-height: 1.6; white-space: pre-wrap; }
-
-.candidate-card { cursor: default; transition: border-color 120ms ease, box-shadow 120ms ease; }
-.candidate-card.is-active { border-color: rgba(46,89,132,.4); box-shadow: 0 0 0 3px rgba(46,89,132,.08); }
-.candidate-card__source-link { justify-self: start; padding: 0; border: 0; color: #2e5984; background: transparent; cursor: pointer; font-size: 11px; font-weight: 850; text-decoration: underline; text-underline-offset: 3px; }
-
-.data-confirmation-nav { display: grid; gap: 14px; padding: 18px; border: 1px solid #dce5ef; border-radius: var(--app-radius-md); background: #f8fbfe; }
-.data-confirmation-nav__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
-.data-confirmation-nav__heading h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 22px; }
-.data-confirmation-nav__heading > div > span { display: block; margin-top: 4px; color: var(--app-muted); font-size: 11px; line-height: 1.55; }
-.data-subnav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-.data-subnav button { display: grid; min-height: 62px; gap: 4px; padding: 10px 12px; border: 1px solid #d9e2ec; border-radius: 10px; color: #4b5d70; background: #fff; cursor: pointer; text-align: left; }
-.data-subnav button.is-active { border-color: #2e5984; color: #244d73; background: #edf4fb; box-shadow: inset 0 0 0 1px rgba(46,89,132,.12); }
-.data-subnav strong { font-size: 11px; }
-.data-subnav small { color: #718094; font-size: 9px; }
-.data-overview { display: grid; gap: 8px; }
-.data-overview article { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 14px; border: 1px solid #dfe6ee; border-left-width: 4px; border-radius: 9px; background: #fff; }
-.data-overview article[data-state="ready"] { border-left-color: #4c9275; }
-.data-overview article[data-state="attention"] { border-left-color: #e09837; }
-.data-overview article > div { display: grid; gap: 3px; }
-.data-overview article > div:last-child { flex: 0 0 auto; grid-template-columns: auto auto; align-items: center; gap: 10px; }
-.data-overview strong { color: var(--app-ink); font-size: 12px; }
-.data-overview span, .data-overview small { color: var(--app-muted); font-size: 10px; line-height: 1.5; }
-.data-overview button { min-height: 34px; padding: 6px 10px; border: 1px solid #cbd8e5; border-radius: 8px; color: #244d73; background: #f5f9fd; cursor: pointer; font-size: 10px; font-weight: 900; }
-.data-complete-state { display: grid; gap: 5px; color: var(--app-muted); font-size: 12px; }
-.data-complete-state strong { color: var(--app-green); font-size: 14px; }
-
-.calculation-launch { display: grid; gap: 14px; border-color: rgba(46,89,132,.24); background: #f8fbff; }
-.calculation-launch__copy { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
-.calculation-launch__copy h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 24px; }
-.calculation-launch__copy p:last-child { max-width: 720px; margin: 7px 0 0; color: var(--app-ink-soft); font-size: 12px; line-height: 1.7; }
-.calculation-launch__readiness { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.calculation-launch__readiness span { padding: 6px 9px; border-radius: 999px; font-size: 10px; font-weight: 850; }
-.calculation-launch__readiness [data-state="ready"] { color: #2f745b; background: #edf8f3; }
-.calculation-launch__readiness [data-state="attention"] { color: #925421; background: #fff0df; }
-.calculation-launch__readiness [data-state="blocked"] { color: #9a4435; background: #fff0ed; }
-.calculation-launch__button { justify-self: start; min-width: 200px; }
-
-.wizard-footer { position: sticky; z-index: 8; bottom: 14px; display: grid; grid-template-columns: auto minmax(180px, 1fr) auto; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid rgba(190,204,220,.9); border-radius: 14px; background: rgba(255,255,255,.96); box-shadow: 0 14px 36px rgba(30,52,78,.16); backdrop-filter: blur(14px); }
-.wizard-footer button { min-height: 42px; padding: 8px 14px; border-radius: 9px; cursor: pointer; font-size: 11px; font-weight: 900; }
-.wizard-footer button:disabled { cursor: not-allowed; opacity: .48; }
-.wizard-footer__secondary { border: 1px solid #ccd7e3; color: #465a70; background: #fff; }
-.wizard-footer__primary { border: 1px solid #2e5984; color: #fff; background: #2e5984; }
-.wizard-footer__status { display: grid; gap: 2px; text-align: center; }
-.wizard-footer__status strong { color: var(--app-ink); font-size: 11px; }
-.wizard-footer__status span { color: var(--app-muted); font-size: 9px; }
-
-@media (max-width: 1100px) {
-  .document-ai-grid { grid-template-columns: 1fr; }
-  .document-preview__body iframe { min-height: 520px; }
-}
 
 @media (max-width: 760px) {
   .valuation-view { padding: 18px 16px 28px; }
-  .valuation-surface { padding: 16px; }
-  .case-context-strip { align-items:flex-start; flex-direction:column; }
-  .case-context-strip__meta { justify-content:flex-start; }
-  .surface-heading, .official-value, .calculation-result, .report-result { align-items: flex-start; flex-direction: column; }
-  .revision-panel__heading, .revision-panel__items li, .revision-panel__actions { align-items: stretch; flex-direction: column; }
-  .workflow-guide__copy { flex-direction: column; }
-  .workflow-guide > .solid-button { width: 100%; justify-self: stretch; }
-  .document-ai-process { grid-template-columns: 1fr; }
-  .document-ai-process__arrow { justify-self: center; transform: rotate(90deg); }
-  .summary-grid, .field-grid { grid-template-columns: 1fr; }
-  .upload-form { grid-template-columns: 1fr; }
-  .document-list li, .supplement-panel__list li, .candidate-card__heading, .candidate-submit, .candidate-history li { align-items: stretch; flex-direction: column; }
-  .document-list__actions { align-items: stretch; }
-  .document-list__analysis-form { min-width: 0; align-items: stretch; flex-direction: column; }
-  .document-list__manage { grid-template-columns: 1fr; align-items: stretch; }
-  .document-preview__heading, .data-confirmation-nav__heading, .calculation-launch__copy { align-items: stretch; flex-direction: column; }
-  .data-subnav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .data-overview article { align-items: stretch; flex-direction: column; }
-  .data-overview article > div:last-child { grid-template-columns: 1fr auto; }
-  .wizard-status { align-items: stretch; flex-direction: column; }
-  .wizard-footer { bottom: 8px; grid-template-columns: 1fr 1fr; }
-  .wizard-footer__status { grid-column: 1 / -1; grid-row: 1; }
-  .candidate-workspace__summary { justify-content: flex-start; }
-  .manual-fields__grid { grid-template-columns: 1fr; }
-  .land-context__grid, .land-context__fields { grid-template-columns: 1fr; }
-  .field-grid__wide { grid-column: auto; }
-  .form-heading, .action-row { align-items: stretch; flex-direction: column; }
-  .solid-button { width: 100%; }
-  .calculation-result strong, .report-result strong { margin-left: 0; }
+  .valuation-view :deep(.case-workspace-header) { margin: -18px -16px 0; }
 }
 </style>

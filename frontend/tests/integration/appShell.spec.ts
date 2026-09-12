@@ -10,6 +10,7 @@ import UnauthorizedView from '../../src/modules/auth/views/UnauthorizedView.vue'
 import type { AuthUser } from '../../src/modules/auth/auth.types'
 import { useAuthStore } from '../../src/stores/auth.store'
 import { tokenService } from '../../src/api/http'
+import { assistantApi } from '../../src/modules/assistant/assistant.api'
 
 const appraiser: AuthUser = {
   id: 'user-appraiser',
@@ -47,7 +48,7 @@ function shellRouter() {
       { path: '/app/valuation/dashboard', component: { template: '<div />' } },
       { path: '/app/review/dashboard', component: { template: '<div />' } },
       { path: '/app/history/search', component: { template: '<div />' } },
-      { path: '/app/assistant', component: { template: '<div />' } },
+      { path: '/app/assistant', name: 'assistant', component: { template: '<div />' } },
       { path: '/app/profile', component: { template: '<div />' } },
     ],
   })
@@ -55,19 +56,6 @@ function shellRouter() {
 
 function setUser(user: AuthUser): void {
   useAuthStore().user = user
-}
-
-function setMobileViewport(): void {
-  vi.spyOn(window, 'matchMedia').mockReturnValue({
-    matches: false,
-    media: '(min-width: 981px)',
-    onchange: null,
-    addListener: vi.fn(),
-    removeListener: vi.fn(),
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  } as unknown as MediaQueryList)
 }
 
 describe('shared application shell', () => {
@@ -114,7 +102,8 @@ describe('shared application shell', () => {
     await router.push('/')
     setUser(appraiser)
     const appraiserWrapper = mount(AppHeader, { global: { plugins: [router] } })
-    expect(appraiserWrapper.get('[data-testid="case-search"]')).toBeTruthy()
+    expect(appraiserWrapper.get('[data-testid="case-search-trigger"]')).toBeTruthy()
+    expect(appraiserWrapper.get('[data-testid="history-shortcut"]').attributes('aria-label')).toBe('案件紀錄')
     const assistantShortcut = appraiserWrapper.get('[data-testid="assistant-shortcut"]')
     expect(assistantShortcut.attributes('aria-controls')).toBe('global-assistant-drawer')
     expect(assistantShortcut.attributes('aria-expanded')).toBe('false')
@@ -124,31 +113,26 @@ describe('shared application shell', () => {
     appraiserWrapper.unmount()
     setUser(reviewer)
     const reviewerWrapper = mount(AppHeader, { global: { plugins: [router] } })
-    expect(reviewerWrapper.get('[data-testid="case-search"]')).toBeTruthy()
+    expect(reviewerWrapper.get('[data-testid="case-search-trigger"]')).toBeTruthy()
+    expect(reviewerWrapper.get('[data-testid="history-shortcut"]').exists()).toBe(true)
     expect(reviewerWrapper.find('[data-testid="assistant-shortcut"]').exists()).toBe(false)
   })
 
-  it('switches Demo roles from the user menu and lands on the selected workspace', async () => {
+  it('keeps Demo account identity visible without exposing a subsystem role switcher', async () => {
     const router = shellRouter()
     await router.push('/app/valuation/dashboard')
     setUser(appraiser)
-    const authStore = useAuthStore()
-    vi.spyOn(authStore, 'switchDemoRole').mockImplementation(async (role) => {
-      authStore.user = role === 'REVIEWER' ? reviewer : role === 'INSPECTOR' ? inspector : appraiser
-    })
 
     const wrapper = mount(AppHeader, { global: { plugins: [router] } })
     expect(wrapper.get('[data-testid="demo-mode-badge"]').text()).toBe('示範')
+    expect(wrapper.get('[data-testid="demo-role-stage"]').text()).toBe('估價人員')
     await wrapper.get('.app-header__user-trigger').trigger('click')
 
-    expect(wrapper.get('[data-testid="demo-switch-appraiser"]').attributes('disabled')).toBeDefined()
-    await wrapper.get('[data-testid="demo-switch-reviewer"]').trigger('click')
-    await flushPromises()
-
-    expect(authStore.switchDemoRole).toHaveBeenCalledWith('REVIEWER')
-    expect(router.currentRoute.value.path).toBe('/app/review/dashboard')
-    expect(authStore.roles).toEqual(['REVIEWER'])
-    expect(wrapper.find('.app-header__user-menu').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="demo-switch-appraiser"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="demo-switch-reviewer"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="demo-switch-inspector"]').exists()).toBe(false)
+    expect(wrapper.get('.app-header__user-menu').text()).toContain('示範估價人員')
+    expect(router.currentRoute.value.path).toBe('/app/valuation/dashboard')
   })
 
   it('keeps case search interactive on mobile with an accessible popover', async () => {
@@ -190,7 +174,7 @@ describe('shared application shell', () => {
     document.body.innerHTML = ''
   })
 
-  it('provides an accessible navigation frame and a named main region', async () => {
+  it('provides an accessible icon toolbar and a named main region without a persistent sidebar', async () => {
     const router = shellRouter()
     await router.push('/')
     setUser(appraiser)
@@ -200,12 +184,15 @@ describe('shared application shell', () => {
     })
 
     expect(wrapper.get('header').attributes('aria-label')).toBe('平台標頭')
-    expect(wrapper.get('nav').attributes('aria-label')).toBe('系統功能')
     expect(wrapper.get('main').attributes('aria-label')).toBe('主要內容')
-    expect(wrapper.get('button[aria-label="開啟功能選單"]').attributes('type')).toBe('button')
+    expect(wrapper.find('#app-sidebar').exists()).toBe(false)
+    expect(wrapper.find('button[aria-label="開啟功能選單"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="case-search-trigger"]').attributes('aria-label')).toBe('搜尋案件')
+    expect(wrapper.get('[data-testid="history-shortcut"]').attributes('aria-label')).toBe('案件紀錄')
+    expect(wrapper.get('[data-testid="assistant-shortcut"]').attributes('aria-label')).toBe('開啟 AI 助手')
   })
 
-  it('uses the verified role contract for History in the sidebar and search action', async () => {
+  it('uses the verified role contract for History in the header actions', async () => {
     const router = shellRouter()
     await router.push('/')
     setUser(inspector)
@@ -213,7 +200,8 @@ describe('shared application shell', () => {
     const inspectorHeader = mount(AppHeader, { global: { plugins: [router] } })
 
     expect(inspectorSidebar.text()).toContain('案件歷程')
-    expect(inspectorHeader.find('[data-testid="case-search"]').exists()).toBe(true)
+    expect(inspectorHeader.find('[data-testid="case-search-trigger"]').exists()).toBe(true)
+    expect(inspectorHeader.find('[data-testid="history-shortcut"]').exists()).toBe(true)
 
     inspectorSidebar.unmount()
     inspectorHeader.unmount()
@@ -222,11 +210,11 @@ describe('shared application shell', () => {
     const unauthorizedHeader = mount(AppHeader, { global: { plugins: [router] } })
 
     expect(unauthorizedSidebar.text()).not.toContain('案件歷程')
-    expect(unauthorizedHeader.find('[data-testid="case-search"]').exists()).toBe(false)
+    expect(unauthorizedHeader.find('[data-testid="case-search-trigger"]').exists()).toBe(false)
+    expect(unauthorizedHeader.find('[data-testid="history-shortcut"]').exists()).toBe(false)
   })
 
-  it('exposes a mobile drawer, traps focus, closes on Escape, and restores trigger focus', async () => {
-    setMobileViewport()
+  it('keeps the compact header actions available without restoring the removed sidebar', async () => {
     const router = shellRouter()
     await router.push('/')
     setUser(appraiser)
@@ -237,36 +225,85 @@ describe('shared application shell', () => {
     })
     await flushPromises()
 
-    const trigger = wrapper.get('button[aria-label="開啟功能選單"]')
-    expect(trigger.attributes('aria-expanded')).toBe('false')
-    expect(trigger.attributes('aria-controls')).toBe('app-sidebar')
-
-    await trigger.trigger('click')
-    await flushPromises()
-    const drawer = wrapper.get('#app-sidebar')
-    expect(trigger.attributes('aria-expanded')).toBe('true')
-    expect(drawer.attributes('role')).toBe('dialog')
-    expect(drawer.attributes('aria-modal')).toBe('true')
-    expect(drawer.get('nav').attributes('aria-label')).toBe('系統功能')
-
-    const closeButton = drawer.get('button[aria-label="關閉功能選單"]')
-    const links = drawer.findAll('a[href]')
-    expect(document.activeElement).toBe(closeButton.element)
-
-    links.at(-1)!.element.focus()
-    await drawer.trigger('keydown', { key: 'Tab' })
-    expect(document.activeElement).toBe(closeButton.element)
-
-    closeButton.element.focus()
-    await drawer.trigger('keydown', { key: 'Tab', shiftKey: true })
-    expect(document.activeElement).toBe(links.at(-1)!.element)
-
-    await drawer.trigger('keydown', { key: 'Escape' })
-    await flushPromises()
     expect(wrapper.find('#app-sidebar').exists()).toBe(false)
-    expect(trigger.attributes('aria-expanded')).toBe('false')
-    expect(document.activeElement).toBe(trigger.element)
+    expect(wrapper.find('button[aria-label="開啟功能選單"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="case-search-trigger"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="history-shortcut"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="assistant-shortcut"]').exists()).toBe(true)
     wrapper.unmount()
+  })
+
+  it('opens the AI assistant as a non-modal floating window over the workspace', async () => {
+    const router = shellRouter()
+    await router.push('/')
+    setUser(appraiser)
+    vi.spyOn(assistantApi, 'listKnowledgeConversations').mockResolvedValue([{
+      conversation_id: 'shell-conversation-1',
+      case_id: null,
+      review_id: null,
+      finding_id: null,
+      workspace: null,
+      title: '一般對話',
+      provider: 'demo',
+      model_id: 'demo-model',
+      status: 'ACTIVE',
+      created_at: '2026-09-12T02:00:00Z',
+      updated_at: '2026-09-12T03:00:00Z',
+    }])
+    vi.spyOn(assistantApi, 'getKnowledgeConversationMessages').mockResolvedValue([])
+    const wrapper = mount(AppLayout, {
+      attachTo: document.body,
+      global: { plugins: [router] },
+      slots: { default: '<button id="workspace-action">工作區操作</button>' },
+    })
+
+    await wrapper.get('[data-testid="assistant-shortcut"]').trigger('click')
+    await nextTick()
+
+    const floating = document.querySelector<HTMLElement>('[data-testid="assistant-floating-window"]')
+    expect(floating).not.toBeNull()
+    expect(floating?.getAttribute('aria-modal')).toBeNull()
+    expect(document.querySelector('.glass-drawer-backdrop')).toBeNull()
+    expect(document.querySelector('#workspace-action')).not.toBeNull()
+
+    wrapper.unmount()
+    document.body.innerHTML = ''
+  })
+
+  it('loads account conversation history without exposing a manual assistant mode switch', async () => {
+    const router = shellRouter()
+    await router.push('/')
+    setUser({ ...appraiser, permissions: [...appraiser.permissions, 'knowledge.read'] })
+    vi.spyOn(assistantApi, 'listKnowledgeConversations').mockResolvedValue([{
+      conversation_id: 'knowledge-conversation-1',
+      title: '土地徵收估價規定',
+      provider: 'demo',
+      model_id: 'demo-model',
+      status: 'ACTIVE',
+      created_at: '2026-09-12T02:00:00Z',
+      updated_at: '2026-09-12T03:00:00Z',
+    }])
+    vi.spyOn(assistantApi, 'getKnowledgeConversationMessages').mockResolvedValue([])
+
+    const wrapper = mount(AppLayout, {
+      attachTo: document.body,
+      global: { plugins: [router] },
+    })
+    await wrapper.get('[data-testid="assistant-shortcut"]').trigger('click')
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-testid="assistant-floating-window"]')?.textContent)
+        .toContain('依問題自動判斷資料來源')
+    })
+
+    expect(document.querySelector('[data-testid="assistant-mode-knowledge"]')).toBeNull()
+    expect(document.querySelector('[data-testid="assistant-mode-case"]')).toBeNull()
+    document.querySelector<HTMLButtonElement>('button[aria-label="歷史對話"]')?.click()
+    await vi.waitFor(() => {
+      expect(document.querySelector('#assistant-history-popover')?.textContent).toContain('土地徵收估價規定')
+    })
+
+    wrapper.unmount()
+    document.body.innerHTML = ''
   })
 
   it('gives an unknown role a logout action instead of a protected-route loop', async () => {

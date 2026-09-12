@@ -2,8 +2,12 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import DocumentTextPreview from '../../src/components/common/DocumentTextPreview.vue'
 import SpreadsheetPreview from '../../src/components/common/SpreadsheetPreview.vue'
+import ValuationFormalValidationPanel from '../../src/modules/valuation/components/ValuationFormalValidationPanel.vue'
 import ValuationIssueDrawer from '../../src/modules/valuation/components/ValuationIssueDrawer.vue'
+import ValuationReportArtifacts from '../../src/modules/valuation/components/ValuationReportArtifacts.vue'
+import ValuationReportPackageWorkspace from '../../src/modules/valuation/components/ValuationReportPackageWorkspace.vue'
 import ValuationStepNavigator from '../../src/modules/valuation/components/ValuationStepNavigator.vue'
+import ValuationSubmitReadiness from '../../src/modules/valuation/components/ValuationSubmitReadiness.vue'
 import ReviewActionBar from '../../src/modules/review/components/ReviewActionBar.vue'
 
 describe('SpreadsheetPreview', () => {
@@ -67,6 +71,143 @@ describe('ValuationIssueDrawer', () => {
     await wrapper.get('.issue-drawer__item > button').trigger('click')
 
     expect(wrapper.emitted('select')?.[0]).toEqual(['formal-validation'])
+  })
+})
+
+describe('ValuationSubmitReadiness', () => {
+  it('keeps the current submit action explicit and emits the selected target', async () => {
+    const steps = [
+      { key: 'report-pages', title: '確認完整查估書', detail: '已完成', target: 'report-pages', state: 'done' as const },
+      { key: 'formal-validation', title: '完成正式檢核', detail: '尚未執行', target: 'formal-validation', state: 'active' as const },
+      { key: 'formal-pdf', title: '產生完整送審 PDF', detail: '待檢核', target: 'formal-pdf', state: 'pending' as const },
+      { key: 'submission', title: '送出審查', detail: '待前置作業', target: 'submission', state: 'pending' as const },
+    ]
+    const wrapper = mount(ValuationSubmitReadiness, {
+      props: {
+        steps,
+        currentStep: steps[1],
+        completedStepCount: 1,
+        submitted: false,
+        readinessMessage: '請先執行正式檢核。',
+      },
+    })
+
+    expect(wrapper.get('[data-testid="submit-next-action"]').text()).toContain('完成正式檢核')
+    expect(wrapper.get('[data-testid="submit-readiness-steps"]').text()).toContain('完成 1 / 4')
+    await wrapper.get('[data-testid="submit-next-action"] button').trigger('click')
+
+    expect(wrapper.emitted('select')?.[0]).toEqual(['formal-validation'])
+  })
+})
+
+describe('ValuationReportPackageWorkspace', () => {
+  it('keeps three-page confirmation, calculation, and validation as explicit gated actions', async () => {
+    const wrapper = mount(ValuationReportPackageWorkspace, {
+      props: {
+        caseId: 'case-1',
+        reportId: 'report-1',
+        authoritativeF02: null,
+        editors: {},
+        activePageCode: 'S01',
+        editorsLoading: false,
+        editorSaving: null,
+        editorNotice: '',
+        confirmations: { s01: false, f02Rf: false, f02: false },
+        pagesConfirmed: false,
+        pageSaving: false,
+        pageCalculating: false,
+        pageValidating: false,
+        pageSaved: false,
+        pageCalculated: false,
+      },
+    })
+
+    expect(wrapper.get('[data-testid="report-package-draft-flow"]').text()).toContain('完整查估書三頁確認')
+    expect(wrapper.get('[data-testid="save-report-pages"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="run-formal-calculation"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="run-report-formal-validation"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-testid="open-report-page-editors"]').trigger('click')
+    expect(wrapper.emitted('loadEditors')).toHaveLength(1)
+
+    await wrapper.get('[data-testid="report-page-s01-confirm"]').setValue(true)
+    expect(wrapper.emitted('updateConfirmation')?.[0]).toEqual(['s01', true])
+  })
+})
+
+describe('ValuationFormalValidationPanel', () => {
+  it('requires explicit warning acknowledgement before formal PDF generation', async () => {
+    const wrapper = mount(ValuationFormalValidationPanel, {
+      props: {
+        validation: {
+          validationRunId: 'validation-1',
+          caseId: 'case-1',
+          reportId: 'report-1',
+          runStatus: 'COMPLETED',
+          passedCount: 8,
+          warningCount: 1,
+          failedCount: 0,
+          canGenerateFormalReport: true,
+          inputFingerprint: 'fingerprint-1',
+          findings: [
+            { code: 'F02_WARNING', severity: 'WARNING', message: '請確認比較資料。', fieldCode: 'comparison_targets' },
+          ],
+          completedAt: '2026-09-12T10:00:00+08:00',
+        },
+        formalWarningCodes: ['F02_WARNING'],
+        acknowledgedWarningCodes: [],
+        warningsAcknowledged: false,
+        formalValidating: false,
+        formalPdfGenerating: false,
+        submitting: false,
+        reportPackageReady: true,
+        authoritativeF02Status: 'CHECKED',
+      },
+    })
+
+    expect(wrapper.get('[data-testid="formal-validation-result"]').text()).toContain('警示 1')
+    expect(wrapper.get('[data-testid="generate-formal-pdf"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="formal-warning-F02_WARNING"]').setValue(true)
+
+    expect(wrapper.emitted('acknowledge')?.[0]).toEqual(['F02_WARNING', true])
+  })
+})
+
+describe('ValuationReportArtifacts', () => {
+  it('distinguishes the formal submission PDF from the traceability attachment', async () => {
+    const wrapper = mount(ValuationReportArtifacts, {
+      props: {
+        formalReport: {
+          documentId: 'formal-document',
+          caseId: 'case-1',
+          reportId: 'report-1',
+          validationRunId: 'validation-1',
+          filename: '完整送審.pdf',
+          mimeType: 'application/pdf',
+          versionNo: 2,
+          fileSizeBytes: 2048,
+          downloadPath: '/download/formal-document',
+        },
+        report: {
+          documentId: 'f03-document',
+          caseId: 'case-1',
+          formInstanceId: 'form-1',
+          validationRunId: 'validation-1',
+          calculationId: 'calculation-1',
+          filename: '比準地地價估計表.pdf',
+          mimeType: 'application/pdf',
+          versionNo: 1,
+          fileSizeBytes: 1024,
+        },
+        downloadingDocumentId: null,
+      },
+    })
+
+    expect(wrapper.text()).toContain('完整送審 PDF')
+    expect(wrapper.text()).toContain('正式送審仍以完整送審 PDF 為主')
+    await wrapper.get('[data-testid="download-formal-report"]').trigger('click')
+
+    expect(wrapper.emitted('download')?.[0]).toEqual(['formal-document', '完整送審.pdf'])
   })
 })
 

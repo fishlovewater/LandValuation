@@ -12,6 +12,7 @@ import type {
   CaseBootstrapResponseDto,
   CaseCreateDto,
   CaseResponseDto,
+  CaseWorkspaceUpdateDto,
   ComparisonSetupApplyDto,
   ComparisonSetupContextDto,
   ComparisonSetupCreateDto,
@@ -137,6 +138,17 @@ export const valuationApi = {
 
   async getCase(caseId: string): Promise<CaseResponseDto> {
     const response = await http.get<CaseResponseDto>(`/valuation/cases/${caseId}`)
+    return response.data
+  },
+
+  async updateCaseWorkspace(
+    caseId: string,
+    payload: CaseWorkspaceUpdateDto,
+  ): Promise<CaseResponseDto> {
+    const response = await http.patch<CaseResponseDto>(
+      `/valuation/cases/${caseId}/workspace`,
+      payload,
+    )
     return response.data
   },
 

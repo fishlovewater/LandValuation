@@ -87,6 +87,9 @@ export function mapCaseResponse(dto: CaseResponseDto): ValuationCaseModel {
     cityCode: dto.city_code,
     districtCode: dto.district_code,
     landUseType: dto.land_use_type,
+    basicInfoConfirmedAt: dto.basic_info_confirmed_at ?? null,
+    basicInfoConfirmedByUserId: dto.basic_info_confirmed_by_user_id ?? null,
+    lastWorkspaceStage: dto.last_workspace_stage ?? 'case',
     source: automaticSource,
   }
 }

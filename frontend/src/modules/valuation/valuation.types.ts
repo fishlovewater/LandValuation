@@ -15,6 +15,13 @@ export type CaseStatus =
 export type FormCode = 'F01' | 'F02' | 'F03' | 'F04' | 'S01' | 'F02-RF'
 export type FormStatus = 'DRAFT' | 'READY' | 'CHECKED' | 'FINAL' | 'VOID'
 export type FindingSeverity = 'ERROR' | 'WARNING'
+export type ValuationWorkspaceStage =
+  | 'case'
+  | 'documents'
+  | 'ai-review'
+  | 'data'
+  | 'calculation'
+  | 'report'
 
 export interface CaseCreateDto {
   case_no: string
@@ -40,10 +47,18 @@ export interface CaseResponseDto {
   district_code: string
   land_use_type: string | null
   case_status: CaseStatus
+  basic_info_confirmed_at?: string | null
+  basic_info_confirmed_by_user_id?: string | null
+  last_workspace_stage?: ValuationWorkspaceStage
   created_by_user_id: string | null
   updated_by_user_id: string | null
   created_at: string
   updated_at: string
+}
+
+export interface CaseWorkspaceUpdateDto {
+  confirm_basic_info?: boolean
+  last_workspace_stage?: ValuationWorkspaceStage
 }
 
 export interface ParcelResponseDto {
@@ -673,6 +688,9 @@ export interface ValuationCaseModel extends CaseSummary {
   cityCode: string
   districtCode: string
   landUseType: string | null
+  basicInfoConfirmedAt: string | null
+  basicInfoConfirmedByUserId: string | null
+  lastWorkspaceStage: ValuationWorkspaceStage
   source: SourceMarker
 }
 

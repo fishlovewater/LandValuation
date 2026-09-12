@@ -1,19 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { PhPlus as Plus } from '@phosphor-icons/vue'
 import CaseTable from '../../../components/common/CaseTable.vue'
-import PageHeader from '../../../components/common/PageHeader.vue'
 import GlassModal from '../../../components/glass/GlassModal.vue'
-import { liquidGlass as vLiquidGlass } from '../../../directives/liquidGlass'
 import { useAuthStore } from '../../../stores/auth.store'
-import { statusLabel } from '../../../utils/enumLabels'
-import { formatDateZhTw } from '../../../utils/formatters'
 import { safeValuationErrorMessage, valuationApi } from '../valuation.api'
 import { mapCaseResponse } from '../valuation.mappers'
+import { valuationStageRoute } from '../valuation.navigation'
 import { NEW_TAIPEI_CITY_CODE, NEW_TAIPEI_DISTRICTS } from '../newTaipei'
 import { resetValuationFlow } from '../valuation.types'
 import type { ValuationCaseModel } from '../valuation.types'
-import ValuationStepNavigator from '../components/ValuationStepNavigator.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -37,15 +34,6 @@ const createDraft = reactive({
   landUseType: '',
 })
 const casesWithDeadlineCount = computed(() => cases.value.filter((item) => Boolean(item.valuationDueDate)).length)
-const priorityCase = computed(() => {
-  if (!cases.value.length) return null
-  return [...cases.value].sort((left, right) => {
-    const leftDue = left.valuationDueDate ?? '9999-12-31'
-    const rightDue = right.valuationDueDate ?? '9999-12-31'
-    if (leftDue !== rightDue) return leftDue.localeCompare(rightDue)
-    return right.updatedAt.localeCompare(left.updatedAt)
-  })[0] ?? null
-})
 const landUseOptions = [
   { value: 'RESIDENTIAL', label: '住宅用地' },
   { value: 'COMMERCIAL', label: '商業用地' },
@@ -124,8 +112,8 @@ async function createCase(): Promise<void> {
     })
     createOpen.value = false
     resetCreateDraft()
-    notice.value = `案件 ${created.case_no} 已建立，可進入案件上傳來源文件與補齊估價資料。`
-    await loadCases()
+    resetValuationFlow()
+    await router.push(valuationStageRoute(created.case_id, 'case'))
   } catch (caught: unknown) {
     error.value = safeValuationErrorMessage(caught)
   } finally {
@@ -135,7 +123,9 @@ async function createCase(): Promise<void> {
 
 async function openCase(caseId: string): Promise<void> {
   resetValuationFlow()
-  await router.push({ name: 'valuation-prepare', params: { caseId } })
+  const row = cases.value.find((item) => item.caseId === caseId)
+  const stage = row?.basicInfoConfirmedAt ? row.lastWorkspaceStage : 'case'
+  await router.push(valuationStageRoute(caseId, stage))
 }
 
 onMounted(() => {
@@ -144,83 +134,34 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="valuation-view">
-    <ValuationStepNavigator :current-step="1" />
-    <PageHeader
-      eyebrow="估價作業"
-      title="估價作業"
-      description="建立或接續估價案件，依表單需求完成文件、欄位、計算、檢核與正式送審。"
-    >
-      <template #actions>
-        <button v-if="canCreate" class="solid-button solid-button--primary" type="button" data-testid="create-case" @click="createOpen = true">
-          ＋ 新增案件
-        </button>
-      </template>
-    </PageHeader>
-
-    <section class="dashboard-workflow" data-testid="valuation-dashboard-workflow" aria-labelledby="valuation-dashboard-workflow-title">
-      <div class="dashboard-workflow__heading">
-        <div>
-          <p class="valuation-eyebrow">作業流程</p>
-          <h2 id="valuation-dashboard-workflow-title">一個案件會依序完成這 5 個階段</h2>
-        </div>
-        <small>進入案件後，系統會保留目前進度，不需要一次把所有資料填完。</small>
+  <div class="valuation-dashboard">
+    <header class="valuation-dashboard__header" data-testid="valuation-dashboard-header">
+      <div>
+        <p class="valuation-eyebrow">估價作業</p>
+        <h1>估價案件</h1>
+        <p>建立新案件或接續既有案件。進入案件後，會顯示案件基本資料與五階段作業進度。</p>
       </div>
-      <ol>
-        <li><b>1</b><div><strong>建立案件</strong><span>建立案件基本資料，系統會準備後續估價工作環境。</span></div></li>
-        <li><b>2</b><div><strong>文件與 AI 辨識</strong><span>上傳來源文件，辨識後由人員確認候選值。</span></div></li>
-        <li><b>3</b><div><strong>資料確認</strong><span>確認宗地、比準地與查估必要欄位。</span></div></li>
-        <li><b>4</b><div><strong>計算與檢核</strong><span>資料齊全後執行正式計算與規則檢核。</span></div></li>
-        <li><b>5</b><div><strong>正式文件與送審</strong><span>確認完整查估書、產生完整送審 PDF，再送交審查。</span></div></li>
-      </ol>
-    </section>
+      <button v-if="canCreate" class="solid-button solid-button--primary" type="button" data-testid="create-case" @click="createOpen = true">
+        <Plus :size="17" weight="bold" aria-hidden="true" />
+        建立案件
+      </button>
+    </header>
+
+    <div v-if="cases.length" class="valuation-dashboard__summary" data-testid="valuation-dashboard-summary" aria-label="案件列表摘要">
+      <span>目前 {{ cases.length }} 件案件</span>
+      <span>{{ casesWithDeadlineCount }} 件已設定作業期限</span>
+      <span>預設依作業期限由近到遠排列</span>
+    </div>
 
     <p v-if="notice" class="dashboard-notice" role="status">{{ notice }}</p>
     <p v-if="error && cases.length" class="dashboard-error" role="alert">{{ error }}</p>
 
-    <section
-      v-if="cases.length"
-      class="dashboard-overview"
-      data-testid="valuation-dashboard-overview"
-      aria-label="估價案件工作摘要"
-    >
-      <article>
-        <span>目前案件</span>
-        <strong>{{ cases.length }} 件</strong>
-        <small>可從下方案件清單接續處理。</small>
-      </article>
-      <article>
-        <span>已設定作業期限</span>
-        <strong>{{ casesWithDeadlineCount }} 件</strong>
-        <small>案件清單預設依作業期限由近到遠排列。</small>
-      </article>
-      <article v-if="priorityCase" class="dashboard-overview__priority">
+    <section class="valuation-case-list" data-testid="valuation-case-list" aria-labelledby="valuation-case-list-title">
+      <div class="valuation-case-list__heading">
         <div>
-          <span>建議先處理</span>
-          <strong>{{ priorityCase.caseNo }}｜{{ priorityCase.name }}</strong>
-          <small>
-            {{ statusLabel(priorityCase.status) }} ·
-            {{ priorityCase.valuationDueDate ? `作業期限 ${formatDateZhTw(priorityCase.valuationDueDate)}` : '尚未設定作業期限' }}
-          </small>
+          <h2 id="valuation-case-list-title">案件列表</h2>
+          <p>選擇案件後會回到該案件目前的估價工作流程。</p>
         </div>
-        <button
-          class="case-action-button"
-          type="button"
-          data-testid="priority-case-open"
-          @click="openCase(priorityCase.caseId)"
-        >
-          繼續此案件
-        </button>
-      </article>
-    </section>
-
-    <section v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="valuation-case-list-title">
-      <div class="valuation-surface__heading">
-        <div>
-          <p class="valuation-eyebrow">案件與文件</p>
-          <h2 id="valuation-case-list-title">最近可處理案件</h2>
-        </div>
-        <span class="source-marker" data-source-kind="automatic">目前可處理案件</span>
       </div>
 
       <CaseTable
@@ -296,59 +237,96 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.valuation-view {
+.valuation-dashboard {
   display: grid;
-  gap: 18px;
-  padding: 24px 28px 34px;
+  gap: 16px;
+  padding: 28px 30px 36px;
 }
 
-.valuation-surface {
-  padding: 22px;
-  border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-md);
-  background: color-mix(in srgb, var(--app-paper-strong) 82%, transparent);
-  box-shadow: var(--app-shadow-soft);
+.valuation-dashboard__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #e1e7ee;
+}
+
+.valuation-dashboard__header > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.valuation-dashboard__header h1 {
+  margin: 0;
+  color: var(--app-ink);
+  font-family: var(--app-font-display);
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -.035em;
+}
+
+.valuation-dashboard__header p:last-child {
+  max-width: 720px;
+  margin: 0;
+  color: #687b8f;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.valuation-dashboard__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 18px;
+  padding: 3px 2px;
+  color: #6c7d90;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.valuation-dashboard__summary span + span::before {
+  content: '·';
+  margin-right: 18px;
+  color: #b0bbc6;
+}
+
+.valuation-case-list {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #dce4ed;
+  border-radius: 11px;
+  background: #fff;
+}
+
+.valuation-case-list__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 15px 18px;
+  border-bottom: 1px solid #e4e9ef;
+  background: #fafbfd;
+}
+
+.valuation-case-list__heading h2 {
+  margin: 0;
+  color: var(--app-ink);
+  font-size: 15px;
+  font-weight: 850;
+}
+
+.valuation-case-list__heading p {
+  margin: 4px 0 0;
+  color: #75869a;
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .dashboard-notice,
 .dashboard-error { margin: 0; padding: 12px 14px; border-radius: var(--app-radius-sm); font-size: 13px; }
 .dashboard-notice { color: var(--app-green); background: rgba(59, 129, 102, .09); }
 .dashboard-error { color: #a44334; background: rgba(255, 240, 237, .9); }
-
-.dashboard-workflow { display: grid; gap: 13px; padding: 18px 20px; border: 1px solid #dce5ef; border-radius: var(--app-radius-md); background: #f8fbfe; }
-.dashboard-workflow__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
-.dashboard-workflow__heading h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 20px; }
-.dashboard-workflow__heading > small { max-width: 420px; color: var(--app-muted); font-size: 10px; line-height: 1.6; text-align: right; }
-.dashboard-workflow ol { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
-.dashboard-workflow li { display: grid; grid-template-columns: auto minmax(0, 1fr); align-content: start; gap: 8px; min-width: 0; padding: 11px; border: 1px solid #dfe6ee; border-radius: 10px; background: #fff; }
-.dashboard-workflow li b { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 999px; color: #fff; background: #2e5984; font-size: 10px; }
-.dashboard-workflow li div { display: grid; gap: 3px; min-width: 0; }
-.dashboard-workflow li strong { color: var(--app-ink); font-size: 11px; }
-.dashboard-workflow li span { color: var(--app-muted); font-size: 9px; line-height: 1.5; }
-
-.dashboard-overview {
-  display: grid;
-  grid-template-columns: minmax(150px, .7fr) minmax(180px, .8fr) minmax(320px, 1.5fr);
-  gap: 10px;
-}
-.dashboard-overview article {
-  display: grid;
-  align-content: center;
-  gap: 4px;
-  min-width: 0;
-  padding: 15px 16px;
-  border: 1px solid var(--app-line);
-  border-radius: var(--app-radius-sm);
-  background: #f9fbfd;
-}
-.dashboard-overview article > span,
-.dashboard-overview article small { color: var(--app-muted); font-size: 10px; line-height: 1.5; }
-.dashboard-overview article > span { font-weight: 900; letter-spacing: .08em; }
-.dashboard-overview article > strong { color: var(--app-ink); font-size: 18px; line-height: 1.35; }
-.dashboard-overview__priority { grid-template-columns: minmax(0, 1fr) auto; align-items: center; border-color: rgba(46, 89, 132, .2) !important; background: #f5f9fd !important; }
-.dashboard-overview__priority > div { display: grid; gap: 4px; min-width: 0; }
-.dashboard-overview__priority strong { overflow-wrap: anywhere; color: var(--app-ink); font-size: 13px; }
-.dashboard-overview__priority .case-action-button { align-self: center; }
 
 .create-case-form { display: grid; width: 100%; min-width: 0; gap: 18px; }
 :deep(.valuation-create-modal.lg-modal__panel) { width: min(860px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
@@ -364,46 +342,12 @@ onMounted(() => {
 .create-case-grid select:focus { outline: 3px solid rgba(200, 91, 67, .16); border-color: var(--app-accent); }
 .create-case-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
-.valuation-surface__heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-}
-
-.valuation-surface__heading {
-  margin-bottom: 16px;
-}
-
-.valuation-surface h2 {
-  margin: 0;
-  color: var(--app-ink);
-  font-family: var(--app-font-display);
-  font-size: 24px;
-  font-weight: 600;
-  letter-spacing: -0.04em;
-}
-
 .valuation-eyebrow {
   margin: 0 0 6px;
   color: var(--app-accent-deep);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.12em;
-}
-
-.source-marker {
-  display: inline-flex;
-  min-height: 30px;
-  align-items: center;
-  padding: 5px 10px;
-  border: 1px solid rgba(59, 129, 102, 0.24);
-  border-radius: var(--app-radius-pill);
-  color: var(--app-green);
-  background: rgba(59, 129, 102, 0.08);
-  font-size: 11px;
-  font-weight: 800;
-  white-space: nowrap;
 }
 
 .case-action-button { min-height: 36px; padding: 7px 12px; border: 1px solid #2e5984; border-radius: 8px; color: #fff; background: #2e5984; cursor: pointer; font-size: 11px; font-weight: 900; white-space: nowrap; }
@@ -422,6 +366,10 @@ onMounted(() => {
 }
 
 .solid-button--primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   border-color: var(--app-accent);
   color: #fff;
   background: var(--app-accent);
@@ -433,25 +381,21 @@ onMounted(() => {
 }
 
 @media (max-width: 640px) {
-  .valuation-view {
+  .valuation-dashboard {
     padding: 18px 16px 28px;
   }
 
-  .valuation-surface {
-    padding: 16px;
-  }
-
-  .dashboard-overview { grid-template-columns: 1fr; }
-  .dashboard-overview__priority { grid-template-columns: 1fr; }
-  .dashboard-overview__priority .case-action-button { width: 100%; margin-top: 6px; }
-  .dashboard-workflow__heading { flex-direction: column; }
-  .dashboard-workflow__heading > small { text-align: left; }
-  .dashboard-workflow ol { grid-template-columns: 1fr; }
-
-  .valuation-surface__heading {
-    align-items: flex-start;
+  .valuation-dashboard__header {
+    align-items: stretch;
     flex-direction: column;
   }
+
+  .valuation-dashboard__summary {
+    display: grid;
+    gap: 4px;
+  }
+
+  .valuation-dashboard__summary span + span::before { content: none; }
 
   .solid-button {
     width: 100%;

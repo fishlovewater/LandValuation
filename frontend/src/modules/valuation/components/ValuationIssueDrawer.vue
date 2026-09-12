@@ -1,5 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import {
+  PhArrowRight as ArrowRight,
+  PhCheckCircle as CheckCircle,
+  PhWarningCircle as WarningCircle,
+} from '@phosphor-icons/vue'
 
 export interface ValuationIssueItem {
   id: string
@@ -32,9 +37,13 @@ function selectIssue(target: string): void {
     aria-labelledby="valuation-issue-title"
   >
     <header class="issue-drawer__heading">
-      <div>
+      <div class="issue-drawer__title">
+        <CheckCircle v-if="count === 0" :size="20" weight="duotone" aria-hidden="true" />
+        <WarningCircle v-else :size="20" weight="duotone" aria-hidden="true" />
+        <div>
         <span class="issue-drawer__eyebrow">作業檢查</span>
         <h2 id="valuation-issue-title">{{ count ? `待處理事項 ${count} 項` : '目前流程已完成' }}</h2>
+        </div>
       </div>
       <span class="issue-drawer__status" :class="{ 'is-complete': count === 0 }">
         <span class="issue-drawer__status-dot" aria-hidden="true" />
@@ -49,7 +58,10 @@ function selectIssue(target: string): void {
           <strong>{{ item.title }}</strong>
           <p>{{ item.detail }}</p>
         </div>
-        <button type="button" @click="selectIssue(item.target)">前往修正</button>
+        <button type="button" @click="selectIssue(item.target)">
+          <span>前往修正</span>
+          <ArrowRight :size="14" weight="bold" aria-hidden="true" />
+        </button>
       </article>
     </div>
     <div v-else class="issue-drawer__empty">
@@ -60,9 +72,12 @@ function selectIssue(target: string): void {
 </template>
 
 <style scoped>
-.issue-drawer { display:grid; gap:12px; margin:12px 28px 0; padding:16px; border:1px solid #e4c38d; border-radius:12px; background:#fffaf2; box-shadow:var(--app-shadow-soft); }
+.issue-drawer { display:grid; gap:12px; padding:16px; border:1px solid #e4c38d; border-radius:12px; background:#fffaf2; }
 .issue-drawer.is-complete { border-color:#b6d7c8; background:#f4faf7; }
 .issue-drawer__heading { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+.issue-drawer__title { display:flex; align-items:flex-start; gap:9px; color:#8b5d19; }
+.issue-drawer.is-complete .issue-drawer__title { color:#2f745b; }
+.issue-drawer__title > div { display:grid; gap:0; }
 .issue-drawer__eyebrow { color:var(--app-primary); font-size:9px; font-weight:900; letter-spacing:.15em; }
 .issue-drawer__heading h2 { margin:4px 0 0; color:var(--app-ink); font-size:18px; }
 .issue-drawer__status { display:inline-flex; align-items:center; gap:7px; min-height:32px; padding:0 10px; border:1px solid #e4c38d; border-radius:999px; color:#73400e; background:#fff; font-size:10px; font-weight:900; white-space:nowrap; }
@@ -77,11 +92,10 @@ function selectIssue(target: string): void {
 .issue-drawer__item.is-pending .issue-drawer__severity { background:var(--app-primary); }
 .issue-drawer__item strong { color:var(--app-ink); font-size:12px; }
 .issue-drawer__item p { margin:4px 0 0; color:var(--app-muted); font-size:11px; line-height:1.55; }
-.issue-drawer__item > button { min-height:36px; padding:0 10px; border:1px solid var(--app-primary); border-radius:8px; color:var(--app-primary-deep); background:var(--app-primary-soft); cursor:pointer; font-size:11px; font-weight:900; }
+.issue-drawer__item > button { display:inline-flex; min-height:36px; align-items:center; justify-content:center; gap:6px; padding:0 10px; border:1px solid var(--app-primary); border-radius:8px; color:var(--app-primary-deep); background:var(--app-primary-soft); cursor:pointer; font-size:11px; font-weight:900; }
 .issue-drawer__empty { align-self:start; padding:14px; border:1px dashed #a7c7b9; border-radius:10px; color:#205f49; background:#fff; text-align:left; }
 .issue-drawer__empty p { margin:6px 0 0; color:#587366; font-size:11px; line-height:1.6; }
 @media (max-width:640px) {
-  .issue-drawer { margin-inline:14px; }
   .issue-drawer__heading { flex-direction:column; }
   .issue-drawer__item { grid-template-columns:10px minmax(0,1fr); }
   .issue-drawer__item > button { grid-column:2; justify-self:start; }

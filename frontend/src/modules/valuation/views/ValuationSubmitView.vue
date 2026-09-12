@@ -1,12 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
+import {
+  PhArrowLeft as ArrowLeft,
+  PhPaperPlaneTilt as PaperPlaneTilt,
+} from '@phosphor-icons/vue'
 import ErrorState from '../../../components/common/ErrorState.vue'
 import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
-import PageHeader from '../../../components/common/PageHeader.vue'
-import { liquidGlass as vLiquidGlass } from '../../../directives/liquidGlass'
 import { statusLabel } from '../../../utils/enumLabels'
 import { formatDateZhTw } from '../../../utils/formatters'
+import { newTaipeiDistrictName } from '../newTaipei'
+import { valuationStageRoute } from '../valuation.navigation'
 import {
   createValuationRequestId,
   isDefinitiveValuationError,
@@ -29,10 +33,15 @@ import {
   type ReportPageCode,
   type ReportPageResponseDto,
 } from '../valuation.types'
-import ComparisonSetupPanel from '../components/ComparisonSetupPanel.vue'
-import ReportPageEditor from '../components/ReportPageEditor.vue'
+import ValuationCaseWorkspaceHeader, { type ValuationWorkspaceStage } from '../components/ValuationCaseWorkspaceHeader.vue'
+import ValuationFormalValidationPanel from '../components/ValuationFormalValidationPanel.vue'
 import ValuationIssueDrawer from '../components/ValuationIssueDrawer.vue'
-import ValuationStepNavigator from '../components/ValuationStepNavigator.vue'
+import ValuationReportArtifacts from '../components/ValuationReportArtifacts.vue'
+import ValuationReportPackageWorkspace from '../components/ValuationReportPackageWorkspace.vue'
+import ValuationSubmitReadiness, {
+  type SubmitReadinessItem,
+  type SubmitReadinessState,
+} from '../components/ValuationSubmitReadiness.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -59,7 +68,6 @@ const reportPageEditorSaving = ref<ReportPageCode | null>(null)
 const activeReportPageCode = ref<ReportPageCode>('S01')
 const editorNotice = ref('')
 const downloadingDocumentId = ref<string | null>(null)
-const REPORT_PAGE_CODES: readonly ReportPageCode[] = ['S01', 'F02-RF', 'F02']
 let activeCaseToken = 0
 
 const caseId = computed(() => String(route.params.caseId ?? ''))
@@ -102,7 +110,6 @@ const formalOutputReady = computed(() => {
       authoritativeF02.outputDocumentId === formalReport.documentId,
   )
 })
-const currentStep = computed<5 | 6>(() => formalOutputReady.value || flow.submission ? 6 : 5)
 const valuationOutputReady = computed(() => Boolean(
   !flow.validation || (flow.validation.canGenerateReport && flow.report),
 ))
@@ -123,7 +130,6 @@ const reportPagesConfirmed = computed(() => {
   const value = reportPageConfirmations.value
   return value.s01 && value.f02Rf && value.f02
 })
-const activeReportPage = computed(() => reportPageEditors.value[activeReportPageCode.value] ?? null)
 const submitIssues = computed(() => {
   if (flow.submission) return []
   const items: Array<{ id: string; title: string; detail: string; target: string; severity: 'error' | 'warning' | 'pending' }> = []
@@ -159,14 +165,7 @@ const readinessMessage = computed(() => {
   if (!formalOutputReady.value) return '正式 PDF 或 F02 最終版本尚未完成，暫時無法送審。'
   return '完整送審 PDF 已準備完成，可以送審。'
 })
-type SubmitReadinessState = 'done' | 'active' | 'pending' | 'blocked'
-const submitReadinessSteps = computed<Array<{
-  key: string
-  title: string
-  detail: string
-  target: string
-  state: SubmitReadinessState
-}>>(() => {
+const submitReadinessSteps = computed<SubmitReadinessItem[]>(() => {
   const formalValidation = flow.formalValidation
   const validationState: SubmitReadinessState = !formalValidation
     ? (flow.authoritativeF02 ? 'active' : 'pending')
@@ -224,21 +223,43 @@ const submitReadinessSteps = computed<Array<{
 })
 const completedSubmitStepCount = computed(() => submitReadinessSteps.value.filter((item) => item.state === 'done').length)
 const currentSubmitStep = computed(() => submitReadinessSteps.value.find((item) => item.state !== 'done') ?? null)
-
-function submitReadinessStateLabel(state: SubmitReadinessState): string {
-  return ({ done: '已完成', active: '下一步', pending: '待前置作業', blocked: '需修正' } as Record<SubmitReadinessState, string>)[state]
-}
+const submitProgressPercent = computed(() => Math.min(100, 80 + completedSubmitStepCount.value * 5))
+const submitWorkspaceIssueCounts = computed(() => ({
+  documents: 0,
+  'ai-review': 0,
+  data: 0,
+  calculation: 0,
+  report: submitIssues.value.length,
+}))
 
 function reportPageLabel(code: ReportPageCode): string {
   return ({ S01: '勘查資料（S01）', 'F02-RF': '影響因素（F02-RF）', F02: '比較法資料（F02）' } as Record<ReportPageCode, string>)[code]
 }
 
-function formalFieldLabel(code: string | null): string {
-  if (!code) return ''
+function formalEditorFieldLabel(code: string): string {
   const labels: Readonly<Record<string, string>> = {
-    benchmark_land_id: '比準地', comparison_analysis_id: '比較分析', rule_version_id: '正式計算規則',
-    comparison_targets: '比較案例', valuation_base_date: '估價基準日', comparison_price: '比較法價格',
-    comparison_weight: '比較法權重', income_price: '收益法價格', income_weight: '收益法權重',
+    district_name: '行政區',
+    district_boundary: '行政區界',
+    survey_date: '勘查日期',
+    urban_plan_status: '都市計畫狀態',
+    land_use_zone: '使用分區',
+    building_coverage_rate: '建蔽率',
+    floor_area_ratio: '容積率',
+    prohibited_building: '禁建狀態',
+    restricted_building: '限建狀態',
+    main_road_name: '主要道路',
+    main_road_width_m: '主要道路寬度',
+    average_road_width_m: '平均道路寬度',
+    observations: '勘查觀察',
+    site_opinion: '現場意見',
+    benchmark_land_id: '比準地',
+    comparison_analysis_id: '比較分析',
+    rule_version_id: '正式計算規則',
+    comparison_targets: '比較案例',
+    factor_rows: '影響因素',
+    other_influences: '其他影響因素',
+    benchmark_notes: '比準地說明',
+    appraiser_name: '估價人員',
   }
   return labels[code] ?? '查估書資料欄位'
 }
@@ -253,6 +274,15 @@ function focusSubmitTarget(target: string): void {
   const element = document.querySelector<HTMLElement>(selectors[target] ?? '')
   element?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
   element?.focus?.()
+}
+
+function backToDashboard(): void {
+  void router.push({ name: 'valuation-dashboard' })
+}
+
+function navigateWorkspaceStage(stage: ValuationWorkspaceStage): void {
+  if (stage === 'report') return
+  void router.push(valuationStageRoute(caseId.value, stage))
 }
 
 function isCurrentCase(token: number, requestedCaseId: string): boolean {
@@ -368,6 +398,13 @@ function resetPageConfirmation(pageCode: ReportPageCode): void {
   }
 }
 
+function updateReportPageConfirmation(key: 's01' | 'f02Rf' | 'f02', checked: boolean): void {
+  reportPageConfirmations.value = {
+    ...reportPageConfirmations.value,
+    [key]: checked,
+  }
+}
+
 async function saveReportPageEditor(value: {
   pageCode: ReportPageCode
   payload: Record<string, unknown>
@@ -462,11 +499,7 @@ function formalFindingTarget(finding: FormalValidationFindingModel): {
 async function goToFormalFinding(finding: FormalValidationFindingModel): Promise<void> {
   const target = formalFindingTarget(finding)
   if (target.documents) {
-    await router.push({
-      name: 'valuation-prepare',
-      params: { caseId: caseId.value },
-      query: { focus: 'documents' },
-    })
+    await router.push(valuationStageRoute(caseId.value, 'documents'))
     return
   }
   if (target.calculation) {
@@ -501,15 +534,20 @@ async function goToFormalFinding(finding: FormalValidationFindingModel): Promise
   ;(field ?? editor)?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
   ;(field ?? editor)?.focus?.()
   const pageLabel = reportPageLabel(target.pageCode)
-  const fieldLabel = target.field ? formalFieldLabel(target.field) : ''
+  const fieldLabel = target.field ? formalEditorFieldLabel(target.field) : ''
   editorNotice.value = `請在「${pageLabel}」${fieldLabel ? `的「${fieldLabel}」` : ''}修正後儲存，再重新計算與檢核。`
 }
 
 function goBackToGeneralFinding(fieldPath: string | null): void {
-  const query = fieldPath === 'documents' || fieldPath === 'object_key'
-    ? { focus: 'documents' }
-    : fieldPath ? { field: fieldPath } : undefined
-  void router.push({ name: 'valuation-prepare', params: { caseId: caseId.value }, query })
+  if (fieldPath === 'documents' || fieldPath === 'object_key') {
+    void router.push(valuationStageRoute(caseId.value, 'documents'))
+    return
+  }
+  void router.push(valuationStageRoute(
+    caseId.value,
+    'data',
+    fieldPath ? { field: fieldPath } : undefined,
+  ))
 }
 
 async function refreshAuthoritativePackage(
@@ -946,23 +984,28 @@ watch(caseId, () => {
 
 <template>
   <div class="valuation-view">
-    <ValuationStepNavigator :current-step="currentStep" />
-    <PageHeader
-      eyebrow="送審確認"
-      title="送審確認"
-      description="確認檢核結果、完整送審 PDF 與版本均已完成後，再送交審查。"
-    />
-    <ValuationIssueDrawer
-      v-if="flow.case"
-      :items="submitIssues"
-      @select="focusSubmitTarget"
-    />
-
     <LoadingSkeleton v-if="loading" :rows="6" label="送審資料載入中" />
     <ErrorState v-else-if="error && !flow.case" :message="error" @retry="loadData" />
 
     <template v-else-if="flow.case">
-      <section v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="submit-summary-title">
+      <ValuationCaseWorkspaceHeader
+        :case-model="flow.case"
+        :district-label="newTaipeiDistrictName(flow.case.districtCode)"
+        :status-label="displayedCaseStatus"
+        current-stage="report"
+        :progress-percent="submitProgressPercent"
+        :issue-counts="submitWorkspaceIssueCounts"
+        :report-available="true"
+        @back="backToDashboard"
+        @navigate="navigateWorkspaceStage"
+      />
+
+      <ValuationIssueDrawer
+        :items="submitIssues"
+        @select="focusSubmitTarget"
+      />
+
+      <section class="valuation-surface" aria-labelledby="submit-summary-title">
         <div class="surface-heading">
           <div>
             <p class="valuation-eyebrow">案件與輸出</p>
@@ -979,133 +1022,43 @@ watch(caseId, () => {
         </div>
       </section>
 
-      <section
-        v-if="!flow.submission && currentSubmitStep"
-        class="submit-next-action"
-        data-testid="submit-next-action"
-        :data-state="currentSubmitStep.state"
-        aria-labelledby="submit-next-action-title"
-      >
-        <div>
-          <span>{{ currentSubmitStep.state === 'blocked' ? '目前需要先修正' : '目前下一步' }}</span>
-          <strong id="submit-next-action-title">{{ currentSubmitStep.title }}</strong>
-          <small>{{ currentSubmitStep.detail }}</small>
-        </div>
-        <button type="button" @click="focusSubmitTarget(currentSubmitStep.target)">
-          {{ currentSubmitStep.state === 'blocked' ? '前往修正' : '前往處理' }}
-        </button>
-      </section>
+      <ValuationSubmitReadiness
+        :steps="submitReadinessSteps"
+        :current-step="currentSubmitStep"
+        :completed-step-count="completedSubmitStepCount"
+        :submitted="Boolean(flow.submission)"
+        :readiness-message="readinessMessage"
+        @select="focusSubmitTarget"
+      />
 
-      <section
-        class="submit-readiness"
-        data-testid="submit-readiness-steps"
-        aria-labelledby="submit-readiness-title"
-      >
-        <div class="submit-readiness__heading">
-          <div>
-            <p class="valuation-eyebrow">送審進度</p>
-            <h2 id="submit-readiness-title">完成 {{ completedSubmitStepCount }} / 4</h2>
-          </div>
-          <strong>{{ flow.submission ? '案件已送審' : readinessMessage }}</strong>
-        </div>
-        <div class="submit-readiness__steps">
-          <article
-            v-for="(item, index) in submitReadinessSteps"
-            :key="item.key"
-            :data-state="item.state"
-          >
-            <div class="submit-readiness__index">{{ index + 1 }}</div>
-            <div>
-              <span>{{ submitReadinessStateLabel(item.state) }}</span>
-              <strong>{{ item.title }}</strong>
-              <small>{{ item.detail }}</small>
-            </div>
-            <button
-              v-if="item.state !== 'done'"
-              type="button"
-              :disabled="item.state === 'pending' && item.key === 'submission'"
-              @click="focusSubmitTarget(item.target)"
-            >
-              {{ item.state === 'blocked' ? '前往修正' : item.state === 'active' ? '前往處理' : '查看' }}
-            </button>
-          </article>
-        </div>
-      </section>
+      <ValuationReportPackageWorkspace
+        v-if="reportPageDraftId"
+        :case-id="caseId"
+        :report-id="reportPageDraftId"
+        :authoritative-f02="flow.authoritativeF02"
+        :editors="reportPageEditors"
+        :active-page-code="activeReportPageCode"
+        :editors-loading="reportPageEditorsLoading"
+        :editor-saving="reportPageEditorSaving"
+        :editor-notice="editorNotice"
+        :confirmations="reportPageConfirmations"
+        :pages-confirmed="reportPagesConfirmed"
+        :page-saving="reportPageSaving"
+        :page-calculating="reportPageCalculating"
+        :page-validating="reportPageValidating"
+        :page-saved="reportPageSaved"
+        :page-calculated="reportPageCalculated"
+        @load-editors="loadReportPageEditors"
+        @update:active-page-code="activeReportPageCode = $event"
+        @comparison-changed="handleComparisonChanged"
+        @save-editor="saveReportPageEditor"
+        @update-confirmation="updateReportPageConfirmation"
+        @save-pages="saveReportPages"
+        @calculate="calculateReportPages"
+        @validate="validateReportPages"
+      />
 
-      <section v-if="reportPageDraftId" v-liquid-glass data-lg class="valuation-surface report-package-flow lg" data-testid="report-package-draft-flow" aria-labelledby="report-package-title">
-        <div class="surface-heading">
-          <div>
-            <p class="valuation-eyebrow">查估書確認</p>
-            <h2 id="report-package-title">完整查估書三頁確認</h2>
-          </div>
-          <span class="value-kind">三頁草稿</span>
-        </div>
-        <div v-if="flow.authoritativeF02" class="package-authoritative" data-testid="report-package-authoritative">
-          <strong>三頁已完成正式檢核</strong>
-          <span>F02 第 {{ flow.authoritativeF02.versionNo }} 版</span>
-        </div>
-        <template v-else>
-          <p class="empty-copy">先檢視或修改 S01、F02-RF、F02，再逐頁確認。修改後必須重新儲存確認、正式計算與檢核。</p>
-          <div class="report-page-editor-shell">
-            <button
-              v-if="!Object.keys(reportPageEditors).length"
-              class="solid-button"
-              type="button"
-              data-testid="open-report-page-editors"
-              :disabled="reportPageEditorsLoading"
-              @click="loadReportPageEditors"
-            >
-              {{ reportPageEditorsLoading ? '三頁載入中…' : '檢視／修改三頁資料' }}
-            </button>
-            <template v-else>
-              <nav class="report-page-tabs" aria-label="三頁表單切換">
-                <button
-                  v-for="pageCode in REPORT_PAGE_CODES"
-                  :key="pageCode"
-                  type="button"
-                  :class="{ 'is-active': activeReportPageCode === pageCode }"
-                  :aria-current="activeReportPageCode === pageCode ? 'page' : undefined"
-                  @click="activeReportPageCode = pageCode"
-                >
-                  {{ reportPageLabel(pageCode) }}
-                </button>
-              </nav>
-              <ComparisonSetupPanel
-                v-if="activeReportPageCode === 'F02' && reportPageEditors.F02 && reportPageDraftId"
-                :case-id="caseId"
-                :report-id="reportPageDraftId"
-                :page="reportPageEditors.F02"
-                @changed="handleComparisonChanged"
-              />
-              <ReportPageEditor
-                v-if="activeReportPage"
-                :page="activeReportPage"
-                :saving="reportPageEditorSaving === activeReportPageCode"
-                @save="saveReportPageEditor"
-              />
-            </template>
-            <p v-if="editorNotice" class="editor-notice" role="status">{{ editorNotice }}</p>
-          </div>
-          <div class="package-confirmations">
-            <label><input v-model="reportPageConfirmations.s01" data-testid="report-page-s01-confirm" type="checkbox" /> 我已確認 S01 勘查資料與來源</label>
-            <label><input v-model="reportPageConfirmations.f02Rf" data-testid="report-page-f02-rf-confirm" type="checkbox" /> 我已確認 F02-RF 全部因素級距</label>
-            <label><input v-model="reportPageConfirmations.f02" data-testid="report-page-f02-confirm" type="checkbox" /> 我已確認 F02 比較標的與權重</label>
-          </div>
-          <div class="formal-actions">
-            <button class="solid-button" type="button" data-testid="save-report-pages" :disabled="!reportPagesConfirmed || reportPageSaving || reportPageCalculating || reportPageValidating" @click="saveReportPages">
-              {{ reportPageSaving ? '三頁儲存中…' : '儲存三頁確認' }}
-            </button>
-            <button class="solid-button" type="button" data-testid="run-formal-calculation" :disabled="!reportPageSaved || reportPageCalculating || reportPageValidating" @click="calculateReportPages">
-              {{ reportPageCalculating ? '正式計算中…' : '執行正式計算' }}
-            </button>
-            <button class="solid-button solid-button--primary" type="button" data-testid="run-report-formal-validation" :disabled="!reportPageCalculated || reportPageValidating" @click="validateReportPages">
-              {{ reportPageValidating ? '三頁正式檢核中…' : '執行三頁正式檢核' }}
-            </button>
-          </div>
-        </template>
-      </section>
-
-      <section v-if="flow.validation" v-liquid-glass data-lg class="valuation-surface lg" data-testid="submit-validation" aria-labelledby="submit-validation-title">
+      <section v-if="flow.validation" class="valuation-surface" data-testid="submit-validation" aria-labelledby="submit-validation-title">
         <div class="surface-heading">
           <div>
             <p class="valuation-eyebrow">檢核結果</p>
@@ -1133,129 +1086,33 @@ watch(caseId, () => {
         <p v-if="blockers.length" class="blocker-note">仍有 {{ blockers.length }} 項待修正內容，請回到資料確認頁處理。</p>
       </section>
 
-      <section v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="formal-validation-title">
-        <div class="surface-heading">
-          <div>
-            <p class="valuation-eyebrow">正式檢核</p>
-            <h2 id="formal-validation-title">完整報告正式檢核</h2>
-          </div>
-          <span v-if="flow.formalValidation" class="value-kind" :data-validation-state="flow.formalValidation.canGenerateFormalReport ? 'ready' : 'blocked'">
-            {{ flow.formalValidation.canGenerateFormalReport ? '可產生正式報告' : '仍有待修正項目' }}
-          </span>
-          <span v-else class="value-kind" data-validation-state="pending">尚未執行</span>
-        </div>
-        <div v-if="flow.formalValidation" data-testid="formal-validation-result">
-          <div class="validation-counts">
-            <span>通過 {{ flow.formalValidation.passedCount }}</span>
-            <span>警示 {{ flow.formalValidation.warningCount }}</span>
-            <span>錯誤 {{ flow.formalValidation.failedCount }}</span>
-          </div>
-          <ul v-if="flow.formalValidation.findings.length" class="finding-list">
-            <li v-for="finding in flow.formalValidation.findings" :key="`${finding.code}-${finding.fieldCode ?? ''}`" :data-severity="finding.severity">
-              <strong>{{ finding.severity === 'ERROR' ? '需要修正' : '請確認' }}</strong>
-              <span>{{ finding.message }}</span>
-              <small v-if="finding.fieldCode">欄位：{{ formalFieldLabel(finding.fieldCode) }}</small>
-              <button
-                v-if="finding.severity === 'ERROR'"
-                class="finding-action"
-                type="button"
-                :data-testid="`fix-formal-finding-${finding.code}`"
-                @click="goToFormalFinding(finding)"
-              >
-                前往修正
-              </button>
-              <label v-if="finding.severity === 'WARNING'" class="warning-acknowledgement">
-                <input
-                  type="checkbox"
-                  :data-testid="`formal-warning-${finding.code}`"
-                  :checked="acknowledgedWarningCodes.includes(finding.code)"
-                  @change="setWarningAcknowledged(finding.code, ($event.target as HTMLInputElement).checked)"
-                />
-                <span>我已確認此警示，允許產生正式 PDF</span>
-              </label>
-            </li>
-          </ul>
-          <p v-else class="empty-copy">正式檢核沒有回傳其他訊息。</p>
-          <p v-if="flow.formalValidation.canGenerateFormalReport && formalWarningCodes.length && !warningsAcknowledged" class="blocker-note">
-            請逐項確認所有警示後，才能產生正式 PDF；系統不會代為確認。
-          </p>
-        </div>
-        <p v-else class="empty-copy">正式 PDF 產出前，必須先完成正式檢核。</p>
-        <div class="formal-actions">
-          <button
-            class="solid-button"
-            type="button"
-            data-testid="run-formal-validation"
-            :disabled="formalValidating || formalPdfGenerating || submitting || !flow.reportPackageId"
-            @click="runFormalValidation"
-          >
-            {{ formalValidating ? '正式檢核中…' : '執行正式檢核' }}
-          </button>
-          <button
-            v-if="flow.formalValidation"
-            class="solid-button solid-button--primary"
-            type="button"
-            data-testid="generate-formal-pdf"
-            :disabled="formalPdfGenerating || formalValidating || submitting || !flow.formalValidation.canGenerateFormalReport || !warningsAcknowledged || flow.authoritativeF02?.status !== 'CHECKED'"
-            @click="generateFormalPdf"
-          >
-            {{ formalPdfGenerating ? '正式 PDF 產生中…' : '產生完整送審 PDF' }}
-          </button>
-        </div>
-      </section>
+      <ValuationFormalValidationPanel
+        :validation="flow.formalValidation"
+        :formal-warning-codes="formalWarningCodes"
+        :acknowledged-warning-codes="acknowledgedWarningCodes"
+        :warnings-acknowledged="warningsAcknowledged"
+        :formal-validating="formalValidating"
+        :formal-pdf-generating="formalPdfGenerating"
+        :submitting="submitting"
+        :report-package-ready="Boolean(flow.reportPackageId)"
+        :authoritative-f02-status="flow.authoritativeF02?.status ?? null"
+        @run-validation="runFormalValidation"
+        @generate-pdf="generateFormalPdf"
+        @fix="goToFormalFinding"
+        @acknowledge="setWarningAcknowledged"
+      />
 
-      <section v-if="flow.formalReport" v-liquid-glass data-lg class="valuation-surface lg" data-testid="formal-pdf-result" aria-labelledby="formal-pdf-title">
-        <div class="surface-heading">
-          <div>
-            <p class="valuation-eyebrow">正式文件</p>
-            <h2 id="formal-pdf-title">完整送審 PDF</h2>
-          </div>
-          <span class="source-marker" data-source-kind="calculated">正式版本</span>
-        </div>
-        <div class="artifact-card">
-          <strong>{{ flow.formalReport.filename }}</strong>
-          <span>第 {{ flow.formalReport.versionNo }} 版｜檔案大小 {{ Math.max(1, Math.round(flow.formalReport.fileSizeBytes / 1024)) }} KB</span>
-          <small>這是主要送審產物。頁數依本案實際查估書表與附圖內容產生，不以固定六頁作為流程條件。</small>
-          <button
-            class="solid-button solid-button--primary artifact-card__download"
-            type="button"
-            data-testid="download-formal-report"
-            :disabled="Boolean(downloadingDocumentId)"
-            @click="downloadOutput(flow.formalReport.documentId, flow.formalReport.filename)"
-          >
-            {{ downloadingDocumentId === flow.formalReport.documentId ? '下載中…' : '下載完整送審 PDF' }}
-          </button>
-        </div>
-      </section>
-
-      <section v-if="flow.report" v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="artifact-title">
-        <div class="surface-heading">
-          <div>
-            <p class="valuation-eyebrow">流程附件</p>
-            <h2 id="artifact-title">比準地地價估計表單表輸出（流程附件）</h2>
-          </div>
-          <span class="source-marker" data-source-kind="calculated">系統產生</span>
-        </div>
-        <div class="artifact-card">
-          <strong>{{ flow.report.filename }}</strong>
-          <span>第 {{ flow.report.versionNo }} 版｜檔案大小 {{ Math.max(1, Math.round(flow.report.fileSizeBytes / 1024)) }} KB</span>
-          <small>這是前段比準地地價估計表計算產生的單表輸出，保留作流程追溯；正式送審以「完整送審 PDF」為主。</small>
-          <button
-            class="solid-button artifact-card__download"
-            type="button"
-            data-testid="download-f03-report"
-            :disabled="Boolean(downloadingDocumentId)"
-            @click="downloadOutput(flow.report.documentId, flow.report.filename)"
-          >
-            {{ downloadingDocumentId === flow.report.documentId ? '下載中…' : '下載比準地地價估計表單表' }}
-          </button>
-        </div>
-      </section>
+      <ValuationReportArtifacts
+        :formal-report="flow.formalReport"
+        :report="flow.report"
+        :downloading-document-id="downloadingDocumentId"
+        @download="downloadOutput"
+      />
 
       <p v-if="error" class="inline-error" role="alert">{{ error }}</p>
       <p v-if="refreshWarning" class="inline-notice" role="status">{{ refreshWarning }}</p>
 
-      <section v-liquid-glass data-lg class="submit-bar lg" aria-label="送審操作">
+      <section class="submit-bar" aria-label="送審操作">
         <div>
           <strong>{{ flow.submission ? '案件已送出審查' : readinessMessage }}</strong>
           <p v-if="flow.submission">送審時間：{{ formatDateZhTw(flow.submission.submittedAt) }}</p>
@@ -1269,7 +1126,8 @@ watch(caseId, () => {
           :disabled="!canSubmit || submitting"
           @click="submitForReview"
         >
-          {{ submitting ? '送審中…' : '送出審查' }}
+          <PaperPlaneTilt v-if="!submitting" :size="16" weight="bold" aria-hidden="true" />
+          <span>{{ submitting ? '送審中…' : '送出審查' }}</span>
         </button>
         <div v-else class="submission-complete" data-testid="submission-result" :data-status="flow.submission.caseStatus">
           <strong>第 {{ flow.submission.submissionNo }} 次送審</strong>
@@ -1277,16 +1135,18 @@ watch(caseId, () => {
         </div>
       </section>
 
-      <RouterLink class="back-link" :to="{ name: 'valuation-prepare', params: { caseId } }">
-        返回資料確認
+      <RouterLink class="back-link" :to="valuationStageRoute(caseId, 'data')">
+        <ArrowLeft :size="15" weight="bold" aria-hidden="true" />
+        <span>返回資料確認</span>
       </RouterLink>
     </template>
   </div>
 </template>
 
 <style scoped>
-.valuation-view { display: grid; gap: 18px; padding: 24px 28px 34px; }
-.valuation-surface { padding: 22px; border: 1px solid rgba(255,255,255,.72); border-radius: var(--app-radius-md); background: rgba(255,255,255,.72); box-shadow: var(--app-shadow-soft); }
+.valuation-view { display: grid; gap: 18px; padding: 0 28px 34px; }
+.valuation-view :deep(.case-workspace-header) { margin-inline: -28px; }
+.valuation-surface { padding: 22px; border: 1px solid var(--app-line); border-radius: var(--app-radius-md); background: #fff; }
 .surface-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
 .surface-heading h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 24px; font-weight: 600; letter-spacing: -0.04em; }
 .valuation-eyebrow { margin: 0 0 6px; color: var(--app-accent-deep); font-size: 11px; font-weight: 800; letter-spacing: 0.12em; }
@@ -1304,58 +1164,12 @@ watch(caseId, () => {
 .finding-list li[data-severity="ERROR"] { border-left-color: #c85b43; background: #fff3f0; }
 .finding-list strong { color: var(--app-ink); font-size: 12px; }
 .finding-action { justify-self: start; min-height: 36px; margin-top: 5px; padding: 6px 11px; border: 1px solid rgba(200,91,67,.26); border-radius: 8px; color: var(--app-accent-deep); background: #fff; cursor: pointer; font-size: 11px; font-weight: 900; }
-.package-confirmations { display: grid; gap: 10px; margin: 16px 0; }
-.package-confirmations label { display: flex; align-items: flex-start; gap: 8px; color: var(--app-ink); font-size: 13px; font-weight: 700; }
-.package-confirmations input { margin-top: 2px; accent-color: var(--app-accent); }
-.report-page-editor-shell { display: grid; gap: 12px; margin-top: 16px; }
-.report-page-editor-shell > .solid-button { justify-self: start; }
-.report-page-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
-.report-page-tabs button { min-height: 38px; padding: 7px 13px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink-soft); background: #fff; cursor: pointer; font-size: 12px; font-weight: 900; }
-.report-page-tabs button.is-active { border-color: rgba(200,91,67,.32); color: var(--app-accent-deep); background: var(--app-accent-soft); }
-.editor-notice { margin: 0; padding: 10px 12px; border-radius: 8px; color: #2e5984; background: #edf4fb; font-size: 12px; line-height: 1.6; }
-.package-authoritative { display: grid; gap: 5px; padding: 14px; border: 1px solid rgba(59, 129, 102, 0.24); border-radius: var(--app-radius-sm); color: var(--app-green); background: rgba(59, 129, 102, 0.08); }
-.package-authoritative span { color: var(--app-ink-soft); font-size: 12px; overflow-wrap: anywhere; }
-.warning-acknowledgement { display: flex; align-items: flex-start; gap: 8px; margin-top: 6px; color: var(--app-ink); font-size: 12px; font-weight: 700; }
-.warning-acknowledgement input { margin-top: 2px; accent-color: var(--app-accent); }
 .empty-copy { margin: 0; color: var(--app-muted); font-size: 13px; }
 .blocker-note { margin: 14px 0 0; color: #a44334; font-size: 13px; font-weight: 700; }
-.artifact-card { display: grid; gap: 5px; padding: 16px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #fbfcfe; }
-.artifact-card strong { color: var(--app-ink); font-size: 15px; }
-.artifact-card span, .artifact-card small { color: var(--app-ink-soft); font-size: 12px; }
-.artifact-card small { color: var(--app-muted); }
-.artifact-card__download { justify-self: start; margin-top: 8px; }
-.formal-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
-.submit-next-action { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 15px 18px; border: 1px solid #bfd0e2; border-left: 5px solid #2e5984; border-radius: var(--app-radius-sm); background: #f4f8fc; }
-.submit-next-action[data-state="blocked"] { border-color: #edc8c0; border-left-color: #b84d3b; background: #fff5f3; }
-.submit-next-action > div { display: grid; gap: 3px; min-width: 0; }
-.submit-next-action span { color: var(--app-muted); font-size: 9px; font-weight: 900; letter-spacing: .1em; }
-.submit-next-action strong { color: var(--app-ink); font-size: 14px; }
-.submit-next-action small { color: var(--app-ink-soft); font-size: 11px; line-height: 1.55; }
-.submit-next-action button { min-height: 40px; flex: 0 0 auto; padding: 8px 13px; border: 1px solid #2e5984; border-radius: 8px; color: #fff; background: #2e5984; cursor: pointer; font-size: 11px; font-weight: 900; }
-.submit-next-action[data-state="blocked"] button { border-color: #b84d3b; background: #b84d3b; }
-.submit-readiness { display: grid; gap: 14px; padding: 18px 20px; border: 1px solid #dce5ef; border-radius: var(--app-radius-md); background: #f8fbfe; }
-.submit-readiness__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
-.submit-readiness__heading h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 22px; }
-.submit-readiness__heading > strong { max-width: 520px; color: var(--app-ink-soft); font-size: 12px; line-height: 1.6; text-align: right; }
-.submit-readiness__steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
-.submit-readiness__steps article { display: grid; grid-template-columns: auto minmax(0, 1fr); align-content: start; gap: 9px; min-width: 0; padding: 12px; border: 1px solid #dde5ee; border-radius: 10px; background: #fff; }
-.submit-readiness__steps article[data-state="done"] { border-color: #cfe0d6; background: #f5faf7; }
-.submit-readiness__steps article[data-state="active"] { border-color: #bfd0e2; background: #f4f8fc; }
-.submit-readiness__steps article[data-state="blocked"] { border-color: #edc8c0; background: #fff5f3; }
-.submit-readiness__steps article > div:nth-child(2) { display: grid; gap: 3px; min-width: 0; }
-.submit-readiness__index { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 999px; color: #fff; background: #718397; font-size: 10px; font-weight: 900; }
-.submit-readiness__steps article[data-state="done"] .submit-readiness__index { background: var(--app-green); }
-.submit-readiness__steps article[data-state="active"] .submit-readiness__index { background: #2e5984; }
-.submit-readiness__steps article[data-state="blocked"] .submit-readiness__index { background: #b84d3b; }
-.submit-readiness__steps span { color: var(--app-muted); font-size: 9px; font-weight: 900; }
-.submit-readiness__steps strong { color: var(--app-ink); font-size: 12px; line-height: 1.4; }
-.submit-readiness__steps small { color: var(--app-muted); font-size: 10px; line-height: 1.5; }
-.submit-readiness__steps button { grid-column: 1 / -1; justify-self: start; min-height: 34px; padding: 6px 10px; border: 1px solid #cbd8e5; border-radius: 8px; color: #244d73; background: #fff; cursor: pointer; font-size: 10px; font-weight: 900; }
-.submit-readiness__steps button:disabled { cursor: not-allowed; opacity: .5; }
-.submit-bar { position: sticky; z-index: 12; bottom: 14px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px 20px; border: 1px solid rgba(223,229,239,.92); border-radius: var(--app-radius-md); background: rgba(255,250,247,.96); box-shadow: 0 14px 36px rgba(30,52,78,.14); backdrop-filter: blur(14px); }
+.submit-bar { position: sticky; z-index: 12; bottom: 14px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px 20px; border: 1px solid #d9e2ec; border-radius: var(--app-radius-md); background: #fff; box-shadow: 0 10px 28px rgba(30,52,78,.12); }
 .submit-bar strong { color: var(--app-ink); font-size: 15px; }
 .submit-bar p { margin: 5px 0 0; color: var(--app-ink-soft); font-size: 12px; }
-.solid-button { min-height: 44px; padding: 10px 18px; border: 1px solid var(--app-line); border-radius: 9px; color: var(--app-ink-soft); background: var(--app-paper-strong); cursor: pointer; font-size: 13px; font-weight: 800; }
+.solid-button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 7px; padding: 10px 18px; border: 1px solid var(--app-line); border-radius: 9px; color: var(--app-ink-soft); background: var(--app-paper-strong); cursor: pointer; font-size: 13px; font-weight: 800; }
 .solid-button--primary { border-color: var(--app-accent); color: #fff; background: var(--app-accent); }
 .solid-button:disabled { cursor: not-allowed; opacity: 0.55; }
 .submission-complete { display: grid; gap: 4px; padding: 10px 14px; border: 1px solid rgba(59, 129, 102, 0.24); border-radius: 9px; color: var(--app-green); background: rgba(59, 129, 102, 0.08); }
@@ -1363,20 +1177,15 @@ watch(caseId, () => {
 .inline-error, .inline-notice { margin: 0; padding: 12px 14px; border-radius: var(--app-radius-sm); font-size: 13px; }
 .inline-error { color: #a44334; background: #fff0ed; }
 .inline-notice { color: var(--app-green); background: rgba(59, 129, 102, 0.08); }
-.back-link { color: var(--app-accent-deep); font-size: 13px; font-weight: 800; }
+.back-link { display: inline-flex; width: fit-content; align-items: center; gap: 6px; color: var(--app-accent-deep); font-size: 13px; font-weight: 800; }
 
 @media (max-width: 760px) {
   .valuation-view { padding: 18px 16px 28px; }
+  .valuation-view :deep(.case-workspace-header) { margin: -18px -16px 0; }
   .valuation-surface { padding: 16px; }
-  .submit-next-action { align-items: stretch; flex-direction: column; }
-  .submit-next-action button { width: 100%; }
-  .surface-heading, .submit-bar, .submit-readiness__heading { align-items: flex-start; flex-direction: column; }
-  .submit-readiness__heading > strong { text-align: left; }
-  .submit-readiness__steps { grid-template-columns: 1fr; }
-  .submit-bar { position: static; box-shadow: var(--app-shadow-soft); backdrop-filter: none; }
+  .surface-heading, .submit-bar { align-items: flex-start; flex-direction: column; }
+  .submit-bar { position: static; box-shadow: 0 8px 22px rgba(30,52,78,.10); }
   .summary-grid { grid-template-columns: 1fr; }
   .solid-button { width: 100%; }
-  .formal-actions { width: 100%; }
-  .report-page-editor-shell > .solid-button { justify-self: stretch; }
 }
 </style>
