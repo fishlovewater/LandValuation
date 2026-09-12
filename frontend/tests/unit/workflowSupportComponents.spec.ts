@@ -371,8 +371,8 @@ describe('ReviewActionBar', () => {
       },
     })
 
-    expect(draft.get('[data-testid="send-correction"]').classes()).toContain('lg-btn--accent')
-    expect(draft.get('[data-testid="finalize-review"]').classes()).not.toContain('lg-btn--accent')
+    expect(draft.get('[data-testid="send-correction"]').classes()).toContain('is-primary')
+    expect(draft.get('[data-testid="finalize-review"]').classes()).not.toContain('is-primary')
 
     const regular = mount(ReviewActionBar, {
       props: {
@@ -380,6 +380,7 @@ describe('ReviewActionBar', () => {
         canFinalize: true,
       },
     })
-    expect(regular.get('[data-testid="finalize-review"]').classes()).toContain('lg-btn--accent')
+    expect(regular.get('[data-testid="finalize-review"]').classes()).toContain('is-primary')
+    expect(regular.find('.lg-btn').exists()).toBe(false)
   })
 })
