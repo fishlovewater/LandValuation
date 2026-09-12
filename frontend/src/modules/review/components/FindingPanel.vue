@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { PhCheckCircle as CheckCircle } from '@phosphor-icons/vue'
 import EmptyState from '../../../components/common/EmptyState.vue'
-import GlassField from '../../../components/glass/GlassField.vue'
 import { verificationStatusLabel } from '../review.mappers'
 import type { FindingTriageDecision, ReviewDecisionModel, ReviewFindingModel } from '../review.types'
 
@@ -75,7 +75,7 @@ function save(): void {
     <EmptyState
       v-if="!finding"
       title="尚未選取疑點"
-      description="從左側疑點清單選取一筆，查看報告值、系統值與智能分析說明。"
+      description="從疑點清單選取一筆，查看報告值、系統值與智能分析說明。"
     />
     <template v-else>
       <header class="finding-panel__header">
@@ -165,18 +165,18 @@ function save(): void {
             <option value="DISMISSED_FALSE_POSITIVE">排除誤報</option>
             <option value="EXPERT_REVIEW">轉交專家審查</option>
           </select>
-          <GlassField
-            id="finding-reason"
-            v-model="reason"
-            label="審查理由（必填）"
-            hint="理由會完整儲存於本次審查紀錄。"
-            as="textarea"
-            :rows="4"
-            surface="solid"
-            :disabled="!canTriage || saving"
-            :invalid="Boolean(validationMessage)"
-            data-testid="finding-reason"
-          />
+          <label class="finding-panel__reason-field" for="finding-reason">
+            <span>審查理由（必填）</span>
+            <textarea
+              id="finding-reason"
+              v-model="reason"
+              rows="4"
+              :disabled="!canTriage || saving"
+              :aria-invalid="Boolean(validationMessage)"
+              data-testid="finding-reason"
+            />
+            <small>理由會完整儲存於本次審查紀錄。</small>
+          </label>
           <p v-if="validationMessage" class="finding-panel__error" role="alert">{{ validationMessage }}</p>
           <p v-if="!canTriage" class="finding-panel__readonly">{{ readonlyReason }}</p>
           <button
@@ -186,7 +186,8 @@ function save(): void {
             :disabled="!canTriage || saving"
             @click="save"
           >
-            {{ saving ? '儲存中…' : '儲存審查結論' }}
+            <CheckCircle :size="17" weight="bold" aria-hidden="true" />
+            <span>{{ saving ? '儲存中…' : '儲存審查結論' }}</span>
           </button>
         </div>
       </section>
@@ -305,9 +306,16 @@ function save(): void {
 .finding-panel__decision-form { display: grid; gap: 9px; }
 .finding-panel__select-label { color: var(--app-ink-soft); font-size: 12px; font-weight: 800; }
 .finding-panel__decision-form select { min-height: 46px; padding: 8px 12px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink); background: var(--app-paper-strong); }
+.finding-panel__reason-field { display: grid; gap: 6px; }
+.finding-panel__reason-field > span { color: var(--app-ink-soft); font-size: 12px; font-weight: 800; }
+.finding-panel__reason-field textarea { width: 100%; min-height: 108px; box-sizing: border-box; resize: vertical; padding: 10px 11px; border: 1px solid var(--app-line); border-radius: 8px; outline: 0; color: var(--app-ink); background: #fff; font: inherit; font-size: 12px; line-height: 1.6; }
+.finding-panel__reason-field textarea:focus { border-color: var(--app-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-accent) 12%, transparent); }
+.finding-panel__reason-field textarea[aria-invalid="true"] { border-color: #c44d45; }
+.finding-panel__reason-field textarea:disabled { cursor: not-allowed; background: #f5f6f8; opacity: .7; }
+.finding-panel__reason-field small { color: var(--app-muted); font-size: 10px; line-height: 1.5; }
 .finding-panel__error { margin: 0; color: #ac3c37; font-size: 12px; }
 .finding-panel__readonly { margin: 0; color: var(--app-muted); font-size: 12px; }
-.finding-panel__save { min-height: 46px; border: 1px solid var(--app-accent); border-radius: 8px; color: #fff8f2; background: var(--app-accent); cursor: pointer; font-weight: 800; }
+.finding-panel__save { display: inline-flex; min-height: 46px; align-items: center; justify-content: center; gap: 7px; border: 1px solid var(--app-accent); border-radius: 8px; color: #fff8f2; background: var(--app-accent); cursor: pointer; font-weight: 800; }
 .finding-panel__save:hover:not(:disabled) { background: var(--app-accent-deep); }
 .finding-panel__save:disabled { cursor: not-allowed; opacity: 0.55; }
 
