@@ -105,10 +105,10 @@ const documentAnalysisForm = reactive<Record<string, FieldAnalysisFormCode>>({})
 const landContextSaving = ref(false)
 const editingParcelId = ref<string | null>(null)
 type WizardStep = 1 | 2 | 3 | 4
-type DataSection = 'overview' | 'manual' | 'land' | 'f03'
+type DataSection = 'manual' | 'land' | 'f03'
 const activeWizardStep = ref<WizardStep>(1)
 const activeIntakeStage = ref<'documents' | 'ai-review'>('documents')
-const activeDataSection = ref<DataSection>('overview')
+const activeDataSection = ref<DataSection>('land')
 const confirmingCaseInfo = ref(false)
 const workspacePersistenceReady = ref(false)
 const lastPersistedWorkspaceStage = ref<ValuationWorkspaceStage | null>(null)
@@ -347,13 +347,22 @@ const manualFieldEntries = computed(() => allManualFieldEntries.value.filter(
 const manualEditableEntries = computed(() => manualFieldEntries.value.filter(
   (entry) => !(entry.formCode === 'F03' && entry.fieldName === 'benchmark_land_id'),
 ))
+const unresolvedNonF03RequiredFields = computed(() => (
+  workflowGuidance.value?.form_guidance.flatMap((guidance) =>
+    guidance.form_code === 'F03'
+      ? []
+      : guidance.missing_required_fields.map((fieldName) => `${guidance.form_code}.${fieldName}`),
+  ) ?? []
+))
 const dataIssueCounts = computed(() => ({
-  overview: unresolvedF03RequiredFields.value.length + (!locationParcels.value.length ? 1 : 0) + (!flow.benchmarks.length ? 1 : 0),
-  manual: allManualFieldEntries.value.length,
+  manual: unresolvedNonF03RequiredFields.value.length,
   land: (!locationParcels.value.length ? 1 : 0) + (!flow.benchmarks.length ? 1 : 0),
   f03: unresolvedF03RequiredFields.value.length,
 }))
-const preCalculationIssueCount = computed(() => dataIssueCounts.value.overview + pendingCandidates.value.length)
+const dataBlockingIssueCount = computed(() =>
+  dataIssueCounts.value.manual + dataIssueCounts.value.land + dataIssueCounts.value.f03,
+)
+const preCalculationIssueCount = computed(() => dataBlockingIssueCount.value + pendingCandidates.value.length)
 const canRunValuation = computed(() => Boolean(
   canEditF03.value
     && flow.f03
@@ -361,7 +370,7 @@ const canRunValuation = computed(() => Boolean(
 ))
 const wizardIssueCounts = computed<Partial<Record<WizardStep, number>>>(() => ({
   2: pendingCandidates.value.length + (!flow.documents.length ? 1 : 0),
-  3: dataIssueCounts.value.overview,
+  3: dataBlockingIssueCount.value,
   4: flow.validation?.failedCount ?? 0,
 }))
 const workspaceStage = computed<ValuationWorkspaceStage>(() => {
@@ -373,16 +382,15 @@ const workspaceStage = computed<ValuationWorkspaceStage>(() => {
 const workspaceIssueCounts = computed(() => ({
   documents: flow.documents.length ? 0 : 1,
   'ai-review': pendingCandidates.value.length,
-  data: dataIssueCounts.value.overview,
+  data: dataBlockingIssueCount.value,
   calculation: flow.validation?.failedCount ?? 0,
   report: canProceedToSubmit.value ? 0 : 1,
 }))
 const caseProgressPercent = computed(() => {
   let progress = 0
-  if (flow.documents.length) progress += 20
-  if (allCandidates.value.length && pendingCandidates.value.length === 0) progress += 20
-  if (dataIssueCounts.value.overview === 0) progress += 20
-  if (flow.validation?.canGenerateReport && flow.report) progress += 20
+  if (flow.documents.length && pendingCandidates.value.length === 0) progress += 25
+  if (dataBlockingIssueCount.value === 0) progress += 25
+  if (flow.validation?.canGenerateReport && flow.report) progress += 25
   return progress
 })
 const workflowIssues = computed(() => {
@@ -391,30 +399,33 @@ const workflowIssues = computed(() => {
   if (pendingCandidates.value.length) items.push({ id: 'candidates', title: '智能辨識結果待確認', detail: `還有 ${pendingCandidates.value.length} 筆辨識結果需要人工確認或修改。`, target: 'candidates', severity: 'warning' })
   if (!parcels.value.length) items.push({ id: 'parcel', title: '尚未建立宗地資料', detail: '建立本案宗地後，才能完成正式估價資料。', target: 'land', severity: 'pending' })
   if (!flow.benchmarks.length) items.push({ id: 'benchmark', title: '尚未建立比準地', detail: '至少需要一筆比準地資料供後續估價流程使用。', target: 'land', severity: 'pending' })
-  const missingCount = unresolvedF03RequiredFields.value.length
-  if (missingCount) items.push({ id: 'required-fields', title: '必要欄位尚未補齊', detail: `${missingCount} 個必要欄位仍缺值，可直接前往人工補充。`, target: manualFieldEntries.value.length ? 'manual' : 'f03', severity: 'warning' })
+  const missingCount = dataIssueCounts.value.manual + dataIssueCounts.value.f03
+  if (missingCount) items.push({ id: 'required-fields', title: '必要欄位尚未補齊', detail: `${missingCount} 個必要欄位仍缺值，可直接前往對應資料區塊。`, target: dataIssueCounts.value.manual ? 'manual' : 'f03', severity: 'warning' })
   if (dirty.value) items.push({ id: 'unsaved-f03', title: '比準地地價估計表有尚未儲存的修改', detail: '先儲存目前修改，避免後續計算仍使用前一版資料。', target: 'f03', severity: 'warning' })
   if ((flow.validation?.failedCount ?? 0) > 0) items.push({ id: 'validation-errors', title: '正式檢核仍有阻擋錯誤', detail: `有 ${flow.validation?.failedCount ?? 0} 個阻擋錯誤必須修正後才能產出查估書。`, target: 'validation', severity: 'error' })
   return items
 })
 const wizardStepTitle = computed(() => {
   if (activeWizardStep.value === 1) return '案件基本資料'
-  if (activeWizardStep.value === 2) return activeIntakeStage.value === 'documents' ? '文件與辨識' : 'AI 結果確認'
-  if (activeWizardStep.value === 3) return '資料補齊'
+  if (activeWizardStep.value === 2) return '來源資料'
+  if (activeWizardStep.value === 3) return '估價資料'
   return '計算與檢核'
 })
 const workspaceStepLabel = computed(() => {
   if (workspaceStage.value === 'case') return '案件資料確認'
-  const index = ['documents', 'ai-review', 'data', 'calculation', 'report'].indexOf(workspaceStage.value)
-  return index >= 0 ? `流程 ${index + 1} / 5` : '案件流程'
+  if (workspaceStage.value === 'documents' || workspaceStage.value === 'ai-review') return '流程 1 / 4'
+  if (workspaceStage.value === 'data') return '流程 2 / 4'
+  if (workspaceStage.value === 'calculation') return '流程 3 / 4'
+  if (workspaceStage.value === 'report') return '流程 4 / 4'
+  return '案件流程'
 })
 const wizardNextLabel = computed(() => {
   if (activeWizardStep.value === 1) {
-    return flow.case?.basicInfoConfirmedAt ? '下一步：文件與辨識' : '確認並開始估價'
+    return flow.case?.basicInfoConfirmedAt ? '下一步：來源資料' : '確認並開始估價'
   }
-  if (activeWizardStep.value === 2 && activeIntakeStage.value === 'documents') return allCandidates.value.length ? '下一步：AI 結果確認' : '下一步：資料補齊'
-  if (activeWizardStep.value === 2) return pendingCandidates.value.length ? `先處理 ${pendingCandidates.value.length} 筆待確認` : '下一步：資料補齊'
-  if (activeWizardStep.value === 3) return dataIssueCounts.value.overview ? `尚有 ${dataIssueCounts.value.overview} 項資料待處理` : '下一步：計算與檢核'
+  if (activeWizardStep.value === 2 && activeIntakeStage.value === 'documents') return pendingCandidates.value.length ? `確認 ${pendingCandidates.value.length} 筆辨識結果` : '下一步：估價資料'
+  if (activeWizardStep.value === 2) return pendingCandidates.value.length ? `先處理 ${pendingCandidates.value.length} 筆待確認` : '下一步：估價資料'
+  if (activeWizardStep.value === 3) return dataBlockingIssueCount.value ? `尚有 ${dataBlockingIssueCount.value} 項資料待處理` : '下一步：計算與檢核'
   return canProceedToSubmit.value ? '下一步：查估書確認' : '通過檢核後才能繼續'
 })
 const SOURCE_DOCUMENT_CATEGORIES: readonly DocumentCategory[] = [
@@ -893,13 +904,13 @@ function applyWorkspaceStage(stage: ValuationWorkspaceStage): ValuationWorkspace
   }
   if (stage === 'data') {
     activeWizardStep.value = 3
-    activeDataSection.value = 'overview'
+    activeDataSection.value = preferredDataSection()
     return 'data'
   }
   if (stage === 'calculation') {
     if (!canRunValuation.value) {
       activeWizardStep.value = 3
-      activeDataSection.value = 'overview'
+      activeDataSection.value = preferredDataSection()
       return 'data'
     }
     activeWizardStep.value = 4
@@ -909,6 +920,18 @@ function applyWorkspaceStage(stage: ValuationWorkspaceStage): ValuationWorkspace
     return applyWorkspaceStage(canRunValuation.value ? 'calculation' : 'data')
   }
   return 'report'
+}
+
+function preferredDataSection(): DataSection {
+  if (dataIssueCounts.value.land) return 'land'
+  if (dataIssueCounts.value.manual) return 'manual'
+  return 'f03'
+}
+
+function selectFirstMissingManualForm(): void {
+  const firstKey = unresolvedNonF03RequiredFields.value[0]
+  const formCode = firstKey?.split('.')[0] as FieldAnalysisFormCode | undefined
+  if (formCode && FIELD_ANALYSIS_FORM_CODES.includes(formCode)) activeManualForm.value = formCode
 }
 
 async function persistWorkspaceStage(stage: ValuationWorkspaceStage): Promise<void> {
@@ -976,12 +999,13 @@ function navigateWorkspaceStage(stage: ValuationWorkspaceStage): void {
 
 function jumpToDataSection(section: DataSection): void {
   activeWizardStep.value = 3
+  if (section === 'manual') selectFirstMissingManualForm()
   activeDataSection.value = section
 }
 
 function jumpToFirstDataIssue(): void {
-  if (manualFieldEntries.value.length) jumpToDataSection('manual')
-  else if (!parcels.value.length || !flow.benchmarks.length) jumpToDataSection('land')
+  if (dataIssueCounts.value.land) jumpToDataSection('land')
+  else if (dataIssueCounts.value.manual) jumpToDataSection('manual')
   else jumpToDataSection('f03')
 }
 
@@ -1005,9 +1029,9 @@ async function wizardNext(): Promise<void> {
   }
   if (activeWizardStep.value === 2) {
     if (activeIntakeStage.value === 'documents') {
-      if (allCandidates.value.length || pendingCandidates.value.length) {
+      if (pendingCandidates.value.length) {
         navigateWorkspaceStage('ai-review')
-        selectedCandidateId.value = pendingCandidates.value[0]?.extracted_field_id ?? allCandidates.value[0]?.extracted_field_id ?? null
+        selectedCandidateId.value = pendingCandidates.value[0]?.extracted_field_id ?? null
         return
       }
       navigateWorkspaceStage('data')
@@ -1023,8 +1047,8 @@ async function wizardNext(): Promise<void> {
     return
   }
   if (activeWizardStep.value === 3) {
-    if (dataIssueCounts.value.overview) {
-      notice.value = `目前仍有 ${dataIssueCounts.value.overview} 項資料待處理，已帶你前往第一個待處理區域。`
+    if (dataBlockingIssueCount.value) {
+      notice.value = `目前仍有 ${dataBlockingIssueCount.value} 項資料待處理，已帶你前往第一個待處理區域。`
       jumpToFirstDataIssue()
       return
     }
@@ -1835,7 +1859,7 @@ async function saveManualFields(): Promise<void> {
     ;(values[entry.formCode] ??= {})[entry.fieldName] = value
   }
   if (!Object.keys(values).length) {
-    notice.value = '請至少填寫一個人工補充欄位；空白欄位不會儲存。'
+    notice.value = '請至少填寫一個欄位；空白欄位不會儲存。'
     return
   }
 
@@ -1864,7 +1888,7 @@ async function saveManualFields(): Promise<void> {
     const failures = Object.entries(response.manual_field_errors ?? {})
     notice.value = failures.length
       ? `已儲存可套用欄位；另有 ${failures.length} 項無法寫入正式表單，請依下方錯誤修正。`
-      : `已儲存 ${response.manual_fields_saved?.length ?? 0} 個人工補充欄位，並重新產生確認資料。`
+      : `已儲存 ${response.manual_fields_saved?.length ?? 0} 個欄位，並重新檢查相關資料。`
   } catch (caught: unknown) {
     if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
   } finally {
@@ -2435,6 +2459,7 @@ onBeforeUnmount(clearPreviewUrl)
         v-if="activeWizardStep === 3"
         :active-section="activeDataSection"
         :issue-counts="dataIssueCounts"
+        :blocking-issue-count="dataBlockingIssueCount"
         :parcel-count="locationParcels.length"
         :benchmark-count="flow.benchmarks.length"
         :has-f03="Boolean(flow.f03)"

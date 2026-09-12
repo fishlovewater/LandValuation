@@ -488,7 +488,7 @@ describe('valuation demo flow', () => {
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
 
     await vi.waitFor(() => expect(wrapper.get('[data-workspace-stage="documents"]').attributes('aria-current')).toBe('step'))
-    expect(wrapper.get('[data-testid="valuation-workflow-guide"]').text()).toContain('文件與辨識')
+    expect(wrapper.get('[data-testid="valuation-workflow-guide"]').text()).toContain('來源資料')
     expect(wrapper.find('#valuation-document-workspace').exists()).toBe(true)
     expect(workspaceRequests).toHaveLength(0)
     wrapper.unmount()
@@ -1713,11 +1713,11 @@ describe('valuation demo flow', () => {
     await wrapper.get('[data-testid="save-manual-fields"]').trigger('click')
     await vi.waitFor(() => {
       expect(savedReason).toBe('人工核對附件後採用此值')
-      expect(wrapper.get('[data-testid="save-manual-fields"]').text()).toContain('儲存人工補充資料')
+      expect(wrapper.get('[data-testid="save-manual-fields"]').text()).toContain('儲存欄位資料')
     })
 
     expect(manualBody).toEqual({ values: { F03: { decision_reason: '人工核對附件後採用此值' } } })
-    expect(wrapper.text()).toContain('已儲存 1 個人工補充欄位')
+    expect(wrapper.text()).toContain('已儲存 1 個欄位')
     wrapper.unmount()
   })
 

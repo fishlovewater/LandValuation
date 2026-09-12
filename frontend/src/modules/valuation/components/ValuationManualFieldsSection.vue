@@ -58,12 +58,12 @@ function handleValueInput(key: string, event: Event): void {
           <ClipboardText :size="22" weight="duotone" />
         </span>
         <div>
-          <p class="manual-fields__eyebrow">人工補充</p>
-          <h2 id="manual-fields-title">補齊正式欄位</h2>
-          <span>針對辨識未取得或仍需人工確認的正式表單欄位補值。</span>
+          <p class="manual-fields__eyebrow">查估資料</p>
+          <h2 id="manual-fields-title">查估必要欄位</h2>
+          <span>確認來源資料未取得或仍需補齊的正式查估欄位。</span>
         </div>
       </div>
-      <div class="manual-fields__stats" aria-label="人工補充狀態">
+      <div class="manual-fields__stats" aria-label="必要欄位狀態">
         <span>{{ props.entries.length }} 項欄位</span>
         <span>{{ completedCount }} 項已填</span>
       </div>
@@ -71,7 +71,7 @@ function handleValueInput(key: string, event: Event): void {
 
     <div class="manual-fields__control-bar">
       <label class="manual-fields__selector">
-        <span>目前補填表單</span>
+        <span>目前查估表單</span>
         <select :value="props.activeForm" data-testid="manual-form-selector" @change="handleFormChange">
           <option value="F01">F01－買賣實例調查估價表</option>
           <option value="F02">F02－比較法調查估價表</option>
@@ -140,7 +140,7 @@ function handleValueInput(key: string, event: Event): void {
     <div class="manual-fields__footer">
       <div class="manual-fields__footer-copy">
         <strong>儲存後會重新檢核相關資料</strong>
-        <span>人工輸入會更新同欄位先前的人工值；受影響的計算與送審文件需要重新計算／檢核。</span>
+        <span>欄位更新會影響相關計算與送審文件，必要時需重新執行計算與檢核。</span>
       </div>
       <button
         v-if="props.editableCount"
@@ -151,7 +151,7 @@ function handleValueInput(key: string, event: Event): void {
         @click="emit('save')"
       >
         <FloppyDisk v-if="!props.saving" :size="16" weight="bold" aria-hidden="true" />
-        {{ props.saving ? '儲存中…' : '儲存人工補充資料' }}
+        {{ props.saving ? '儲存中…' : '儲存欄位資料' }}
       </button>
     </div>
   </section>
@@ -159,8 +159,8 @@ function handleValueInput(key: string, event: Event): void {
   <section v-else class="manual-fields__empty">
     <CheckCircle :size="22" weight="duotone" aria-hidden="true" />
     <div>
-      <strong>目前沒有需要人工補充的欄位</strong>
-      <span>智能辨識與既有資料已提供目前可確認的欄位；可以繼續處理宗地與比準地或比準地地價估計表。</span>
+      <strong>目前沒有缺少的必要欄位</strong>
+      <span>目前查估必要資料已具備；可以繼續處理宗地與比準地或估價參數。</span>
     </div>
   </section>
 </template>
