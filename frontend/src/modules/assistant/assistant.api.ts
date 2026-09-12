@@ -272,5 +272,15 @@ export function safeAssistantErrorMessage(error: unknown): string {
     }
     return '目前操作與案件或表單狀態衝突，請重新整理後確認目前狀態。'
   }
+  if (isAxiosError(error) && error.response?.status === 422) {
+    const code = responseErrorCode(error)
+    if (code === 'ASSISTANT_CONTEXT_INVALID') {
+      return '目前智能助理無法使用這個工作情境，請重新整理後再試。'
+    }
+    if (code === 'CASE_CONTEXT_INTEGRATION_PENDING') {
+      return '目前這項知識查詢尚未支援案件情境，請改用一般知識問題。'
+    }
+    return '問題內容或目前案件情境無法處理，請確認後再試。'
+  }
   return '智能助理目前無法回應，請稍後再試。'
 }

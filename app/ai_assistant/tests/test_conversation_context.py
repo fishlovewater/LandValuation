@@ -12,6 +12,7 @@ def test_workspace_is_normalized_and_limited_to_known_assistant_workspaces():
     assert _normalize_workspace(None) is None
     assert _normalize_workspace(" Review ") == "review"
     assert _normalize_workspace("VALUATION") == "valuation"
+    assert _normalize_workspace("History") == "history"
 
     with pytest.raises(AppError) as raised:
         _normalize_workspace("admin")

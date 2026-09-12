@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { assistantApi, AssistantContextError } from '../../src/modules/assistant/assistant.api'
+import {
+  assistantApi,
+  AssistantContextError,
+  safeAssistantErrorMessage,
+} from '../../src/modules/assistant/assistant.api'
 import { http } from '../../src/api/http'
 
 const sessionId = '33333333-3333-4333-8333-333333333333'
@@ -162,5 +166,33 @@ describe('Assistant API transport', () => {
       text: '以下是目前找到的相關來源，請確認內容是否符合你的問題。',
       citation_ids: [chunkId],
     }])
+  })
+
+  it('shows a specific message when the assistant workspace context is rejected', () => {
+    const error = {
+      isAxiosError: true,
+      response: {
+        status: 422,
+        data: { error: { code: 'ASSISTANT_CONTEXT_INVALID' } },
+      },
+    }
+
+    expect(safeAssistantErrorMessage(error)).toBe(
+      '目前智能助理無法使用這個工作情境，請重新整理後再試。',
+    )
+  })
+
+  it('does not describe every 422 response as a temporary AI outage', () => {
+    const error = {
+      isAxiosError: true,
+      response: {
+        status: 422,
+        data: { error: { code: 'VALIDATION_ERROR' } },
+      },
+    }
+
+    expect(safeAssistantErrorMessage(error)).toBe(
+      '問題內容或目前案件情境無法處理，請確認後再試。',
+    )
   })
 })
