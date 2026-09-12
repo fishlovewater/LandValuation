@@ -36,7 +36,10 @@ class ReviewRepository:
             ) latest ON true
             JOIN valuation.extracted_fields ef ON ef.extraction_id = latest.extraction_id
             WHERE d.case_id = :case_id AND d.is_active = true
-              AND ef.field_status IN ('EXTRACTED', 'NEEDS_CONFIRMATION', 'CONFIRMED')
+              AND (
+                    ef.field_status IS NULL
+                    OR ef.field_status NOT IN ('APPLIED', 'AUTO_APPLIED', 'REJECTED')
+                  )
         """), {"case_id": case_id})
 
     async def create(self, payload: ReviewCreate, started_by_user_id: UUID) -> Review:

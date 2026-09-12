@@ -275,6 +275,16 @@ export function safeReviewErrorMessage(error: unknown): string {
   }
   if (isAxiosError(error) && error.response?.status === 409) {
     const code = error.response.data?.error?.code
+    if (code === 'REVIEW_OCR_CONFIRMATION_REQUIRED') {
+      const details = error.response.data?.error?.details
+      const pendingCount = details && typeof details === 'object'
+        ? (details as Record<string, unknown>).pending_external_field_count
+        : undefined
+      const countCopy = typeof pendingCount === 'number' && pendingCount > 0
+        ? `案件仍有 ${pendingCount} 筆辨識欄位尚未完成確認並填表或排除。`
+        : '案件仍有辨識欄位尚未完成確認並填表或排除。'
+      return `${countCopy}請檢查案件全部有效文件後再開始智慧審查。`
+    }
     const knownMessages: Record<string, string> = {
       REVIEW_STATE_CONFLICT: '案件狀態已變更，請重新整理後再試。',
       FINDING_DECISION_CONFLICT: '此疑點已被其他流程更新，請重新整理後確認目前狀態。',
@@ -296,7 +306,6 @@ export function safeReviewErrorMessage(error: unknown): string {
       REVIEW_DECISION_INVALID: '請補充審查理由或必要內容。',
       EXTERNAL_REVIEW_OPERATION_NOT_ALLOWED: '此操作只適用於外部審查案件。',
       DATA_CONFLICT: '資料未能儲存，請重試；若仍失敗，請檢查後端資料限制。',
-      REVIEW_OCR_CONFIRMATION_REQUIRED: '請先確認或排除疑慮欄位，再開始審查。',
     }
     return knownMessages[code] ?? '案件狀態不允許此操作，請重新整理後確認。'
   }

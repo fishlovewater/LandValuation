@@ -35,6 +35,7 @@ describe('review mappers', () => {
     expect(missingItemStatusLabel('VERIFIED')).toBe('已確認')
     expect(correctionStatusLabel('RESUBMITTED')).toBe('已重新送審')
     expect(verificationStatusLabel('APPLIED')).toBe('已確認並套用')
+    expect(verificationStatusLabel('CONFIRMED')).toBe('已確認，待填入表單')
     expect(findingCodeLabel('F03_WEIGHT_SUM')).toBe('F03 權重檢核')
     expect(findingTypeLabel('F03_WEIGHT_SUM_MISMATCH')).toBe('F03 權重規則檢核')
     expect(findingTypeLabel('EXPERT_GRADE_JUDGMENT')).toBe('級距專業覆核')

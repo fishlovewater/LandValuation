@@ -170,7 +170,7 @@ const CORRECTION_STATUS_LABELS: Readonly<Record<string, string>> = {
 const VERIFICATION_STATUS_LABELS: Readonly<Record<string, string>> = {
   EXTRACTED: '已辨識，待確認',
   NEEDS_CONFIRMATION: '待人工確認',
-  CONFIRMED: '已人工確認',
+  CONFIRMED: '已確認，待填入表單',
   APPLIED: '已確認並套用',
   AUTO_APPLIED: '自動已填表（未經人工確認）',
   VERIFIED: '已確認',

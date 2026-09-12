@@ -5,7 +5,9 @@ from uuid import uuid4
 
 import pytest
 
+import app.review.intake_forms as intake_forms
 from app.core.exceptions import AppError
+from app.review.repository import ReviewRepository
 from app.review.workbench_repository import WorkbenchRepository
 from app.review.workbench_service import WorkbenchService
 from app.review.workbench_schemas import ExternalReviewCaseCreate
@@ -333,6 +335,117 @@ def test_workbench_preflight_rejects_returned_for_revision_bypass():
 
     assert exc_info.value.code == "REVIEW_STATE_CONFLICT"
     assert exc_info.value.status_code == 409
+
+
+def test_external_preflight_blocks_any_field_not_fully_handled_and_returns_case_count():
+    review_id = uuid4()
+    case_id = uuid4()
+
+    class FakeReviewRepository:
+        async def get(self, requested_review_id, **_kwargs):
+            assert requested_review_id == review_id
+            return SimpleNamespace(
+                review_id=review_id,
+                case_id=case_id,
+                review_status="RECEIVED",
+            )
+
+        async def get_case(self, requested_case_id):
+            assert requested_case_id == case_id
+            return SimpleNamespace(case_type="EXTERNAL_REVIEW")
+
+        async def pending_external_fields(self, requested_case_id):
+            assert requested_case_id == case_id
+            return 3
+
+    service = WorkbenchService(SimpleNamespace(), FakeReviewRepository())
+
+    with pytest.raises(AppError) as exc_info:
+        asyncio.run(service.preflight(review_id, uuid4()))
+
+    assert exc_info.value.code == "REVIEW_OCR_CONFIRMATION_REQUIRED"
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.details == {"pending_external_field_count": 3}
+    assert "確認並填表或排除" in exc_info.value.message
+
+
+def test_pending_external_fields_uses_completed_status_allowlist():
+    case_id = uuid4()
+
+    class FakeSession:
+        def __init__(self):
+            self.statement = ""
+            self.parameters = None
+
+        async def scalar(self, statement, parameters):
+            self.statement = str(statement)
+            self.parameters = parameters
+            return 0
+
+    session = FakeSession()
+    result = asyncio.run(ReviewRepository(session).pending_external_fields(case_id))
+
+    assert result == 0
+    assert session.parameters == {"case_id": case_id}
+    assert "ef.field_status IS NULL" in session.statement
+    assert "NOT IN ('APPLIED', 'AUTO_APPLIED', 'REJECTED')" in session.statement
+
+
+def test_fill_review_form_finishes_human_confirmation_as_applied(monkeypatch):
+    user_id = uuid4()
+    form_id = uuid4()
+    candidate = SimpleNamespace(
+        extracted_field_id=uuid4(),
+        extraction_id=uuid4(),
+        case_id=uuid4(),
+        document_id=uuid4(),
+        form_code="F01",
+        field_name="vendor_note",
+        extracted_value="原始辨識內容",
+        confirmed_value="人工確認內容",
+        confirmed_by_user_id=user_id,
+        confirmed_at=datetime.now(UTC),
+        source_page=2,
+        applied_form_instance_id=None,
+        applied_at=None,
+        field_status="CONFIRMED",
+    )
+    form = SimpleNamespace(
+        form_instance_id=form_id,
+        form_code="F01",
+        source_document_id=candidate.document_id,
+        version_no=1,
+        form_status="DRAFT",
+        form_content={
+            "review_extraction_id": str(candidate.extraction_id),
+            "review_fields": {},
+        },
+        updated_by_user_id=None,
+    )
+
+    class FakeValuationRepository:
+        def __init__(self, _session):
+            pass
+
+        async def list_forms(self, requested_case_id):
+            assert requested_case_id == candidate.case_id
+            return [form]
+
+        async def save_form(self, saved_form):
+            assert saved_form is form
+
+    monkeypatch.setattr(intake_forms, "ValuationRepository", FakeValuationRepository)
+
+    asyncio.run(
+        intake_forms.fill_review_form(
+            object(), candidate, SimpleNamespace(user_id=user_id)
+        )
+    )
+
+    assert candidate.field_status == "APPLIED"
+    assert candidate.applied_form_instance_id == form_id
+    assert candidate.applied_at is not None
+    assert form.form_content["review_fields"]["vendor_note"]["value"] == "人工確認內容"
 
 
 def test_run_projection_exposes_external_snapshot_metadata_without_snapshot_body():
