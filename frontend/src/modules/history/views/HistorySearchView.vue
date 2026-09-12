@@ -270,7 +270,7 @@ onBeforeUnmount(() => activeController?.abort())
     <PageHeader
       eyebrow="案件歷史"
       title="案件查詢"
-      description="先確認目前帳號的可查看範圍，再搜尋案件並進入案件資料或下載相關文件。"
+      description="搜尋符合目前帳號權限的歷史案件，查看案件資料與相關文件。"
     >
       <template #actions>
         <span class="history-search__permission">
@@ -279,21 +279,6 @@ onBeforeUnmount(() => activeController?.abort())
         </span>
       </template>
     </PageHeader>
-
-    <ol class="history-search__flow" aria-label="案件歷史操作流程">
-      <li class="is-complete">
-        <span>1</span>
-        <div><strong>確認權限</strong><small>依登入帳號自動判斷</small></div>
-      </li>
-      <li class="is-current" aria-current="step">
-        <span>2</span>
-        <div><strong>搜尋案件</strong><small>輸入案件編號、名稱或地號</small></div>
-      </li>
-      <li>
-        <span>3</span>
-        <div><strong>查看資料 / 下載文件</strong><small>進入案件後查看授權內容</small></div>
-      </li>
-    </ol>
 
     <section v-liquid-glass data-lg class="history-search__workspace lg">
       <form class="history-search__form" data-testid="history-search-form" @submit.prevent="applySearch">
@@ -473,17 +458,6 @@ onBeforeUnmount(() => activeController?.abort())
 .history-search { padding: 0 28px 36px; }
 .history-search__permission { display:inline-flex; align-items:center; gap:8px; padding:8px 11px; border:1px solid var(--app-line); border-radius:999px; color:var(--app-ink-soft); background:rgba(255,255,255,.78); font-size:11px; font-weight:800; }
 .history-search__permission-dot { width:7px; height:7px; border-radius:999px; background:var(--app-green); box-shadow:0 0 0 4px color-mix(in srgb, var(--app-green) 12%, transparent); }
-.history-search__flow { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0; margin:0 0 15px; padding:0; border:1px solid var(--app-line); border-radius:12px; overflow:hidden; background:rgba(255,255,255,.68); list-style:none; }
-.history-search__flow li { position:relative; display:flex; align-items:center; gap:10px; min-width:0; padding:11px 15px; }
-.history-search__flow li + li { border-left:1px solid var(--app-line); }
-.history-search__flow li > span { display:grid; width:26px; height:26px; flex:0 0 26px; place-items:center; border:1px solid var(--app-line); border-radius:999px; color:var(--app-muted); background:#fff; font-size:10px; font-weight:900; }
-.history-search__flow li div { display:grid; min-width:0; gap:2px; }
-.history-search__flow strong { color:var(--app-ink-soft); font-size:11px; }
-.history-search__flow small { overflow:hidden; color:var(--app-muted); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
-.history-search__flow .is-complete > span { border-color:#b8d8c6; color:#276345; background:#eef7f2; }
-.history-search__flow .is-current { background:color-mix(in srgb, var(--app-primary-soft) 72%, white); }
-.history-search__flow .is-current > span { border-color:var(--app-primary); color:#fff; background:var(--app-primary); }
-.history-search__flow .is-current strong { color:var(--app-primary-deep); }
 .history-search__workspace { overflow:hidden; border:1px solid rgba(255,255,255,.82); border-radius:var(--app-radius-md); background:rgba(248,250,252,.76); box-shadow:var(--app-shadow-soft); }
 .history-search__form { padding:20px; }
 .history-search__form-heading,
@@ -562,9 +536,6 @@ onBeforeUnmount(() => activeController?.abort())
 
 @media (max-width: 700px) {
   .history-search { padding-inline: 14px; }
-  .history-search__flow { grid-template-columns:1fr; }
-  .history-search__flow li + li { border-top:1px solid var(--app-line); border-left:0; }
-  .history-search__flow small { white-space:normal; }
   .history-search__quick-fields { grid-template-columns: 1fr; }
   .history-search__submit { width: 100%; }
   .history-search__form-heading,

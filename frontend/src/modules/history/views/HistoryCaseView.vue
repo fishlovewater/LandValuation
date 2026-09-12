@@ -427,18 +427,12 @@ onBeforeUnmount(() => {
     <PageHeader
       eyebrow="案件歷史"
       title="案件資料"
-      :description="detail ? `${detail.caseNo} · ${detail.caseTitle}` : '查看授權的案件資料與相關文件。'"
+      description="查看案件基本資料、歷程與目前帳號可存取的相關文件。"
     >
       <template #actions>
         <button type="button" class="history-case__back" data-testid="history-back-search" @click="backToSearch">返回案件清單</button>
       </template>
     </PageHeader>
-
-    <ol class="history-case__flow" aria-label="案件歷史操作流程">
-      <li class="is-complete"><span>1</span><div><strong>確認權限</strong><small>依登入帳號自動判斷</small></div></li>
-      <li class="is-complete"><span>2</span><div><strong>搜尋案件</strong><small>已選取案件</small></div></li>
-      <li class="is-current" aria-current="step"><span>3</span><div><strong>查看資料 / 下載文件</strong><small>目前所在步驟</small></div></li>
-    </ol>
 
     <LoadingSkeleton v-if="loading && !detail" :rows="6" label="案件歷程明細載入中" />
     <ErrorState v-else-if="error && !detail" :message="error" @retry="load" />
@@ -448,27 +442,43 @@ onBeforeUnmount(() => {
 
       <section v-liquid-glass data-lg class="history-case__identity lg" aria-labelledby="history-case-identity-title">
         <div class="history-case__identity-heading">
-          <div>
-            <p class="history-case__eyebrow">案件資料</p>
+          <div class="history-case__identity-copy">
+            <div class="history-case__identity-kicker">
+              <span class="history-case__identity-no">{{ detail.caseNo }}</span>
+              <span class="history-case__identity-type">{{ detail.caseType || '其他案件類型' }}</span>
+            </div>
             <h2 id="history-case-identity-title">{{ detail.caseTitle }}</h2>
-            <p class="history-case__identity-no">{{ detail.caseNo }}</p>
+            <p class="history-case__identity-location">{{ districtDisplay }}</p>
           </div>
           <div class="history-case__identity-status">
             <StatusBadge :status="detail.caseStatusCode" />
             <RiskBadge v-if="detail.riskLevelCode" :risk="detail.riskLevelCode" />
           </div>
         </div>
-        <dl class="history-case__identity-grid">
-          <div><dt>案件類型</dt><dd>{{ detail.caseType || '—' }}</dd></div>
-          <div><dt>案件地區</dt><dd>{{ districtDisplay }}</dd></div>
-          <div><dt>估價基準日</dt><dd>{{ readableDate(detail.valuationBaseDate) }}</dd></div>
-          <div><dt>案件狀態</dt><dd>{{ detail.caseStatusLabel }}</dd></div>
-          <div><dt>最後更新</dt><dd>{{ readableDate(detail.updatedAt) }}</dd></div>
-          <div><dt>案件文件</dt><dd>{{ currentDocumentCount }} 份</dd></div>
-        </dl>
-        <div class="history-case__identity-footer">
-          <span>可查看：{{ hasValuation ? '估價資料' : '' }}{{ hasValuation && hasReview ? '、' : '' }}{{ hasReview ? '審查資料' : '' }}</span>
-          <span>{{ documentSummary }}</span>
+        <div class="history-case__identity-body">
+          <dl class="history-case__identity-grid">
+            <div>
+              <dt>估價基準日</dt>
+              <dd>{{ readableDate(detail.valuationBaseDate) }}</dd>
+            </div>
+            <div>
+              <dt>最後更新</dt>
+              <dd>{{ readableDate(detail.updatedAt) }}</dd>
+            </div>
+          </dl>
+          <aside class="history-case__access" data-testid="history-case-access" aria-label="目前帳號可查看資料">
+            <div>
+              <span class="history-case__access-label">目前可查看</span>
+              <div class="history-case__access-chips">
+                <span v-if="hasValuation">估價資料</span>
+                <span v-if="hasReview">審查資料</span>
+              </div>
+            </div>
+            <div class="history-case__access-summary">
+              <span class="history-case__access-label">案件內容</span>
+              <strong>{{ detail.parcels.length }} 筆土地資料 · {{ documentSummary }}</strong>
+            </div>
+          </aside>
         </div>
       </section>
 
@@ -493,12 +503,28 @@ onBeforeUnmount(() => {
           <section v-liquid-glass data-lg class="history-case__facts lg" aria-labelledby="history-case-facts-title">
             <p class="history-case__eyebrow">資料概況</p>
             <h2 id="history-case-facts-title">案件內容摘要</h2>
-            <dl>
-              <div><dt>土地資料</dt><dd>{{ detail.parcels.length }} 筆</dd></div>
-              <div><dt>案件文件</dt><dd>{{ currentDocumentCount }} 份</dd></div>
-              <div v-if="hasValuation"><dt>估價資料</dt><dd>{{ valuationItems.length }} 筆紀錄</dd></div>
-              <div v-if="hasReview"><dt>審查資料</dt><dd>{{ reviewItems.length }} 筆紀錄</dd></div>
-            </dl>
+            <div class="history-case__stats">
+              <article>
+                <span>土地資料</span>
+                <strong>{{ detail.parcels.length }}</strong>
+                <small>筆地籍資料</small>
+              </article>
+              <article>
+                <span>案件文件</span>
+                <strong>{{ currentDocumentCount }}</strong>
+                <small>份目前文件</small>
+              </article>
+              <article v-if="hasValuation">
+                <span>估價資料</span>
+                <strong>{{ valuationItems.length }}</strong>
+                <small>筆紀錄</small>
+              </article>
+              <article v-if="hasReview">
+                <span>審查資料</span>
+                <strong>{{ reviewItems.length }}</strong>
+                <small>筆紀錄</small>
+              </article>
+            </div>
           </section>
           <DocumentList
             :documents="detail.documents"
@@ -658,28 +684,28 @@ onBeforeUnmount(() => {
 .history-case__back:hover { border-color: var(--app-accent); color: var(--app-accent-deep); }
 .history-case__message { margin: 10px 0 0; color: var(--app-green); font-size: 13px; font-weight: 700; }
 .history-case__message.is-error { color: #ac3c37; }
-.history-case__flow { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0; margin:0 0 15px; padding:0; border:1px solid var(--app-line); border-radius:12px; overflow:hidden; background:rgba(255,255,255,.68); list-style:none; }
-.history-case__flow li { display:flex; align-items:center; gap:10px; min-width:0; padding:11px 15px; }
-.history-case__flow li + li { border-left:1px solid var(--app-line); }
-.history-case__flow li > span { display:grid; width:26px; height:26px; flex:0 0 26px; place-items:center; border:1px solid var(--app-line); border-radius:999px; color:var(--app-muted); background:#fff; font-size:10px; font-weight:900; }
-.history-case__flow li div { display:grid; min-width:0; gap:2px; }
-.history-case__flow strong { color:var(--app-ink-soft); font-size:11px; }
-.history-case__flow small { overflow:hidden; color:var(--app-muted); font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
-.history-case__flow .is-complete > span { border-color:#b8d8c6; color:#276345; background:#eef7f2; }
-.history-case__flow .is-current { background:color-mix(in srgb, var(--app-primary-soft) 72%, white); }
-.history-case__flow .is-current > span { border-color:var(--app-primary); color:#fff; background:var(--app-primary); }
-.history-case__flow .is-current strong { color:var(--app-primary-deep); }
-.history-case__identity { display:grid; gap:17px; margin-top:12px; padding:20px; border:1px solid rgba(255,255,255,.72); border-radius:var(--app-radius-md); background:rgba(248,250,252,.74); box-shadow:var(--app-shadow-soft); }
-.history-case__identity-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; }
+.history-case__identity { display:grid; gap:18px; margin-top:12px; padding:20px; border:1px solid rgba(255,255,255,.72); border-radius:var(--app-radius-md); background:rgba(248,250,252,.78); box-shadow:var(--app-shadow-soft); }
+.history-case__identity-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; padding-bottom:16px; border-bottom:1px solid var(--app-line); }
+.history-case__identity-copy { display:grid; min-width:0; gap:8px; }
+.history-case__identity-kicker { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
 .history-case__eyebrow { margin: 0 0 5px; color: var(--app-accent-deep); font-size: 10px; font-weight: 900; letter-spacing: .15em; }
 .history-case__identity h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 25px; }
-.history-case__identity-no { margin:6px 0 0; color:var(--app-muted); font-size:11px; font-weight:800; letter-spacing:.06em; }
+.history-case__identity-no { display:inline-flex; align-items:center; min-height:26px; padding:4px 8px; border:1px solid color-mix(in srgb, var(--app-primary) 20%, var(--app-line)); border-radius:999px; color:var(--app-primary-deep); background:var(--app-primary-soft); font-size:10px; font-weight:900; letter-spacing:.05em; }
+.history-case__identity-type { color:var(--app-muted); font-size:10px; font-weight:800; }
+.history-case__identity-location { margin:0; color:var(--app-ink-soft); font-size:12px; font-weight:700; }
 .history-case__identity-status { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.history-case__identity-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; margin:0; overflow:hidden; border:1px solid var(--app-line); border-radius:10px; background:var(--app-line); }
-.history-case__identity-grid div { display:grid; gap:4px; min-width:0; padding:11px 12px; background:rgba(255,255,255,.88); }
+.history-case__identity-body { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(280px,.75fr); gap:12px; align-items:stretch; }
+.history-case__identity-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:0; }
+.history-case__identity-grid div { display:grid; align-content:center; gap:5px; min-width:0; min-height:74px; padding:13px 14px; border:1px solid var(--app-line); border-radius:10px; background:rgba(255,255,255,.86); }
 .history-case__identity-grid dt { color:var(--app-muted); font-size:9px; font-weight:800; }
-.history-case__identity-grid dd { margin:0; overflow-wrap:anywhere; color:var(--app-ink); font-size:12px; font-weight:800; }
-.history-case__identity-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; color:var(--app-muted); font-size:10px; }
+.history-case__identity-grid dd { margin:0; overflow-wrap:anywhere; color:var(--app-ink); font-size:13px; font-weight:900; }
+.history-case__access { display:grid; gap:12px; padding:13px 14px; border:1px solid color-mix(in srgb, var(--app-primary) 18%, var(--app-line)); border-radius:10px; background:color-mix(in srgb, var(--app-primary-soft) 58%, white); }
+.history-case__access > div { display:grid; gap:7px; }
+.history-case__access-summary { padding-top:10px; border-top:1px solid color-mix(in srgb, var(--app-primary) 14%, var(--app-line)); }
+.history-case__access-label { color:var(--app-muted); font-size:9px; font-weight:900; letter-spacing:.04em; }
+.history-case__access-chips { display:flex; flex-wrap:wrap; gap:6px; }
+.history-case__access-chips span { padding:5px 8px; border-radius:999px; color:var(--app-blue); background:#edf4fb; font-size:10px; font-weight:900; }
+.history-case__access-summary strong { color:var(--app-ink-soft); font-size:11px; line-height:1.55; }
 .history-case__tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 15px; border-bottom: 1px solid var(--app-line); }
 .history-case__tabs button { display: inline-flex; min-height: 44px; align-items: center; gap: 7px; margin-bottom: -1px; padding: 8px 14px; border: 1px solid transparent; border-bottom: 2px solid transparent; border-radius: 8px 8px 0 0; color: var(--app-ink-soft); background: transparent; cursor: pointer; font-size: 13px; font-weight: 800; }
 .history-case__tabs button:hover,
@@ -691,7 +717,7 @@ onBeforeUnmount(() => {
 .history-case__document-preview:focus-visible { outline:3px solid color-mix(in srgb, var(--app-primary) 25%, white); outline-offset:3px; }
 .history-case__tab-count { display: grid; min-width: 22px; height: 22px; place-items: center; padding: 0 6px; border-radius: 999px; color: #607286; background: #edf1f5; font-size: 9px; font-weight: 900; line-height: 1; }
 .history-case__tabs button.is-active .history-case__tab-count { color: #244d73; background: #e6eff8; }
-.history-case__overview-grid { display: grid; grid-template-columns: minmax(230px, .7fr) minmax(0, 1.3fr); gap: 15px; margin-top: 15px; }
+.history-case__overview-grid { display: grid; grid-template-columns: minmax(260px, .8fr) minmax(0, 1.2fr); gap: 15px; margin-top: 15px; }
 .history-case__document-preview { display:grid; gap:12px; margin-top:15px; padding:18px; border:1px solid var(--app-line); border-radius:var(--app-radius-sm); background:var(--app-paper-strong); }
 .history-case__document-preview > header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
 .history-case__document-preview h2 { margin:0; color:var(--app-ink); font-size:19px; }
@@ -707,11 +733,12 @@ onBeforeUnmount(() => {
 .history-case__data-section { padding: 20px; border: 1px solid rgba(255,255,255,.72); border-radius: var(--app-radius-sm); background: rgba(255,255,255,.72); box-shadow: var(--app-shadow-soft); }
 .history-case__facts h2,
 .history-case__parcel-card h2 { margin: 0 0 14px; color: var(--app-ink); font-family: var(--app-font-display); font-size: 22px; }
-.history-case__facts dl { display: grid; gap: 10px; margin: 0; }
-.history-case__facts dl div { display: grid; gap: 3px; }
-.history-case__facts dt,
+.history-case__stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.history-case__stats article { display:grid; gap:2px; padding:12px; border:1px solid var(--app-line); border-radius:9px; background:#fbfcfe; }
+.history-case__stats span { color:var(--app-muted); font-size:9px; font-weight:900; }
+.history-case__stats strong { color:var(--app-ink); font-size:24px; line-height:1.1; }
+.history-case__stats small { color:var(--app-ink-soft); font-size:9px; }
 .history-case__record dt { color: var(--app-muted); font-size: 10px; font-weight: 800; }
-.history-case__facts dd { margin: 0; color: var(--app-ink); font-size: 13px; font-weight: 800; }
 .history-case__parcel-card { margin-top: 15px; }
 .history-case__parcel-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .history-case__parcel { display: grid; gap: 4px; padding: 11px; border: 1px solid #e5e9f0; border-radius: 9px; background: #fbfcfe; }
@@ -768,7 +795,7 @@ onBeforeUnmount(() => {
 
 @media (max-width: 900px) {
   .history-case { padding-inline: 18px; }
-  .history-case__identity-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .history-case__identity-body { grid-template-columns:1fr; }
   .history-case__overview-grid { grid-template-columns: 1fr; }
   .history-case__record-grid { grid-template-columns: 1fr; }
   .history-case__diff-grid { grid-template-columns:1fr; }
@@ -776,13 +803,10 @@ onBeforeUnmount(() => {
 
 @media (max-width: 640px) {
   .history-case { padding-inline: 14px; }
-  .history-case__flow { grid-template-columns:1fr; }
-  .history-case__flow li + li { border-top:1px solid var(--app-line); border-left:0; }
-  .history-case__flow small { white-space:normal; }
   .history-case__identity-heading { flex-direction:column; }
   .history-case__identity-status { justify-content: flex-start; }
   .history-case__identity-grid { grid-template-columns:1fr; }
-  .history-case__identity-footer { align-items:flex-start; flex-direction:column; }
+  .history-case__stats { grid-template-columns:1fr 1fr; }
   .history-case__document-preview > header { flex-direction:column; }
   .history-case__document-frame { min-height:420px; }
   .history-case__parcel-list { grid-template-columns: 1fr; }

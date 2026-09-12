@@ -17,6 +17,7 @@ test('History search stays readable from desktop to mobile without exposing inte
   await page.setViewportSize({ width: 1440, height: 900 })
   await loginForHistory(page)
   await expect(page.locator('.history-search__permission')).toContainText('估價資料、審查資料')
+  await expect(page.locator('.history-search__flow')).toHaveCount(0)
 
   await page.getByTestId('history-advanced-toggle').click()
   await expect(page.getByTestId('history-advanced-filters')).toBeVisible()
@@ -56,6 +57,9 @@ test('History detail exposes readable data, previewable documents, and no raw wo
   await expect(page).toHaveURL(/\/app\/history\/cases\//)
   await expect(page.getByTestId('history-case')).toContainText('土地徵收補償市價查估案件')
   await expect(page.getByTestId('history-case')).toContainText('新北市 板橋區')
+  await expect(page.locator('.history-case__flow')).toHaveCount(0)
+  await expect(page.getByTestId('history-case-access')).toContainText('估價資料')
+  await expect(page.getByTestId('history-case-access')).toContainText('審查資料')
 
   const previewButton = page.locator('[data-testid^="history-preview-"]').first()
   await expect(previewButton).toBeVisible()
@@ -121,13 +125,13 @@ for (const scenario of [
     await expect(page.getByTestId(scenario.visibleTab)).toBeVisible()
     await expect(page.getByTestId(scenario.hiddenTab)).toHaveCount(0)
 
-    const detailText = await page.getByTestId('history-case').innerText()
+    const access = page.getByTestId('history-case-access')
     if (scenario.role === 'appraiser') {
-      expect(detailText).toContain('可查看：估價資料')
-      expect(detailText).not.toContain('可查看：審查資料')
+      await expect(access).toContainText('估價資料')
+      await expect(access).not.toContainText('審查資料')
     } else {
-      expect(detailText).toContain('可查看：審查資料')
-      expect(detailText).not.toContain('可查看：估價資料')
+      await expect(access).toContainText('審查資料')
+      await expect(access).not.toContainText('估價資料')
     }
   })
 }
@@ -198,9 +202,6 @@ test('History missing MinIO object degrades to a safe document error in the real
 test('History supports keyboard navigation, tab semantics, and preview focus restoration', async ({ page }) => {
   await loginForHistory(page)
 
-  const searchFlowCurrent = page.locator('.history-search__flow [aria-current="step"]')
-  await expect(searchFlowCurrent).toContainText('搜尋案件')
-
   const advancedToggle = page.getByTestId('history-advanced-toggle')
   await advancedToggle.focus()
   await page.keyboard.press('Enter')
@@ -213,7 +214,6 @@ test('History supports keyboard navigation, tab semantics, and preview focus res
   await expect(richCase).toBeVisible()
   await richCase.getByRole('button', { name: '查看案件' }).click()
 
-  await expect(page.locator('.history-case__flow [aria-current="step"]')).toContainText('查看資料 / 下載文件')
   const tablist = page.getByRole('tablist', { name: '案件歷程資料區段' })
   await expect(tablist).toBeVisible()
 
