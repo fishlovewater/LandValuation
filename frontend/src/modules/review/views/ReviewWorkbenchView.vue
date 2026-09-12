@@ -8,7 +8,6 @@ import ErrorState from '../../../components/common/ErrorState.vue'
 import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
 import PageHeader from '../../../components/common/PageHeader.vue'
 import GlassModal from '../../../components/glass/GlassModal.vue'
-import { liquidGlass as vLiquidGlass } from '../../../directives/liquidGlass'
 import { useAuthStore } from '../../../stores/auth.store'
 import EvidenceViewer from '../components/EvidenceViewer.vue'
 import ExternalReviewIntake from '../components/ExternalReviewIntake.vue'
@@ -798,7 +797,7 @@ onBeforeUnmount(() => {
           @changed="loadDetail"
         />
 
-        <div v-if="showStartReview" v-liquid-glass data-lg class="review-workbench__start-panel lg" data-testid="review-start-panel">
+        <div v-if="showStartReview" class="review-workbench__start-panel" data-testid="review-start-panel">
           <div>
             <strong>尚未開始智慧審查</strong>
             <p>先執行資料完整性與規則檢核，完成後才能處理疑點並完成審查。</p>
@@ -842,9 +841,7 @@ onBeforeUnmount(() => {
 
         <section
           v-if="detail.missingItems.length"
-          v-liquid-glass
-          data-lg
-          class="review-workbench__supplement lg"
+          class="review-workbench__supplement"
           data-testid="review-missing-items"
           aria-labelledby="review-missing-items-title"
         >
@@ -907,9 +904,7 @@ onBeforeUnmount(() => {
 
         <section
           v-if="detail.versionDiffs.length"
-          v-liquid-glass
-          data-lg
-          class="review-workbench__diffs lg"
+          class="review-workbench__diffs"
           data-testid="review-version-diffs"
           aria-labelledby="review-version-diffs-title"
         >
@@ -956,9 +951,7 @@ onBeforeUnmount(() => {
         <div class="review-workbench__layout">
           <aside
             id="review-context-drawer"
-            v-liquid-glass
-            data-lg
-            class="review-workbench__left lg"
+            class="review-workbench__left"
             :class="{ 'review-workbench__left--open': drawer === 'left' }"
             :role="drawer === 'left' ? 'dialog' : undefined"
             :aria-modal="drawer === 'left' ? 'true' : undefined"
