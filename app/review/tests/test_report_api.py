@@ -53,7 +53,9 @@ class FakeStorage:
         self.objects.pop(object_key, None)
 
 
-def test_structured_and_pdf_report_apis(authorized_client, runnable_review):
+def test_structured_report_api_is_available_for_completed_run(
+    authorized_client, runnable_review
+):
     run = authorized_client.post(
         f"/api/v1/review/cases/{runnable_review.review_id}/runs",
         json=run_payload(runnable_review),
@@ -69,28 +71,6 @@ def test_structured_and_pdf_report_apis(authorized_client, runnable_review):
         f"{runnable_review.rule_version_id}:{runnable_review.validation_rule_id}"
     )
     assert finding["source_evidence"][0]["verification_status"] == "APPLIED"
-
-    storage = FakeStorage()
-    app.dependency_overrides[get_storage_service] = lambda: storage
-    try:
-        generated = authorized_client.post(
-            f"/api/v1/review/runs/{run['validation_run_id']}/report/pdf"
-        )
-        assert generated.status_code == 201
-        metadata = generated.json()
-        # Storage internals must never reach an API response.
-        assert "bucket_name" not in metadata
-        assert "object_key" not in metadata
-        assert metadata["mime_type"] == "application/pdf"
-        assert metadata["original_filename"].endswith(".pdf")
-
-        downloaded = authorized_client.get(
-            f"/api/v1/review/runs/{run['validation_run_id']}/report/pdf/download"
-        )
-        assert downloaded.status_code == 200
-        assert downloaded.content.startswith(b"%PDF")
-    finally:
-        app.dependency_overrides.pop(get_storage_service, None)
 
 
 def test_report_decisions_are_scoped_to_the_requested_run(
@@ -213,6 +193,29 @@ def completed_review(authorized_client, runnable_review):
     )
 
 
+def test_generate_and_download_pdf_report(authorized_client, completed_review):
+    storage = FakeStorage()
+    app.dependency_overrides[get_storage_service] = lambda: storage
+    try:
+        generated = authorized_client.post(
+            f"/api/v1/review/runs/{completed_review.id}/report/pdf"
+        )
+        assert generated.status_code == 201
+        metadata = generated.json()
+        assert "bucket_name" not in metadata
+        assert "object_key" not in metadata
+        assert metadata["mime_type"] == "application/pdf"
+        assert metadata["original_filename"].endswith(".pdf")
+
+        downloaded = authorized_client.get(
+            f"/api/v1/review/runs/{completed_review.id}/report/pdf/download"
+        )
+        assert downloaded.status_code == 200
+        assert downloaded.content.startswith(b"%PDF")
+    finally:
+        app.dependency_overrides.pop(get_storage_service, None)
+
+
 @pytest.mark.parametrize(
     ("format_name", "mime_type", "suffix"),
     [
@@ -260,10 +263,16 @@ def test_final_report_requires_completed_review(
             f"/api/v1/review/runs/{run['validation_run_id']}/reports",
             json={"format": "xlsx"},
         )
+        pdf_response = authorized_client.post(
+            f"/api/v1/review/runs/{run['validation_run_id']}/report/pdf"
+        )
     finally:
         app.dependency_overrides.pop(get_storage_service, None)
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "REVIEW_REPORT_NOT_AVAILABLE"
+    assert pdf_response.status_code == 409
+    assert pdf_response.json()["error"]["code"] == "REVIEW_REPORT_NOT_AVAILABLE"
+    assert storage.objects == {}
 
 
 def test_report_generation_rejects_unknown_format(
