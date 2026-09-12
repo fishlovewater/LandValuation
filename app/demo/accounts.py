@@ -42,6 +42,11 @@ ASSISTANT_ROLE = (
     "Valuation Demo Assistant Appraiser",
     "Development-only companion role owned by app.demo; grants assistant.use only",
 )
+# Keep the legacy companion-role code/name for existing persistent Demo
+# databases, but link it to every owned Demo persona.  The role still grants
+# only ``assistant.use`` and never changes the production APPRAISER/REVIEWER/
+# INSPECTOR permission sets.
+ASSISTANT_ROLE_USERNAMES = frozenset({APPRAISER[0], REVIEWER[0], INSPECTOR[0]})
 PERMISSION_TEST_ROLE = (
     "DEMO_PERMISSION_TEST_APPRAISER",
     "Valuation Demo Permission Test Appraiser",
@@ -258,7 +263,7 @@ def _validate_demo_role_ownership(cursor, definition: tuple[str, str, str], *, a
         raise DemoError(f"DEMO_ROLE_MISSING: {role_code}")
     role_id = _ensure_owned_role(row, definition)
     linked = _role_linked_usernames(cursor, role_id)
-    allowed = {APPRAISER[0]}
+    allowed = ASSISTANT_ROLE_USERNAMES if definition == ASSISTANT_ROLE else {APPRAISER[0]}
     if any(username not in allowed for username in linked):
         raise DemoError(f"OWNERSHIP_COLLISION: auth.roles.role_code={role_code}")
     return role_id
@@ -289,8 +294,8 @@ def _validate_ownership(cursor, *, require_formal_roles: bool = True):
     # links are treated as a collision before any destructive statement.
     allowed_links = {
         APPRAISER[0]: {formal_role_ids.get("APPRAISER"), assistant_role_id, permission_test_role_id},
-        REVIEWER[0]: {formal_role_ids.get("REVIEWER")},
-        INSPECTOR[0]: {formal_role_ids.get("INSPECTOR")},
+        REVIEWER[0]: {formal_role_ids.get("REVIEWER"), assistant_role_id},
+        INSPECTOR[0]: {formal_role_ids.get("INSPECTOR"), assistant_role_id},
     }
     for username, row in users.items():
         if row is None:
@@ -516,28 +521,20 @@ def seed_accounts(
         user_ids[username] = user_id
         identities[username] = identity
 
-    appraiser_id = user_ids[APPRAISER[0]]
-    reviewer_id = user_ids[REVIEWER[0]]
-    inspector_id = user_ids[INSPECTOR[0]]
-    cursor.execute("DELETE FROM auth.user_roles WHERE user_id = %s", (appraiser_id,))
-    cursor.execute(
-        """
-        INSERT INTO auth.user_roles (user_id, role_id)
-        VALUES (%s, %s), (%s, %s)
-        """,
-        (appraiser_id, formal_role_ids["APPRAISER"], appraiser_id, assistant_role_id),
-    )
-    if assistant_role_id not in _role_links(cursor, appraiser_id):
-        raise DemoError("PERMISSION_STATE_MISMATCH")
-    for user_id, role_code in (
-        (reviewer_id, "REVIEWER"),
-        (inspector_id, "INSPECTOR"),
-    ):
+    for definition in _ACCOUNT_DEFINITIONS:
+        username, _email, _display_name, role_code = definition
+        user_id = user_ids[username]
         cursor.execute("DELETE FROM auth.user_roles WHERE user_id = %s", (user_id,))
         cursor.execute(
-            "INSERT INTO auth.user_roles (user_id, role_id) VALUES (%s, %s)",
-            (user_id, formal_role_ids[role_code]),
+            """
+            INSERT INTO auth.user_roles (user_id, role_id)
+            VALUES (%s, %s), (%s, %s)
+            """,
+            (user_id, formal_role_ids[role_code], user_id, assistant_role_id),
         )
+        links = _role_links(cursor, user_id)
+        if formal_role_ids[role_code] not in links or assistant_role_id not in links:
+            raise DemoError("PERMISSION_STATE_MISMATCH")
 
     # A fresh seed returns the normal APPRAISER state and removes the transient
     # permission-test role only after all ownership checks have passed.
@@ -642,6 +639,7 @@ __all__ = [
     "REVIEWER",
     "INSPECTOR",
     "ASSISTANT_ROLE",
+    "ASSISTANT_ROLE_USERNAMES",
     "PERMISSION_TEST_ROLE",
     "DEMO_LIFECYCLE_LOCK_KEY",
     "DemoAccounts",

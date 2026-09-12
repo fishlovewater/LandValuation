@@ -89,10 +89,13 @@ before execution; read-only tools do not inherit that mutation permission.
 Migration `20260908_0015` registers `assistant.use` without granting it to any
 production role. The development seed never edits `APPRAISER` role permissions:
 it owns the `DEMO_ASSISTANT_APPRAISER` companion role, replaces only that role's
-permissions with `assistant.use`, and links both `APPRAISER` and the companion
-role only to `valuation_demo`. Seed/status output contains only the safe username,
-role codes, and permission codes; the generated password is returned only by the
-one-time `seed` command. Reset removes only the Demo user's links/user and drops
+permissions with `assistant.use`, and links that companion role to all three owned
+Demo personas (`valuation_demo`, `review_demo`, and `inspector_demo`) alongside
+their normal `APPRAISER`, `REVIEWER`, or `INSPECTOR` role. This keeps the same AI
+assistant shell available in Valuation, Review, and History without changing any
+production-role grants. Seed/status output contains only the safe username, role
+codes, and permission codes; the generated password is returned only by the
+one-time `seed` command. Reset removes only the Demo users' links/users and drops
 the companion role only when no external user link or unexpected permission
 ownership makes deletion unsafe.
 

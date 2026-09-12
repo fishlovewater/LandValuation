@@ -32,14 +32,29 @@ async function switchDemoRole(page: Page, testId: string, role: string, expected
   await expect(page).toHaveURL(expectedPath)
 }
 
+async function expectAssistantFramework(page: Page): Promise<void> {
+  const shortcut = page.getByTestId('assistant-shortcut')
+  await expect(shortcut).toBeVisible()
+  await shortcut.click()
+  const assistant = page.getByTestId('assistant-floating-window')
+  await expect(assistant).toBeVisible()
+  await expect(assistant).toContainText('AI 助手')
+  await expect(assistant).toContainText('依問題自動判斷資料來源')
+  await assistant.getByRole('button', { name: '關閉' }).click()
+  await expect(assistant).toHaveCount(0)
+}
+
 test('three Demo role buttons enter the correct workspaces without typing credentials', async ({ page }) => {
   await quickLogin(page, 'demo-login-appraiser', 'APPRAISER', /\/app\/valuation\/dashboard$/)
+  await expectAssistantFramework(page)
   await logout(page)
 
   await quickLogin(page, 'demo-login-reviewer', 'REVIEWER', /\/app\/review\/dashboard$/)
+  await expectAssistantFramework(page)
   await logout(page)
 
   await quickLogin(page, 'demo-login-inspector', 'INSPECTOR', /\/app\/history\/search$/)
+  await expectAssistantFramework(page)
 })
 
 test('Demo presenter can switch roles inside the authenticated workspace without logging out', async ({ page }) => {

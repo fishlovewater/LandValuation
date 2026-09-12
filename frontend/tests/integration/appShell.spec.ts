@@ -118,6 +118,22 @@ describe('shared application shell', () => {
     expect(reviewerWrapper.find('[data-testid="assistant-shortcut"]').exists()).toBe(false)
   })
 
+  it('uses the same AI assistant shortcut for reviewer and inspector once assistant.use is granted', async () => {
+    const router = shellRouter()
+    await router.push('/')
+
+    for (const user of [reviewer, inspector]) {
+      setUser({ ...user, permissions: [...user.permissions, 'assistant.use'] })
+      const wrapper = mount(AppHeader, { global: { plugins: [router] } })
+      const shortcut = wrapper.get('[data-testid="assistant-shortcut"]')
+      expect(shortcut.attributes('aria-label')).toBe('開啟 AI 助手')
+      expect(shortcut.attributes('aria-controls')).toBe('global-assistant-drawer')
+      await shortcut.trigger('click')
+      expect(wrapper.emitted('openAssistant')).toHaveLength(1)
+      wrapper.unmount()
+    }
+  })
+
   it('keeps Demo account identity visible without exposing a subsystem role switcher', async () => {
     const router = shellRouter()
     await router.push('/app/valuation/dashboard')
