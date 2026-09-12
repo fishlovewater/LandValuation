@@ -90,6 +90,21 @@ try {
         throw 'Acceptance Demo seed output did not contain the expected case/form IDs.'
     }
 
+    Write-Host 'Seeding the dedicated External Review acceptance case...'
+    $externalSeedOutput = Invoke-AcceptanceCompose -Arguments @(
+        'exec', '-T', 'api', 'python', '-m', 'app.review.demo', 'seed'
+    )
+    $externalSeedRaw = ($externalSeedOutput | Out-String).Trim()
+    try {
+        $externalSeed = $externalSeedRaw | ConvertFrom-Json
+    }
+    catch {
+        throw 'External Review Demo seed did not return valid JSON.'
+    }
+    if (-not $externalSeed.ok -or [string]::IsNullOrWhiteSpace([string]$externalSeed.review_id)) {
+        throw "External Review Demo seed failed: $externalSeedRaw"
+    }
+
     $env:E2E_BASE_URL = $FrontendUrl
     $env:VITE_DEV_PORT = '5174'
     $env:VITE_DEV_API_TARGET = $ApiUrl
@@ -98,6 +113,8 @@ try {
     $env:E2E_CASE_ID = $uuidMatches[0].Value
     $env:E2E_F03_FORM_ID = $uuidMatches[1].Value
     $env:E2E_CASE_NO = 'DEMO-F03-PERSISTENT-001'
+    $env:E2E_EXTERNAL_REVIEW_ID = [string]$externalSeed.review_id
+    $env:E2E_EXTERNAL_CASE_NO = 'DEMO-EXTERNAL-REVIEW-001'
     $env:E2E_APPRAISER_USERNAME = 'valuation_demo'
     $env:E2E_REVIEWER_USERNAME = 'review_demo'
     $env:E2E_INSPECTOR_USERNAME = 'inspector_demo'
@@ -112,7 +129,7 @@ try {
     Write-Host 'Running the real Assistant -> Valuation -> Review -> History browser journey...'
     Push-Location $FrontendRoot
     try {
-        & npm.cmd run test:e2e -- tests/e2e/demo-flow.spec.ts --workers=1
+        & npm.cmd run test:e2e -- tests/e2e/demo-flow.spec.ts tests/e2e/external-review-demo.spec.ts --workers=1
         if ($LASTEXITCODE -ne 0) {
             throw "Playwright acceptance failed with exit code $LASTEXITCODE."
         }

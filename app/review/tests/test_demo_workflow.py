@@ -27,6 +27,11 @@ def test_demo_seed_is_idempotent_and_real_api_workflow_completes(postgres_connec
         cursor.execute("SELECT count(*) FROM auth.users WHERE username = %s", (DEMO_USERNAME,))
         assert cursor.fetchone()[0] == 1
         cursor.execute(
+            "SELECT case_type, case_status FROM valuation.cases WHERE case_id = %s",
+            (second["case_id"],),
+        )
+        assert cursor.fetchone() == ("EXTERNAL_REVIEW", "IN_REVIEW")
+        cursor.execute(
             """
             SELECT extraction_status, document_id
             FROM valuation.document_extractions
@@ -80,7 +85,23 @@ def test_demo_seed_is_idempotent_and_real_api_workflow_completes(postgres_connec
             )
             assert run1.status_code == 200
             assert run1.json()["run_no"] == 1
+            assert run1.json()["external_input_snapshot_id"]
             run1_id = run1.json()["validation_run_id"]
+
+            workbench1 = client.get(
+                f"/api/v1/review/workbench/cases/{review_id}", headers=headers
+            )
+            assert workbench1.status_code == 200
+            assert workbench1.json()["case_source"] == "EXTERNAL"
+            projected_run1 = next(
+                item
+                for item in workbench1.json()["runs"]
+                if item["validation_run_id"] == run1_id
+            )
+            assert projected_run1["external_input_snapshot_no"] == 1
+            assert len(projected_run1["external_input_fingerprint"]) == 64
+            run1_fingerprint = projected_run1["external_input_fingerprint"]
+            assert "input_snapshot" not in projected_run1
 
             findings1 = client.get(
                 f"/api/v1/review/runs/{run1_id}/findings",
@@ -165,9 +186,29 @@ def test_demo_seed_is_idempotent_and_real_api_workflow_completes(postgres_connec
                 if item["run_no"] == 2
             )
             run2_id = run2["validation_run_id"]
+            assert run2["external_input_snapshot_id"]
+            assert run2["external_input_snapshot_id"] != run1.json()["external_input_snapshot_id"]
             assert client.get(
                 f"/api/v1/review/runs/{run1_id}", headers=headers
             ).status_code == 200
+
+            workbench2 = client.get(
+                f"/api/v1/review/workbench/cases/{review_id}", headers=headers
+            )
+            assert workbench2.status_code == 200
+            projected_run2 = next(
+                item
+                for item in workbench2.json()["runs"]
+                if item["validation_run_id"] == run2_id
+            )
+            assert projected_run2["external_input_snapshot_no"] == 2
+            assert len(projected_run2["external_input_fingerprint"]) == 64
+            assert projected_run2["external_input_fingerprint"] != run1_fingerprint
+            assert any(
+                item["previous"]["normalized_value"] == "-12"
+                and item["current"]["normalized_value"] == "-7"
+                for item in workbench2.json()["version_diffs"]
+            )
 
             findings2 = client.get(
                 f"/api/v1/review/runs/{run2_id}/findings",
@@ -177,19 +218,19 @@ def test_demo_seed_is_idempotent_and_real_api_workflow_completes(postgres_connec
             assert Decimal(findings2[0]["reported_value"]) == Decimal("-7")
             assert findings2[0]["document_version"] == 2
             assert findings2[0]["supersedes_finding_id"] == high["finding_id"]
-            assert client.get(
+            report2 = client.get(
                 f"/api/v1/review/runs/{run2_id}/report", headers=headers
-            ).status_code == 200
-            generated = client.post(
+            )
+            assert report2.status_code == 200
+            assert report2.json()["input_provenance"]["source"] == "EXTERNAL"
+            assert report2.json()["input_provenance"]["version_no"] == 2
+            assert report2.json()["input_provenance"]["fingerprint"] == projected_run2["external_input_fingerprint"]
+
+            blocked_pdf = client.post(
                 f"/api/v1/review/runs/{run2_id}/report/pdf", headers=headers
             )
-            assert generated.status_code == 201
-            downloaded = client.get(
-                f"/api/v1/review/runs/{run2_id}/report/pdf/download",
-                headers=headers,
-            )
-            assert downloaded.status_code == 200
-            assert downloaded.content.startswith(b"%PDF-")
+            assert blocked_pdf.status_code == 409
+            assert blocked_pdf.json()["error"]["code"] == "REVIEW_REPORT_NOT_AVAILABLE"
 
             # Complete the review, then export the immutable Excel and Word
             # artifacts and reopen both byte streams.
@@ -214,6 +255,16 @@ def test_demo_seed_is_idempotent_and_real_api_workflow_completes(postgres_connec
                 headers=headers,
             )
             assert completed.status_code == 201
+            generated = client.post(
+                f"/api/v1/review/runs/{run2_id}/report/pdf", headers=headers
+            )
+            assert generated.status_code == 201
+            downloaded = client.get(
+                f"/api/v1/review/runs/{run2_id}/report/pdf/download",
+                headers=headers,
+            )
+            assert downloaded.status_code == 200
+            assert downloaded.content.startswith(b"%PDF-")
             for format_name, opener in (
                 ("xlsx", load_workbook),
                 ("docx", Document),

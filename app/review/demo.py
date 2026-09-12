@@ -21,12 +21,12 @@ from app.core.config import get_settings
 from app.core.security import hash_password
 from app.storage.client import get_minio_client
 
-DEMO_USERNAME = "review_demo"
-DEMO_EMAIL = "review_demo@local.invalid"
-DEMO_DISPLAY_NAME = "Review Demo Reviewer"
-DEMO_CASE_NO = "DEMO-REVIEW-001"
-DEMO_CASE_TITLE = "Review API Manual Test Demo"
-DEMO_DISTRICT_CODE = "DEMO-F01"
+DEMO_USERNAME = "external_review_demo"
+DEMO_EMAIL = "external_review_demo@local.invalid"
+DEMO_DISPLAY_NAME = "External Review Demo Reviewer"
+DEMO_CASE_NO = "DEMO-EXTERNAL-REVIEW-001"
+DEMO_CASE_TITLE = "External Review Full Lifecycle Demo"
+DEMO_DISTRICT_CODE = "65000010"
 DEMO_RULE_SET_CODE = "DEMO-REVIEW-RULES"
 DEMO_KNOWLEDGE_CODE = "DEMO-REVIEW-SOURCE"
 DEMO_KNOWLEDGE_TITLE = "Review Demo Validation Rules"
@@ -406,8 +406,9 @@ def seed_demo() -> dict[str, Any]:
                             case_id, case_no, case_title, case_type, requesting_agency,
                             valuation_base_date, city_code, district_code, land_use_type,
                             case_status, created_by_user_id, updated_by_user_id
-                        ) VALUES (%s, %s, %s, 'LAND', 'Review Demo Office', CURRENT_DATE,
-                                  'F', %s, 'RESIDENTIAL', 'DRAFT', %s, %s)
+                        ) VALUES (%s, %s, %s, 'EXTERNAL_REVIEW',
+                                  'External Review Demo Office', CURRENT_DATE,
+                                  'NWT', %s, 'RESIDENTIAL', 'IN_REVIEW', %s, %s)
                         """,
                         (
                             case_id,
@@ -505,7 +506,7 @@ def seed_demo() -> dict[str, Any]:
                             applicable_case_type, applicable_district_code, selection_priority
                         ) VALUES (%s, %s, 1, 'Review Demo Rules v1', CURRENT_DATE,
                                   'PUBLISHED', %s, %s, 'Owned by app.review.demo',
-                                  %s, 'LAND', %s, 100)
+                                  %s, 'EXTERNAL_REVIEW', %s, 100)
                         """,
                         (
                             rule_version_id,

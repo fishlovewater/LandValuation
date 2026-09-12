@@ -21,11 +21,11 @@ def test_demo_cli_rejects_non_development(monkeypatch, capsys):
 def test_demo_ownership_constants_are_fixed():
     from app.review import demo
 
-    assert demo.DEMO_USERNAME == "review_demo"
-    assert demo.DEMO_CASE_NO == "DEMO-REVIEW-001"
+    assert demo.DEMO_USERNAME == "external_review_demo"
+    assert demo.DEMO_CASE_NO == "DEMO-EXTERNAL-REVIEW-001"
     assert demo.DEMO_RULE_SET_CODE == "DEMO-REVIEW-RULES"
     assert demo.DEMO_KNOWLEDGE_CODE == "DEMO-REVIEW-SOURCE"
-    assert demo.DEMO_DISTRICT_CODE == "DEMO-F01"
+    assert demo.DEMO_DISTRICT_CODE == "65000010"
 
 
 def test_demo_pdf_is_a_real_pdf():

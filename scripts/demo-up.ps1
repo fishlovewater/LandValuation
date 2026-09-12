@@ -124,6 +124,11 @@ Use the documented project-scoped teardown procedure before starting a fresh Dem
         throw 'Demo seed completed but readiness is still false. Run app.demo status and inspect the isolated Demo logs.'
     }
 
+    Write-Host 'Seeding the dedicated External Review Demo case...'
+    Invoke-DemoCompose -Arguments @(
+        'exec', '-T', 'api', 'python', '-m', 'app.review.demo', 'seed'
+    ) -DiscardOutput
+
     Write-Host 'Preparing the typed-login development system administrator...'
     Invoke-DemoCompose -Arguments @(
         'exec', '-T', 'api', 'python', '-m', 'app.demo.admin', 'seed'

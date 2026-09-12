@@ -380,13 +380,16 @@ def test_incomplete_recheck_persists_missing_items_without_creating_run(
         assert cursor.fetchone()[0] == before_runs
 
 
-def test_completion_blocked_while_request_active(review_client, sent_request):
+def test_completion_rejects_returned_for_revision_until_recheck(
+    review_client, sent_request
+):
     response = review_client.post(
         f"/api/v1/review/cases/{sent_request.review_id}/complete-review",
         json={"reason": "嘗試完成"},
     )
     assert response.status_code == 409
-    assert response.json()["error"]["code"] == "REVIEW_COMPLETION_BLOCKED"
+    assert response.json()["error"]["code"] == "REVIEW_STATE_CONFLICT"
+    assert response.json()["error"]["details"]["current"] == "RETURNED_FOR_REVISION"
 
 
 def test_legacy_case_decision_route_is_disabled(review_client, triaged_case):
