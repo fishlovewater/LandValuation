@@ -3,6 +3,13 @@ services:
     environment:
       AI_PROVIDER: bedrock
       KNOWLEDGE_ANSWER_PROVIDER: bedrock
-      BEDROCK_REGION: ${BEDROCK_REGION:-ap-northeast-1}
+      BEDROCK_REGION: ${BEDROCK_REGION:-us-west-2}
       BEDROCK_MODEL_ID: ${BEDROCK_MODEL_ID:-global.anthropic.claude-sonnet-4-5-20250929-v1:0}
       AWS_BEARER_TOKEN_BEDROCK: ${AWS_BEARER_TOKEN_BEDROCK:?Set AWS_BEARER_TOKEN_BEDROCK before starting the Bedrock demo}
+    # The base Compose file exposes optional classic AWS credential variables as
+    # empty strings. Remove them before Python starts so Botocore can use the
+    # Bedrock bearer token instead of trying to load an empty AWS profile.
+    command: >-
+      /bin/sh -c "unset AWS_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN &&
+      python -m app.history.demo seed &&
+      exec uvicorn app.main:app --host 0.0.0.0 --port 8000"

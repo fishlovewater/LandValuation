@@ -2,7 +2,7 @@
 param(
     [switch]$SkipBuild,
     [switch]$Bedrock,
-    [string]$BedrockRegion = 'ap-northeast-1',
+    [string]$BedrockRegion = 'us-west-2',
     [string]$BedrockModelId = 'global.anthropic.claude-sonnet-4-5-20250929-v1:0'
 )
 
@@ -120,41 +120,52 @@ try {
 
     Wait-DemoApiReady
     $status = Get-DemoStatus
+    $reuseExistingDemo = $false
 
     if (-not $status.ready) {
         $hasCase = $null -ne $status.case -and -not [string]::IsNullOrWhiteSpace([string]$status.case.case_id)
         if ($hasCase -and -not $status.pre_submission) {
-            throw @"
+            if ($Bedrock) {
+                $reuseExistingDemo = $true
+                Write-Host 'Existing submitted/reviewed Demo data detected; reusing it and switching only the AI provider to Bedrock.'
+            }
+            else {
+                throw @"
 The isolated Demo already contains a submitted or reviewed case.
 For safety this script will not reseed it automatically.
 Use the documented project-scoped teardown procedure before starting a fresh Demo generation.
 "@
+            }
         }
 
-        Write-Host 'Seeding the production-shaped Demo lifecycle generation...'
-        Invoke-DemoCompose -Arguments @('exec', '-T', 'api', 'python', '-m', 'app.demo', 'seed') -DiscardOutput
-        $status = Get-DemoStatus
+        if (-not $reuseExistingDemo) {
+            Write-Host 'Seeding the production-shaped Demo lifecycle generation...'
+            Invoke-DemoCompose -Arguments @('exec', '-T', 'api', 'python', '-m', 'app.demo', 'seed') -DiscardOutput
+            $status = Get-DemoStatus
+        }
     }
 
-    if (-not $status.ready) {
+    if (-not $status.ready -and -not $reuseExistingDemo) {
         throw 'Demo seed completed but readiness is still false. Run app.demo status and inspect the isolated Demo logs.'
     }
 
-    Write-Host 'Seeding the dedicated External Review Demo case...'
-    Invoke-DemoCompose -Arguments @(
-        'exec', '-T', 'api', 'python', '-m', 'app.review.demo', 'seed'
-    ) -DiscardOutput
+    if (-not $reuseExistingDemo) {
+        Write-Host 'Seeding the dedicated External Review Demo case...'
+        Invoke-DemoCompose -Arguments @(
+            'exec', '-T', 'api', 'python', '-m', 'app.review.demo', 'seed'
+        ) -DiscardOutput
 
-    Write-Host 'Preparing the typed-login development system administrator...'
-    Invoke-DemoCompose -Arguments @(
-        'exec', '-T', 'api', 'python', '-m', 'app.demo.admin', 'seed'
-    ) -DiscardOutput
+        Write-Host 'Preparing the typed-login development system administrator...'
+        Invoke-DemoCompose -Arguments @(
+            'exec', '-T', 'api', 'python', '-m', 'app.demo.admin', 'seed'
+        ) -DiscardOutput
 
-    Write-Host 'Indexing official Knowledge PDFs (idempotent; OCR is used only where required)...'
-    Invoke-DemoCompose -Arguments @(
-        'exec', '-T', 'api', 'python', '-m', 'app.knowledge.import_official',
-        '--approved-by-username', 'valuation_demo'
-    ) -DiscardOutput
+        Write-Host 'Indexing official Knowledge PDFs (idempotent; OCR is used only where required)...'
+        Invoke-DemoCompose -Arguments @(
+            'exec', '-T', 'api', 'python', '-m', 'app.knowledge.import_official',
+            '--approved-by-username', 'valuation_demo'
+        ) -DiscardOutput
+    }
 
     Write-Host ''
     Write-Host 'Demo backend is ready.'
