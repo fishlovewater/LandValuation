@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import UploadFile
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
@@ -11,7 +12,7 @@ from app.core.exceptions import AppError, ResourceNotFoundError
 from app.storage.service import StorageService
 from app.valuation.documents.repository import DocumentRepository
 from app.valuation.documents.schemas import DocumentCategory
-from app.valuation.models import DocumentRecord
+from app.valuation.models import DocumentRecord, ValuationLocationRecord
 from app.valuation.service import ValuationService
 
 SAFE_FILENAME_PATTERN = re.compile(r"[^\w.()\-\u4e00-\u9fff]+", re.UNICODE)
@@ -58,11 +59,8 @@ class DocumentService:
         user: User,
         document_group_id: UUID | None = None,
         location_id: UUID | None = None,
-        *,
-        _skip_case_access: bool = False,
     ) -> DocumentRecord:
-        if not _skip_case_access:
-            await self.valuation._owned_editable_case(case_id, user)
+        await self.valuation._owned_editable_case(case_id, user)
         if not file.content_type:
             raise AppError("MIME_TYPE_REQUIRED", "上傳檔案必須提供 MIME type", 422)
         if (
@@ -170,9 +168,7 @@ class DocumentService:
         file.file.seek(0)
         return digest.hexdigest()
 
-    async def list_documents(
-        self, case_id: UUID, user: User, location_id: UUID | None = None
-    ) -> list[DocumentRecord]:
+    async def list_documents(self, case_id: UUID, user: User, location_id: UUID | None = None) -> list[DocumentRecord]:
         await self.valuation.get_case(case_id, user)
         records = await self.repository.list_for_case(case_id)
         return [record for record in records if location_id is None or record.location_id == location_id]
