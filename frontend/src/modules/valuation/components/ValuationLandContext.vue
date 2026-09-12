@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref, watch } from 'vue'
 import {
   PhCheckCircle as CheckCircle,
   PhFileText as FileText,
@@ -53,6 +54,69 @@ const emit = defineEmits<{
   saveBenchmark: []
   chooseBenchmark: [benchmarkLandId: string]
 }>()
+
+const showParcelEditor = ref(props.parcels.length === 0)
+const showBenchmarkEditor = ref(props.parcels.length > 0 && props.benchmarks.length === 0)
+
+watch(() => props.editingParcelId, (editingId) => {
+  if (editingId) showParcelEditor.value = true
+  else if (props.parcels.length) showParcelEditor.value = false
+})
+
+watch(() => props.parcels.length, (count, previousCount) => {
+  if (count > 0 && count > previousCount && !props.editingParcelId) showParcelEditor.value = false
+  if (count > 0 && props.benchmarks.length === 0) showBenchmarkEditor.value = true
+})
+
+watch(() => props.benchmarks.length, (count, previousCount) => {
+  if (count > previousCount) showBenchmarkEditor.value = false
+})
+
+function openParcelEditor(): void {
+  showParcelEditor.value = true
+  requestAnimationFrame(() => document.getElementById('parcel-editor')?.scrollIntoView?.({ behavior: 'smooth', block: 'center' }))
+}
+
+function editParcel(parcel: ParcelResponseDto): void {
+  showParcelEditor.value = true
+  emit('editParcel', parcel)
+}
+
+function cancelParcelEdit(): void {
+  emit('resetParcel')
+  showParcelEditor.value = props.parcels.length === 0
+}
+
+function openBenchmarkEditor(): void {
+  showBenchmarkEditor.value = true
+  requestAnimationFrame(() => document.getElementById('benchmark-editor')?.scrollIntoView?.({ behavior: 'smooth', block: 'center' }))
+}
+
+function nextLandAction(): void {
+  if (!props.parcels.length) {
+    openParcelEditor()
+    return
+  }
+  if (!props.benchmarks.length) {
+    openBenchmarkEditor()
+    return
+  }
+  const firstBenchmark = props.benchmarks[0]
+  if (props.hasF03 && props.canEditF03 && !props.selectedBenchmarkLandId && props.benchmarks.length === 1 && firstBenchmark) {
+    emit('chooseBenchmark', firstBenchmark.benchmarkLandId)
+    return
+  }
+  document.getElementById('benchmark-panel-title')?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+}
+
+function nextLandActionLabel(): string {
+  if (!props.parcels.length) return '建立第一筆宗地'
+  if (!props.benchmarks.length) return '建立比準地'
+  if (props.hasF03 && props.canEditF03 && !props.selectedBenchmarkLandId) {
+    return props.benchmarks.length === 1 ? `採用 ${props.benchmarks[0]?.benchmarkLandNo ?? '比準地'}` : '選擇採用比準地'
+  }
+  return '土地資料已就緒'
+}
 </script>
 
 <template>
@@ -80,6 +144,44 @@ const emit = defineEmits<{
       </div>
     </header>
 
+    <section class="land-flow" data-testid="land-detail-flow" aria-labelledby="land-flow-title">
+      <div class="land-flow__heading">
+        <div>
+          <span>目前進度</span>
+          <strong id="land-flow-title">先確認宗地，再設定後續估價使用的比準地</strong>
+        </div>
+        <button
+          v-if="!parcels.length || !benchmarks.length || (hasF03 && canEditF03 && !selectedBenchmarkLandId)"
+          type="button"
+          data-testid="land-next-action"
+          :disabled="saving"
+          @click="nextLandAction"
+        >
+          {{ nextLandActionLabel() }}
+        </button>
+        <span v-else class="land-flow__ready">
+          <CheckCircle :size="15" weight="fill" aria-hidden="true" />
+          土地資料已就緒
+        </span>
+      </div>
+      <div class="land-flow__steps">
+        <article :data-state="parcels.length ? 'done' : 'active'">
+          <span>1</span>
+          <div>
+            <strong>確認宗地</strong>
+            <small>{{ parcels.length ? `已建立 ${parcels.length} 筆宗地` : '先建立實際要記錄與估價的土地' }}</small>
+          </div>
+        </article>
+        <article :data-state="!parcels.length ? 'pending' : benchmarks.length ? 'done' : 'active'">
+          <span>2</span>
+          <div>
+            <strong>建立並採用比準地</strong>
+            <small>{{ !parcels.length ? '完成宗地後才能建立' : benchmarks.length ? selectedBenchmarkLandId ? '已有採用中的比準地' : `已建立 ${benchmarks.length} 筆比準地` : '從已確認宗地建立比較基準' }}</small>
+          </div>
+        </article>
+      </div>
+    </section>
+
     <div class="land-context__grid">
       <section class="land-panel" aria-labelledby="parcel-panel-title">
         <div class="land-panel__heading">
@@ -90,7 +192,19 @@ const emit = defineEmits<{
               <span>本案實際要記錄與估價的土地</span>
             </div>
           </div>
-          <span class="land-panel__count">{{ parcels.length }} 筆</span>
+          <div class="land-panel__heading-actions">
+            <span class="land-panel__count">{{ parcels.length }} 筆</span>
+            <button
+              v-if="parcels.length && canEditLandContext && !showParcelEditor"
+              type="button"
+              class="land-panel__secondary-action"
+              data-testid="open-parcel-editor"
+              @click="openParcelEditor"
+            >
+              <Plus :size="13" weight="bold" aria-hidden="true" />
+              新增宗地
+            </button>
+          </div>
         </div>
 
         <p class="land-panel__help">
@@ -108,7 +222,7 @@ const emit = defineEmits<{
               class="land-records__action"
               type="button"
               :data-testid="`edit-parcel-${parcel.parcel_id}`"
-              @click="emit('editParcel', parcel)"
+              @click="editParcel(parcel)"
             >
               <PencilSimple :size="14" weight="bold" aria-hidden="true" />
               修改
@@ -117,10 +231,11 @@ const emit = defineEmits<{
         </ul>
         <div v-else class="land-panel__empty">
           <MapPin :size="20" weight="duotone" aria-hidden="true" />
-          <span>尚未建立宗地，請使用下方表單新增。</span>
+          <span>尚未建立宗地。先建立第一筆宗地，才能繼續設定比準地。</span>
         </div>
 
         <form
+          v-if="showParcelEditor"
           id="parcel-editor"
           class="land-form"
           tabindex="-1"
@@ -192,7 +307,7 @@ const emit = defineEmits<{
               v-if="editingParcelId"
               type="button"
               class="land-button"
-              @click="emit('resetParcel')"
+              @click="cancelParcelEdit"
             >
               <X :size="15" weight="bold" aria-hidden="true" />
               取消修改
@@ -222,7 +337,19 @@ const emit = defineEmits<{
               <span>後續查估使用的比較基準</span>
             </div>
           </div>
-          <span class="land-panel__count">{{ benchmarks.length }} 筆</span>
+          <div class="land-panel__heading-actions">
+            <span class="land-panel__count">{{ benchmarks.length }} 筆</span>
+            <button
+              v-if="parcels.length && benchmarks.length && canEditLandContext && !showBenchmarkEditor"
+              type="button"
+              class="land-panel__secondary-action"
+              data-testid="open-benchmark-editor"
+              @click="openBenchmarkEditor"
+            >
+              <Plus :size="13" weight="bold" aria-hidden="true" />
+              新增比準地
+            </button>
+          </div>
         </div>
 
         <p class="land-panel__help">
@@ -258,10 +385,10 @@ const emit = defineEmits<{
         </ul>
         <div v-else class="land-panel__empty">
           <Target :size="20" weight="duotone" aria-hidden="true" />
-          <span>尚未建立比準地；建立後才能初始化或指定比準地地價估計表。</span>
+          <span>{{ parcels.length ? '尚未建立比準地；請從已確認宗地建立比較基準。' : '請先完成宗地資料，再建立比準地。' }}</span>
         </div>
 
-        <form class="land-form" @submit.prevent="emit('saveBenchmark')">
+        <form v-if="showBenchmarkEditor && parcels.length" id="benchmark-editor" class="land-form" @submit.prevent="emit('saveBenchmark')">
           <div class="land-form__heading">
             <div>
               <span>新增比較基準</span>
@@ -382,9 +509,52 @@ const emit = defineEmits<{
   white-space: nowrap;
 }
 
+.land-flow {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 14px 15px;
+  border: 1px solid #cfdce8;
+  border-radius: 10px;
+  background: #f7fafd;
+}
+.land-flow__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.land-flow__heading > div { display: grid; gap: 3px; }
+.land-flow__heading > div > span { color: #63768a; font-size: 9px; font-weight: 900; letter-spacing: .08em; }
+.land-flow__heading strong { color: var(--app-ink); font-size: 13px; }
+.land-flow__heading button {
+  min-height: 38px;
+  padding: 7px 12px;
+  border: 1px solid #2e5984;
+  border-radius: 8px;
+  color: #fff;
+  background: #2e5984;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 900;
+}
+.land-flow__heading button:disabled { cursor: not-allowed; opacity: .5; }
+.land-flow__ready { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: 999px; color: #2f745b; background: #eaf7f0; font-size: 10px; font-weight: 900; }
+.land-flow__steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.land-flow__steps article { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 8px; padding: 10px 11px; border: 1px solid #e0e6ec; border-radius: 8px; background: #fff; }
+.land-flow__steps article[data-state="active"] { border-color: #b7cce0; background: #f2f7fc; }
+.land-flow__steps article[data-state="done"] { border-color: #d3e5dc; background: #f7fbf9; }
+.land-flow__steps article[data-state="pending"] { opacity: .62; }
+.land-flow__steps article > span { display: grid; width: 23px; height: 23px; place-items: center; border-radius: 999px; color: #fff; background: #7a8b9d; font-size: 9px; font-weight: 900; }
+.land-flow__steps article[data-state="active"] > span { background: #2e5984; }
+.land-flow__steps article[data-state="done"] > span { background: #3c8368; }
+.land-flow__steps article > div { display: grid; gap: 3px; min-width: 0; }
+.land-flow__steps strong { color: var(--app-ink); font-size: 10px; }
+.land-flow__steps small { color: var(--app-muted); font-size: 9px; line-height: 1.45; }
+
 .land-context__grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 14px;
 }
 .land-panel {
@@ -404,6 +574,8 @@ const emit = defineEmits<{
 .land-panel__heading-title > div { display: grid; gap: 3px; }
 .land-panel__heading-title strong { color: var(--app-ink); font-size: 13px; }
 .land-panel__heading-title span { color: var(--app-muted); font-size: 10px; }
+.land-panel__heading-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.land-panel__secondary-action { display: inline-flex; min-height: 30px; align-items: center; justify-content: center; gap: 4px; padding: 5px 8px; border: 1px solid #cad7e3; border-radius: 7px; color: #2e5984; background: #fff; cursor: pointer; font-size: 9px; font-weight: 900; }
 .land-panel__count {
   padding: 5px 8px;
   border-radius: 999px;
@@ -517,14 +689,17 @@ const emit = defineEmits<{
 .land-button:disabled { cursor: not-allowed; opacity: .55; }
 
 @media (max-width: 980px) {
-  .land-context__grid { grid-template-columns: 1fr; }
+  .land-flow__steps { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 640px) {
   .land-context { padding: 16px; }
-  .land-context__heading { align-items: flex-start; flex-direction: column; }
+  .land-context__heading, .land-flow__heading { align-items: flex-start; flex-direction: column; }
   .land-context__summary { justify-content: flex-start; }
+  .land-flow__heading button { width: 100%; }
   .land-panel { padding: 14px; }
+  .land-panel__heading { align-items: flex-start; flex-direction: column; }
+  .land-panel__heading-actions { width: 100%; justify-content: flex-start; }
   .land-form__fields { grid-template-columns: 1fr; }
   .land-records li { align-items: flex-start; flex-direction: column; }
   .land-records__benchmark-actions { width: 100%; }
