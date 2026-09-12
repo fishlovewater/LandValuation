@@ -4,7 +4,27 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+VALUATION_CASE_TYPE = "LAND"
+VALUATION_CASE_TYPE_ALIASES = frozenset(
+    {
+        VALUATION_CASE_TYPE,
+        "LAND_VALUATION",
+        "LAND_ACQUISITION",
+        "土地徵收補償市價查估",
+        "土地徵收補償市價查估案件",
+    }
+)
+
+
+def normalize_valuation_case_type(value: str) -> str:
+    normalized = value.strip()
+    alias = normalized.upper() if normalized.isascii() else normalized
+    if alias not in VALUATION_CASE_TYPE_ALIASES:
+        raise ValueError("案件類型僅支援土地徵收補償市價查估")
+    return VALUATION_CASE_TYPE
 
 
 class CaseStatus(StrEnum):
@@ -60,6 +80,11 @@ class CaseCreate(RequestModel):
     district_code: str = Field(min_length=1, max_length=20)
     land_use_type: str | None = Field(default=None, max_length=100)
 
+    @field_validator("case_type")
+    @classmethod
+    def normalize_case_type(cls, value: str) -> str:
+        return normalize_valuation_case_type(value)
+
 
 class CaseUpdate(RequestModel):
     case_title: str | None = Field(default=None, min_length=1, max_length=200)
@@ -70,6 +95,13 @@ class CaseUpdate(RequestModel):
     city_code: str | None = Field(default=None, min_length=1, max_length=20)
     district_code: str | None = Field(default=None, min_length=1, max_length=20)
     land_use_type: str | None = Field(default=None, max_length=100)
+
+    @field_validator("case_type")
+    @classmethod
+    def normalize_case_type(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return normalize_valuation_case_type(value)
 
     @model_validator(mode="after")
     def require_update_field(self):

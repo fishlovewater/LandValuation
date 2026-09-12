@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from app.valuation.schemas import CaseCreate, CaseResponse, CaseStatus, CaseUpdate, FormCode
 from app.valuation.service import ValuationService
@@ -54,6 +55,46 @@ def test_case_deadline_remains_optional_and_can_be_cleared() -> None:
     update_payload = CaseUpdate(valuation_due_date=None)
     assert update_payload.model_fields_set == {"valuation_due_date"}
     assert update_payload.valuation_due_date is None
+
+
+@pytest.mark.parametrize(
+    "case_type",
+    [
+        "LAND",
+        "land",
+        "LAND_VALUATION",
+        "LAND_ACQUISITION",
+        "土地徵收補償市價查估",
+        "土地徵收補償市價查估案件",
+    ],
+)
+def test_case_type_aliases_are_normalized_to_land(case_type: str) -> None:
+    payload = CaseCreate(
+        case_no="VAL-2026-TYPE",
+        case_title="案件類型正規化測試",
+        case_type=case_type,
+        valuation_base_date=date(2026, 9, 12),
+        city_code="65000000",
+        district_code="65000010",
+    )
+
+    assert payload.case_type == "LAND"
+    assert CaseUpdate(case_type=case_type).case_type == "LAND"
+
+
+def test_case_type_rejects_values_outside_the_supported_valuation_workflow() -> None:
+    with pytest.raises(ValidationError, match="案件類型僅支援土地徵收補償市價查估"):
+        CaseCreate(
+            case_no="VAL-2026-INVALID-TYPE",
+            case_title="不支援案件類型",
+            case_type="GENERAL_APPRAISAL",
+            valuation_base_date=date(2026, 9, 12),
+            city_code="65000000",
+            district_code="65000010",
+        )
+
+    with pytest.raises(ValidationError, match="案件類型僅支援土地徵收補償市價查估"):
+        CaseUpdate(case_type="EXTERNAL_REVIEW")
 
 
 @pytest.mark.asyncio
