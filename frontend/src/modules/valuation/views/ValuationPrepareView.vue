@@ -1161,7 +1161,7 @@ async function ensureRevisionDrafts(): Promise<void> {
 
     await loadData()
     if (isCurrentCase(activeCaseToken, requestedCaseId)) {
-      notice.value = '補正版已建立：比準地地價估計表、地價區段勘查表、影響地價區域因素分析明細表（商業用地）與比較法調查估價表已建立較新的 DRAFT 版本，可依修正通知逐項修改。'
+      notice.value = '補正版已建立：比準地地價估計表、地價區段勘查表、影響地價區域因素分析明細表（商業用地）與比較法調查估價表都已建立新的可編輯草稿，可依修正通知逐項修改。'
       activeWizardStep.value = 3
       activeDataSection.value = 'f03'
       void focusElementById('f03-data-section')
