@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import UploadFile
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
@@ -11,7 +12,7 @@ from app.core.exceptions import AppError, ResourceNotFoundError
 from app.storage.service import StorageService
 from app.valuation.documents.repository import DocumentRepository
 from app.valuation.documents.schemas import DocumentCategory
-from app.valuation.models import DocumentRecord
+from app.valuation.models import DocumentRecord, ValuationLocationRecord
 from app.valuation.service import ValuationService
 
 SAFE_FILENAME_PATTERN = re.compile(r"[^\w.()\-\u4e00-\u9fff]+", re.UNICODE)
@@ -57,6 +58,7 @@ class DocumentService:
         file: UploadFile,
         user: User,
         document_group_id: UUID | None = None,
+        location_id: UUID | None = None,
     ) -> DocumentRecord:
         await self.valuation._owned_editable_case(case_id, user)
         if not file.content_type:
@@ -139,6 +141,7 @@ class DocumentService:
                 document_id=document_id,
                 document_group_id=group_id,
                 case_id=case_id,
+                location_id=location_id,
                 document_type=category.value,
                 original_filename=Path(file.filename or filename).name[:255],
                 mime_type=file.content_type,
@@ -165,11 +168,10 @@ class DocumentService:
         file.file.seek(0)
         return digest.hexdigest()
 
-    async def list_documents(
-        self, case_id: UUID, user: User
-    ) -> list[DocumentRecord]:
+    async def list_documents(self, case_id: UUID, user: User, location_id: UUID | None = None) -> list[DocumentRecord]:
         await self.valuation.get_case(case_id, user)
-        return await self.repository.list_for_case(case_id)
+        records = await self.repository.list_for_case(case_id)
+        return [record for record in records if location_id is None or record.location_id == location_id]
 
     async def list_active_documents(
         self, case_id: UUID, user: User

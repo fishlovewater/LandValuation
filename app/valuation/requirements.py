@@ -80,8 +80,9 @@ FORM_REQUIREMENTS: dict[str, FormRequirementDefinition] = {
         form_code="F03",
         form_name="比準地地價估計表",
         required_fields=("valuation_base_date", "benchmark_land_id"),
-        required_documents=("land-register", "cadastral-map"),
-        optional_documents=("photos", "attachments"),
+        # These documents improve evidence quality when available, but are not mandatory for the report workflow.
+        required_documents=(),
+        optional_documents=("land-register", "cadastral-map", "photos", "attachments"),
         calculated_fields=(
             "adjusted_unit_price",
             "benchmark_land_price",

@@ -96,7 +96,20 @@ class FormalReportResponse(BaseModel):
     request_id: UUID | None = None
 
 
+class TemplateExportResponse(BaseModel):
+    form_code: str
+    title: str
+    location_id: UUID | None = None
+    location_label: str | None = None
+    document_id: UUID
+    filename: str
+    mime_type: str
+    version_no: int
+    file_size_bytes: int
+    download_path: str
+
 class FormalWorkflowStatusResponse(BaseModel):
     validation: FormalValidationResponse | None = None
     report: FormalReportResponse | None = None
+    template_exports: list[TemplateExportResponse] = Field(default_factory=list)
     requires_revalidation_for_submission: bool = False

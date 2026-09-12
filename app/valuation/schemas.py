@@ -116,6 +116,7 @@ class ParcelCreate(RequestModel):
         default=None, gt=0, max_digits=18, decimal_places=6
     )
     source_document_id: UUID | None = None
+    location_id: UUID | None = None
 
     @model_validator(mode="after")
     def validate_ownership(self):
@@ -145,6 +146,7 @@ class ParcelUpdate(RequestModel):
         default=None, gt=0, max_digits=18, decimal_places=6
     )
     source_document_id: UUID | None = None
+    location_id: UUID | None = None
 
     @model_validator(mode="after")
     def validate_update(self):
@@ -189,6 +191,7 @@ class ParcelResponse(BaseModel):
 
     parcel_id: UUID
     case_id: UUID
+    location_id: UUID | None
     district_code: str
     section_name: str
     subsection_name: str

@@ -51,11 +51,16 @@ services:
       DEMO_QUICK_LOGIN_ENABLED: "true"
       PASSWORD_RESET_DEBUG_TOKEN_ENABLED: "true"
       DEMO_SOURCE_DIR: /app/demo-sources
-      DOCUMENT_EXTRACTION_PROVIDER: local_ocr
-      KNOWLEDGE_ANSWER_PROVIDER: ollama
-      AI_PROVIDER: ollama
-      OLLAMA_BASE_URL: http://host.docker.internal:11434
-      OLLAMA_MODEL: qwen3.5:latest
-      OLLAMA_TIMEOUT_SECONDS: "120"
+      DOCUMENT_EXTRACTION_PROVIDER: auto
+      KNOWLEDGE_ANSWER_PROVIDER: bedrock
+      AI_PROVIDER: bedrock
+      TEXTRACT_REGION: ${TEXTRACT_REGION:-}
+      TEXTRACT_S3_BUCKET: ${TEXTRACT_S3_BUCKET:-}
+      TEXTRACT_S3_PREFIX: ${TEXTRACT_S3_PREFIX:-land-valuation-textract}
+      BEDROCK_REGION: ${BEDROCK_REGION:-}
+      BEDROCK_MODEL_ID: global.anthropic.claude-sonnet-4-5-20250929-v1:0
+      BEDROCK_FALLBACK_MODEL_ID: global.anthropic.claude-opus-4-6-v1
+      AWS_PROFILE: ${AWS_PROFILE:-land-valuation}
     volumes:
       - ./需要放入MINIO的東西:/app/demo-sources:ro
+      - ${USERPROFILE}/.aws:/root/.aws:ro

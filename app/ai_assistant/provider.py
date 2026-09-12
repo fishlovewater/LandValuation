@@ -70,7 +70,7 @@ class BedrockConverseProvider:
                     }
                 ],
                 toolConfig={"tools": self.tools},
-                inferenceConfig={"temperature": 0, "maxTokens": 800},
+                inferenceConfig=self._inference_config(),
             )
         except Exception as exc:
             raise AppError("BEDROCK_UNAVAILABLE", "Bedrock 暫時無法使用", 503) from exc
@@ -91,6 +91,19 @@ class BedrockConverseProvider:
             tool_calls=calls,
             stop_reason=result.get("stopReason", "end_turn"),
         )
+
+
+    def _inference_config(self) -> dict[str, Any]:
+        model_id = self.settings.bedrock_model_id or ""
+        config: dict[str, Any] = {
+            "maxTokens": getattr(self.settings, "bedrock_max_tokens", 800),
+        }
+        # Fable 5.1 requires temperature=1.0 or an omitted parameter.
+        if "claude-fable-5-1" not in model_id:
+            config["temperature"] = getattr(
+                self.settings, "bedrock_temperature", 0
+            )
+        return config
 
 
 class OllamaChatProvider:

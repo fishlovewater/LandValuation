@@ -1,11 +1,12 @@
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
 from app.auth.service import role_codes
 from app.core.exceptions import AppError, PermissionDeniedError, ResourceNotFoundError
-from app.valuation.models import CaseRecord, FormInstanceRecord, ParcelRecord
+from app.valuation.models import CaseRecord, FormInstanceRecord, ParcelRecord, ValuationLocationRecord
 from app.valuation.official_forms import blank_form_content
 from app.valuation.repository import ValuationRepository
 from app.valuation.requirements import FORM_REQUIREMENTS
@@ -72,7 +73,10 @@ class ValuationService:
             created_by_user_id=user.user_id,
             updated_by_user_id=user.user_id,
         )
-        return await self.repository.create_case(record)
+        created = await self.repository.create_case(record)
+        self.session.add(ValuationLocationRecord(case_id=created.case_id, display_order=1, label="地點 1"))
+        await self.session.flush()
+        return created
 
     async def bootstrap_case(
         self, payload: CaseCreate, user: User
@@ -136,6 +140,7 @@ class ValuationService:
     ) -> ParcelRecord:
         case = await self._owned_editable_case(case_id, user)
         await self._validate_source_document(case_id, payload.source_document_id)
+        await self._validate_location(case_id, payload.location_id)
         record = ParcelRecord(case_id=case_id, **payload.model_dump())
         if case.case_status == CaseStatus.DRAFT.value:
             case.case_status = CaseStatus.PROCESSING.value
@@ -160,6 +165,8 @@ class ValuationService:
         values = payload.model_dump(exclude_unset=True)
         if "source_document_id" in values:
             await self._validate_source_document(case_id, values["source_document_id"])
+        if "location_id" in values:
+            await self._validate_location(case_id, values["location_id"])
         for field, value in values.items():
             setattr(record, field, value)
         return await self.repository.save_parcel(record)
@@ -244,6 +251,8 @@ class ValuationService:
             )
         if "source_document_id" in values:
             await self._validate_source_document(case_id, values["source_document_id"])
+        if "location_id" in values:
+            await self._validate_location(case_id, values["location_id"])
         for field, value in values.items():
             setattr(record, field, value)
         record.updated_by_user_id = user.user_id
@@ -310,6 +319,18 @@ class ValuationService:
         if record.created_by_user_id != user.user_id:
             raise PermissionDeniedError("只有案件建立者可以修改此案件")
 
+    async def _validate_location(self, case_id: UUID, location_id: UUID | None) -> None:
+        if location_id is None:
+            return
+        location = await self.repository.session.scalar(
+            select(ValuationLocationRecord).where(
+                ValuationLocationRecord.case_id == case_id,
+                ValuationLocationRecord.location_id == location_id,
+                ValuationLocationRecord.is_active.is_(True),
+            )
+        )
+        if location is None:
+            raise AppError("VALUATION_LOCATION_NOT_FOUND", "指定的宗地地點不存在或已封存", 422)
     async def _validate_source_document(
         self, case_id: UUID, document_id: UUID | None
     ) -> None:

@@ -29,6 +29,7 @@ class ExtractedFieldResponse(BaseModel):
 
     extracted_field_id: UUID
     extraction_id: UUID
+    location_id: UUID | None
     document_id: UUID
     form_code: str
     field_name: str
@@ -59,6 +60,7 @@ class ExtractionResponse(BaseModel):
     extraction_status: ExtractionStatus
     page_count: int | None
     extracted_text: str | None
+    extraction_metadata: dict[str, Any] = Field(default_factory=dict)
     error_message: str | None
     started_at: datetime
     completed_at: datetime | None

@@ -16,6 +16,8 @@ import type {
   FormalValidationResponseDto,
   FormalReportModel,
   FormalReportResponseDto,
+  TemplateExportModel,
+  TemplateExportResponseDto,
   FormResponseDto,
   ReportArtifactModel,
   ReportProgressResponseDto,
@@ -112,6 +114,7 @@ export function mapDocumentResponse(dto: DocumentResponseDto): DocumentArtifactM
     documentId: dto.document_id,
     documentGroupId: dto.document_group_id,
     caseId: dto.case_id,
+    locationId: dto.location_id,
     documentType: dto.document_type,
     filename: dto.original_filename,
     mimeType: dto.mime_type,
@@ -240,6 +243,19 @@ export function mapFormalReportResponse(dto: FormalReportResponseDto): FormalRep
     caseId: dto.case_id,
     reportId: dto.report_id,
     validationRunId: dto.validation_run_id,
+    filename: dto.filename,
+    mimeType: dto.mime_type,
+    versionNo: dto.version_no,
+    fileSizeBytes: dto.file_size_bytes,
+    downloadPath: dto.download_path,
+  }
+}
+
+export function mapTemplateExportResponse(dto: TemplateExportResponseDto): TemplateExportModel {
+  return {
+    formCode: dto.form_code,
+    title: dto.title,
+    documentId: dto.document_id,
     filename: dto.filename,
     mimeType: dto.mime_type,
     versionNo: dto.version_no,

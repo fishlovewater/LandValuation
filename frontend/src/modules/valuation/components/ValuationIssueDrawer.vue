@@ -49,7 +49,7 @@ function selectIssue(target: string): void {
           <strong>{{ item.title }}</strong>
           <p>{{ item.detail }}</p>
         </div>
-        <button type="button" @click="selectIssue(item.target)">前往修正</button>
+        <button type="button" @click="selectIssue(item.target)">前往處理</button>
       </article>
     </div>
     <div v-else class="issue-drawer__empty">

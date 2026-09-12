@@ -27,13 +27,13 @@ const emit = defineEmits<{
       <p class="valuation-eyebrow">必要資料</p>
       <h2 id="setup-required-title">估價資料尚未可計算</h2>
     </div>
-    <p>請先完成必要的來源文件、宗地與比準地資料；比準地地價估計表草稿建立完成後即可進行計算與檢核。</p>
+    <p>請先完成必要的來源文件、宗地與比準地資料；F03 資料建立後即可進行計算與檢核。</p>
   </section>
 
   <section v-else id="f03-data-section" class="valuation-surface" aria-labelledby="f03-title">
     <div class="surface-heading">
       <div>
-        <p class="valuation-eyebrow">比準地地價估計表</p>
+        <p class="valuation-eyebrow">F03 正式資料</p>
         <h2 id="f03-title">資料確認與正式採用值</h2>
       </div>
       <span class="source-marker" data-source-kind="human-confirmed">{{ f03.source.label }}</span>
@@ -41,7 +41,7 @@ const emit = defineEmits<{
 
     <div class="official-value" data-testid="official-value">
       <div>
-        <span>比準地地價（元／㎡）</span>
+        <span>比準地正式採用價格</span>
         <strong>{{ f03.benchmarkLandPrice || '尚未計算' }}</strong>
       </div>
       <span class="value-kind" data-value-kind="calculated" data-source-kind="calculated">{{ calculatedSource.label }}</span>
@@ -50,7 +50,7 @@ const emit = defineEmits<{
     <form class="confirmed-form" @submit.prevent="emit('save')">
       <div class="form-heading">
         <h3>人工確認欄位</h3>
-        <span class="value-kind" data-value-kind="human-confirmed">人工確認後儲存</span>
+        <span class="value-kind" data-value-kind="human-confirmed">人工確認後保存</span>
       </div>
       <fieldset class="field-grid" :disabled="!canEditF03">
         <label>
@@ -61,15 +61,15 @@ const emit = defineEmits<{
           </select>
         </label>
         <label><span>估價基準日</span><input id="f03-valuation-base-date" v-model="props.draft.valuationBaseDate" type="date" @input="emit('dirty')" /></label>
-        <label><span>比準地比較價格（元／㎡）</span><input id="f03-comparison-price" v-model="props.draft.comparisonPrice" data-testid="f03-comparison-price" inputmode="decimal" @input="emit('dirty')" /></label>
-        <label><span>比較價格權重</span><input id="f03-comparison-weight" v-model="props.draft.comparisonWeight" inputmode="decimal" @input="emit('dirty')" /></label>
-        <label><span>比準地收益價格（元／㎡）</span><input id="f03-income-price" v-model="props.draft.incomePrice" inputmode="decimal" @input="emit('dirty')" /></label>
-        <label><span>收益價格權重</span><input id="f03-income-weight" v-model="props.draft.incomeWeight" inputmode="decimal" @input="emit('dirty')" /></label>
+        <label><span>比較法價格（正式值）</span><input id="f03-comparison-price" v-model="props.draft.comparisonPrice" data-testid="f03-comparison-price" inputmode="decimal" @input="emit('dirty')" /></label>
+        <label><span>比較法權重</span><input id="f03-comparison-weight" v-model="props.draft.comparisonWeight" inputmode="decimal" @input="emit('dirty')" /></label>
+        <label><span>收益法價格（正式值）</span><input id="f03-income-price" v-model="props.draft.incomePrice" inputmode="decimal" @input="emit('dirty')" /></label>
+        <label><span>收益法權重</span><input id="f03-income-weight" v-model="props.draft.incomeWeight" inputmode="decimal" @input="emit('dirty')" /></label>
         <label><span>市場期間起日</span><input id="f03-market-period-start" v-model="props.draft.marketPeriodStart" type="date" @input="emit('dirty')" /></label>
         <label><span>市場期間迄日</span><input id="f03-market-period-end" v-model="props.draft.marketPeriodEnd" type="date" @input="emit('dirty')" /></label>
         <label class="field-grid__wide"><span>市場條件</span><input id="f03-market-condition" v-model="props.draft.marketCondition" @input="emit('dirty')" /></label>
         <label class="field-grid__wide"><span>選擇範圍理由</span><textarea id="f03-selection-scope-reason" v-model="props.draft.selectionScopeReason" rows="2" @input="emit('dirty')" /></label>
-        <label class="field-grid__wide"><span>決定理由</span><textarea id="f03-decision-reason" v-model="props.draft.decisionReason" rows="2" @input="emit('dirty')" /></label>
+        <label class="field-grid__wide"><span>採用決策理由</span><textarea id="f03-decision-reason" v-model="props.draft.decisionReason" rows="2" @input="emit('dirty')" /></label>
       </fieldset>
       <div class="action-row">
         <button class="solid-button" data-testid="save-confirmed-fields" type="submit" :disabled="saving || !canEditF03">{{ saving ? '儲存中…' : '儲存確認欄位' }}</button>

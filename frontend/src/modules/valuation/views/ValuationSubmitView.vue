@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import ErrorState from '../../../components/common/ErrorState.vue'
 import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
@@ -16,8 +16,8 @@ import {
 import {
   mapCaseResponse,
   mapDocumentResponse,
-  mapFormalReportResponse,
   mapFormalValidationResponse,
+  mapTemplateExportResponse,
   mapFormResponse,
   mapSubmitForReviewResult,
   selectAuthoritativeF02,
@@ -25,7 +25,6 @@ import {
 import {
   resetValuationFlow,
   valuationFlowState,
-  type FormalValidationFindingModel,
   type ReportPageCode,
   type ReportPageResponseDto,
 } from '../valuation.types'
@@ -40,19 +39,10 @@ const flow = valuationFlowState
 const loading = ref(false)
 const submitting = ref(false)
 const formalValidating = ref(false)
-const formalPdfGenerating = ref(false)
 const error = ref('')
 const refreshWarning = ref('')
 const submitRequestId = ref<string | null>(null)
-const formalPdfRequestId = ref<string | null>(null)
-const acknowledgedWarningCodes = ref<string[]>([])
 const reportPageDraftId = ref<string | null>(null)
-const reportPageSaving = ref(false)
-const reportPageCalculating = ref(false)
-const reportPageValidating = ref(false)
-const reportPageSaved = ref(false)
-const reportPageCalculated = ref(false)
-const reportPageConfirmations = ref({ s01: false, f02Rf: false, f02: false })
 const reportPageEditors = ref<Partial<Record<ReportPageCode, ReportPageResponseDto>>>({})
 const reportPageEditorsLoading = ref(false)
 const reportPageEditorSaving = ref<ReportPageCode | null>(null)
@@ -74,173 +64,42 @@ const displayedCaseStatus = computed(() =>
 const expectedCaseVersion = computed(
   () => flow.authoritativeF02?.versionNo ?? null,
 )
-const formalWarningCodes = computed(() => Array.from(new Set(
-  flow.formalValidation?.findings
-    .filter((finding) => finding.severity === 'WARNING')
-    .map((finding) => finding.code) ?? [],
-)))
-const warningsAcknowledged = computed(() => Boolean(
-  flow.formalValidation &&
-    flow.formalValidation.canGenerateFormalReport &&
-    formalWarningCodes.value.every((code) => acknowledgedWarningCodes.value.includes(code)),
+const templateOutputReady = computed(() => flow.templateExports.length >= 3)
+const excelSubmissionReady = computed(() => Boolean(
+  templateOutputReady.value &&
+  flow.formalValidation?.validationRunId &&
+  flow.formalValidation.runStatus === "COMPLETED",
 ))
-const formalOutputReady = computed(() => {
-  const formalReport = flow.formalReport
-  const formalValidation = flow.formalValidation
-  const authoritativeF02 = flow.authoritativeF02
-  return Boolean(
-    formalReport &&
-      formalValidation?.canGenerateFormalReport &&
-      formalValidation.runStatus === 'COMPLETED' &&
-      formalValidation.caseId === caseId.value &&
-      formalReport.caseId === caseId.value &&
-      formalReport.reportId === flow.reportPackageId &&
-      formalReport.validationRunId === formalValidation.validationRunId &&
-      formalReport.mimeType === 'application/pdf' &&
-      authoritativeF02?.formCode === 'F02' &&
-      authoritativeF02.status === 'FINAL' &&
-      authoritativeF02.outputDocumentId === formalReport.documentId,
-  )
-})
-const currentStep = computed<5 | 6>(() => formalOutputReady.value || flow.submission ? 6 : 5)
-const valuationOutputReady = computed(() => Boolean(
-  !flow.validation || (flow.validation.canGenerateReport && flow.report),
+const currentStep = computed<5 | 6>(() => excelSubmissionReady.value || flow.submission ? 6 : 5)
+const canSubmit = computed(() => Boolean(
+  templateOutputReady.value &&
+  flow.authoritativeF02 &&
+  flow.reportPackageId &&
+  expectedCaseVersion.value !== null &&
+  !flow.submission &&
+  !formalValidating.value,
 ))
-const canSubmit = computed(
-  () => Boolean(
-    valuationOutputReady.value &&
-      flow.authoritativeF02 &&
-      (flow.completeReport || flow.formalReport) &&
-      flow.reportPackageId &&
-      expectedCaseVersion.value !== null &&
-      flow.formalValidation?.canGenerateFormalReport &&
-      warningsAcknowledged.value &&
-      formalOutputReady.value &&
-      !flow.submission,
-  ),
-)
-const reportPagesConfirmed = computed(() => {
-  const value = reportPageConfirmations.value
-  return value.s01 && value.f02Rf && value.f02
-})
 const activeReportPage = computed(() => reportPageEditors.value[activeReportPageCode.value] ?? null)
 const submitIssues = computed(() => {
-  if (flow.submission) return []
-  const items: Array<{ id: string; title: string; detail: string; target: string; severity: 'error' | 'warning' | 'pending' }> = []
-  if (!flow.authoritativeF02) {
-    items.push({ id: 'report-pages', title: '完整查估書尚未確認完成', detail: '檢視三頁資料、逐頁確認並完成正式計算與檢核。', target: 'report-pages', severity: 'pending' })
-  }
-  if (flow.formalValidation?.failedCount) {
-    items.push({ id: 'formal-errors', title: '正式檢核仍有阻擋項目', detail: `${flow.formalValidation.failedCount} 個錯誤必須修正後才能產生正式 PDF。`, target: 'formal-validation', severity: 'error' })
-  } else if (!flow.formalValidation) {
-    items.push({ id: 'formal-validation', title: '尚未完成正式檢核', detail: '完成查估書資料後執行正式檢核。', target: 'formal-validation', severity: 'pending' })
-  } else if (!warningsAcknowledged.value) {
-    items.push({ id: 'formal-warnings', title: '正式檢核警示待人工確認', detail: `還有 ${formalWarningCodes.value.length} 個警示需要人工確認。`, target: 'formal-validation', severity: 'warning' })
-  }
-  if (!flow.formalReport) {
-    items.push({ id: 'formal-pdf', title: '尚未產生正式 PDF', detail: '正式檢核通過後產生送審用完整正式 PDF。', target: 'formal-pdf', severity: 'pending' })
-  }
-  if (!flow.submission) {
-    items.push({ id: 'submission', title: '案件尚未送審', detail: '完整送審 PDF 完成後即可送出審查。', target: 'submission', severity: 'pending' })
-  }
-  return items
+  if (flow.templateExports.length) return []
+  return [{
+    id: 'template-exports',
+    title: '尚未產生 Excel 範本',
+    detail: '按「產生 Excel 範本」即可將已確認資料寫入範本；缺少資料會保留空白。',
+    target: 'formal-validation',
+    severity: 'pending' as const,
+  }]
 })
 const readinessMessage = computed(() => {
-  if (!flow.authoritativeF02) return '尚未完成 F02 最終版本，暫時無法送審。'
-  if (!flow.reportPackageId) return '完整查估書尚未準備完成。'
-  if (!flow.completeReport && !flow.formalReport) return '尚未找到可送審的完整 PDF，無法送審。'
-  if (flow.validation && !flow.validation.canGenerateReport) return '目前仍有待修正的檢核項目，暫時無法送審。'
-  if (flow.validation && !flow.report) return '尚未產生比準地地價估計表單表輸出。'
-  if (expectedCaseVersion.value === null) return '尚未取得可送審的 F02 版本。'
-  if (!flow.formalValidation) return '請先執行 F02 正式檢核。'
-  if (!flow.formalValidation.canGenerateFormalReport) return 'F02 正式檢核仍有待修正項目，暫時無法送審。'
-  if (!warningsAcknowledged.value) return '請逐項確認正式檢核警示後產生 PDF。'
-  if (!flow.formalReport) return '請先產生完整送審 PDF。'
-  if (!formalOutputReady.value) return '正式 PDF 或 F02 最終版本尚未完成，暫時無法送審。'
-  return '完整送審 PDF 已準備完成，可以送審。'
+  if (!flow.authoritativeF02) return "尚未取得案件版本資訊。"
+  if (!flow.reportPackageId) return "尚未建立 Excel 產出資料包。"
+  if (!templateOutputReady.value) return "請先產生六份 Excel 成果。"
+  if (!flow.formalValidation) return "Excel 已產生，正在建立送審追蹤資料。"
+  if (flow.formalValidation.runStatus !== "COMPLETED") return "送審追蹤資料尚未完成。"
+  return "六份 Excel 已準備完成，可以送審。"
 })
-type SubmitReadinessState = 'done' | 'active' | 'pending' | 'blocked'
-const submitReadinessSteps = computed<Array<{
-  key: string
-  title: string
-  detail: string
-  target: string
-  state: SubmitReadinessState
-}>>(() => {
-  const formalValidation = flow.formalValidation
-  const validationState: SubmitReadinessState = !formalValidation
-    ? (flow.authoritativeF02 ? 'active' : 'pending')
-    : formalValidation.failedCount > 0
-      ? 'blocked'
-      : warningsAcknowledged.value
-        ? 'done'
-        : 'active'
-  const pdfState: SubmitReadinessState = formalOutputReady.value
-    ? 'done'
-    : formalValidation?.canGenerateFormalReport && warningsAcknowledged.value
-      ? 'active'
-      : 'pending'
-  const submissionState: SubmitReadinessState = flow.submission
-    ? 'done'
-    : canSubmit.value
-      ? 'active'
-      : 'pending'
-  return [
-    {
-      key: 'report-pages',
-      title: '確認完整查估書',
-      detail: flow.authoritativeF02 ? `F02 第 ${flow.authoritativeF02.versionNo} 版已完成` : '確認 S01、F02-RF、F02 三頁資料',
-      target: 'report-pages',
-      state: flow.authoritativeF02 ? 'done' : 'active',
-    },
-    {
-      key: 'formal-validation',
-      title: '完成正式檢核',
-      detail: formalValidation
-        ? formalValidation.failedCount > 0
-          ? `仍有 ${formalValidation.failedCount} 個錯誤待修正`
-          : warningsAcknowledged.value
-            ? '正式檢核與警示確認已完成'
-            : `還有 ${formalWarningCodes.value.length} 個警示待人工確認`
-        : '查估書確認後執行正式檢核',
-      target: 'formal-validation',
-      state: validationState,
-    },
-    {
-      key: 'formal-pdf',
-      title: '產生完整送審 PDF',
-      detail: flow.formalReport ? flow.formalReport.filename : '正式檢核完成後產生送審文件',
-      target: 'formal-pdf',
-      state: pdfState,
-    },
-    {
-      key: 'submission',
-      title: '送出審查',
-      detail: flow.submission ? `第 ${flow.submission.submissionNo} 次送審已完成` : canSubmit.value ? '所有送審條件已完成' : '前述項目完成後即可送審',
-      target: 'submission',
-      state: submissionState,
-    },
-  ]
-})
-const completedSubmitStepCount = computed(() => submitReadinessSteps.value.filter((item) => item.state === 'done').length)
-const currentSubmitStep = computed(() => submitReadinessSteps.value.find((item) => item.state !== 'done') ?? null)
-
-function submitReadinessStateLabel(state: SubmitReadinessState): string {
-  return ({ done: '已完成', active: '下一步', pending: '待前置作業', blocked: '需修正' } as Record<SubmitReadinessState, string>)[state]
-}
-
 function reportPageLabel(code: ReportPageCode): string {
   return ({ S01: '勘查資料（S01）', 'F02-RF': '影響因素（F02-RF）', F02: '比較法資料（F02）' } as Record<ReportPageCode, string>)[code]
-}
-
-function formalFieldLabel(code: string | null): string {
-  if (!code) return ''
-  const labels: Readonly<Record<string, string>> = {
-    benchmark_land_id: '比準地', comparison_analysis_id: '比較分析', rule_version_id: '正式計算規則',
-    comparison_targets: '比較案例', valuation_base_date: '估價基準日', comparison_price: '比較法價格',
-    comparison_weight: '比較法權重', income_price: '收益法價格', income_weight: '收益法權重',
-  }
-  return labels[code] ?? '查估書資料欄位'
 }
 
 function focusSubmitTarget(target: string): void {
@@ -257,81 +116,6 @@ function focusSubmitTarget(target: string): void {
 
 function isCurrentCase(token: number, requestedCaseId: string): boolean {
   return token === activeCaseToken && requestedCaseId === caseId.value
-}
-
-function recordValue(value: unknown): Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
-}
-
-function recordList(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value) ? value.map(recordValue) : []
-}
-
-function confirmationNote(value: unknown): string {
-  return typeof value === 'string' && value.trim()
-    ? value
-    : '估價人員依案件來源資料確認。'
-}
-
-function saveS01Payload(page: ReportPageResponseDto): Record<string, unknown> {
-  const data = page.data
-  return {
-    ...data,
-    observations: recordList(data.observations).map((observation) => ({
-      ...observation,
-      source_type: 'MANUAL_CONFIRMED',
-      source_notes: confirmationNote(observation.source_notes),
-      confirmed_by_user: true,
-    })),
-  }
-}
-
-function saveF02RfPayload(page: ReportPageResponseDto): Record<string, unknown> {
-  const data = page.data
-  return {
-    benchmark_land_id: data.benchmark_land_id,
-    comparison_analysis_id: data.comparison_analysis_id,
-    rule_version_id: data.rule_version_id,
-    factor_rows: recordList(data.factor_rows).map((factor) => ({
-      ...factor,
-      source_notes: confirmationNote(factor.source_notes),
-      confirmed_by_user: true,
-      targets: recordList(factor.targets).map((target) => ({
-        ...target,
-        source_notes: confirmationNote(target.source_notes),
-        confirmed_by_user: true,
-      })),
-    })),
-    other_influences: data.other_influences,
-    notes: data.notes,
-    appraiser_name: data.appraiser_name,
-  }
-}
-
-function saveF02Payload(page: ReportPageResponseDto): Record<string, unknown> {
-  const data = page.data
-  return {
-    benchmark_land_id: data.benchmark_land_id,
-    comparison_analysis_id: data.comparison_analysis_id,
-    comparison_targets: recordList(data.comparison_targets).map((target) => ({
-      ...target,
-      weight_confirmed_by_user: true,
-      weight_reason: confirmationNote(target.weight_reason),
-      individual_factors: recordList(target.individual_factors).map((factor) => ({
-        ...factor,
-        source_notes: confirmationNote(factor.source_notes),
-        confirmed_by_user: true,
-      })),
-    })),
-    benchmark_notes: data.benchmark_notes,
-    notes: data.notes,
-    handler_name: data.handler_name,
-    section_head_name: data.section_head_name,
-    director_name: data.director_name,
-    appraiser_name: data.appraiser_name,
-  }
 }
 
 async function loadReportPageEditors(): Promise<void> {
@@ -351,20 +135,11 @@ async function loadReportPageEditors(): Promise<void> {
     ])
     if (!isCurrentCase(token, requestedCaseId)) return
     reportPageEditors.value = { S01: s01, 'F02-RF': f02Rf, F02: f02 }
-    editorNotice.value = '三頁草稿已載入。可修改後逐頁儲存，再進行確認、正式計算與檢核。'
+    editorNotice.value = '三頁資料已載入。可選擇修改並逐頁儲存，或直接略過並產生 Excel 範本。'
   } catch (caught: unknown) {
     if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
   } finally {
     if (isCurrentCase(token, requestedCaseId)) reportPageEditorsLoading.value = false
-  }
-}
-
-function resetPageConfirmation(pageCode: ReportPageCode): void {
-  reportPageConfirmations.value = {
-    ...reportPageConfirmations.value,
-    s01: pageCode === 'S01' ? false : reportPageConfirmations.value.s01,
-    f02Rf: pageCode === 'F02-RF' ? false : reportPageConfirmations.value.f02Rf,
-    f02: pageCode === 'F02' ? false : reportPageConfirmations.value.f02,
   }
 }
 
@@ -384,13 +159,10 @@ async function saveReportPageEditor(value: {
     const updated = await valuationApi.updateReportPage(requestedCaseId, reportId, value.pageCode, value.payload)
     if (!isCurrentCase(token, requestedCaseId)) return
     reportPageEditors.value = { ...reportPageEditors.value, [value.pageCode]: updated }
-    resetPageConfirmation(value.pageCode)
-    reportPageSaved.value = false
-    reportPageCalculated.value = false
     flow.formalValidation = null
     flow.formalReport = null
-    acknowledgedWarningCodes.value = []
-    editorNotice.value = `${value.pageCode} 已儲存。因輸入已變更，請重新確認本頁並重新執行正式計算與檢核。`
+    flow.templateExports = []
+    editorNotice.value = `${value.pageCode} 已儲存。資料已儲存；需要時可繼續修改其他頁面，Excel 輸出會保留空白欄位。`
   } catch (caught: unknown) {
     if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
   } finally {
@@ -404,105 +176,9 @@ async function handleComparisonChanged(): Promise<void> {
   if (!isCurrentCase(token, requestedCaseId)) return
   await loadReportPageEditors()
   if (!isCurrentCase(token, requestedCaseId)) return
-  reportPageConfirmations.value = {
-    ...reportPageConfirmations.value,
-    f02Rf: false,
-    f02: false,
-  }
-  reportPageSaved.value = false
-  reportPageCalculated.value = false
   flow.formalValidation = null
   flow.formalReport = null
-  acknowledgedWarningCodes.value = []
-  editorNotice.value = '比較法設定已變更。F02 / F02-RF 已重新載入；請重新確認兩頁並執行正式計算與檢核。'
-}
-
-function formalFindingTarget(finding: FormalValidationFindingModel): {
-  pageCode?: ReportPageCode
-  field?: string
-  documents?: boolean
-  calculation?: boolean
-  comparison?: boolean
-  systemRule?: boolean
-} {
-  if (finding.fieldCode) {
-    const inS01 = new Set([
-      'district_name', 'district_boundary', 'survey_date', 'urban_plan_status', 'land_use_zone',
-      'building_coverage_rate', 'floor_area_ratio', 'prohibited_building', 'restricted_building',
-      'main_road_name', 'main_road_width_m', 'average_road_width_m', 'observations', 'site_opinion',
-      'handler_name', 'section_head_name', 'director_name',
-    ])
-    const inF02Rf = new Set(['factor_rows', 'other_influences'])
-    if (['benchmark_land_id', 'comparison_analysis_id', 'comparison_targets'].includes(finding.fieldCode)) {
-      return { comparison: true }
-    }
-    if (finding.fieldCode === 'rule_version_id') return { systemRule: true }
-    if (inS01.has(finding.fieldCode)) return { pageCode: 'S01', field: finding.fieldCode }
-    if (inF02Rf.has(finding.fieldCode)) return { pageCode: 'F02-RF', field: finding.fieldCode }
-    return { pageCode: 'F02', field: finding.fieldCode }
-  }
-  if (finding.code.startsWith('S01_')) {
-    return { pageCode: 'S01', field: finding.code.includes('OBSERVATION') ? 'observations' : undefined }
-  }
-  if (finding.code === 'FORMAL_RULE_VERSION_INVALID' || finding.code.includes('RULE_VERSION')) {
-    return { systemRule: true }
-  }
-  if (finding.code === 'FORMAL_REFERENCES_REQUIRED') return { comparison: true }
-  if (finding.code.startsWith('F02_RF_')) {
-    return { pageCode: 'F02-RF', field: 'factor_rows' }
-  }
-  if (finding.code === 'F02_BENCHMARK_NOTES_MISSING') return { pageCode: 'F02', field: 'benchmark_notes' }
-  if (finding.code === 'F02_TARGETS_REQUIRED' || finding.code.includes('COMPARISON')) return { comparison: true }
-  if (finding.code === 'APPRAISER_NAME_MISSING') return { pageCode: 'F02', field: 'appraiser_name' }
-  if (finding.code.startsWith('FORMAL_MAP_')) return { documents: true }
-  if (finding.code.includes('CALCULATION')) return { calculation: true }
-  return { pageCode: 'F02' }
-}
-
-async function goToFormalFinding(finding: FormalValidationFindingModel): Promise<void> {
-  const target = formalFindingTarget(finding)
-  if (target.documents) {
-    await router.push({
-      name: 'valuation-prepare',
-      params: { caseId: caseId.value },
-      query: { focus: 'documents' },
-    })
-    return
-  }
-  if (target.calculation) {
-    const calculationButton = document.querySelector<HTMLElement>('[data-testid="run-formal-calculation"]')
-      ?? document.querySelector<HTMLElement>('[data-testid="run-formal-validation"]')
-    calculationButton?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
-    calculationButton?.focus()
-    editorNotice.value = '此問題來自正式計算狀態；請確認輸入資料後重新執行正式計算，再執行正式檢核。'
-    return
-  }
-  if (target.systemRule) {
-    editorNotice.value = '正式規則會依案件適用範圍自動選用；若目前沒有可用規則，請由規則管理人員處理。'
-    return
-  }
-  if (!Object.keys(reportPageEditors.value).length) await loadReportPageEditors()
-  if (target.comparison) {
-    activeReportPageCode.value = 'F02'
-    await nextTick()
-    const setup = document.querySelector<HTMLElement>('[data-testid="comparison-setup"]')
-    setup?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
-    setup?.focus?.()
-    editorNotice.value = '請在「比較法設定」建立或套用可追溯的比較分析。'
-    return
-  }
-  if (!target.pageCode) return
-  activeReportPageCode.value = target.pageCode
-  await nextTick()
-  const editor = document.querySelector<HTMLElement>(`[data-page-code="${target.pageCode}"]`)
-  const field = target.field
-    ? editor?.querySelector<HTMLElement>(`[data-report-field="${target.field}"]`)
-    : editor
-  ;(field ?? editor)?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
-  ;(field ?? editor)?.focus?.()
-  const pageLabel = reportPageLabel(target.pageCode)
-  const fieldLabel = target.field ? formalFieldLabel(target.field) : ''
-  editorNotice.value = `請在「${pageLabel}」${fieldLabel ? `的「${fieldLabel}」` : ''}修正後儲存，再重新計算與檢核。`
+  editorNotice.value = '比較法設定已變更。F02 / F02-RF 已重新載入；可直接產生 Excel 範本，未填資料會保留空白。'
 }
 
 function goBackToGeneralFinding(fieldPath: string | null): void {
@@ -512,119 +188,6 @@ function goBackToGeneralFinding(fieldPath: string | null): void {
   void router.push({ name: 'valuation-prepare', params: { caseId: caseId.value }, query })
 }
 
-async function refreshAuthoritativePackage(
-  token: number,
-  requestedCaseId: string,
-): Promise<boolean> {
-  const [formDtos, documentDtos, reportProgressDto] = await Promise.all([
-    valuationApi.listForms(requestedCaseId),
-    valuationApi.listDocuments(requestedCaseId),
-    valuationApi.getReportProgress(requestedCaseId),
-  ])
-  if (!isCurrentCase(token, requestedCaseId)) return false
-  const forms = formDtos.map(mapFormResponse)
-  const documents = documentDtos.map(mapDocumentResponse)
-  const authoritative = selectAuthoritativeF02(forms, documents, reportProgressDto)
-  flow.forms = forms
-  flow.documents = documents
-  flow.authoritativeF02 = authoritative.form
-  flow.completeReport = authoritative.completeReport
-  flow.reportPackageId = authoritative.reportPackageId
-  reportPageDraftId.value = reportProgressDto.report_id
-  return Boolean(authoritative.form && authoritative.reportPackageId)
-}
-
-async function saveReportPages(): Promise<void> {
-  const requestedCaseId = caseId.value
-  const token = activeCaseToken
-  const reportId = reportPageDraftId.value
-  if (
-    reportPageSaving.value ||
-    !reportId ||
-    !reportPagesConfirmed.value ||
-    !isCurrentCase(token, requestedCaseId)
-  ) return
-
-  reportPageSaving.value = true
-  error.value = ''
-  try {
-    const s01 = await valuationApi.getReportPage(requestedCaseId, reportId, 'S01')
-    const f02Rf = await valuationApi.getReportPage(requestedCaseId, reportId, 'F02-RF')
-    const f02 = await valuationApi.getReportPage(requestedCaseId, reportId, 'F02')
-    await valuationApi.updateReportPage(requestedCaseId, reportId, 'S01', saveS01Payload(s01))
-    await valuationApi.updateReportPage(requestedCaseId, reportId, 'F02-RF', saveF02RfPayload(f02Rf))
-    await valuationApi.updateReportPage(requestedCaseId, reportId, 'F02', saveF02Payload(f02))
-    if (!isCurrentCase(token, requestedCaseId)) return
-    reportPageSaved.value = true
-    reportPageCalculated.value = false
-  } catch (caught: unknown) {
-    if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
-  } finally {
-    if (isCurrentCase(token, requestedCaseId)) reportPageSaving.value = false
-  }
-}
-
-async function calculateReportPages(): Promise<void> {
-  const requestedCaseId = caseId.value
-  const token = activeCaseToken
-  const reportId = reportPageDraftId.value
-  if (
-    reportPageCalculating.value ||
-    !reportId ||
-    !reportPageSaved.value ||
-    !isCurrentCase(token, requestedCaseId)
-  ) return
-
-  reportPageCalculating.value = true
-  error.value = ''
-  try {
-    await valuationApi.calculateFormalReport(requestedCaseId, reportId, { confirm_calculation: true })
-    if (!isCurrentCase(token, requestedCaseId)) return
-    reportPageCalculated.value = true
-  } catch (caught: unknown) {
-    if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
-  } finally {
-    if (isCurrentCase(token, requestedCaseId)) reportPageCalculating.value = false
-  }
-}
-
-async function validateReportPages(): Promise<void> {
-  const requestedCaseId = caseId.value
-  const token = activeCaseToken
-  const reportId = reportPageDraftId.value
-  if (
-    reportPageValidating.value ||
-    !reportId ||
-    !reportPageCalculated.value ||
-    !isCurrentCase(token, requestedCaseId)
-  ) return
-
-  reportPageValidating.value = true
-  error.value = ''
-  try {
-    const result = await valuationApi.formalValidate(requestedCaseId, reportId)
-    if (!isCurrentCase(token, requestedCaseId)) return
-    const formalValidation = mapFormalValidationResponse(result)
-    if (formalValidation.reportId !== reportId) {
-      error.value = '三頁正式檢核與目前查估書版本不一致，請重新執行檢核。'
-      return
-    }
-    flow.formalValidation = formalValidation
-    flow.formalReport = null
-    acknowledgedWarningCodes.value = []
-    if (!result.can_generate_formal_report) {
-      error.value = '三頁正式檢核仍有待修正項目，請依檢核結果補正。'
-      return
-    }
-    if (!(await refreshAuthoritativePackage(token, requestedCaseId))) {
-      error.value = '三頁檢核已完成，但尚未取得已完成正式檢核的 F02 版本。'
-    }
-  } catch (caught: unknown) {
-    if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
-  } finally {
-    if (isCurrentCase(token, requestedCaseId)) reportPageValidating.value = false
-  }
-}
 
 async function loadData(): Promise<void> {
   const requestedCaseId = caseId.value
@@ -634,19 +197,10 @@ async function loadData(): Promise<void> {
   if (!sameCase) {
     resetValuationFlow()
     submitRequestId.value = null
-    formalPdfRequestId.value = null
   }
   submitting.value = false
   formalValidating.value = false
-  formalPdfGenerating.value = false
-  acknowledgedWarningCodes.value = []
   reportPageDraftId.value = null
-  reportPageSaving.value = false
-  reportPageCalculating.value = false
-  reportPageValidating.value = false
-  reportPageSaved.value = false
-  reportPageCalculated.value = false
-  reportPageConfirmations.value = { s01: false, f02Rf: false, f02: false }
   reportPageEditors.value = {}
   reportPageEditorsLoading.value = false
   reportPageEditorSaving.value = null
@@ -663,13 +217,27 @@ async function loadData(): Promise<void> {
 
   loading.value = true
   try {
-    const [caseDto, formDtos, documentDtos, reportProgressDto] = await Promise.all([
+    const [caseDto, formDtos, documentDtos, initialReportProgressDto] = await Promise.all([
       valuationApi.getCase(requestedCaseId),
       valuationApi.listForms(requestedCaseId),
       valuationApi.listDocuments(requestedCaseId),
       valuationApi.getReportProgress(requestedCaseId),
     ])
     if (!isCurrentCase(token, requestedCaseId)) return
+
+    let reportProgressDto = initialReportProgressDto
+    if (!reportProgressDto.report_id) {
+      await valuationApi.createReportPackage(requestedCaseId, {
+        report_type: 'REPORT_COMPARISON_COMMERCIAL',
+      })
+      const [createdForms, createdProgress] = await Promise.all([
+        valuationApi.listForms(requestedCaseId),
+        valuationApi.getReportProgress(requestedCaseId),
+      ])
+      formDtos.splice(0, formDtos.length, ...createdForms)
+      reportProgressDto = createdProgress
+      editorNotice.value = '已自動建立 Excel 範本資料包；可直接產生三份範本，缺少資料會保留空白。'
+    }
 
     const forms = formDtos.map(mapFormResponse)
     const documents = documentDtos.map(mapDocumentResponse)
@@ -689,8 +257,7 @@ async function loadData(): Promise<void> {
     ) {
       flow.formalValidation = null
       flow.formalReport = null
-      acknowledgedWarningCodes.value = []
-      formalPdfRequestId.value = null
+      flow.templateExports = []
     }
 
     // Page load must be read-only. Restore the latest persisted formal result
@@ -705,38 +272,16 @@ async function loadData(): Promise<void> {
       const restoredValidation = formalStatus.validation
         ? mapFormalValidationResponse(formalStatus.validation)
         : null
-      const restoredReport = formalStatus.report
-        ? mapFormalReportResponse(formalStatus.report)
-        : null
-
       if (
         restoredValidation &&
         (restoredValidation.caseId !== requestedCaseId ||
           restoredValidation.reportId !== reportProgressDto.report_id)
       ) {
-        error.value = '正式檢核結果與目前案件或查估書版本不一致，請重新執行檢核。'
-      } else if (formalStatus.requires_revalidation_for_submission) {
-        flow.formalValidation = restoredValidation
-        flow.formalReport = null
-        acknowledgedWarningCodes.value = []
-        refreshWarning.value = '既有正式檢核資料不完整，無法直接送審；請重新執行正式計算與檢核。'
+        error.value = "送審追蹤狀態與目前案件或報告包不一致。"
       } else {
         flow.formalValidation = restoredValidation
-        flow.formalReport = restoredReport
-        if (restoredReport && restoredValidation) {
-          // A persisted formal PDF can only exist after the server accepted
-          // every warning acknowledgement for this validation run. Restoring
-          // those codes here does not create a new acknowledgement; it merely
-          // reflects the already-authorized server result.
-          acknowledgedWarningCodes.value = Array.from(new Set(
-            restoredValidation.findings
-              .filter((finding) => finding.severity === 'WARNING')
-              .map((finding) => finding.code),
-          ))
-        }
-        if (restoredValidation && !restoredValidation.canGenerateFormalReport) {
-          error.value = 'F02 正式檢核仍有待修正項目，請先完成補正。'
-        }
+        flow.formalReport = null
+        flow.templateExports = formalStatus.template_exports.map(mapTemplateExportResponse)
       }
     }
   } catch (caught: unknown) {
@@ -747,36 +292,16 @@ async function loadData(): Promise<void> {
   }
 }
 
-function setWarningAcknowledged(code: string, checked: boolean): void {
-  const next = new Set(acknowledgedWarningCodes.value)
-  if (checked) next.add(code)
-  else next.delete(code)
-  acknowledgedWarningCodes.value = formalWarningCodes.value.filter((item) => next.has(item))
-}
-
-function setFormalFormStatus(status: 'CHECKED' | 'FINAL', outputDocumentId: string | null): void {
-  if (!flow.authoritativeF02) return
-  const updated = {
-    ...flow.authoritativeF02,
-    status,
-    outputDocumentId,
-  }
-  flow.authoritativeF02 = updated
-  flow.forms = flow.forms.map((form) =>
-    form.formInstanceId === updated.formInstanceId ? updated : form,
-  )
-}
-
 async function downloadOutput(documentId: string, filename: string): Promise<void> {
   const requestedCaseId = caseId.value
   if (!requestedCaseId || !documentId || downloadingDocumentId.value) return
 
   downloadingDocumentId.value = documentId
-  error.value = ''
+  error.value = ""
   try {
     const blob = await valuationApi.downloadDocument(requestedCaseId, documentId)
     const url = URL.createObjectURL(blob)
-    const anchor = document.createElement('a')
+    const anchor = document.createElement("a")
     anchor.href = url
     anchor.download = filename
     anchor.click()
@@ -788,37 +313,33 @@ async function downloadOutput(documentId: string, filename: string): Promise<voi
   }
 }
 
-async function runFormalValidation(): Promise<void> {
+
+async function generateTemplateExports(): Promise<void> {
   const requestedCaseId = caseId.value
   const token = activeCaseToken
-  const reportPackageId = flow.reportPackageId
-  if (
-    formalValidating.value ||
-    submitting.value ||
-    !reportPackageId ||
-    !isCurrentCase(token, requestedCaseId)
-  ) return
+  let reportPackageId = flow.reportPackageId
+  if (formalValidating.value || submitting.value || !isCurrentCase(token, requestedCaseId)) return
 
   formalValidating.value = true
-  error.value = ''
-  refreshWarning.value = ''
-  flow.formalValidation = null
-  flow.formalReport = null
-  acknowledgedWarningCodes.value = []
+  error.value = ""
+  refreshWarning.value = ""
   try {
-    const formalValidationDto = await valuationApi.formalValidate(requestedCaseId, reportPackageId)
+    if (!reportPackageId) {
+      const createdPackage = await valuationApi.createReportPackage(requestedCaseId, {
+        report_type: "REPORT_COMPARISON_COMMERCIAL",
+      })
+      if (!isCurrentCase(token, requestedCaseId)) return
+      reportPackageId = createdPackage.report_id
+      flow.reportPackageId = reportPackageId
+    }
+    const templateDtos = await valuationApi.generateTemplateExports(requestedCaseId, reportPackageId)
     if (!isCurrentCase(token, requestedCaseId)) return
-    const formalValidation = mapFormalValidationResponse(formalValidationDto)
-    if (formalValidation.reportId !== reportPackageId) {
-      error.value = 'F02 正式檢核與目前查估書版本不一致，請重新執行檢核。'
-      return
-    }
-    flow.formalValidation = formalValidation
-    if (!formalValidation.canGenerateFormalReport) {
-      error.value = 'F02 正式檢核仍有待修正項目，請先完成補正。'
-      return
-    }
-    setFormalFormStatus('CHECKED', flow.authoritativeF02?.outputDocumentId ?? null)
+    flow.templateExports = templateDtos.map(mapTemplateExportResponse)
+    const validationDto = await valuationApi.formalValidate(requestedCaseId, reportPackageId)
+    if (!isCurrentCase(token, requestedCaseId)) return
+    flow.formalValidation = mapFormalValidationResponse(validationDto)
+    flow.formalReport = null
+    editorNotice.value = '已產生 ' + flow.templateExports.length + ' 份 Excel 成果；空白欄位保留空白，送審時會直接交給第二系統審查。'
   } catch (caught: unknown) {
     if (!isCurrentCase(token, requestedCaseId)) return
     error.value = safeValuationErrorMessage(caught)
@@ -827,95 +348,38 @@ async function runFormalValidation(): Promise<void> {
   }
 }
 
-async function generateFormalPdf(): Promise<void> {
-  const requestedCaseId = caseId.value
-  const token = activeCaseToken
-  const formalValidation = flow.formalValidation
-  const reportPackageId = flow.reportPackageId
-  if (
-    formalPdfGenerating.value ||
-    submitting.value ||
-    !formalValidation ||
-    !formalValidation.canGenerateFormalReport ||
-    formalValidation.runStatus !== 'COMPLETED' ||
-    formalValidation.caseId !== requestedCaseId ||
-    formalValidation.reportId !== reportPackageId ||
-    !reportPackageId ||
-    !warningsAcknowledged.value ||
-    flow.authoritativeF02?.status !== 'CHECKED' ||
-    !isCurrentCase(token, requestedCaseId)
-  ) {
-    if (formalValidation && !warningsAcknowledged.value) {
-      error.value = '請先逐項確認所有正式檢核警示；系統不會代為確認。'
-    }
-    return
-  }
-
-  formalPdfGenerating.value = true
-  error.value = ''
-  refreshWarning.value = ''
-  const requestId = formalPdfRequestId.value ?? createValuationRequestId()
-  formalPdfRequestId.value = requestId
-  try {
-    const formalReportDto = await valuationApi.generateFormalPdf(requestedCaseId, reportPackageId, {
-      confirm_generate: true,
-      acknowledged_warning_codes: [...acknowledgedWarningCodes.value],
-    }, requestId)
-    if (!isCurrentCase(token, requestedCaseId)) return
-    formalPdfRequestId.value = null
-    const formalReport = mapFormalReportResponse(formalReportDto)
-    if (
-      formalReport.caseId !== requestedCaseId ||
-      formalReport.reportId !== reportPackageId ||
-      formalReport.validationRunId !== formalValidation.validationRunId ||
-      formalReport.mimeType !== 'application/pdf'
-    ) {
-      error.value = '正式 PDF 與目前案件或檢核結果不一致，暫時無法送審。請重新產生正式文件。'
-      return
-    }
-    flow.formalReport = formalReport
-    setFormalFormStatus('FINAL', formalReport.documentId)
-  } catch (caught: unknown) {
-    if (!isCurrentCase(token, requestedCaseId)) return
-    if (isDefinitiveValuationError(caught)) formalPdfRequestId.value = null
-    error.value = safeValuationErrorMessage(caught)
-  } finally {
-    if (isCurrentCase(token, requestedCaseId)) formalPdfGenerating.value = false
-  }
-}
-
 async function submitForReview(): Promise<void> {
   const requestedCaseId = caseId.value
   const token = activeCaseToken
   const authoritativeF02 = flow.authoritativeF02
-  const completeReport = flow.completeReport
-  const reportPackageId = flow.reportPackageId
-  const formalReport = flow.formalReport
+  const sourceTemplateDocumentIds = flow.templateExports.map((item) => item.documentId)
+  const sourceValidationRunId = flow.formalValidation?.validationRunId ?? flow.validation?.validationRunId
   if (
     submitting.value ||
+    formalValidating.value ||
     flow.submission ||
     !flow.case ||
-    !valuationOutputReady.value ||
     !authoritativeF02 ||
-    !(completeReport || formalReport) ||
-    !reportPackageId ||
-    !formalReport ||
+    !flow.reportPackageId ||
+    !templateOutputReady.value ||
     expectedCaseVersion.value === null ||
-    !formalOutputReady.value ||
+    !sourceTemplateDocumentIds.length ||
+    !sourceValidationRunId ||
     !isCurrentCase(token, requestedCaseId)
   ) return
 
   submitting.value = true
-  error.value = ''
-  refreshWarning.value = ''
+  error.value = ""
+  refreshWarning.value = ""
   try {
     const requestId = submitRequestId.value ?? createValuationRequestId()
     submitRequestId.value = requestId
     const result = await valuationApi.submitForReview(requestedCaseId, {
       request_id: requestId,
       expected_case_version: authoritativeF02.versionNo,
-      source_validation_run_id: formalReport.validationRunId,
-      source_report_document_id: formalReport.documentId,
+      source_validation_run_id: sourceValidationRunId,
+      source_report_document_id: sourceTemplateDocumentIds[0],
+      source_template_document_ids: sourceTemplateDocumentIds,
     })
     if (!isCurrentCase(token, requestedCaseId)) return
     submitRequestId.value = null
@@ -950,7 +414,7 @@ watch(caseId, () => {
     <PageHeader
       eyebrow="送審確認"
       title="送審確認"
-      description="確認檢核結果、完整送審 PDF 與版本均已完成後，再送交審查。"
+      description="確認 Excel 成果已產生後，再送交第二系統審查。"
     />
     <ValuationIssueDrawer
       v-if="flow.case"
@@ -973,79 +437,26 @@ watch(caseId, () => {
         <div class="summary-grid">
           <div><span>案件資料</span><strong>已載入目前案件</strong></div>
           <div><span>F02 正式版本</span><strong>{{ flow.authoritativeF02 ? `第 ${flow.authoritativeF02.versionNo} 版` : '尚未取得' }}</strong></div>
-          <div><span>完整送審 PDF</span><strong>{{ flow.formalReport?.filename || flow.completeReport?.filename || '尚未找到啟用文件' }}</strong></div>
+          <div><span>Excel 成果</span><strong>{{ flow.templateExports.length ? '已產生 ' + flow.templateExports.length + ' 份' : '尚未產生' }}</strong></div>
           <div><span>檢核狀態</span><strong>{{ flow.validation ? '已執行' : '尚未執行' }}</strong></div>
           <div><span>送審準備</span><strong>{{ readinessMessage }}</strong></div>
-        </div>
-      </section>
-
-      <section
-        v-if="!flow.submission && currentSubmitStep"
-        class="submit-next-action"
-        data-testid="submit-next-action"
-        :data-state="currentSubmitStep.state"
-        aria-labelledby="submit-next-action-title"
-      >
-        <div>
-          <span>{{ currentSubmitStep.state === 'blocked' ? '目前需要先修正' : '目前下一步' }}</span>
-          <strong id="submit-next-action-title">{{ currentSubmitStep.title }}</strong>
-          <small>{{ currentSubmitStep.detail }}</small>
-        </div>
-        <button type="button" @click="focusSubmitTarget(currentSubmitStep.target)">
-          {{ currentSubmitStep.state === 'blocked' ? '前往修正' : '前往處理' }}
-        </button>
-      </section>
-
-      <section
-        class="submit-readiness"
-        data-testid="submit-readiness-steps"
-        aria-labelledby="submit-readiness-title"
-      >
-        <div class="submit-readiness__heading">
-          <div>
-            <p class="valuation-eyebrow">送審進度</p>
-            <h2 id="submit-readiness-title">完成 {{ completedSubmitStepCount }} / 4</h2>
-          </div>
-          <strong>{{ flow.submission ? '案件已送審' : readinessMessage }}</strong>
-        </div>
-        <div class="submit-readiness__steps">
-          <article
-            v-for="(item, index) in submitReadinessSteps"
-            :key="item.key"
-            :data-state="item.state"
-          >
-            <div class="submit-readiness__index">{{ index + 1 }}</div>
-            <div>
-              <span>{{ submitReadinessStateLabel(item.state) }}</span>
-              <strong>{{ item.title }}</strong>
-              <small>{{ item.detail }}</small>
-            </div>
-            <button
-              v-if="item.state !== 'done'"
-              type="button"
-              :disabled="item.state === 'pending' && item.key === 'submission'"
-              @click="focusSubmitTarget(item.target)"
-            >
-              {{ item.state === 'blocked' ? '前往修正' : item.state === 'active' ? '前往處理' : '查看' }}
-            </button>
-          </article>
         </div>
       </section>
 
       <section v-if="reportPageDraftId" v-liquid-glass data-lg class="valuation-surface report-package-flow lg" data-testid="report-package-draft-flow" aria-labelledby="report-package-title">
         <div class="surface-heading">
           <div>
-            <p class="valuation-eyebrow">查估書確認</p>
-            <h2 id="report-package-title">完整查估書三頁確認</h2>
+            <p class="valuation-eyebrow">選填資料</p>
+            <h2 id="report-package-title">選填：查估書三頁資料</h2>
           </div>
-          <span class="value-kind">三頁草稿</span>
+          <span class="value-kind">可略過</span>
         </div>
         <div v-if="flow.authoritativeF02" class="package-authoritative" data-testid="report-package-authoritative">
-          <strong>三頁已完成正式檢核</strong>
+          <strong>已建立 Excel 範本資料包</strong>
           <span>F02 第 {{ flow.authoritativeF02.versionNo }} 版</span>
         </div>
         <template v-else>
-          <p class="empty-copy">先檢視或修改 S01、F02-RF、F02，再逐頁確認。修改後必須重新儲存確認、正式計算與檢核。</p>
+          <p class="empty-copy">此區為選填：可檢視或修改 S01、F02-RF、F02，也可直接按下方「產生 Excel 範本」；未填欄位會保留空白。</p>
           <div class="report-page-editor-shell">
             <button
               v-if="!Object.keys(reportPageEditors).length"
@@ -1086,22 +497,7 @@ watch(caseId, () => {
             </template>
             <p v-if="editorNotice" class="editor-notice" role="status">{{ editorNotice }}</p>
           </div>
-          <div class="package-confirmations">
-            <label><input v-model="reportPageConfirmations.s01" data-testid="report-page-s01-confirm" type="checkbox" /> 我已確認 S01 勘查資料與來源</label>
-            <label><input v-model="reportPageConfirmations.f02Rf" data-testid="report-page-f02-rf-confirm" type="checkbox" /> 我已確認 F02-RF 全部因素級距</label>
-            <label><input v-model="reportPageConfirmations.f02" data-testid="report-page-f02-confirm" type="checkbox" /> 我已確認 F02 比較標的與權重</label>
-          </div>
-          <div class="formal-actions">
-            <button class="solid-button" type="button" data-testid="save-report-pages" :disabled="!reportPagesConfirmed || reportPageSaving || reportPageCalculating || reportPageValidating" @click="saveReportPages">
-              {{ reportPageSaving ? '三頁儲存中…' : '儲存三頁確認' }}
-            </button>
-            <button class="solid-button" type="button" data-testid="run-formal-calculation" :disabled="!reportPageSaved || reportPageCalculating || reportPageValidating" @click="calculateReportPages">
-              {{ reportPageCalculating ? '正式計算中…' : '執行正式計算' }}
-            </button>
-            <button class="solid-button solid-button--primary" type="button" data-testid="run-report-formal-validation" :disabled="!reportPageCalculated || reportPageValidating" @click="validateReportPages">
-              {{ reportPageValidating ? '三頁正式檢核中…' : '執行三頁正式檢核' }}
-            </button>
-          </div>
+
         </template>
       </section>
 
@@ -1122,7 +518,7 @@ watch(caseId, () => {
         </div>
         <ul v-if="flow.validation.findings.length" class="finding-list">
           <li v-for="finding in flow.validation.findings" :key="finding.findingId" :data-severity="finding.severity">
-            <strong>{{ finding.severity === 'ERROR' ? '需要修正' : '請確認' }}</strong>
+            <strong>保留給第二系統確認</strong>
             <span>{{ finding.message }}</span>
             <small>實際值：{{ finding.actualValue ?? '—' }}</small>
             <small>預期值：{{ finding.expectedValue ?? '—' }}</small>
@@ -1133,98 +529,49 @@ watch(caseId, () => {
         <p v-if="blockers.length" class="blocker-note">仍有 {{ blockers.length }} 項待修正內容，請回到資料確認頁處理。</p>
       </section>
 
-      <section v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="formal-validation-title">
+      <section v-liquid-glass data-lg class="valuation-surface lg" aria-labelledby="template-export-title">
         <div class="surface-heading">
           <div>
-            <p class="valuation-eyebrow">正式檢核</p>
-            <h2 id="formal-validation-title">完整報告正式檢核</h2>
+            <p class="valuation-eyebrow">Excel 範本輸出</p>
+            <h2 id="template-export-title">產生 Excel 範本</h2>
           </div>
-          <span v-if="flow.formalValidation" class="value-kind" :data-validation-state="flow.formalValidation.canGenerateFormalReport ? 'ready' : 'blocked'">
-            {{ flow.formalValidation.canGenerateFormalReport ? '可產生正式報告' : '仍有待修正項目' }}
-          </span>
-          <span v-else class="value-kind" data-validation-state="pending">尚未執行</span>
+          <span class="value-kind" data-validation-state="ready">可直接產生</span>
         </div>
-        <div v-if="flow.formalValidation" data-testid="formal-validation-result">
-          <div class="validation-counts">
-            <span>通過 {{ flow.formalValidation.passedCount }}</span>
-            <span>警示 {{ flow.formalValidation.warningCount }}</span>
-            <span>錯誤 {{ flow.formalValidation.failedCount }}</span>
-          </div>
-          <ul v-if="flow.formalValidation.findings.length" class="finding-list">
-            <li v-for="finding in flow.formalValidation.findings" :key="`${finding.code}-${finding.fieldCode ?? ''}`" :data-severity="finding.severity">
-              <strong>{{ finding.severity === 'ERROR' ? '需要修正' : '請確認' }}</strong>
-              <span>{{ finding.message }}</span>
-              <small v-if="finding.fieldCode">欄位：{{ formalFieldLabel(finding.fieldCode) }}</small>
-              <button
-                v-if="finding.severity === 'ERROR'"
-                class="finding-action"
-                type="button"
-                :data-testid="`fix-formal-finding-${finding.code}`"
-                @click="goToFormalFinding(finding)"
-              >
-                前往修正
-              </button>
-              <label v-if="finding.severity === 'WARNING'" class="warning-acknowledgement">
-                <input
-                  type="checkbox"
-                  :data-testid="`formal-warning-${finding.code}`"
-                  :checked="acknowledgedWarningCodes.includes(finding.code)"
-                  @change="setWarningAcknowledged(finding.code, ($event.target as HTMLInputElement).checked)"
-                />
-                <span>我已確認此警示，允許產生正式 PDF</span>
-              </label>
-            </li>
-          </ul>
-          <p v-else class="empty-copy">正式檢核沒有回傳其他訊息。</p>
-          <p v-if="flow.formalValidation.canGenerateFormalReport && formalWarningCodes.length && !warningsAcknowledged" class="blocker-note">
-            請逐項確認所有警示後，才能產生正式 PDF；系統不會代為確認。
-          </p>
-        </div>
-        <p v-else class="empty-copy">正式 PDF 產出前，必須先完成正式檢核。</p>
+        <p class="empty-copy">表3 會依宗地數量各產生一份；表4 與表5-1 合併所有地點，並把前段選擇的比準地放入比準地欄位。AI 已擷取或人工填寫的資料會帶入，未填欄位維持空白。產出後可直接送交第二系統審查。</p>
         <div class="formal-actions">
           <button
             class="solid-button"
             type="button"
-            data-testid="run-formal-validation"
-            :disabled="formalValidating || formalPdfGenerating || submitting || !flow.reportPackageId"
-            @click="runFormalValidation"
+            data-testid="generate-template-exports"
+            :disabled="formalValidating || submitting"
+            @click="generateTemplateExports"
           >
-            {{ formalValidating ? '正式檢核中…' : '執行正式檢核' }}
-          </button>
-          <button
-            v-if="flow.formalValidation"
-            class="solid-button solid-button--primary"
-            type="button"
-            data-testid="generate-formal-pdf"
-            :disabled="formalPdfGenerating || formalValidating || submitting || !flow.formalValidation.canGenerateFormalReport || !warningsAcknowledged || flow.authoritativeF02?.status !== 'CHECKED'"
-            @click="generateFormalPdf"
-          >
-            {{ formalPdfGenerating ? '正式 PDF 產生中…' : '產生完整送審 PDF' }}
+            {{ formalValidating ? 'Excel 範本產生中…' : '產生 Excel 範本' }}
           </button>
         </div>
       </section>
-
-      <section v-if="flow.formalReport" v-liquid-glass data-lg class="valuation-surface lg" data-testid="formal-pdf-result" aria-labelledby="formal-pdf-title">
+      <section v-if="flow.templateExports.length" v-liquid-glass data-lg class="valuation-surface lg" data-testid="template-excel-results" aria-labelledby="template-excel-title">
         <div class="surface-heading">
           <div>
-            <p class="valuation-eyebrow">正式文件</p>
-            <h2 id="formal-pdf-title">完整送審 PDF</h2>
+            <p class="valuation-eyebrow">範本成果</p>
+            <h2 id="template-excel-title">Excel 範本成果</h2>
           </div>
-          <span class="source-marker" data-source-kind="calculated">正式版本</span>
+          <span class="source-marker" data-source-kind="calculated">依目前已確認資料產生</span>
         </div>
-        <div class="artifact-card">
-          <strong>{{ flow.formalReport.filename }}</strong>
-          <span>第 {{ flow.formalReport.versionNo }} 版｜檔案大小 {{ Math.max(1, Math.round(flow.formalReport.fileSizeBytes / 1024)) }} KB</span>
-          <small>這是主要送審產物。頁數依本案實際查估書表與附圖內容產生，不以固定六頁作為流程條件。</small>
-          <button
-            class="solid-button solid-button--primary artifact-card__download"
-            type="button"
-            data-testid="download-formal-report"
-            :disabled="Boolean(downloadingDocumentId)"
-            @click="downloadOutput(flow.formalReport.documentId, flow.formalReport.filename)"
-          >
-            {{ downloadingDocumentId === flow.formalReport.documentId ? '下載中…' : '下載完整送審 PDF' }}
-          </button>
+        <p class="empty-copy">每個宗地各有一份表3；表4與表5-1彙整全部地點，前段選擇的比準地會置於比準地欄位。沒有資料的儲存格保留空白，另附「AI欄位對應」頁。</p>
+        <div class="artifact-list">
+          <div v-for="item in flow.templateExports" :key="item.documentId" class="artifact-card">
+            <strong>{{ item.title }}</strong>
+            <span>{{ item.filename }}｜第 {{ item.versionNo }} 版｜{{ Math.max(1, Math.round(item.fileSizeBytes / 1024)) }} KB</span>
+            <button
+              class="solid-button artifact-card__download"
+              type="button"
+              :disabled="Boolean(downloadingDocumentId)"
+              @click="downloadOutput(item.documentId, item.filename)"
+            >
+              {{ downloadingDocumentId === item.documentId ? '下載中…' : '下載 ' + item.formCode + ' Excel' }}
+            </button>
+          </div>
         </div>
       </section>
 
@@ -1232,14 +579,14 @@ watch(caseId, () => {
         <div class="surface-heading">
           <div>
             <p class="valuation-eyebrow">流程附件</p>
-            <h2 id="artifact-title">比準地地價估計表單表輸出（流程附件）</h2>
+            <h2 id="artifact-title">F03 單表輸出（流程附件）</h2>
           </div>
           <span class="source-marker" data-source-kind="calculated">系統產生</span>
         </div>
         <div class="artifact-card">
           <strong>{{ flow.report.filename }}</strong>
           <span>第 {{ flow.report.versionNo }} 版｜檔案大小 {{ Math.max(1, Math.round(flow.report.fileSizeBytes / 1024)) }} KB</span>
-          <small>這是前段比準地地價估計表計算產生的單表輸出，保留作流程追溯；正式送審以「完整送審 PDF」為主。</small>
+          <small>這是前段 F03 計算產生的單表輸出，保留作流程追溯；送審以六份 Excel 成果為主。</small>
           <button
             class="solid-button artifact-card__download"
             type="button"
@@ -1247,7 +594,7 @@ watch(caseId, () => {
             :disabled="Boolean(downloadingDocumentId)"
             @click="downloadOutput(flow.report.documentId, flow.report.filename)"
           >
-            {{ downloadingDocumentId === flow.report.documentId ? '下載中…' : '下載比準地地價估計表單表' }}
+            {{ downloadingDocumentId === flow.report.documentId ? '下載中…' : '下載 F03 單表' }}
           </button>
         </div>
       </section>
@@ -1259,7 +606,7 @@ watch(caseId, () => {
         <div>
           <strong>{{ flow.submission ? '案件已送出審查' : readinessMessage }}</strong>
           <p v-if="flow.submission">送審時間：{{ formatDateZhTw(flow.submission.submittedAt) }}</p>
-          <p v-else>完成必要檢核與完整送審 PDF 後即可送出審查。</p>
+          <p v-else>六份 Excel 成果產生後即可送出審查。</p>
         </div>
         <button
           v-if="!flow.submission"
@@ -1325,34 +672,7 @@ watch(caseId, () => {
 .artifact-card small { color: var(--app-muted); }
 .artifact-card__download { justify-self: start; margin-top: 8px; }
 .formal-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
-.submit-next-action { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 15px 18px; border: 1px solid #bfd0e2; border-left: 5px solid #2e5984; border-radius: var(--app-radius-sm); background: #f4f8fc; }
-.submit-next-action[data-state="blocked"] { border-color: #edc8c0; border-left-color: #b84d3b; background: #fff5f3; }
-.submit-next-action > div { display: grid; gap: 3px; min-width: 0; }
-.submit-next-action span { color: var(--app-muted); font-size: 9px; font-weight: 900; letter-spacing: .1em; }
-.submit-next-action strong { color: var(--app-ink); font-size: 14px; }
-.submit-next-action small { color: var(--app-ink-soft); font-size: 11px; line-height: 1.55; }
-.submit-next-action button { min-height: 40px; flex: 0 0 auto; padding: 8px 13px; border: 1px solid #2e5984; border-radius: 8px; color: #fff; background: #2e5984; cursor: pointer; font-size: 11px; font-weight: 900; }
-.submit-next-action[data-state="blocked"] button { border-color: #b84d3b; background: #b84d3b; }
-.submit-readiness { display: grid; gap: 14px; padding: 18px 20px; border: 1px solid #dce5ef; border-radius: var(--app-radius-md); background: #f8fbfe; }
-.submit-readiness__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
-.submit-readiness__heading h2 { margin: 0; color: var(--app-ink); font-family: var(--app-font-display); font-size: 22px; }
-.submit-readiness__heading > strong { max-width: 520px; color: var(--app-ink-soft); font-size: 12px; line-height: 1.6; text-align: right; }
-.submit-readiness__steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
-.submit-readiness__steps article { display: grid; grid-template-columns: auto minmax(0, 1fr); align-content: start; gap: 9px; min-width: 0; padding: 12px; border: 1px solid #dde5ee; border-radius: 10px; background: #fff; }
-.submit-readiness__steps article[data-state="done"] { border-color: #cfe0d6; background: #f5faf7; }
-.submit-readiness__steps article[data-state="active"] { border-color: #bfd0e2; background: #f4f8fc; }
-.submit-readiness__steps article[data-state="blocked"] { border-color: #edc8c0; background: #fff5f3; }
-.submit-readiness__steps article > div:nth-child(2) { display: grid; gap: 3px; min-width: 0; }
-.submit-readiness__index { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 999px; color: #fff; background: #718397; font-size: 10px; font-weight: 900; }
-.submit-readiness__steps article[data-state="done"] .submit-readiness__index { background: var(--app-green); }
-.submit-readiness__steps article[data-state="active"] .submit-readiness__index { background: #2e5984; }
-.submit-readiness__steps article[data-state="blocked"] .submit-readiness__index { background: #b84d3b; }
-.submit-readiness__steps span { color: var(--app-muted); font-size: 9px; font-weight: 900; }
-.submit-readiness__steps strong { color: var(--app-ink); font-size: 12px; line-height: 1.4; }
-.submit-readiness__steps small { color: var(--app-muted); font-size: 10px; line-height: 1.5; }
-.submit-readiness__steps button { grid-column: 1 / -1; justify-self: start; min-height: 34px; padding: 6px 10px; border: 1px solid #cbd8e5; border-radius: 8px; color: #244d73; background: #fff; cursor: pointer; font-size: 10px; font-weight: 900; }
-.submit-readiness__steps button:disabled { cursor: not-allowed; opacity: .5; }
-.submit-bar { position: sticky; z-index: 12; bottom: 14px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px 20px; border: 1px solid rgba(223,229,239,.92); border-radius: var(--app-radius-md); background: rgba(255,250,247,.96); box-shadow: 0 14px 36px rgba(30,52,78,.14); backdrop-filter: blur(14px); }
+.submit-bar { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px 20px; border: 1px solid rgba(255,255,255,.72); border-radius: var(--app-radius-md); background: rgba(255,250,247,.74); box-shadow: var(--app-shadow-soft); }
 .submit-bar strong { color: var(--app-ink); font-size: 15px; }
 .submit-bar p { margin: 5px 0 0; color: var(--app-ink-soft); font-size: 12px; }
 .solid-button { min-height: 44px; padding: 10px 18px; border: 1px solid var(--app-line); border-radius: 9px; color: var(--app-ink-soft); background: var(--app-paper-strong); cursor: pointer; font-size: 13px; font-weight: 800; }
@@ -1368,12 +688,7 @@ watch(caseId, () => {
 @media (max-width: 760px) {
   .valuation-view { padding: 18px 16px 28px; }
   .valuation-surface { padding: 16px; }
-  .submit-next-action { align-items: stretch; flex-direction: column; }
-  .submit-next-action button { width: 100%; }
-  .surface-heading, .submit-bar, .submit-readiness__heading { align-items: flex-start; flex-direction: column; }
-  .submit-readiness__heading > strong { text-align: left; }
-  .submit-readiness__steps { grid-template-columns: 1fr; }
-  .submit-bar { position: static; box-shadow: var(--app-shadow-soft); backdrop-filter: none; }
+  .surface-heading, .submit-bar { align-items: flex-start; flex-direction: column; }
   .summary-grid { grid-template-columns: 1fr; }
   .solid-button { width: 100%; }
   .formal-actions { width: 100%; }

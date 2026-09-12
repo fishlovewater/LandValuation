@@ -44,8 +44,8 @@ class CalculationService:
             raise ResourceNotFoundError("估價表")
         if form.form_code != "F03":
             raise AppError("FORM_TYPE_MISMATCH", "此計算端點只接受 F03 表單", 422)
-        if form.form_status != "DRAFT":
-            raise AppError("FORM_STATE_CONFLICT", "只有 F03 草稿可以重新計算", 409)
+        if form.form_status not in {"DRAFT", "READY"}:
+            raise AppError("FORM_STATE_CONFLICT", "只有 F03 草稿或 READY 狀態可以重新計算", 409)
 
         if not case.land_use_type:
             raise AppError(

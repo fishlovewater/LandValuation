@@ -1,11 +1,13 @@
+from copy import deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
 from hashlib import sha256
 from io import BytesIO
 import json
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from fastapi.concurrency import run_in_threadpool
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
@@ -19,6 +21,10 @@ from app.valuation.models import (
     CaseEventRecord,
     ComparisonFactorValueRecord,
     DocumentRecord,
+    ExtractedFieldRecord,
+    FormInstanceRecord,
+    ParcelRecord,
+    ValuationLocationRecord,
     ValidationRunRecord,
 )
 from app.valuation.report_packages.complete_draft_pdf_builder import (
@@ -46,6 +52,12 @@ from app.valuation.report_packages.formal_schemas import (
     FormalValidationFinding,
     FormalValidationResponse,
     FormalWorkflowStatusResponse,
+    TemplateExportResponse,
+)
+from app.valuation.report_packages.template_exports import (
+    EXCEL_MIME,
+    TEMPLATE_EXPORTS,
+    build_template_export_xlsx,
 )
 from app.valuation.report_packages.page_schemas import (
     F02DraftData,
@@ -507,9 +519,12 @@ class FormalReportService:
         findings: list[FormalValidationFinding] = []
 
         def error(code: str, message: str, field: str | None = None) -> None:
+            # This system exports working Excel templates. Missing or incomplete
+            # formal data must remain visible to the second review system, but
+            # must not prevent a template with blank cells from being produced.
             findings.append(
                 FormalValidationFinding(
-                    code=code, severity="ERROR", message=message, field_code=field
+                    code=code, severity="WARNING", message=message, field_code=field
                 )
             )
 
@@ -557,19 +572,15 @@ class FormalReportService:
 
         fingerprint = None
         input_snapshot = None
-        if comparison.comparison_workflow_enabled and (
-            regional.comparison_analysis_id is not None
-            and regional.rule_version_id is not None
-        ):
-            db_targets = await self.repository.list_comparison_targets(
-                case_id, regional.comparison_analysis_id
-            )
-            db_target_by_id = {
+        if comparison.comparison_workflow_enabled:
+            db_targets = []
+            if regional.comparison_analysis_id is not None:
+                db_targets = await self.repository.list_comparison_targets(
+                    case_id, regional.comparison_analysis_id
+                )
+            input_snapshot = self._input_snapshot(case, regional, comparison, {
                 item.comparison_target_id: item for item in db_targets
-            }
-            input_snapshot = self._input_snapshot(
-                case, regional, comparison, db_target_by_id
-            )
+            })
             fingerprint = self._fingerprint(input_snapshot)
             saved_fingerprint = comparison.calculation_snapshot.get(
                 "input_fingerprint"
@@ -579,18 +590,20 @@ class FormalReportService:
                     "FORMAL_CALCULATION_STALE",
                     "表單或比較標資料已在最後一次計算後變更，請重新計算",
                 )
-            rule = await self.repository.get_rule_version(regional.rule_version_id)
-            if rule is None:
-                error("FORMAL_RULE_VERSION_INVALID", "正式規則版本不存在或未發布")
+            if regional.comparison_analysis_id is None:
+                error("FORMAL_REFERENCES_REQUIRED", "缺少正式比較分析（暫時留空）")
+            if regional.rule_version_id is None:
+                error("FORMAL_RULE_VERSION_REQUIRED", "缺少正式規則版本（暫時留空）")
             else:
-                try:
-                    self._validate_rule(case, rule)
-                except AppError as exc:
-                    error(exc.code, exc.message)
-        elif comparison.comparison_workflow_enabled:
-            error("FORMAL_REFERENCES_REQUIRED", "缺少正式規則版本或比較分析")
-
-        if not comparison.comparison_workflow_enabled:
+                rule = await self.repository.get_rule_version(regional.rule_version_id)
+                if rule is None:
+                    error("FORMAL_RULE_VERSION_INVALID", "正式規則版本不存在或未發布")
+                else:
+                    try:
+                        self._validate_rule(case, rule)
+                    except AppError as exc:
+                        error(exc.code, exc.message)
+        else:
             input_snapshot = self._input_snapshot(case, regional, comparison, {})
             fingerprint = self._fingerprint(input_snapshot)
             saved_fingerprint = comparison.calculation_snapshot.get(
@@ -602,7 +615,7 @@ class FormalReportService:
                     "表單資料已在最後一次計算後變更，請重新計算",
                 )
             if regional.rule_version_id is None:
-                error("FORMAL_RULE_VERSION_REQUIRED", "缺少正式規則版本")
+                error("FORMAL_RULE_VERSION_REQUIRED", "缺少正式規則版本（暫時留空）")
             else:
                 rule = await self.repository.get_rule_version(regional.rule_version_id)
                 if rule is None:
@@ -612,7 +625,6 @@ class FormalReportService:
                         self._validate_rule(case, rule)
                     except AppError as exc:
                         error(exc.code, exc.message)
-
         failed_count = sum(item.severity == "ERROR" for item in findings)
         warning_count = sum(item.severity == "WARNING" for item in findings)
         checklist_count = 12
@@ -741,6 +753,7 @@ class FormalReportService:
             )
 
         data = await self.pages.draft_pdf_data(case_id, report_id, user)
+        data = self._merge_location_data_into_pdf(data, await self._template_location_data(case_id))
         regional = self.pages._read_data(records["F02-RF"], F02RFDraftData)
         comparison = self.pages._read_data(records["F02"], F02DraftData)
         if not comparison.comparison_workflow_enabled:
@@ -755,9 +768,7 @@ class FormalReportService:
             data["f02_rf"]["benchmark_land_id"] = None
             data["f02_rf"]["comparison_analysis_id"] = None
         db_targets = []
-        if comparison.comparison_workflow_enabled and regional.comparison_analysis_id is None:
-            raise AppError("FORMAL_REFERENCES_REQUIRED", "缺少比較分析", 409)
-        if comparison.comparison_workflow_enabled:
+        if comparison.comparison_workflow_enabled and regional.comparison_analysis_id is not None:
             db_targets = await self.repository.list_comparison_targets(
                 case_id, regional.comparison_analysis_id
             )
@@ -953,6 +964,430 @@ class FormalReportService:
             raise ResourceNotFoundError("完整六頁查估書 PDF")
         return document
 
+
+    async def _template_location_data(self, case_id: UUID) -> list[dict[str, object]]:
+        """Collect AI-extracted and manual values per active valuation location.
+
+        Manual values override confirmed values, which override pending AI values.  Keeping this separate from the
+        formal calculation pages lets working Excel exports preserve blank fields
+        and supports any number of uploaded locations.
+        """
+        locations = list((await self.session.scalars(
+            select(ValuationLocationRecord)
+            .where(
+                ValuationLocationRecord.case_id == case_id,
+                ValuationLocationRecord.is_active.is_(True),
+            )
+            .order_by(ValuationLocationRecord.display_order)
+        )).all())
+        if not locations:
+            return []
+
+        location_by_id = {item.location_id: item for item in locations}
+        values_by_location: dict[UUID, dict[str, object]] = {
+            item.location_id: {} for item in locations
+        }
+        parcels = list((await self.session.scalars(
+            select(ParcelRecord).where(
+                ParcelRecord.case_id == case_id,
+                ParcelRecord.location_id.in_(location_by_id),
+            )
+        )).all())
+        for parcel in parcels:
+            if parcel.location_id is None:
+                continue
+            values = values_by_location[parcel.location_id]
+            values.setdefault("land_no", parcel.land_no)
+            values.setdefault("section_name", parcel.section_name)
+            values.setdefault("subsection_name", parcel.subsection_name)
+            values.setdefault("area_sqm", parcel.area_sqm)
+            values.setdefault("land_use_zone", parcel.land_use_zone)
+            values.setdefault("designated_use", parcel.designated_use)
+
+        aliases = {
+            "administrative_area": "district_name",
+            "zone_boundary_description": "district_boundary",
+            "urban_plan_scope": "urban_plan_status",
+            "land_use_zone_category": "land_use_zone",
+            "building_coverage_ratio": "building_coverage_rate",
+            "building_prohibition_status": "prohibited_building",
+            "building_restriction_status": "restricted_building",
+            "building_restriction_details": "restricted_building",
+            "internal_road_width_m": "average_road_width_m",
+            "average_internal_road_width_m": "average_road_width_m",
+            "section_chief_name": "section_head_name",
+        }
+        candidates = list((await self.session.scalars(
+            select(ExtractedFieldRecord)
+            .where(
+                ExtractedFieldRecord.case_id == case_id,
+                ExtractedFieldRecord.location_id.in_(location_by_id),
+                ExtractedFieldRecord.field_status.in_(("CONFIRMED", "APPLIED")),
+                ExtractedFieldRecord.confirmed_value.is_not(None),
+            )
+            .order_by(
+                ExtractedFieldRecord.updated_at.desc(),
+                ExtractedFieldRecord.created_at.desc(),
+            )
+        )).all())
+        candidate_priorities: dict[tuple[UUID, str], int] = {}
+        for candidate in candidates:
+            if candidate.location_id is None:
+                continue
+            field = aliases.get(str(candidate.field_name), str(candidate.field_name))
+            priority = 2 if candidate.field_status in {"CONFIRMED", "APPLIED"} else 1
+            key = (candidate.location_id, field)
+            if candidate_priorities.get(key, 0) >= priority:
+                continue
+            value = candidate.confirmed_value if candidate.confirmed_value is not None else candidate.extracted_value
+            if value in (None, ""):
+                continue
+            values_by_location[candidate.location_id][field] = value
+            candidate_priorities[key] = priority
+
+        forms = list((await self.session.scalars(
+            select(FormInstanceRecord).where(FormInstanceRecord.case_id == case_id)
+        )).all())
+        for form in forms:
+            content = form.form_content if isinstance(form.form_content, dict) else {}
+            scoped = content.get("manual_overrides_by_location")
+            if not isinstance(scoped, dict):
+                continue
+            for raw_location_id, raw_values in scoped.items():
+                try:
+                    location_id = UUID(str(raw_location_id))
+                except (TypeError, ValueError):
+                    continue
+                if location_id not in values_by_location or not isinstance(raw_values, dict):
+                    continue
+                values = values_by_location[location_id]
+                for field, value in raw_values.items():
+                    if value not in (None, ""):
+                        values[aliases.get(str(field), str(field))] = value
+
+        return [
+            {
+                "location_id": str(item.location_id),
+                "display_order": item.display_order,
+                "label": item.label,
+                "address": item.address,
+                "is_benchmark_location": item.is_benchmark_location,
+                "values": values_by_location[item.location_id],
+            }
+            for item in locations
+        ]
+
+    @staticmethod
+    def _merge_location_data_into_pdf(
+        data: dict, locations: list[dict[str, object]]
+    ) -> dict:
+        """Use the same per-location values as Excel when building the PDF."""
+        if not locations:
+            return data
+        merged = deepcopy(data)
+
+        def values(location: dict[str, object] | None) -> dict[str, object]:
+            raw = {} if location is None else location.get("values")
+            return dict(raw) if isinstance(raw, dict) else {}
+
+        def value(location: dict[str, object] | None, field: str, fallback=None):
+            current = values(location).get(field)
+            return fallback if current in (None, "", []) else current
+
+        def label(location: dict[str, object] | None) -> str:
+            if location is None:
+                return ""
+            return str(location.get("label") or location.get("address") or "")
+
+        benchmark = next(
+            (item for item in locations if item.get("is_benchmark_location")),
+            locations[0],
+        )
+        targets = [item for item in locations if item is not benchmark][:3]
+        benchmark_id = str(benchmark.get("location_id"))
+
+        context = dict(merged.get("context") or {})
+        context["benchmark_lands"] = [
+            {
+                "benchmark_land_id": str(item.get("location_id")),
+                "parcel_id": str(item.get("location_id")),
+                "benchmark_land_no": label(item),
+                "price_zone_no": value(item, "price_zone_no"),
+            }
+            for item in locations
+        ]
+        merged["context"] = context
+
+        s01 = dict(merged.get("s01") or {})
+        for field in (
+            "district_name", "district_boundary", "survey_date", "urban_plan_status",
+            "land_use_zone", "building_coverage_rate", "floor_area_ratio",
+            "prohibited_building", "restricted_building", "main_road_name",
+            "main_road_width_m", "average_road_width_m", "handler_name",
+            "section_head_name", "director_name", "appraiser_name",
+        ):
+            current = value(benchmark, field)
+            if current not in (None, "", []):
+                if field in {"building_coverage_rate", "floor_area_ratio"}:
+                    current = str(current).removesuffix("%")
+                s01[field] = current
+        observations = {
+            str(item.get("item_code")): dict(item)
+            for item in s01.get("observations") or []
+        }
+        for code in TEMPLATE_FACTOR_CODES:
+            current = value(benchmark, code)
+            if current not in (None, "", []):
+                observations[code] = {
+                    "item_code": code,
+                    "raw_value": str(current),
+                    "source_notes": "地點 AI／人工確認值",
+                }
+        s01["observations"] = list(observations.values())
+        merged["s01"] = s01
+
+        regional = dict(merged.get("f02_rf") or {})
+        regional["benchmark_land_id"] = benchmark_id
+        old_rows = {
+            str(item.get("factor_code")): dict(item)
+            for item in regional.get("factor_rows") or []
+        }
+        factor_rows = []
+        for code in TEMPLATE_FACTOR_CODES:
+            row = deepcopy(old_rows.get(code, {"factor_code": code, "targets": []}))
+            row["factor_code"] = code
+            benchmark_value = value(benchmark, code)
+            if benchmark_value not in (None, "", []):
+                row["benchmark_confirmed_level"] = str(benchmark_value)
+                row["benchmark_reported_level"] = str(benchmark_value)
+            old_targets = list(row.get("targets") or [])
+            new_targets = []
+            for index, target in enumerate(targets, start=1):
+                item = deepcopy(old_targets[index - 1] if index <= len(old_targets) else {})
+                item["comparison_target_id"] = str(target.get("location_id"))
+                item["display_order"] = index
+                target_value = value(target, code)
+                if target_value not in (None, "", []):
+                    item["confirmed_level"] = str(target_value)
+                    item["reported_level"] = str(target_value)
+                new_targets.append(item)
+            row["targets"] = new_targets
+            if benchmark_value not in (None, "", []) or new_targets or code in old_rows:
+                factor_rows.append(row)
+        regional["factor_rows"] = factor_rows
+        merged["f02_rf"] = regional
+
+        comparison = dict(merged.get("f02") or {})
+        comparison["benchmark_land_id"] = benchmark_id
+        benchmark_price = value(benchmark, "benchmark_comparison_price", value(benchmark, "comparison_price"))
+        if benchmark_price not in (None, "", []):
+            comparison["benchmark_comparison_price"] = benchmark_price
+        old_targets = sorted(
+            list(comparison.get("comparison_targets") or []),
+            key=lambda item: item.get("display_order", 0),
+        )
+        comparison_targets = []
+        for index, target in enumerate(targets, start=1):
+            item = deepcopy(old_targets[index - 1] if index <= len(old_targets) else {})
+            item["comparison_target_id"] = str(target.get("location_id"))
+            item["comparison_target_label"] = label(target)
+            item["display_order"] = index
+            for field, destination in (
+                ("transaction_date", "transaction_date_snapshot"),
+                ("normal_unit_price", "normal_unit_price_snapshot"),
+                ("time_adjustment_rate", "time_adjustment_rate"),
+                ("regional_adjustment_rate", "regional_adjustment_rate"),
+                ("individual_adjustment_rate", "individual_adjustment_rate"),
+                ("total_adjustment_absolute", "total_adjustment_absolute"),
+                ("trial_price", "trial_price"),
+                ("weight", "weight"),
+            ):
+                current = value(target, field)
+                if current not in (None, "", []):
+                    item[destination] = current
+            old_factors = {
+                str(factor.get("factor_code")): dict(factor)
+                for factor in item.get("individual_factors") or []
+            }
+            individual_factors = []
+            for code in INDIVIDUAL_FACTOR_CODES:
+                factor = old_factors.get(code, {"factor_code": code})
+                current = value(target, code)
+                if current not in (None, "", []):
+                    factor["comparable_confirmed_level"] = str(current)
+                    factor["comparable_reported_level"] = str(current)
+                if current not in (None, "", []) or code in old_factors:
+                    individual_factors.append(factor)
+            item["individual_factors"] = individual_factors
+            comparison_targets.append(item)
+        comparison["comparison_targets"] = comparison_targets
+        merged["f02"] = comparison
+        return merged
+    async def generate_template_exports(
+        self,
+        case_id: UUID,
+        report_id: UUID,
+        user: User,
+    ) -> list[TemplateExportResponse]:
+        if self.storage is None:
+            raise RuntimeError("Template export requires storage")
+        case, records = await self.pages._read_records(case_id, report_id, user)
+        pages = {
+            code: self.pages._read_data(records[code], model).model_dump(mode="json")
+            for code, model in (
+                ("S01", S01DraftData),
+                ("F02-RF", F02RFDraftData),
+                ("F02", F02DraftData),
+            )
+        }
+        case_data = {
+            "case_no": case.case_no,
+            "case_title": case.case_title,
+            "valuation_base_date": case.valuation_base_date,
+        }
+        locations = await self._template_location_data(case_id)
+        jobs: list[tuple[object, dict[str, object] | None]] = []
+        s01_definition = next(item for item in TEMPLATE_EXPORTS if item.code == "S01")
+        if locations:
+            jobs.extend((s01_definition, location) for location in locations)
+        else:
+            jobs.append((s01_definition, None))
+        jobs.extend(
+            (definition, None)
+            for definition in TEMPLATE_EXPORTS
+            if definition.code != "S01"
+        )
+
+        repository = DocumentRepository(self.session)
+        results: list[TemplateExportResponse] = []
+        for definition, location in jobs:
+            location_id = None if location is None else UUID(str(location["location_id"]))
+            location_label = None if location is None else str(location["label"])
+            scope_key = "combined" if location is None else str(location["location_id"])
+            content = await run_in_threadpool(
+                build_template_export_xlsx,
+                code=definition.code,
+                case=case_data,
+                pages=pages,
+                locations=locations if definition.code != "S01" else None,
+                location=location,
+            )
+            group_id = uuid5(
+                NAMESPACE_URL,
+                f"land-valuation:{case_id}:report:{report_id}:template:{definition.code}:{scope_key}",
+            )
+            version_no = await repository.next_version(case_id, group_id)
+            document_id = uuid4()
+            suffix = "combined" if location is None else f"location-{location['display_order']}"
+            filename = safe_filename(
+                f"{case.case_no}_{definition.code}_{suffix}_{definition.filename}"
+            )
+            object_key = build_generated_report_object_key(
+                case_id, group_id, document_id, version_no, filename
+            )
+            uploaded = await self.storage.upload(
+                object_key,
+                BytesIO(content),
+                len(content),
+                content_type=EXCEL_MIME,
+            )
+            try:
+                await repository.deactivate_group(case_id, group_id)
+                document = await repository.create(
+                    DocumentRecord(
+                        document_id=document_id,
+                        document_group_id=group_id,
+                        case_id=case_id,
+                        location_id=location_id,
+                        document_type="generated-template-xlsx",
+                        original_filename=filename,
+                        mime_type=EXCEL_MIME,
+                        bucket_name=str(uploaded["bucket_name"]),
+                        object_key=str(uploaded["object_key"]),
+                        checksum_sha256=sha256(content).hexdigest(),
+                        file_size_bytes=len(content),
+                        storage_etag=str(uploaded["etag"]),
+                        version_no=version_no,
+                        uploaded_by_user_id=user.user_id,
+                        is_active=True,
+                    )
+                )
+            except Exception:
+                await self.storage.delete(object_key)
+                raise
+            title = definition.title if location is None else f"{definition.title}（{location_label}）"
+            results.append(
+                TemplateExportResponse(
+                    form_code=definition.code,
+                    title=title,
+                    location_id=location_id,
+                    location_label=location_label,
+                    document_id=document.document_id,
+                    filename=document.original_filename,
+                    mime_type=document.mime_type,
+                    version_no=document.version_no,
+                    file_size_bytes=document.file_size_bytes,
+                    download_path=(
+                        f"/api/v1/valuation/cases/{case_id}/documents/"
+                        f"{document.document_id}/download"
+                    ),
+                )
+            )
+        return results
+    async def _existing_template_exports(
+        self, case_id: UUID, report_id: UUID, user: User
+    ) -> list[TemplateExportResponse]:
+        documents = await self.documents.list_active_for_case(case_id)
+        locations = await self._template_location_data(case_id)
+        s01_definition = next(item for item in TEMPLATE_EXPORTS if item.code == "S01")
+        jobs: list[tuple[object, dict[str, object] | None]] = []
+        if locations:
+            jobs.extend((s01_definition, location) for location in locations)
+        else:
+            jobs.append((s01_definition, None))
+        jobs.extend(
+            (definition, None)
+            for definition in TEMPLATE_EXPORTS
+            if definition.code != "S01"
+        )
+        results: list[TemplateExportResponse] = []
+        for definition, location in jobs:
+            scope_key = "combined" if location is None else str(location["location_id"])
+            group_id = uuid5(
+                NAMESPACE_URL,
+                f"land-valuation:{case_id}:report:{report_id}:template:{definition.code}:{scope_key}",
+            )
+            document = next(
+                (
+                    item for item in documents
+                    if item.document_type == "generated-template-xlsx"
+                    and item.is_active
+                    and item.document_group_id == group_id
+                ),
+                None,
+            )
+            if document is None:
+                continue
+            location_id = None if location is None else UUID(str(location["location_id"]))
+            location_label = None if location is None else str(location["label"])
+            results.append(
+                TemplateExportResponse(
+                    form_code=definition.code,
+                    title=(definition.title if location is None else f"{definition.title}（{location_label}）"),
+                    location_id=location_id,
+                    location_label=location_label,
+                    document_id=document.document_id,
+                    filename=document.original_filename,
+                    mime_type=document.mime_type,
+                    version_no=document.version_no,
+                    file_size_bytes=document.file_size_bytes,
+                    download_path=(
+                        f"/api/v1/valuation/cases/{case_id}/documents/"
+                        f"{document.document_id}/download"
+                    ),
+                )
+            )
+        return results
     async def status(
         self, case_id: UUID, report_id: UUID, user: User
     ) -> FormalWorkflowStatusResponse:
@@ -983,6 +1418,7 @@ class FormalReportService:
         return FormalWorkflowStatusResponse(
             validation=validation_response,
             report=report,
+            template_exports=await self._existing_template_exports(case_id, report_id, user),
             requires_revalidation_for_submission=(
                 validation is not None
                 and not bool(validation.input_snapshot)

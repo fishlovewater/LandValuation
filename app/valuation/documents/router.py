@@ -60,6 +60,7 @@ async def upload_document(
     category: Annotated[DocumentCategory, Form()],
     file: Annotated[UploadFile, File()],
     document_group_id: Annotated[UUID | None, Form()] = None,
+    location_id: Annotated[UUID | None, Form()] = None,
 ) -> DocumentResponse:
     record = await DocumentService(session, storage).upload(
         case_id,
@@ -67,6 +68,7 @@ async def upload_document(
         file,
         user,
         document_group_id,
+        location_id,
     )
     return DocumentResponse.model_validate(record)
 
@@ -80,8 +82,9 @@ async def list_documents(
     session: DbSession,
     storage: Storage,
     user: DocumentDownloader,
+    location_id: UUID | None = None,
 ) -> list[DocumentResponse]:
-    records = await DocumentService(session, storage).list_documents(case_id, user)
+    records = await DocumentService(session, storage).list_documents(case_id, user, location_id)
     return [DocumentResponse.model_validate(record) for record in records]
 
 

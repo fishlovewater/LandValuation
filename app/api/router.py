@@ -10,6 +10,7 @@ from app.valuation.documents.router import router as document_router
 from app.valuation.extraction.router import router as extraction_router
 from app.valuation.facilities.router import router as facilities_router
 from app.valuation.operations.router import router as operations_router
+from app.valuation.locations.router import router as location_router
 from app.valuation.report_packages.router import router as report_package_router
 from app.valuation.router import router as valuation_router
 from app.valuation.rule_packs.router import router as rule_pack_router
@@ -21,6 +22,7 @@ api_router.include_router(history_router)
 api_router.include_router(knowledge_router, prefix="/knowledge", tags=["knowledge"])
 api_router.include_router(valuation_router, prefix="/valuation", tags=["valuation"])
 api_router.include_router(document_router, prefix="/valuation", tags=["valuation-documents"])
+api_router.include_router(location_router, prefix="/valuation", tags=["valuation-locations"])
 api_router.include_router(extraction_router, prefix="/valuation", tags=["valuation-extraction"])
 api_router.include_router(
     report_package_router,

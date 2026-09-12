@@ -34,10 +34,10 @@ const emit = defineEmits<{
       <div>
         <p class="valuation-eyebrow">正式計算</p>
         <h2 id="calculation-launch-title">計算與檢核</h2>
-        <p>系統會使用已確認的比準地地價估計表資料執行公式計算，再依檢核規則檢查缺漏與一致性；若有問題會直接指出修正位置。</p>
+        <p>F03 完整時會執行公式計算；F03 空白時會略過該表的公式檢核，保留空值且不產生虛假的地價。</p>
       </div>
       <div class="calculation-launch__readiness">
-        <span :data-state="hasF03 ? 'ready' : 'blocked'">{{ hasF03 ? '比準地地價估計表已建立' : '尚未建立比準地地價估計表' }}</span>
+        <span :data-state="hasF03 ? 'ready' : 'blocked'">{{ hasF03 ? 'F03 已建立' : '缺少 F03' }}</span>
         <span v-if="preCalculationIssueCount" data-state="blocked">前置資料尚有 {{ preCalculationIssueCount }} 項</span>
         <span :data-state="dirty ? 'attention' : 'ready'">{{ dirty ? '有尚未儲存的修改' : '資料已同步' }}</span>
       </div>
@@ -47,7 +47,7 @@ const emit = defineEmits<{
       type="button"
       data-testid="run-valuation"
       :disabled="running || saving || !canRunValuation"
-      :title="!canRunValuation ? '請先完成待處理前置資料' : dirty ? '會先儲存尚未儲存的比準地地價估計表修改，再執行計算與檢核' : '執行正式計算與檢核'"
+      :title="!canRunValuation ? '請先完成待處理前置資料' : dirty ? '會先儲存尚未保存的 F03 修改，再執行計算與檢核' : '執行正式計算與檢核'"
       @click="emit('run')"
     >
       {{ running ? '計算與檢核中…' : dirty ? '儲存修改並執行計算與檢核' : '執行計算與檢核' }}
@@ -60,7 +60,7 @@ const emit = defineEmits<{
         <p class="valuation-eyebrow">檢核結果</p>
         <h2 id="validation-title">計算與資料檢核</h2>
       </div>
-      <span class="value-kind" :data-validation-state="validation.canGenerateReport ? 'ready' : 'blocked'">{{ validation.canGenerateReport ? '可產生比準地地價估計表單表' : '仍有待修正項目' }}</span>
+      <span class="value-kind" :data-validation-state="validation.canGenerateReport ? 'ready' : 'blocked'">{{ validation.canGenerateReport ? '可產生正式輸出' : '仍有待修正項目' }}</span>
     </div>
     <div class="validation-counts">
       <span>通過 {{ validation.passedCount }}</span>
@@ -89,11 +89,11 @@ const emit = defineEmits<{
       <small>公式版本：{{ calculation.formulaVersion }}</small>
     </div>
     <div v-if="report" class="report-result" data-testid="report-result">
-      <span>比準地地價估計表單表輸出</span>
+      <span>F03 單表輸出</span>
       <strong>{{ report.filename }}</strong>
       <small>第 {{ report.versionNo }} 版｜檔案大小 {{ Math.max(1, Math.round(report.fileSizeBytes / 1024)) }} KB</small>
     </div>
-    <button class="solid-button solid-button--primary" type="button" data-testid="go-to-submit" :disabled="!canProceedToSubmit" :title="canProceedToSubmit ? '前往輸出預覽與送審' : '必須先修正阻擋項目並通過檢核'" @click="emit('goSubmit')">{{ canProceedToSubmit ? '前往輸出預覽與送審' : '請先完成阻擋項目' }}</button>
+    <button class="solid-button solid-button--primary" type="button" data-testid="go-to-submit" :disabled="!canProceedToSubmit" :title="canProceedToSubmit ? '前往輸出預覽與送審' : '必須先修正 ERROR 並通過檢核'" @click="emit('goSubmit')">{{ canProceedToSubmit ? '前往輸出預覽與送審' : '請先完成阻擋項目' }}</button>
   </section>
 </template>
 
