@@ -13,7 +13,7 @@ import GlassModal from '../../../components/glass/GlassModal.vue'
 import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
 import PageHeader from '../../../components/common/PageHeader.vue'
 import { formatDateZhTw } from '../../../utils/formatters'
-import { NEW_TAIPEI_DISTRICTS } from '../../valuation/newTaipei'
+import { NEW_TAIPEI_DISTRICTS, newTaipeiDistrictName } from '../../valuation/newTaipei'
 import { reviewApi, safeReviewErrorMessage } from '../review.api'
 import {
   caseSourceLabel,
@@ -71,6 +71,7 @@ const sortDirection = computed<'asc' | 'desc'>(() => (stringQuery('sortDirection
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / Math.max(1, pageSize.value))))
 const summaryTotal = computed(() => Object.values(summary.value?.statusCounts ?? {}).reduce((sum, count) => sum + count, 0))
 const sortValue = computed(() => `${sortBy.value}:${sortDirection.value}`)
+const districtFilterValue = computed(() => canonicalDistrictFilter(stringQuery('district', '')))
 
 const quickFilters = computed(() => [
   { key: '', label: '全部', count: summaryTotal.value, testId: 'kpi-all' },
@@ -95,7 +96,7 @@ const activeFilters = computed(() => {
   if (statusGroup) items.push({ key: 'statusGroup', label: statusGroupLabel(statusGroup) })
   if (source) items.push({ key: 'source', label: caseSourceLabel(source) })
   if (riskLevel) items.push({ key: 'riskLevel', label: riskLevelLabel(riskLevel) })
-  if (district) items.push({ key: 'district', label: `行政區：${district}` })
+  if (district) items.push({ key: 'district', label: `行政區：${newTaipeiDistrictName(district) || '行政區待確認'}` })
   if (urgency) items.push({ key: 'urgency', label: urgencyLabel(urgency) })
   return items
 })
@@ -117,6 +118,14 @@ function positiveQuery(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
+function canonicalDistrictFilter(value: string): string {
+  const normalized = value.trim()
+  if (!normalized) return ''
+  return NEW_TAIPEI_DISTRICTS.find(
+    (district) => district.code === normalized || district.name === normalized,
+  )?.code ?? normalized
+}
+
 function queueParams() {
   return {
     q: stringQuery('q', '') || undefined,
@@ -124,7 +133,7 @@ function queueParams() {
     riskLevel: stringQuery('riskLevel', '') || undefined,
     statusGroup: stringQuery('statusGroup', '') || undefined,
     source: stringQuery('source', '') || undefined,
-    district: stringQuery('district', '') || undefined,
+    district: districtFilterValue.value || undefined,
     urgency: stringQuery('urgency', '') || undefined,
     sortBy: sortBy.value,
     sortDirection: sortDirection.value,
@@ -447,13 +456,16 @@ onBeforeUnmount(() => {
 
           <label>
             <span>行政區</span>
-            <input
+            <select
               name="district"
-              type="text"
-              :value="stringQuery('district', '')"
-              placeholder="例如：新店區"
-              @change="applyAdvancedFilter('district', ($event.target as HTMLInputElement).value.trim())"
+              :value="districtFilterValue"
+              @change="applyAdvancedFilter('district', ($event.target as HTMLSelectElement).value)"
             >
+              <option value="">全部行政區</option>
+              <option v-for="district in NEW_TAIPEI_DISTRICTS" :key="district.code" :value="district.code">
+                {{ district.name }}
+              </option>
+            </select>
           </label>
 
           <label>
