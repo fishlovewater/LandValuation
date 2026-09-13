@@ -2,12 +2,13 @@ import json
 import logging
 import re
 import unicodedata
+from io import BytesIO
 from dataclasses import dataclass
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from fastapi.concurrency import run_in_threadpool
@@ -36,6 +37,7 @@ from app.valuation.extraction.schemas import (
 )
 from app.valuation.models import DocumentExtractionRecord, ExtractedFieldRecord
 from app.valuation.service import ValuationService
+from app.valuation.extraction.map_vision_service import MapVisionService
 
 
 logger = logging.getLogger(__name__)
@@ -163,6 +165,17 @@ def _read_field_rules_markdown() -> str:
         raise RuntimeError(
             f"估價表單 AI 欄位規則文件不存在或無法讀取：{_FIELD_RULES_PATH}"
         ) from exc
+
+
+def _map_vision_ai_prompt() -> str:
+    markdown = _read_field_rules_markdown()
+    section = re.search(
+        r"(?ms)^###\s+Vision AI 任務指示 \(Prompt\)\s*\n```text\n(.*?)\n```",
+        markdown,
+    )
+    if not section:
+        return ""
+    return section.group(1).strip()
 
 
 def _field_rules_markdown_for_form(form_code: str) -> str:
@@ -591,9 +604,12 @@ class BedrockFieldAnalysisProvider:
                 "Bedrock 欄位辨識需要 boto3",
                 503,
             ) from exc
-        self.client = boto3.client(
-            "bedrock-runtime",
+        session = boto3.Session(
+            profile_name=settings.aws_profile or None,
             region_name=settings.bedrock_region,
+        )
+        self.client = session.client(
+            "bedrock-runtime",
             config=Config(
                 read_timeout=settings.ai_timeout_seconds,
                 connect_timeout=5,
@@ -1210,9 +1226,181 @@ class FieldAnalysisService:
                 )
         if records:
             await self.repository.add_candidates(records)
+
+        # ====== MAP AI FALLBACK ======
+        if form_code in ("F02-RF", "S01"):
+            all_candidates = await self.repository.list_candidates(extraction.extraction_id)
+            address = self._map_query_from_evidence(
+                all_candidates,
+                extracted_text,
+            )
+
+            if address:
+                existing_names = {c.field_name for c in all_candidates if c.form_code == form_code}
+                missing_fields = {
+                    k: v for k, v in remaining_fields.items() if k not in existing_names
+                }
+
+                if missing_fields:
+                    map_svc = None
+                    try:
+                        map_svc = MapVisionService()
+                        prompt = _map_vision_ai_prompt()
+                        if prompt:
+                            coords = await run_in_threadpool(map_svc.geocode_location, address)
+                            if coords:
+                                image_bytes = await run_in_threadpool(
+                                    map_svc.capture_map_image,
+                                    coords["latitude"],
+                                    coords["longitude"]
+                                )
+                                if image_bytes:
+                                    await self._store_map_evidence(
+                                        case_id=case_id,
+                                        location_id=document.location_id,
+                                        user=user,
+                                        image_bytes=image_bytes,
+                                    )
+                                    map_candidates = await run_in_threadpool(
+                                        map_svc.analyze_map_with_vision_ai,
+                                        image_bytes,
+                                        prompt
+                                    )
+                                    map_records = []
+                                    for mc in map_candidates:
+                                        fn = mc.get("field_name")
+                                        if fn in missing_fields:
+                                            val = mc.get("extracted_value")
+                                            conf = mc.get("confidence", 0.0)
+                                            src = mc.get("source_text", "")
+                                            if val and conf > 0.8:
+                                                dummy_result = FieldAnalysisResult(
+                                                    candidates=[
+                                                        AnalyzedFieldCandidate(
+                                                            field_name=fn,
+                                                            extracted_value=str(val),
+                                                            confidence=Decimal(str(conf)),
+                                                            source_text=str(src),
+                                                        )
+                                                    ],
+                                                    provider="MAP_VISION_AI",
+                                                    model_id="anthropic.claude-3-opus-20240229-v1:0",
+                                                    prompt_version="field-rules-md-v2-map",
+                                                )
+                                                map_records.extend(
+                                                    self._candidate_records(
+                                                        extraction,
+                                                        form_code,
+                                                        dummy_result,
+                                                        {fn: missing_fields[fn]},
+                                                        location_id=document.location_id,
+                                                        evidence_text=(
+                                                            "[MAPBOX_STATIC_MAP]\n"
+                                                            f"{src}"
+                                                        ),
+                                                        allow_visual_evidence=True,
+                                                    )
+                                                )
+                                    if map_records:
+                                        await self.repository.add_candidates(map_records)
+                    except Exception:
+                        logger.exception("MapVisionService failed")
+                    finally:
+                        if map_svc is not None:
+                            map_svc.close()
+
         return extraction, await self.repository.list_candidates(
             extraction.extraction_id
         )
+
+    @staticmethod
+    def _map_query_from_evidence(candidates, extracted_text: str) -> str | None:
+        """Find an explicit map/address scope without inventing a location."""
+        labels = (
+            "截取範圍",
+            "地圖範圍",
+            "查詢範圍",
+            "地址",
+            "位置",
+        )
+        label_pattern = "|".join(re.escape(label) for label in labels)
+        for line in extracted_text.splitlines():
+            match = re.search(rf"(?:{label_pattern})\s*[：:]\s*(.+)", line)
+            if match and match.group(1).strip():
+                return match.group(1).strip()[:500]
+
+        candidate_fields = {
+            "basic_description",
+            "property_registry_fields",
+            "address",
+            "section_name",
+            "section_subsection_name",
+            "district_name",
+        }
+        for candidate in candidates:
+            if candidate.field_name in candidate_fields and candidate.extracted_value.strip():
+                return candidate.extracted_value.strip()[:500]
+        return None
+
+    async def _store_map_evidence(
+        self,
+        *,
+        case_id: UUID,
+        location_id: UUID | None,
+        user: User,
+        image_bytes: bytes,
+    ) -> None:
+        """Persist one generated map image as downloadable case evidence."""
+        existing = await self.documents.list_for_case(case_id)
+        if any(
+            item.document_type == "ai-map-evidence"
+            and item.location_id == location_id
+            and item.is_active
+            for item in existing
+        ):
+            return
+
+        storage = self.storage
+        if storage is None:
+            from app.storage.dependencies import get_storage_service
+
+            storage = get_storage_service()
+
+        document_id = uuid4()
+        group_id = uuid4()
+        object_key = (
+            f"cases/{case_id}/ai-map-evidence/{group_id}/v1/"
+            f"{document_id}_map.jpg"
+        )
+        uploaded = await storage.upload(
+            object_key,
+            BytesIO(image_bytes),
+            len(image_bytes),
+            content_type="image/jpeg",
+        )
+        try:
+            await self.documents.create(
+                DocumentRecord(
+                    document_id=document_id,
+                    document_group_id=group_id,
+                    case_id=case_id,
+                    location_id=location_id,
+                    document_type="ai-map-evidence",
+                    original_filename="ai-map-evidence.jpg",
+                    mime_type="image/jpeg",
+                    bucket_name=str(uploaded["bucket_name"]),
+                    object_key=str(uploaded["object_key"]),
+                    checksum_sha256=str(uploaded["checksum_sha256"]),
+                    file_size_bytes=int(uploaded["file_size_bytes"]),
+                    storage_etag=str(uploaded["etag"]),
+                    version_no=1,
+                    uploaded_by_user_id=user.user_id,
+                    is_active=True,
+                )
+            )
+        except Exception:
+            await storage.delete(object_key)
+            raise
 
     def _field_batches(self, fields: dict[str, str]) -> tuple[dict[str, str], ...]:
         items = list(fields.items())

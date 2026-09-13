@@ -43,7 +43,7 @@ async def _retrieval_candidates(
     metadata_by_key = await repository.documents_by_object_key()
     inventory = {
         object_info.object_name: metadata_by_key.get(object_info.object_name)
-        or virtual_document_from_object(settings.minio_bucket, object_info)
+        or virtual_document_from_object(storage.bucket, object_info)
         for object_info in object_infos
         if not object_info.object_name.endswith("/")
     }

@@ -31,8 +31,7 @@ from app.knowledge.schemas import (
     KnowledgeSearchResponse,
 )
 from app.knowledge.service import KnowledgeSafetyService
-from app.storage.client import get_minio_client
-from app.storage.service import StorageService
+from app.storage.dependencies import StorageBackend, get_storage_service
 
 router = APIRouter()
 
@@ -42,11 +41,7 @@ AssistantConversationUser = Annotated[User, Depends(require_permissions("assista
 _ASSISTANT_WORKSPACES = frozenset({"valuation", "review"})
 
 
-def get_storage_service() -> StorageService:
-    return StorageService(get_minio_client())
-
-
-KnowledgeStorage = Annotated[StorageService, Depends(get_storage_service)]
+KnowledgeStorage = Annotated[StorageBackend, Depends(get_storage_service)]
 
 
 def _reject_case_context(case_id) -> None:
@@ -58,7 +53,7 @@ def _reject_case_context(case_id) -> None:
         )
 
 
-async def _source_document(document_id: UUID, repository: KnowledgeRepository, storage: StorageService):
+async def _source_document(document_id: UUID, repository: KnowledgeRepository, storage: StorageBackend):
     document = await repository.knowledge_document(document_id)
     if document is not None:
         return document
@@ -68,7 +63,7 @@ async def _source_document(document_id: UUID, repository: KnowledgeRepository, s
     ):
         if object_info.object_name.endswith("/"):
             continue
-        virtual_document = virtual_document_from_object(settings.minio_bucket, object_info)
+        virtual_document = virtual_document_from_object(storage.bucket, object_info)
         if virtual_document.document_id == document_id:
             return virtual_document
     return None

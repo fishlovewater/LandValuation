@@ -1,4 +1,4 @@
-from decimal import Decimal
+﻿from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -21,7 +21,7 @@ from app.valuation.extraction.field_analysis import (
     build_field_analysis_provider,
     field_analysis_prompt,
     field_analysis_output_schema,
-    ollama_field_analysis_prompt,
+    field_analysis_prompt,
 )
 from app.valuation.extraction.provider import CandidateValue
 from app.valuation.extraction.field_catalog import (
@@ -32,7 +32,6 @@ from app.valuation.extraction.field_catalog import (
 from app.valuation.extraction.schemas import CodexCandidateImportRequest
 from app.valuation.extraction.service import ExtractionService
 from app.valuation.models import DocumentExtractionRecord
-
 
 class FakeBedrockClient:
     def __init__(self, response):
@@ -90,98 +89,98 @@ def ollama_settings() -> Settings:
 
 
 def test_f01_analysis_uses_only_the_comparison_target_worksheet() -> None:
-    extracted = """[工作表：02徵收土地清冊]
-[B4] 金山區 | [C4] 金美段 | [D4] 489
+    extracted = """[å·¥ä½œè¡¨ï¼š02å¾µæ”¶åœŸåœ°æ¸…å†Š]
+[B4] é‡‘å±±å€ | [C4] é‡‘ç¾Žæ®µ | [D4] 489
 
-[工作表：06比較標的資料]
-[B4] 新北市金山區 | [B5] 溫泉段 | [B6] 218
+[å·¥ä½œè¡¨ï¼š06æ¯”è¼ƒæ¨™çš„è³‡æ–™]
+[B4] æ–°åŒ—å¸‚é‡‘å±±å€ | [B5] æº«æ³‰æ®µ | [B6] 218
 """
 
     source = _analysis_source_text(extracted, "F01")
 
-    assert "金美段" not in source
-    assert "溫泉段" in source
+    assert "é‡‘ç¾Žæ®µ" not in source
+    assert "æº«æ³‰æ®µ" in source
     assert _analysis_source_text(extracted, "F03") == ""
 
 
 def test_f01_analysis_uses_only_the_sale_comparison_pdf_section() -> None:
-    extracted = """徵收土地宗地市價估計表
-新北市金山區金美段489地號
+    extracted = """å¾µæ”¶åœŸåœ°å®—åœ°å¸‚åƒ¹ä¼°è¨ˆè¡¨
+æ–°åŒ—å¸‚é‡‘å±±å€é‡‘ç¾Žæ®µ489åœ°è™Ÿ
 
-買賣實例調查估價表
-實例編號：2
-交易日期：114年5月28日
-比較標的：新北市金山區溫泉段218地號
+è²·è³£å¯¦ä¾‹èª¿æŸ¥ä¼°åƒ¹è¡¨
+å¯¦ä¾‹ç·¨è™Ÿï¼š2
+äº¤æ˜“æ—¥æœŸï¼š114å¹´5æœˆ28æ—¥
+æ¯”è¼ƒæ¨™çš„ï¼šæ–°åŒ—å¸‚é‡‘å±±å€æº«æ³‰æ®µ218åœ°è™Ÿ
 
-比準地地價估計表
-比準地：金美段100地號
+æ¯”æº–åœ°åœ°åƒ¹ä¼°è¨ˆè¡¨
+æ¯”æº–åœ°ï¼šé‡‘ç¾Žæ®µ100åœ°è™Ÿ
 """
 
     source = _analysis_source_text(extracted, "F01")
 
-    assert "金美段489地號" not in source
-    assert "實例編號：2" in source
-    assert "溫泉段218地號" in source
-    assert "金美段100地號" not in source
+    assert "é‡‘ç¾Žæ®µ489åœ°è™Ÿ" not in source
+    assert "å¯¦ä¾‹ç·¨è™Ÿï¼š2" in source
+    assert "æº«æ³‰æ®µ218åœ°è™Ÿ" in source
+    assert "é‡‘ç¾Žæ®µ100åœ°è™Ÿ" not in source
 
 
 def test_f01_analysis_refuses_unclassified_source_text() -> None:
-    extracted = """徵收土地宗地市價估計表
-宗地地號：金美段489地號
-估計單價：184763
+    extracted = """å¾µæ”¶åœŸåœ°å®—åœ°å¸‚åƒ¹ä¼°è¨ˆè¡¨
+å®—åœ°åœ°è™Ÿï¼šé‡‘ç¾Žæ®µ489åœ°è™Ÿ
+ä¼°è¨ˆå–®åƒ¹ï¼š184763
 """
 
     assert _analysis_source_text(extracted, "F01") == ""
 
 
 def test_each_form_only_receives_its_matching_packet_section() -> None:
-    extracted = """買賣實例調查估價表
-實例編號：2
+    extracted = """è²·è³£å¯¦ä¾‹èª¿æŸ¥ä¼°åƒ¹è¡¨
+å¯¦ä¾‹ç·¨è™Ÿï¼š2
 
-比較法調查估價表
-比較標的一：溫泉段218地號
+æ¯”è¼ƒæ³•èª¿æŸ¥ä¼°åƒ¹è¡¨
+æ¯”è¼ƒæ¨™çš„ä¸€ï¼šæº«æ³‰æ®µ218åœ°è™Ÿ
 
-影響地價區域因素分析明細表
-建蔽率：70%
+å½±éŸ¿åœ°åƒ¹å€åŸŸå› ç´ åˆ†æžæ˜Žç´°è¡¨
+å»ºè”½çŽ‡ï¼š70%
 
-比準地地價估計表
-比準地：金美段100地號
+æ¯”æº–åœ°åœ°åƒ¹ä¼°è¨ˆè¡¨
+æ¯”æº–åœ°ï¼šé‡‘ç¾Žæ®µ100åœ°è™Ÿ
 
-徵收土地宗地市價估計表
-宗地地號：金美段489地號
+å¾µæ”¶åœŸåœ°å®—åœ°å¸‚åƒ¹ä¼°è¨ˆè¡¨
+å®—åœ°åœ°è™Ÿï¼šé‡‘ç¾Žæ®µ489åœ°è™Ÿ
 
-地價區段勘查表
-行政區：金山區
+åœ°åƒ¹å€æ®µå‹˜æŸ¥è¡¨
+è¡Œæ”¿å€ï¼šé‡‘å±±å€
 """
 
-    assert "實例編號：2" in _analysis_source_text(extracted, "F01")
-    assert "比準地：" not in _analysis_source_text(extracted, "F01")
-    assert "比較標的一：" in _analysis_source_text(extracted, "F02")
-    assert "實例編號：2" in _analysis_source_text(extracted, "F02")
-    assert "建蔽率：70%" in _analysis_source_text(extracted, "F02-RF")
-    assert "比準地：" in _analysis_source_text(extracted, "F03")
-    assert "宗地地號：" in _analysis_source_text(extracted, "F04")
-    assert "行政區：" in _analysis_source_text(extracted, "S01")
+    assert "å¯¦ä¾‹ç·¨è™Ÿï¼š2" in _analysis_source_text(extracted, "F01")
+    assert "æ¯”æº–åœ°ï¼š" not in _analysis_source_text(extracted, "F01")
+    assert "æ¯”è¼ƒæ¨™çš„ä¸€ï¼š" in _analysis_source_text(extracted, "F02")
+    assert "å¯¦ä¾‹ç·¨è™Ÿï¼š2" in _analysis_source_text(extracted, "F02")
+    assert "å»ºè”½çŽ‡ï¼š70%" in _analysis_source_text(extracted, "F02-RF")
+    assert "æ¯”æº–åœ°ï¼š" in _analysis_source_text(extracted, "F03")
+    assert "å®—åœ°åœ°è™Ÿï¼š" in _analysis_source_text(extracted, "F04")
+    assert "è¡Œæ”¿å€ï¼š" in _analysis_source_text(extracted, "S01")
 
 
 def test_f02_can_use_f01_source_for_explicit_comparison_fields() -> None:
-    extracted = """買賣實例調查估價表
-實例編號：2
-交易日期：103年05月26日
-土地正常買賣單價：22001
+    extracted = """è²·è³£å¯¦ä¾‹èª¿æŸ¥ä¼°åƒ¹è¡¨
+å¯¦ä¾‹ç·¨è™Ÿï¼š2
+äº¤æ˜“æ—¥æœŸï¼š103å¹´05æœˆ26æ—¥
+åœŸåœ°æ­£å¸¸è²·è³£å–®åƒ¹ï¼š22001
 """
 
     source = _analysis_source_text(extracted, "F02")
 
-    assert "交易日期：103年05月26日" in source
-    assert "土地正常買賣單價：22001" in source
+    assert "äº¤æ˜“æ—¥æœŸï¼š103å¹´05æœˆ26æ—¥" in source
+    assert "åœŸåœ°æ­£å¸¸è²·è³£å–®åƒ¹ï¼š22001" in source
 
 
 def test_cross_form_route_limits_f01_evidence_to_explicit_f02_fields() -> None:
-    extracted = """買賣實例調查估價表
-實例編號：2
-交易日期：103年05月26日
-土地正常買賣單價：22001
+    extracted = """è²·è³£å¯¦ä¾‹èª¿æŸ¥ä¼°åƒ¹è¡¨
+å¯¦ä¾‹ç·¨è™Ÿï¼š2
+äº¤æ˜“æ—¥æœŸï¼š103å¹´05æœˆ26æ—¥
+åœŸåœ°æ­£å¸¸è²·è³£å–®åƒ¹ï¼š22001
 """
 
     routes = _cross_form_candidate_routes()
@@ -205,7 +204,7 @@ def test_initial_rule_candidates_do_not_cross_form_sections() -> None:
             value="P002-00",
             confidence=Decimal("0.9000"),
             source_page=1,
-            source_text="地價區段：P002-00",
+            source_text="åœ°åƒ¹å€æ®µï¼šP002-00",
             form_code="F03",
         ),
         CandidateValue(
@@ -213,14 +212,14 @@ def test_initial_rule_candidates_do_not_cross_form_sections() -> None:
             value="2",
             confidence=Decimal("0.9000"),
             source_page=1,
-            source_text="實例編號：2",
+            source_text="å¯¦ä¾‹ç·¨è™Ÿï¼š2",
             form_code="F03",
         ),
     )
 
     filtered = ExtractionService._validated_initial_candidates(
         candidates,
-        extracted_text="買賣實例調查估價表\n實例編號：2",
+        extracted_text="è²·è³£å¯¦ä¾‹èª¿æŸ¥ä¼°åƒ¹è¡¨\nå¯¦ä¾‹ç·¨è™Ÿï¼š2",
     )
 
     assert [(item.form_code, item.field_name) for item in filtered] == [
@@ -245,7 +244,7 @@ async def test_bedrock_field_analysis_uses_forced_structured_tool() -> None:
                                             "field_name": "transaction_no",
                                             "extracted_value": "2",
                                             "confidence": 0.98,
-                                            "source_text": "實例編號:2",
+                                            "source_text": "å¯¦ä¾‹ç·¨è™Ÿ:2",
                                         }
                                     ]
                                 },
@@ -259,9 +258,9 @@ async def test_bedrock_field_analysis_uses_forced_structured_tool() -> None:
     provider = BedrockFieldAnalysisProvider(bedrock_settings(), client=client)
 
     result = await provider.analyze(
-        "買賣實例調查估價表\n實例編號:2",
+        "è²·è³£å¯¦ä¾‹èª¿æŸ¥ä¼°åƒ¹è¡¨\nå¯¦ä¾‹ç·¨è™Ÿ:2",
         "F01",
-        {"transaction_no": "買賣實例編號"},
+        {"transaction_no": "è²·è³£å¯¦ä¾‹ç·¨è™Ÿ"},
     )
 
     assert result.provider == "BEDROCK"
@@ -307,7 +306,7 @@ async def test_bedrock_router_sends_missing_and_low_confidence_fields_to_fallbac
                     field_name="transaction_no",
                     extracted_value="2",
                     confidence=Decimal("0.70"),
-                    source_text="實例編號：2",
+                    source_text="å¯¦ä¾‹ç·¨è™Ÿï¼š2",
                 ),
             ),
             provider="BEDROCK",
@@ -322,13 +321,13 @@ async def test_bedrock_router_sends_missing_and_low_confidence_fields_to_fallbac
                     field_name="transaction_no",
                     extracted_value="2",
                     confidence=Decimal("0.99"),
-                    source_text="實例編號：2",
+                    source_text="å¯¦ä¾‹ç·¨è™Ÿï¼š2",
                 ),
                 AnalyzedFieldCandidate(
                     field_name="transaction_date",
-                    extracted_value="114年5月28日",
+                    extracted_value="114å¹´5æœˆ28æ—¥",
                     confidence=Decimal("0.98"),
-                    source_text="交易日期：114年5月28日",
+                    source_text="äº¤æ˜“æ—¥æœŸï¼š114å¹´5æœˆ28æ—¥",
                 ),
             ),
             provider="BEDROCK",
@@ -345,18 +344,18 @@ async def test_bedrock_router_sends_missing_and_low_confidence_fields_to_fallbac
     router = BedrockFieldAnalysisRouter(settings, primary=primary, fallback=fallback)
 
     routed = await router.analyze_with_routing(
-        "實例編號：2\n交易日期：114年5月28日",
+        "å¯¦ä¾‹ç·¨è™Ÿï¼š2\näº¤æ˜“æ—¥æœŸï¼š114å¹´5æœˆ28æ—¥",
         "F01",
         {
-            "transaction_no": "實例編號",
-            "transaction_date": "交易日期",
+            "transaction_no": "å¯¦ä¾‹ç·¨è™Ÿ",
+            "transaction_date": "äº¤æ˜“æ—¥æœŸ",
         },
     )
 
     assert len(routed) == 1
     assert routed[0][1] == {
-        "transaction_no": "實例編號",
-        "transaction_date": "交易日期",
+        "transaction_no": "å¯¦ä¾‹ç·¨è™Ÿ",
+        "transaction_date": "äº¤æ˜“æ—¥æœŸ",
     }
     assert fallback.calls[0][2] == routed[0][1]
 
@@ -365,15 +364,15 @@ async def test_bedrock_router_sends_missing_and_low_confidence_fields_to_fallbac
 @pytest.mark.asyncio
 async def test_bedrock_field_analysis_rejects_missing_tool_call() -> None:
     client = FakeBedrockClient(
-        {"output": {"message": {"content": [{"text": "自行填入資料"}]}}}
+        {"output": {"message": {"content": [{"text": "è‡ªè¡Œå¡«å…¥è³‡æ–™"}]}}}
     )
     provider = BedrockFieldAnalysisProvider(bedrock_settings(), client=client)
 
     with pytest.raises(AppError) as error:
         await provider.analyze(
-            "實例編號:2",
+            "å¯¦ä¾‹ç·¨è™Ÿ:2",
             "F01",
-            {"transaction_no": "買賣實例編號"},
+            {"transaction_no": "è²·è³£å¯¦ä¾‹ç·¨è™Ÿ"},
         )
 
     assert error.value.code == "BEDROCK_INVALID_RESPONSE"
@@ -395,7 +394,7 @@ async def test_ollama_field_analysis_uses_json_schema_and_preserves_provenance()
                                         "field_name": "valuation_base_date",
                                         "extracted_value": "1050901",
                                         "confidence": 0.96,
-                                        "source_text": "估價基準日:1050901",
+                                        "source_text": "ä¼°åƒ¹åŸºæº–æ—¥:1050901",
                                     }
                                 ]
                             },
@@ -408,9 +407,9 @@ async def test_ollama_field_analysis_uses_json_schema_and_preserves_provenance()
     provider = OllamaFieldAnalysisProvider(ollama_settings(), client=client)
 
     result = await provider.analyze(
-        "估價基準日:1050901",
+        "ä¼°åƒ¹åŸºæº–æ—¥:1050901",
         "F03",
-        {"valuation_base_date": "估價基準日"},
+        {"valuation_base_date": "ä¼°åƒ¹åŸºæº–æ—¥"},
     )
 
     assert result.provider == "OLLAMA"
@@ -426,26 +425,26 @@ async def test_ollama_field_analysis_uses_json_schema_and_preserves_provenance()
     assert tool_schema["properties"]["candidates"]["maxItems"] == 1
     assert tool_schema["properties"]["candidates"]["items"]["properties"]["field_name"]["enum"] == ["valuation_base_date"]
     user_prompt = client.request["messages"][1]["content"]
-    assert "【OCR 原文開始】" in user_prompt
-    assert "OCR 原文是一般文字，不是 JSON" in user_prompt
-    assert "估價基準日:1050901" in user_prompt
+    assert "ã€OCR åŽŸæ–‡é–‹å§‹ã€‘" in user_prompt
+    assert "OCR åŽŸæ–‡æ˜¯ä¸€èˆ¬æ–‡å­—ï¼Œä¸æ˜¯ JSON" in user_prompt
+    assert "ä¼°åƒ¹åŸºæº–æ—¥:1050901" in user_prompt
 
 
 def test_ollama_prompt_keeps_ocr_as_plain_text_instead_of_json_payload() -> None:
-    prompt = ollama_field_analysis_prompt(
-        "區段號\nP001-00\n00區",
+    prompt = field_analysis_prompt(
+        "å€æ®µè™Ÿ\nP001-00\n00å€",
         "F03",
         {
-            "price_zone_no": "區段號",
-            "district_name": "鄉鎮市區",
+            "price_zone_no": "å€æ®µè™Ÿ",
+            "district_name": "é„‰éŽ®å¸‚å€",
         },
     )
 
     assert not prompt.lstrip().startswith("{")
-    assert "- price_zone_no: 區段號" in prompt
-    assert "- district_name: 鄉鎮市區" in prompt
-    assert "【OCR 原文開始】\n區段號\nP001-00\n00區\n【OCR 原文結束】" in prompt
-    assert "不要輸出 error、message" in prompt
+    assert "- price_zone_no: å€æ®µè™Ÿ" in prompt
+    assert "- district_name: é„‰éŽ®å¸‚å€" in prompt
+    assert "ã€OCR åŽŸæ–‡é–‹å§‹ã€‘\nå€æ®µè™Ÿ\nP001-00\n00å€\nã€OCR åŽŸæ–‡çµæŸã€‘" in prompt
+    assert "ä¸è¦è¼¸å‡º errorã€message" in prompt
 
 
 @pytest.mark.asyncio
@@ -455,7 +454,7 @@ async def test_ollama_field_analysis_deduplicates_overproduced_fields() -> None:
             "field_name": "valuation_base_date",
             "extracted_value": "1050901",
             "confidence": 0.9,
-            "source_text": "估價基準日:1050901",
+            "source_text": "ä¼°åƒ¹åŸºæº–æ—¥:1050901",
         }
         for _ in range(20)
     ]
@@ -465,9 +464,9 @@ async def test_ollama_field_analysis_deduplicates_overproduced_fields() -> None:
     provider = OllamaFieldAnalysisProvider(ollama_settings(), client=client)
 
     result = await provider.analyze(
-        "估價基準日:1050901",
+        "ä¼°åƒ¹åŸºæº–æ—¥:1050901",
         "F03",
-        {"valuation_base_date": "估價基準日"},
+        {"valuation_base_date": "ä¼°åƒ¹åŸºæº–æ—¥"},
     )
 
     assert len(result.candidates) == 1
@@ -502,14 +501,14 @@ def extraction_record(text: str) -> DocumentExtractionRecord:
 
 
 def test_candidate_requires_exact_ocr_evidence_and_keeps_provenance() -> None:
-    extraction = extraction_record("實例編號:2\n交易日期103年05月26日")
+    extraction = extraction_record("å¯¦ä¾‹ç·¨è™Ÿ:2\näº¤æ˜“æ—¥æœŸ103å¹´05æœˆ26æ—¥")
     result = FieldAnalysisResult(
         candidates=(
             AnalyzedFieldCandidate(
                 field_name="transaction_no",
                 extracted_value="2",
                 confidence=Decimal("0.9700"),
-                source_text="實例編號:2",
+                source_text="å¯¦ä¾‹ç·¨è™Ÿ:2",
             ),
         ),
         provider="BEDROCK",
@@ -521,7 +520,7 @@ def test_candidate_requires_exact_ocr_evidence_and_keeps_provenance() -> None:
         extraction,
         "F01",
         result,
-        {"transaction_no": "買賣實例編號"},
+        {"transaction_no": "è²·è³£å¯¦ä¾‹ç·¨è™Ÿ"},
     )
 
     assert records[0].extracted_value == "2"
@@ -533,14 +532,14 @@ def test_candidate_requires_exact_ocr_evidence_and_keeps_provenance() -> None:
 
 
 def test_candidate_without_verbatim_source_is_rejected() -> None:
-    extraction = extraction_record("實例編號:2")
+    extraction = extraction_record("å¯¦ä¾‹ç·¨è™Ÿ:2")
     result = FieldAnalysisResult(
         candidates=(
             AnalyzedFieldCandidate(
                 field_name="transaction_no",
                 extracted_value="99",
                 confidence=Decimal("0.9000"),
-                source_text="實例編號:99",
+                source_text="å¯¦ä¾‹ç·¨è™Ÿ:99",
             ),
         ),
         provider="BEDROCK",
@@ -553,21 +552,21 @@ def test_candidate_without_verbatim_source_is_rejected() -> None:
             extraction,
             "F01",
             result,
-            {"transaction_no": "買賣實例編號"},
+            {"transaction_no": "è²·è³£å¯¦ä¾‹ç·¨è™Ÿ"},
         )
 
     assert error.value.code == "BEDROCK_FIELD_EVIDENCE_INVALID"
 
 
 def test_ollama_candidate_without_verbatim_source_can_be_dropped_safely() -> None:
-    extraction = extraction_record("估價基準日:1050901")
+    extraction = extraction_record("ä¼°åƒ¹åŸºæº–æ—¥:1050901")
     result = FieldAnalysisResult(
         candidates=(
             AnalyzedFieldCandidate(
                 field_name="land_no",
-                extracted_value="不存在地號",
+                extracted_value="ä¸å­˜åœ¨åœ°è™Ÿ",
                 confidence=Decimal("0.9000"),
-                source_text="不存在的 OCR 證據",
+                source_text="ä¸å­˜åœ¨çš„ OCR è­‰æ“š",
             ),
         ),
         provider="OLLAMA",
@@ -579,7 +578,7 @@ def test_ollama_candidate_without_verbatim_source_can_be_dropped_safely() -> Non
         extraction,
         "F03",
         result,
-        {"land_no": "地號"},
+        {"land_no": "åœ°è™Ÿ"},
         drop_invalid_evidence=True,
     )
 
@@ -587,14 +586,14 @@ def test_ollama_candidate_without_verbatim_source_can_be_dropped_safely() -> Non
 
 
 def test_ollama_candidate_with_wrong_f03_surface_shape_is_dropped() -> None:
-    extraction = extraction_record("區段號\nP001-00\n00區")
+    extraction = extraction_record("å€æ®µè™Ÿ\nP001-00\n00å€")
     result = FieldAnalysisResult(
         candidates=(
             AnalyzedFieldCandidate(
                 field_name="price_zone_no",
-                extracted_value="00區",
+                extracted_value="00å€",
                 confidence=Decimal("0.9500"),
-                source_text="00區",
+                source_text="00å€",
             ),
         ),
         provider="OLLAMA",
@@ -606,7 +605,7 @@ def test_ollama_candidate_with_wrong_f03_surface_shape_is_dropped() -> None:
         extraction,
         "F03",
         result,
-        {"price_zone_no": "區段號"},
+        {"price_zone_no": "å€æ®µè™Ÿ"},
         drop_invalid_evidence=True,
     )
 
@@ -657,23 +656,23 @@ def test_codex_schema_is_limited_to_remaining_fields() -> None:
 
 def test_codex_prompt_requires_verbatim_value_and_source_text() -> None:
     prompt = field_analysis_prompt(
-        "交易日期103年05月26日",
+        "äº¤æ˜“æ—¥æœŸ103å¹´05æœˆ26æ—¥",
         "F01",
-        {"transaction_date": "交易日期"},
+        {"transaction_date": "äº¤æ˜“æ—¥æœŸ"},
     )
 
-    assert "語意泛化與同義詞識別" in prompt
+    assert "èªžæ„æ³›åŒ–èˆ‡åŒç¾©è©žè­˜åˆ¥" in prompt
     assert "source_text" in prompt
     assert "extracted_value" in prompt
-    assert "零虛構原則" in prompt
-    assert "不可使用徵收宗地" in prompt
+    assert "é›¶è™›æ§‹åŽŸå‰‡" in prompt
+    assert "ä¸å¯ä½¿ç”¨å¾µæ”¶å®—åœ°" in prompt
 
 
 def test_field_analysis_prompt_includes_shared_markdown_and_selected_form_rules() -> None:
     prompt = field_analysis_prompt(
-        "交易日期：114年5月28日",
+        "äº¤æ˜“æ—¥æœŸï¼š114å¹´5æœˆ28æ—¥",
         "F01",
-        {"transaction_date": "交易日期"},
+        {"transaction_date": "äº¤æ˜“æ—¥æœŸ"},
     )
 
     assert "field_rules_markdown" in prompt
@@ -684,7 +683,7 @@ def test_field_analysis_prompt_includes_shared_markdown_and_selected_form_rules(
 
 
 def test_codex_import_keeps_codex_provenance() -> None:
-    extraction = extraction_record("實例編號:2")
+    extraction = extraction_record("å¯¦ä¾‹ç·¨è™Ÿ:2")
     payload = CodexCandidateImportRequest(
         form_code="F01",
         model_id="gpt-5.6-sol",
@@ -693,7 +692,7 @@ def test_codex_import_keeps_codex_provenance() -> None:
                 "field_name": "transaction_no",
                 "extracted_value": "2",
                 "confidence": "0.91",
-                "source_text": "實例編號:2",
+                "source_text": "å¯¦ä¾‹ç·¨è™Ÿ:2",
             }
         ],
     )
@@ -716,7 +715,7 @@ def test_codex_import_keeps_codex_provenance() -> None:
         extraction,
         "F01",
         result,
-        {"transaction_no": "買賣實例編號"},
+        {"transaction_no": "è²·è³£å¯¦ä¾‹ç·¨è™Ÿ"},
         error_prefix="CODEX",
         source_label="Codex",
         error_status=422,
@@ -729,14 +728,14 @@ def test_codex_import_keeps_codex_provenance() -> None:
 
 
 def test_codex_import_rejects_untraceable_value() -> None:
-    extraction = extraction_record("實例編號:2")
+    extraction = extraction_record("å¯¦ä¾‹ç·¨è™Ÿ:2")
     result = FieldAnalysisResult(
         candidates=(
             AnalyzedFieldCandidate(
                 field_name="transaction_no",
                 extracted_value="99",
                 confidence=Decimal("0.9000"),
-                source_text="實例編號:2",
+                source_text="å¯¦ä¾‹ç·¨è™Ÿ:2",
             ),
         ),
         provider="CODEX",
@@ -749,7 +748,7 @@ def test_codex_import_rejects_untraceable_value() -> None:
             extraction,
             "F01",
             result,
-            {"transaction_no": "買賣實例編號"},
+            {"transaction_no": "è²·è³£å¯¦ä¾‹ç·¨è™Ÿ"},
             error_prefix="CODEX",
             source_label="Codex",
             error_status=422,
@@ -760,20 +759,20 @@ def test_codex_import_rejects_untraceable_value() -> None:
 
 
 def test_f02_rf_preserves_natural_language_until_formal_rule_is_selected() -> None:
-    extraction = extraction_record("區段勘查表\n地勢：平坦\n使用分區：商業區")
+    extraction = extraction_record("å€æ®µå‹˜æŸ¥è¡¨\nåœ°å‹¢ï¼šå¹³å¦\nä½¿ç”¨åˆ†å€ï¼šå•†æ¥­å€")
     result = FieldAnalysisResult(
         candidates=(
             AnalyzedFieldCandidate(
                 field_name="terrain",
-                extracted_value="平坦",
+                extracted_value="å¹³å¦",
                 confidence=Decimal("0.9500"),
-                source_text="地勢：平坦",
+                source_text="åœ°å‹¢ï¼šå¹³å¦",
             ),
             AnalyzedFieldCandidate(
                 field_name="land_use_zone",
                 extracted_value="L1",
                 confidence=Decimal("0.9200"),
-                source_text="使用分區：商業區",
+                source_text="ä½¿ç”¨åˆ†å€ï¼šå•†æ¥­å€",
             ),
         ),
         provider="BEDROCK",
@@ -786,35 +785,35 @@ def test_f02_rf_preserves_natural_language_until_formal_rule_is_selected() -> No
         "F02-RF",
         result,
         {
-            "terrain": "地勢等級",
-            "land_use_zone": "使用分區",
+            "terrain": "åœ°å‹¢ç­‰ç´š",
+            "land_use_zone": "ä½¿ç”¨åˆ†å€",
         },
     )
 
     assert len(records) == 2
     assert records[0].field_name == "terrain"
-    assert records[0].extracted_value == "平坦"
-    assert records[0].source_text == "地勢：平坦"
+    assert records[0].extracted_value == "å¹³å¦"
+    assert records[0].source_text == "åœ°å‹¢ï¼šå¹³å¦"
     assert records[1].field_name == "land_use_zone"
     assert records[1].extracted_value == "L1"
-    assert records[1].source_text == "使用分區：商業區"
+    assert records[1].source_text == "ä½¿ç”¨åˆ†å€ï¼šå•†æ¥­å€"
 
 
 def test_bedrock_rejects_ungrounded_candidate() -> None:
-    extraction = extraction_record("比準地地號：100號")
+    extraction = extraction_record("æ¯”æº–åœ°åœ°è™Ÿï¼š100è™Ÿ")
     result = FieldAnalysisResult(
         candidates=(
             AnalyzedFieldCandidate(
                 field_name="benchmark_land_no",
-                extracted_value="100號",
+                extracted_value="100è™Ÿ",
                 confidence=Decimal("0.9800"),
-                source_text="比準地地號：100號",
+                source_text="æ¯”æº–åœ°åœ°è™Ÿï¼š100è™Ÿ",
             ),
             AnalyzedFieldCandidate(
                 field_name="valuation_base_date",
-                extracted_value="113年05月20日",
+                extracted_value="113å¹´05æœˆ20æ—¥",
                 confidence=Decimal("0.9000"),
-                source_text="估價日期：113年05月20日",  # Not in OCR text
+                source_text="ä¼°åƒ¹æ—¥æœŸï¼š113å¹´05æœˆ20æ—¥",  # Not in OCR text
             ),
         ),
         provider="BEDROCK",
@@ -828,8 +827,8 @@ def test_bedrock_rejects_ungrounded_candidate() -> None:
             "F03",
             result,
             {
-                "benchmark_land_no": "比準地地號",
-                "valuation_base_date": "估價基準日",
+                "benchmark_land_no": "æ¯”æº–åœ°åœ°è™Ÿ",
+                "valuation_base_date": "ä¼°åƒ¹åŸºæº–æ—¥",
             },
         )
 
@@ -850,7 +849,7 @@ def test_s01_analysis_fields_are_imported_from_the_workbook_catalog() -> None:
             "commercial_facility_distance_m",
         }
     ).issubset(fields)
-    assert "區段內主要道路名稱" in fields["main_road_name"]
+    assert "å€æ®µå…§ä¸»è¦é“è·¯åç¨±" in fields["main_road_name"]
 
 
 def test_f02_rf_commercial_analysis_fields_are_linked_to_source_item_codes() -> None:
@@ -869,21 +868,21 @@ def test_initial_ocr_candidates_are_canonicalized_to_official_form_fields() -> N
                 value="T-001",
                 confidence=Decimal("0.9"),
                 source_page=1,
-                source_text="實例編號：T-001",
+                source_text="å¯¦ä¾‹ç·¨è™Ÿï¼šT-001",
             ),
             CandidateValue(
                 field_name="benchmark_land_no",
-                value="金美段1地號",
+                value="é‡‘ç¾Žæ®µ1åœ°è™Ÿ",
                 confidence=Decimal("0.9"),
                 source_page=1,
-                source_text="比準地地號：金美段1地號",
+                source_text="æ¯”æº–åœ°åœ°è™Ÿï¼šé‡‘ç¾Žæ®µ1åœ°è™Ÿ",
             ),
             CandidateValue(
                 field_name="not_a_catalog_field",
-                value="不應寫入",
+                value="ä¸æ‡‰å¯«å…¥",
                 confidence=Decimal("0.9"),
                 source_page=1,
-                source_text="不應寫入",
+                source_text="ä¸æ‡‰å¯«å…¥",
             ),
         )
     )

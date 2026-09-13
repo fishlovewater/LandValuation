@@ -448,10 +448,10 @@ describe('valuation demo flow', () => {
     expect(wrapper.find('[data-testid="valuation-issue-drawer"]').exists()).toBe(false)
 
     await wrapper.get('[data-testid="valuation-step-3"]').trigger('click')
-    expect(wrapper.get('[data-testid="valuation-workflow-guide"]').text()).toContain('案件基本資料')
-    expect(wrapper.text()).toContain('請先確認案件基本資料')
+    expect(wrapper.get('[data-workspace-stage="data"]').attributes('aria-current')).toBe('step')
     expect(workspaceBodies).toHaveLength(0)
 
+    await wrapper.get('[data-testid="valuation-step-1"]').trigger('click')
     await wrapper.get('[data-testid="wizard-next"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.get('[data-workspace-stage="documents"]').attributes('aria-current')).toBe('step'))
     expect(workspaceBodies).toEqual([{
@@ -552,36 +552,26 @@ describe('valuation demo flow', () => {
     await router.push(`/app/valuation/cases/${ids.case}/documents`)
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
 
-    await vi.waitFor(() => expect(router.currentRoute.value.path).toBe(`/app/valuation/cases/${ids.case}`))
-    expect(wrapper.get('[data-testid="valuation-workflow-guide"]').text()).toContain('案件基本資料')
-    expect(wrapper.get('[data-testid="wizard-next"]').text()).toContain('確認並開始估價')
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="valuation-workflow-guide"]').text()).toContain('文件與辨識'))
+    expect(router.currentRoute.value.path).toBe(`/app/valuation/cases/${ids.case}/documents`)
+    expect(wrapper.get('[data-workspace-stage="documents"]').attributes('aria-current')).toBe('step')
     expect(workspaceRequests).toHaveLength(0)
     wrapper.unmount()
   })
 
-  it('follows the real F03 state machine and submits the authoritative F02 report', async () => {
+  it.skip('keeps the retired legacy F03 calculation flow for historical reference', async () => {
     const requests: Array<{ method?: string; url?: string; params?: unknown; data?: unknown }> = []
-    const patchBodies: Array<Record<string, any>> = []
-    let submitCount = 0
-    let validationCount = 0
-    let reportCount = 0
-    const formalPdfBodies: Array<Record<string, any>> = []
     http.defaults.adapter = vi.fn(async (config) => {
       requests.push({ method: config.method, url: config.url, params: config.params, data: config.data })
 
       if (config.method === 'get' && config.url === '/valuation/cases') return response([caseDto], config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}`) return response(caseDto, config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms`) {
-        const f03 = requests.some(
-          (request) => request.method === 'post' && request.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/submit`,
-        )
-          ? submittedF03FormDto
-          : formDto
         return response([
           { ...authoritativeFormDto, form_instance_id: '61616161-6161-4616-8161-616161616161', form_code: 'S01' },
           { ...authoritativeFormDto, form_instance_id: '62626262-6262-4626-8262-626262626262', form_code: 'F02-RF' },
           authoritativeFormDto,
-          f03,
+          formDto,
         ], config)
       }
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/f03`) return response(f03Dto, config)
@@ -589,50 +579,19 @@ describe('valuation demo flow', () => {
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([benchmarkDto], config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response(documentsDto, config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) return response(reportProgressDto, config)
-      if (config.method === 'patch' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/f03`) {
-        patchBodies.push(requestBody(config.data))
-        return response(f03Dto, config)
-      }
-      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/calculations`) {
-        expect(requestBody(config.data)).toEqual({ form_instance_id: ids.f03 })
-        return response(calculationDto, config, 201)
-      }
-      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/submit`) {
-        expect(config.data).toBeUndefined()
-        return response(submittedF03FormDto, config)
-      }
-      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/validations`) {
-        expect(requestBody(config.data)).toEqual({ form_instance_id: ids.f03 })
-        const validation = validationCount++ === 0 ? blockedValidationDto : validationDto
-        return response(validation, config, 201)
-      }
-      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports`) {
-        expect(requestBody(config.data)).toEqual({ form_instance_id: ids.f03 })
-        reportCount += 1
-        return response(reportDto, config, 201)
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-calculation`) {
+        expect(requestBody(config.data)).toEqual({ confirm_calculation: true })
+        return response({ case_id: ids.case, report_id: ids.reportPackage }, config, 201)
       }
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-validation`) return response(formalValidationDto, config, 201)
-      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-pdf`) {
-        formalPdfBodies.push(requestBody(config.data))
-        expect(formalPdfBodies[0]).toEqual({
-          confirm_generate: true,
-          acknowledged_warning_codes: ['F02_BENCHMARK_NOTES_MISSING'],
-        })
-        return response(formalReportDto, config, 201)
-      }
-      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/submit-for-review`) {
-        submitCount += 1
-        const body = requestBody(requests.at(-1)?.data)
-        expect(body).toEqual({
-          request_id: expect.any(String),
-          expected_case_version: authoritativeFormDto.version_no,
-          source_validation_run_id: ids.formalValidationRun,
-          source_report_document_id: ids.formalReport,
-        })
-        expect(body.source_report_document_id).not.toBe(ids.completeReport)
-        expect(body.source_report_document_id).not.toBe(ids.f03Report)
-        return response(submissionDto, config, 201)
-      }
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/template-exports`) return response([
+        {
+          form_code: 'F03', title: '地價區段勘查表', document_id: '71717171-7171-4717-8171-717171717171',
+          filename: 'F03.xlsx', mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          version_no: 1, file_size_bytes: 1024,
+          download_path: `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/template-exports/F03/download`,
+        },
+      ], config, 201)
       throw new Error(`Unexpected request ${config.method} ${config.url}`)
     }) as unknown as typeof originalAdapter
 
@@ -768,6 +727,61 @@ describe('valuation demo flow', () => {
     expect(wrapper.find('[data-testid="submit-for-review"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="submit-next-action"]').exists()).toBe(false)
     expect(requests.some((request) => request.data?.toString().includes('internal-bucket'))).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('calculates, validates, and exports Excel through the formal multi-location workflow', async () => {
+    const operations: string[] = []
+    http.defaults.adapter = vi.fn(async (config) => {
+      const operation = `${config.method} ${config.url}`
+      operations.push(operation)
+
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}`) return response(caseDto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms`) {
+        return response([authoritativeFormDto, formDto], config)
+      }
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/f03`) return response(f03Dto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/parcels`) return response([parcelDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([benchmarkDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response(documentsDto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) return response(reportProgressDto, config)
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-calculation`) {
+        expect(requestBody(config.data)).toEqual({ confirm_calculation: true })
+        return response({ case_id: ids.case, report_id: ids.reportPackage }, config, 201)
+      }
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-validation`) {
+        return response(formalValidationDto, config, 201)
+      }
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/template-exports`) {
+        return response([{
+          form_code: 'F03',
+          title: 'F03',
+          document_id: '71717171-7171-4717-8171-717171717171',
+          filename: 'F03.xlsx',
+          mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          version_no: 1,
+          file_size_bytes: 1024,
+          download_path: `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/template-exports/F03/download`,
+        }], config, 201)
+      }
+      throw new Error(`Unexpected request ${operation}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/valuation/cases/${ids.case}/calculation`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="run-valuation"]').exists()).toBe(true))
+    await wrapper.get('[data-testid="run-valuation"]').trigger('click')
+    await vi.waitFor(() => expect(operations).toContain(`post /valuation/cases/${ids.case}/reports/${ids.reportPackage}/template-exports`))
+
+    expect(operations).toEqual(expect.arrayContaining([
+      `post /valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-calculation`,
+      `post /valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-validation`,
+      `post /valuation/cases/${ids.case}/reports/${ids.reportPackage}/template-exports`,
+    ]))
+    expect(operations).not.toContain(`post /valuation/cases/${ids.case}/calculations`)
+    expect(wrapper.get('[data-testid="wizard-next"]').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
 
@@ -1691,8 +1705,13 @@ describe('valuation demo flow', () => {
     await vi.waitFor(() => expect(wrapper.find('[data-testid="data-section-manual"]').exists()).toBe(true))
     await wrapper.get('[data-testid="data-section-manual"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.find('[data-testid="manual-field-workspace"]').exists()).toBe(true))
+    // The comparison price is produced by the formal F02 calculation and is
+    // intentionally not offered as a manual fallback.
+    expect(wrapper.find('[data-testid="manual-field-F03-comparison_price"]').exists()).toBe(false)
 
     await wrapper.get('[data-testid="manual-field-F03-decision_reason"]').setValue('人工核對附件後採用此值')
+    expect(savedReason).toBe('')
+    expect(wrapper.find('[data-testid="manual-field-F03-decision_reason"]').exists()).toBe(true)
     await wrapper.get('[data-testid="save-manual-fields"]').trigger('click')
     await vi.waitFor(() => {
       expect(savedReason).toBe('人工核對附件後採用此值')

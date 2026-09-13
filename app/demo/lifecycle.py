@@ -28,7 +28,11 @@ from app.valuation.report_packages.factor_catalog import (
     INDIVIDUAL_FACTORS,
     TEMPLATE_FACTORS,
 )
-from app.valuation.rule_packs.coverage import NEW_TAIPEI_CITYWIDE_SCOPE
+from app.valuation.rule_packs.coverage import (
+    FIXED_RULE_EFFECTIVE_FROM,
+    FIXED_RULE_LAND_USE_TYPES,
+    NEW_TAIPEI_CITYWIDE_SCOPE,
+)
 from app.valuation.submissions.snapshot import build_submission_snapshot, snapshot_fingerprint
 
 from .accounts import (
@@ -1599,14 +1603,14 @@ def _write_seed_rows(cursor, uploads: _UploadBatch) -> None:
                 jurisdiction_code, district_scope, land_use_types, formula_code,
                 rounding_code, import_status, import_summary, verified_by_user_id, verified_at
             ) VALUES (%s, %s, 1, %s, %s, 'PUBLISHED', %s, %s, %s, %s,
-                      'LAND', '65000010', %s, %s, %s, %s,
+                      'LAND', NULL, %s, %s, %s, %s,
                       'NTPC_COMPARISON_V1', 'NTPC_LAND_PRICE_V1', 'VERIFIED', %s, %s, now())
             """,
             (
                 rule_version_id,
                 rule_set_code,
                 version_name,
-                today,
+                FIXED_RULE_EFFECTIVE_FROM,
                 DEMO_KNOWLEDGE_CODE,
                 knowledge_upload["checksum_sha256"],
                 f"Persistent Demo {layer} rule version; owner={DEMO_OWNER}",
@@ -1614,7 +1618,7 @@ def _write_seed_rows(cursor, uploads: _UploadBatch) -> None:
                 90 if layer == "f03_validation" else 100,
                 "NEW_TAIPEI_CITY" if layer == "f03_validation" else None,
                 Jsonb(NEW_TAIPEI_CITYWIDE_SCOPE),
-                Jsonb(["COMMERCIAL"]),
+                Jsonb(list(FIXED_RULE_LAND_USE_TYPES)),
                 Jsonb(
                     {
                         "owner": DEMO_OWNER,
@@ -1811,10 +1815,10 @@ def _scenario_rule_version_snapshot(
         "version_no": 1,
         "version_name": DEMO_REVIEW_RULE_VERSION_NAME if review_layer else DEMO_RULE_VERSION_NAME,
         "status": "PUBLISHED",
-        "effective_from": "2026-09-08",
+        "effective_from": FIXED_RULE_EFFECTIVE_FROM.isoformat(),
         "effective_to": None,
         "applicable_case_type": "LAND",
-        "applicable_district_code": "65000010",
+        "applicable_district_code": None,
         "selection_priority": 100 if review_layer else 90,
         "source_document_id": str(material.knowledge_document_id),
         "import_summary": {

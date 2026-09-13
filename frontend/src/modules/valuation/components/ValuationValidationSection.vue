@@ -4,6 +4,7 @@ import {
   PhCalculator as Calculator,
   PhCheckCircle as CheckCircle,
   PhDatabase as Database,
+  PhDownloadSimple as DownloadSimple,
   PhFileText as FileText,
   PhShieldCheck as ShieldCheck,
   PhWarningCircle as WarningCircle,
@@ -12,13 +13,18 @@ import {
 } from '@phosphor-icons/vue'
 import type {
   CalculationModel,
+  FormalValidationModel,
   ReportArtifactModel,
+  TemplateExportModel,
   ValidationFindingModel,
   ValidationRunModel,
 } from '../valuation.types'
 
 const props = defineProps<{
   validation: ValidationRunModel | null
+  formalValidation: FormalValidationModel | null
+  templateExports: TemplateExportModel[]
+  downloadingTemplateDocumentId: string | null
   calculation: CalculationModel | null
   report: ReportArtifactModel | null
   hasF03: boolean
@@ -26,6 +32,7 @@ const props = defineProps<{
   dirty: boolean
   running: boolean
   saving: boolean
+  caseEditable: boolean
   canRunValuation: boolean
   canProceedToSubmit: boolean
   findingLocationLabel: (finding: ValidationFindingModel) => string
@@ -36,7 +43,12 @@ const emit = defineEmits<{
   run: []
   'fix-finding': [finding: ValidationFindingModel]
   'go-submit': []
+  'download-template': [documentId: string, filename: string]
 }>()
+
+function isDownloadingTemplate(documentId: string): boolean {
+  return props.downloadingTemplateDocumentId === documentId
+}
 </script>
 
 <template>
@@ -88,7 +100,11 @@ const emit = defineEmits<{
     </div>
 
     <div class="calculation-stage__action-row">
-      <p v-if="!canRunValuation">
+      <p v-if="!caseEditable">
+        <WarningCircle :size="16" weight="fill" aria-hidden="true" />
+        此案件已送審並鎖定，不能再修改或重複執行正式計算；如需重算，請先由審查系統退回修正。
+      </p>
+      <p v-else-if="!canRunValuation">
         <WarningCircle :size="16" weight="fill" aria-hidden="true" />
         請先完成待處理前置資料，再執行正式計算。
       </p>
@@ -100,12 +116,98 @@ const emit = defineEmits<{
         class="calculation-stage__run"
         type="button"
         data-testid="run-valuation"
-        :disabled="running || saving || !canRunValuation"
-        :title="!canRunValuation ? '請先完成待處理前置資料' : dirty ? '會先儲存尚未儲存的比準地地價估計表修改，再執行計算與檢核' : '執行正式計算與檢核'"
+        :disabled="running || saving || !caseEditable || !canRunValuation"
+        :title="!caseEditable ? '案件已送審鎖定' : !canRunValuation ? '請先完成待處理前置資料' : dirty ? '會先儲存尚未儲存的比準地地價估計表修改，再執行計算與檢核' : '執行正式計算與檢核'"
         @click="emit('run')"
       >
         <Calculator v-if="!running" :size="17" weight="bold" aria-hidden="true" />
         <span>{{ running ? '計算與檢核中…' : dirty ? '儲存修改並執行計算與檢核' : '執行計算與檢核' }}</span>
+      </button>
+    </div>
+  </section>
+
+  <section
+    v-if="formalValidation"
+    class="validation-results"
+    data-testid="formal-calculation-results"
+    aria-labelledby="formal-calculation-results-title"
+  >
+    <div class="validation-results__heading">
+      <div class="validation-results__title">
+        <span class="validation-results__icon" aria-hidden="true">
+          <ShieldCheck :size="21" weight="duotone" />
+        </span>
+        <div>
+          <p>正式檢核結果</p>
+          <h2 id="formal-calculation-results-title">多宗地計算與檢核</h2>
+        </div>
+      </div>
+      <span
+        class="validation-results__state"
+        :data-validation-state="formalValidation.canGenerateFormalReport ? 'ready' : 'blocked'"
+      >
+        <CheckCircle v-if="formalValidation.canGenerateFormalReport" :size="16" weight="fill" aria-hidden="true" />
+        <WarningCircle v-else :size="16" weight="fill" aria-hidden="true" />
+        {{ formalValidation.canGenerateFormalReport ? '已通過正式檢核' : '仍有待修正項目' }}
+      </span>
+    </div>
+
+    <div class="validation-results__counts" aria-label="正式檢核統計">
+      <span data-state="passed"><CheckCircle :size="16" weight="fill" aria-hidden="true" />通過 {{ formalValidation.passedCount }}</span>
+      <span data-state="warning"><WarningCircle :size="16" weight="fill" aria-hidden="true" />警示 {{ formalValidation.warningCount }}</span>
+      <span data-state="error"><XCircle :size="16" weight="fill" aria-hidden="true" />錯誤 {{ formalValidation.failedCount }}</span>
+    </div>
+
+    <ul v-if="formalValidation.findings.length" class="validation-results__findings">
+      <li
+        v-for="finding in formalValidation.findings"
+        :key="finding.code"
+        :data-severity="finding.severity"
+      >
+        <div class="validation-results__finding-title">
+          <XCircle v-if="finding.severity === 'ERROR'" :size="17" weight="fill" aria-hidden="true" />
+          <WarningCircle v-else :size="17" weight="fill" aria-hidden="true" />
+          <strong>{{ finding.severity === 'ERROR' ? '需要修正' : '請確認' }}</strong>
+        </div>
+        <span>{{ finding.message }}</span>
+      </li>
+    </ul>
+    <p v-else class="validation-results__empty">
+      <CheckCircle :size="17" weight="fill" aria-hidden="true" />
+      目前沒有其他需要處理的檢核項目。
+    </p>
+
+    <div v-if="templateExports.length" class="validation-results__outputs">
+      <article v-for="templateExport in templateExports" :key="templateExport.documentId" class="validation-results__output">
+        <FileText :size="20" weight="duotone" aria-hidden="true" />
+        <div>
+          <span>{{ templateExport.title }}</span>
+          <strong>{{ templateExport.filename }}</strong>
+          <small>第 {{ templateExport.versionNo }} 版｜檔案大小 {{ Math.max(1, Math.round(templateExport.fileSizeBytes / 1024)) }} KB</small>
+        </div>
+        <button
+          class="validation-results__download"
+          type="button"
+          :disabled="Boolean(downloadingTemplateDocumentId)"
+          @click="emit('download-template', templateExport.documentId, templateExport.filename)"
+        >
+          <DownloadSimple v-if="!isDownloadingTemplate(templateExport.documentId)" :size="15" weight="bold" aria-hidden="true" />
+          <span>{{ isDownloadingTemplate(templateExport.documentId) ? '下載中…' : '下載 Excel' }}</span>
+        </button>
+      </article>
+    </div>
+
+    <div class="validation-results__next">
+      <p>{{ canProceedToSubmit ? '已產生 Excel 範本，可進入輸出與送審。' : '請先修正阻擋項目，再重新執行正式檢核。' }}</p>
+      <button
+        class="validation-results__submit"
+        type="button"
+        data-testid="go-to-submit"
+        :disabled="!canProceedToSubmit"
+        @click="emit('go-submit')"
+      >
+        <span>{{ canProceedToSubmit ? '前往輸出與送審' : '請先完成阻擋項目' }}</span>
+        <ArrowRight v-if="canProceedToSubmit" :size="16" weight="bold" aria-hidden="true" />
       </button>
     </div>
   </section>
@@ -333,6 +435,8 @@ const emit = defineEmits<{
 .validation-results__output span { color: var(--app-muted); font-size: 10px; font-weight: 800; }
 .validation-results__output strong { color: var(--app-ink); font-size: 14px; overflow-wrap: anywhere; }
 .validation-results__output small { color: var(--app-muted); font-size: 11px; }
+.validation-results__download { justify-self: start; min-height: 34px; margin-top: 4px; padding: 6px 10px; border: 1px solid rgba(46, 89, 132, .24); border-radius: 8px; color: var(--app-accent-deep); background: #fff; cursor: pointer; font-size: 11px; font-weight: 850; }
+.validation-results__download:disabled { cursor: not-allowed; opacity: .55; }
 .validation-results__next { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--app-line); }
 .validation-results__next p { margin: 0; color: var(--app-ink-soft); font-size: 12px; }
 

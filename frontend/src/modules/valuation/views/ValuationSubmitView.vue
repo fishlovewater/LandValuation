@@ -19,6 +19,7 @@ import {
   mapFormalReportResponse,
   mapFormalValidationResponse,
   mapFormResponse,
+  mapTemplateExportResponse,
   mapSubmitForReviewResult,
   selectAuthoritativeF02,
 } from '../valuation.mappers'
@@ -79,6 +80,13 @@ const displayedCaseStatus = computed(() =>
 const expectedCaseVersion = computed(
   () => flow.authoritativeF02?.versionNo ?? null,
 )
+const caseEditable = computed(() => [
+  'DRAFT',
+  'PROCESSING',
+  'CORRECTION',
+  'REVISION_REQUIRED',
+].includes(flow.case?.status ?? ''))
+const caseLockedMessage = '案件已送審並鎖定，不能再修改或重複執行正式計算；如需重算，請先由審查系統退回修正。'
 const formalWarningCodes = computed(() => Array.from(new Set(
   flow.formalValidation?.findings
     .filter((finding) => finding.severity === 'WARNING')
@@ -89,6 +97,8 @@ const warningsAcknowledged = computed(() => Boolean(
     flow.formalValidation.canGenerateFormalReport &&
     formalWarningCodes.value.every((code) => acknowledgedWarningCodes.value.includes(code)),
 ))
+// Existing cases may still have the legacy PDF output. Newer cases hand off
+// the three formal Excel templates directly, so accept either complete output.
 const formalOutputReady = computed(() => {
   const formalReport = flow.formalReport
   const formalValidation = flow.formalValidation
@@ -107,19 +117,37 @@ const formalOutputReady = computed(() => {
       authoritativeF02.outputDocumentId === formalReport.documentId,
   )
 })
+const excelOutputReady = computed(() => {
+  const formalValidation = flow.formalValidation
+  const exports = flow.templateExports
+  return Boolean(
+    formalValidation?.canGenerateFormalReport &&
+      formalValidation.runStatus === 'COMPLETED' &&
+      formalValidation.caseId === caseId.value &&
+      formalValidation.reportId === flow.reportPackageId &&
+      exports.some((item) => item.formCode === 'S01') &&
+      exports.some((item) => item.formCode === 'F02-RF') &&
+      exports.some((item) => item.formCode === 'F02'),
+  )
+})
+const excelSubmissionMain = computed(() => (
+  flow.templateExports.find((item) => item.formCode === 'F02')
+  ?? flow.templateExports[0]
+  ?? null
+))
+const submissionOutputReady = computed(() => excelOutputReady.value || formalOutputReady.value)
 const valuationOutputReady = computed(() => Boolean(
   !flow.validation || (flow.validation.canGenerateReport && flow.report),
 ))
 const canSubmit = computed(
   () => Boolean(
-    valuationOutputReady.value &&
+      valuationOutputReady.value &&
       flow.authoritativeF02 &&
-      (flow.completeReport || flow.formalReport) &&
       flow.reportPackageId &&
       expectedCaseVersion.value !== null &&
       flow.formalValidation?.canGenerateFormalReport &&
       warningsAcknowledged.value &&
-      formalOutputReady.value &&
+      submissionOutputReady.value &&
       !flow.submission,
   ),
 )
@@ -134,33 +162,32 @@ const submitIssues = computed(() => {
     items.push({ id: 'report-pages', title: '完整查估書尚未確認完成', detail: '檢視三頁資料、逐頁確認並完成正式計算與檢核。', target: 'report-pages', severity: 'pending' })
   }
   if (flow.formalValidation?.failedCount) {
-    items.push({ id: 'formal-errors', title: '正式檢核仍有阻擋項目', detail: `${flow.formalValidation.failedCount} 個錯誤必須修正後才能產生正式 PDF。`, target: 'formal-validation', severity: 'error' })
+    items.push({ id: 'formal-errors', title: '正式檢核仍有阻擋項目', detail: `${flow.formalValidation.failedCount} 個錯誤必須修正後才能產生正式 Excel。`, target: 'formal-validation', severity: 'error' })
   } else if (!flow.formalValidation) {
     items.push({ id: 'formal-validation', title: '尚未完成正式檢核', detail: '完成查估書資料後執行正式檢核。', target: 'formal-validation', severity: 'pending' })
   } else if (!warningsAcknowledged.value) {
     items.push({ id: 'formal-warnings', title: '正式檢核警示待人工確認', detail: `還有 ${formalWarningCodes.value.length} 個警示需要人工確認。`, target: 'formal-validation', severity: 'warning' })
   }
-  if (!flow.formalReport) {
-    items.push({ id: 'formal-pdf', title: '尚未產生正式 PDF', detail: '正式檢核通過後產生送審用完整正式 PDF。', target: 'formal-pdf', severity: 'pending' })
+  if (!submissionOutputReady.value) {
+    items.push({ id: 'template-exports', title: '尚未產生正式送審附件', detail: '請回到「計算與檢核」產生 S01、F02-RF、F02 Excel。', target: 'template-exports', severity: 'pending' })
   }
   if (!flow.submission) {
-    items.push({ id: 'submission', title: '案件尚未送審', detail: '完整送審 PDF 完成後即可送出審查。', target: 'submission', severity: 'pending' })
+    items.push({ id: 'submission', title: '案件尚未送審', detail: '正式 Excel 已完成後即可送出審查。', target: 'submission', severity: 'pending' })
   }
   return items
 })
 const readinessMessage = computed(() => {
   if (!flow.authoritativeF02) return '尚未完成 F02 最終版本，暫時無法送審。'
   if (!flow.reportPackageId) return '完整查估書尚未準備完成。'
-  if (!flow.completeReport && !flow.formalReport) return '尚未找到可送審的完整 PDF，無法送審。'
+  if (!submissionOutputReady.value) return '尚未找到完整的正式送審附件，無法送審。'
   if (flow.validation && !flow.validation.canGenerateReport) return '目前仍有待修正的檢核項目，暫時無法送審。'
   if (flow.validation && !flow.report) return '尚未產生比準地地價估計表單表輸出。'
   if (expectedCaseVersion.value === null) return '尚未取得可送審的 F02 版本。'
   if (!flow.formalValidation) return '請先執行 F02 正式檢核。'
   if (!flow.formalValidation.canGenerateFormalReport) return 'F02 正式檢核仍有待修正項目，暫時無法送審。'
-  if (!warningsAcknowledged.value) return '請逐項確認正式檢核警示後產生 PDF。'
-  if (!flow.formalReport) return '請先產生完整送審 PDF。'
-  if (!formalOutputReady.value) return '正式 PDF 或 F02 最終版本尚未完成，暫時無法送審。'
-  return '完整送審 PDF 已準備完成，可以送審。'
+  if (!warningsAcknowledged.value) return '請逐項確認正式檢核警示。'
+  if (!submissionOutputReady.value) return '請先產生完整的正式 Excel。'
+  return excelOutputReady.value ? '正式 Excel 已準備完成，可以送審。' : '正式 PDF 已準備完成，可以送審。'
 })
 const submitReadinessSteps = computed<SubmitReadinessItem[]>(() => {
   const formalValidation = flow.formalValidation
@@ -171,7 +198,7 @@ const submitReadinessSteps = computed<SubmitReadinessItem[]>(() => {
       : warningsAcknowledged.value
         ? 'done'
         : 'active'
-  const pdfState: SubmitReadinessState = formalOutputReady.value
+  const excelState: SubmitReadinessState = submissionOutputReady.value
     ? 'done'
     : formalValidation?.canGenerateFormalReport && warningsAcknowledged.value
       ? 'active'
@@ -203,11 +230,15 @@ const submitReadinessSteps = computed<SubmitReadinessItem[]>(() => {
       state: validationState,
     },
     {
-      key: 'formal-pdf',
-      title: '產生完整送審 PDF',
-      detail: flow.formalReport ? flow.formalReport.filename : '正式檢核完成後產生送審文件',
-      target: 'formal-pdf',
-      state: pdfState,
+      key: 'template-exports',
+      title: '確認正式 Excel',
+      detail: excelOutputReady.value
+        ? `已產生 ${flow.templateExports.length} 份正式 Excel`
+        : formalOutputReady.value
+          ? flow.formalReport?.filename ?? '正式 PDF 已產生'
+          : '正式檢核完成後產生送審附件',
+      target: 'template-exports',
+      state: excelState,
     },
     {
       key: 'submission',
@@ -265,7 +296,7 @@ function focusSubmitTarget(target: string): void {
   const selectors: Readonly<Record<string, string>> = {
     'report-pages': '[data-testid="report-package-draft-flow"]',
     'formal-validation': '[aria-labelledby="formal-validation-title"]',
-    'formal-pdf': '[data-testid="generate-formal-pdf"]',
+    'template-exports': '[data-testid="template-export-artifacts"]',
     submission: '[data-testid="submit-for-review"]',
   }
   const element = document.querySelector<HTMLElement>(selectors[target] ?? '')
@@ -406,6 +437,10 @@ async function saveReportPageEditor(value: {
   pageCode: ReportPageCode
   payload: Record<string, unknown>
 }): Promise<void> {
+  if (!caseEditable.value) {
+    error.value = caseLockedMessage
+    return
+  }
   const requestedCaseId = caseId.value
   const token = activeCaseToken
   const reportId = reportPageDraftId.value
@@ -447,6 +482,7 @@ async function handleComparisonChanged(): Promise<void> {
   reportPageCalculated.value = false
   flow.formalValidation = null
   flow.formalReport = null
+  flow.templateExports = []
   acknowledgedWarningCodes.value = []
   editorNotice.value = '比較法設定已變更。F02 / F02-RF 已重新載入；請重新確認兩頁並執行正式計算與檢核。'
 }
@@ -570,6 +606,10 @@ async function refreshAuthoritativePackage(
 }
 
 async function saveReportPages(): Promise<void> {
+  if (!caseEditable.value) {
+    error.value = caseLockedMessage
+    return
+  }
   const requestedCaseId = caseId.value
   const token = activeCaseToken
   const reportId = reportPageDraftId.value
@@ -600,6 +640,10 @@ async function saveReportPages(): Promise<void> {
 }
 
 async function calculateReportPages(): Promise<void> {
+  if (!caseEditable.value) {
+    error.value = caseLockedMessage
+    return
+  }
   const requestedCaseId = caseId.value
   const token = activeCaseToken
   const reportId = reportPageDraftId.value
@@ -624,6 +668,10 @@ async function calculateReportPages(): Promise<void> {
 }
 
 async function validateReportPages(): Promise<void> {
+  if (!caseEditable.value) {
+    error.value = caseLockedMessage
+    return
+  }
   const requestedCaseId = caseId.value
   const token = activeCaseToken
   const reportId = reportPageDraftId.value
@@ -645,6 +693,7 @@ async function validateReportPages(): Promise<void> {
       return
     }
     flow.formalValidation = formalValidation
+    flow.templateExports = []
     flow.formalReport = null
     acknowledgedWarningCodes.value = []
     if (!result.can_generate_formal_report) {
@@ -724,6 +773,7 @@ async function loadData(): Promise<void> {
     ) {
       flow.formalValidation = null
       flow.formalReport = null
+      flow.templateExports = []
       acknowledgedWarningCodes.value = []
       formalPdfRequestId.value = null
     }
@@ -743,6 +793,7 @@ async function loadData(): Promise<void> {
       const restoredReport = formalStatus.report
         ? mapFormalReportResponse(formalStatus.report)
         : null
+      const restoredTemplateExports = (formalStatus.template_exports ?? []).map(mapTemplateExportResponse)
 
       if (
         restoredValidation &&
@@ -753,11 +804,13 @@ async function loadData(): Promise<void> {
       } else if (formalStatus.requires_revalidation_for_submission) {
         flow.formalValidation = restoredValidation
         flow.formalReport = null
+        flow.templateExports = []
         acknowledgedWarningCodes.value = []
         refreshWarning.value = '既有正式檢核資料不完整，無法直接送審；請重新執行正式計算與檢核。'
       } else {
         flow.formalValidation = restoredValidation
         flow.formalReport = restoredReport
+        flow.templateExports = restoredTemplateExports
         if (restoredReport && restoredValidation) {
           // A persisted formal PDF can only exist after the server accepted
           // every warning acknowledgement for this validation run. Restoring
@@ -864,6 +917,7 @@ async function runFormalValidation(): Promise<void> {
   refreshWarning.value = ''
   flow.formalValidation = null
   flow.formalReport = null
+  flow.templateExports = []
   acknowledgedWarningCodes.value = []
   try {
     const formalValidationDto = await valuationApi.formalValidate(requestedCaseId, reportPackageId)
@@ -948,20 +1002,20 @@ async function submitForReview(): Promise<void> {
   const requestedCaseId = caseId.value
   const token = activeCaseToken
   const authoritativeF02 = flow.authoritativeF02
-  const completeReport = flow.completeReport
   const reportPackageId = flow.reportPackageId
+  const mainExcel = excelSubmissionMain.value
   const formalReport = flow.formalReport
+  const submittingExcel = excelOutputReady.value && mainExcel
   if (
     submitting.value ||
     flow.submission ||
     !flow.case ||
     !valuationOutputReady.value ||
     !authoritativeF02 ||
-    !(completeReport || formalReport) ||
     !reportPackageId ||
-    !formalReport ||
     expectedCaseVersion.value === null ||
-    !formalOutputReady.value ||
+    !submissionOutputReady.value ||
+    !submittingExcel && !formalOutputReady.value ||
     !isCurrentCase(token, requestedCaseId)
   ) return
 
@@ -974,8 +1028,11 @@ async function submitForReview(): Promise<void> {
     const result = await valuationApi.submitForReview(requestedCaseId, {
       request_id: requestId,
       expected_case_version: authoritativeF02.versionNo,
-      source_validation_run_id: formalReport.validationRunId,
-      source_report_document_id: formalReport.documentId,
+      source_validation_run_id: flow.formalValidation!.validationRunId,
+      source_report_document_id: submittingExcel ? mainExcel.documentId : formalReport!.documentId,
+      ...(submittingExcel
+        ? { source_template_document_ids: flow.templateExports.map((item) => item.documentId) }
+        : {}),
     })
     if (!isCurrentCase(token, requestedCaseId)) return
     submitRequestId.value = null
@@ -1051,6 +1108,7 @@ watch(caseId, () => {
         v-if="reportPageDraftId"
         :case-id="caseId"
         :report-id="reportPageDraftId"
+        :case-editable="caseEditable"
         :authoritative-f02="flow.authoritativeF02"
         :editors="reportPageEditors"
         :active-page-code="activeReportPageCode"
@@ -1090,6 +1148,8 @@ watch(caseId, () => {
         :submitting="submitting"
         :report-package-ready="Boolean(flow.reportPackageId)"
         :authoritative-f02-status="flow.authoritativeF02?.status ?? null"
+        :excel-handoff-ready="excelOutputReady"
+        :template-export-count="flow.templateExports.length"
         @run-validation="runFormalValidation"
         @generate-pdf="generateFormalPdf"
         @fix="goToFormalFinding"
@@ -1099,6 +1159,7 @@ watch(caseId, () => {
       <ValuationReportArtifacts
         :formal-report="flow.formalReport"
         :report="flow.report"
+        :template-exports="flow.templateExports"
         :downloading-document-id="downloadingDocumentId"
         :downloading-workbook="downloadingWorkbook"
         @download="downloadOutput"

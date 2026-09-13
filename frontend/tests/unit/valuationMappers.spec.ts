@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   mapDocumentResponse,
+  mapF03Update,
   mapFormalReportResponse,
   mapFormResponse,
   selectAuthoritativeF02,
@@ -130,6 +131,28 @@ describe('valuation F02 authority mapper', () => {
       versionNo: 5,
       fileSizeBytes: 4096,
       downloadPath: `/valuation/cases/${ids.case}/complete-reports/${ids.document}/download`,
+    })
+  })
+})
+
+describe('F03 update mapper', () => {
+  it('omits cleared inputs so FastAPI does not receive invalid empty UUID, date, or decimal strings', () => {
+    expect(mapF03Update({
+      benchmarkLandId: '',
+      comparisonAnalysisId: null,
+      valuationBaseDate: '',
+      comparisonPrice: '125000',
+      comparisonWeight: '',
+      incomePrice: null,
+      incomeWeight: '',
+      marketPeriodStart: '',
+      marketPeriodEnd: '  ',
+      marketCondition: 'normal',
+      selectionScopeReason: '',
+      decisionReason: null,
+    })).toEqual({
+      comparison_price: '125000',
+      market_condition: 'normal',
     })
   })
 })

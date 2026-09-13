@@ -55,9 +55,12 @@ class BedrockConverseProvider:
                 "Bedrock provider 需要 boto3",
                 503,
             ) from exc
-        self.client = boto3.client(
-            "bedrock-runtime",
+        session = boto3.Session(
+            profile_name=settings.aws_profile or None,
             region_name=settings.bedrock_region,
+        )
+        self.client = session.client(
+            "bedrock-runtime",
             config=Config(
                 read_timeout=settings.ai_timeout_seconds,
                 connect_timeout=5,

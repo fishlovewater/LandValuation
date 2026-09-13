@@ -40,6 +40,7 @@ class ValuationService:
         session: AsyncSession,
         repository: ValuationRepository | None = None,
     ) -> None:
+        self.session = session
         self.repository = repository or ValuationRepository(session)
 
     @staticmethod

@@ -7,11 +7,12 @@ import {
   PhFileText as FileText,
   PhFileXls as FileXls,
 } from '@phosphor-icons/vue'
-import type { FormalReportModel, ReportArtifactModel } from '../valuation.types'
+import type { FormalReportModel, ReportArtifactModel, TemplateExportModel } from '../valuation.types'
 
 const props = defineProps<{
   formalReport: FormalReportModel | null
   report: ReportArtifactModel | null
+  templateExports: TemplateExportModel[]
   downloadingDocumentId: string | null
   downloadingWorkbook?: boolean
 }>()
@@ -31,6 +32,51 @@ function isDownloading(documentId: string): boolean {
 </script>
 
 <template>
+  <section
+    v-if="props.templateExports.length"
+    class="report-artifact report-artifact--formal"
+    data-testid="template-export-artifacts"
+    aria-labelledby="template-export-title"
+  >
+    <div class="report-artifact__heading">
+      <div class="report-artifact__title">
+        <span class="report-artifact__icon" aria-hidden="true">
+          <FileXls :size="21" weight="duotone" />
+        </span>
+        <div>
+          <p>正式送審附件</p>
+          <h2 id="template-export-title">正式 Excel</h2>
+          <span>這些已確認的 Excel 會作為本次送審附件，可個別下載核對。</span>
+        </div>
+      </div>
+      <span class="report-artifact__marker report-artifact__marker--ready">
+        <CheckCircle :size="14" weight="fill" aria-hidden="true" />
+        已完成 {{ props.templateExports.length }} 份
+      </span>
+    </div>
+
+    <div v-for="templateExport in props.templateExports" :key="templateExport.documentId" class="report-artifact__file">
+      <div class="report-artifact__file-main">
+        <span class="report-artifact__file-icon" aria-hidden="true">
+          <FileXls :size="24" weight="duotone" />
+        </span>
+        <div>
+          <strong>{{ templateExport.title }}</strong>
+          <span>{{ templateExport.filename }} · {{ fileSizeKb(templateExport.fileSizeBytes) }} KB</span>
+        </div>
+      </div>
+      <button
+        class="is-primary"
+        type="button"
+        :disabled="Boolean(props.downloadingDocumentId)"
+        @click="emit('download', templateExport.documentId, templateExport.filename)"
+      >
+        <DownloadSimple v-if="!isDownloading(templateExport.documentId)" :size="16" weight="bold" aria-hidden="true" />
+        <span>{{ isDownloading(templateExport.documentId) ? '下載中…' : '下載 Excel' }}</span>
+      </button>
+    </div>
+  </section>
+
   <section
     v-if="props.formalReport"
     class="report-artifact report-artifact--formal"

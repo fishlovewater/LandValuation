@@ -1,10 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import {
-  PhArrowRight as ArrowRight,
   PhCheckCircle as CheckCircle,
   PhClipboardText as ClipboardText,
-  PhDatabase as Database,
   PhFloppyDisk as FloppyDisk,
   PhInfo as Info,
   PhPencilSimple as PencilSimple,
@@ -31,8 +29,61 @@ const emit = defineEmits<{
   save: []
 }>()
 
-const completedCount = computed(() => props.entries.filter((entry) => {
-  if (entry.formCode === 'F03' && entry.fieldName === 'benchmark_land_id') return false
+const SYSTEM_MANAGED_FIELDS = new Set([
+  'F01.accumulated_depreciation_raw',
+  'F01.building_cost_total_raw',
+  'F01.calculation_building_area',
+  'F01.capital_interest_rate_raw',
+  'F01.cost_components_raw',
+  'F01.elapsed_years_raw',
+  'F01.land_price_raw',
+  'F01.normal_land_total_price',
+  'F01.normal_land_unit_price',
+  'F01.normal_land_unit_price_raw',
+  'F01.normal_total_price_raw',
+  'F02.absolute_adjustment_total',
+  'F02.adjusted_unit_price_display',
+  'F02.adjusted_unit_price_raw',
+  'F02.benchmark_land_no',
+  'F02.benchmark_comparison_price',
+  'F02.benchmark_comparison_price_raw',
+  'F02.date_adjustment_rate',
+  'F02.individual_factor_rate',
+  'F02.individual_factor_total',
+  'F02.normal_land_unit_price',
+  'F02.regional_factor_rate',
+  'F02.regional_adjustment_rate',
+  'F02.time_adjustment_rate',
+  'F02.trial_price',
+  'F02.trial_price_raw',
+  'F02-RF.comparison_analysis_id',
+  'F02-RF.comparison_targets',
+  'F02-RF.rule_version_id',
+  'F03.benchmark_land_price',
+  'F03.comparison_price',
+  'F03.comparison_price_raw',
+  'F03.weight_total',
+  'F03.weighted_value_raw',
+  'F04.parcel_market_price',
+  'F04.rule_version_id',
+  'F04.total_adjustment_rate_raw',
+  'F04.trial_price_raw',
+  'S01.average_internal_road_width_m',
+  'F02.parcel_id',
+  'F02-RF.benchmark_land_id',
+  'F03.benchmark_land_id',
+  'F04.benchmark_valuation_id',
+])
+
+function isSystemManagedField(entry: ManualFieldEntry): boolean {
+  return SYSTEM_MANAGED_FIELDS.has(`${entry.formCode}.${entry.fieldName}`)
+}
+
+const displayEntries = computed(() => props.entries.filter((entry) => !isSystemManagedField(entry)))
+const activeEntries = computed(() => displayEntries.value.filter(
+  (entry) => entry.formCode === props.activeForm,
+))
+const completedCount = computed(() => activeEntries.value.filter((entry) => {
   return Boolean((props.values[entry.key] ?? '').trim())
 }).length)
 
@@ -47,7 +98,7 @@ function handleValueInput(key: string, event: Event): void {
 
 <template>
   <section
-    v-if="props.entries.length"
+    v-if="displayEntries.length"
     class="manual-fields"
     data-testid="manual-field-workspace"
     aria-labelledby="manual-fields-title"
@@ -59,12 +110,12 @@ function handleValueInput(key: string, event: Event): void {
         </span>
         <div>
           <p class="manual-fields__eyebrow">人工補充</p>
-          <h2 id="manual-fields-title">補齊正式欄位</h2>
-          <span>針對辨識未取得或仍需人工確認的正式表單欄位補值。</span>
+          <h2 id="manual-fields-title">可補充正式欄位</h2>
+          <span>只顯示 AI 未取得或被拒絕的欄位；空白欄位可以直接略過。</span>
         </div>
       </div>
       <div class="manual-fields__stats" aria-label="人工補充狀態">
-        <span>{{ props.entries.length }} 項欄位</span>
+        <span>{{ activeEntries.length }} 項欄位</span>
         <span>{{ completedCount }} 項已填</span>
       </div>
     </div>
@@ -83,31 +134,12 @@ function handleValueInput(key: string, event: Event): void {
       </label>
       <div class="manual-fields__notice">
         <Info :size="17" weight="duotone" aria-hidden="true" />
-        <span>只會送出非空欄位；未填欄位不會用空字串覆蓋既有資料。</span>
+        <span>只會送出非空欄位；未填欄位保留空白，不會阻擋後續流程。</span>
       </div>
     </div>
 
     <div class="manual-fields__grid">
-      <template v-for="entry in props.entries" :key="entry.key">
-        <div
-          v-if="entry.formCode === 'F03' && entry.fieldName === 'benchmark_land_id'"
-          class="manual-fields__relation"
-          data-testid="manual-benchmark-helper"
-        >
-          <span class="manual-fields__relation-icon" aria-hidden="true">
-            <Database :size="20" weight="duotone" />
-          </span>
-          <div class="manual-fields__relation-copy">
-            <strong>比準地地價估計表 → 比準地</strong>
-            <span>這是案件資料關聯，不是一般文字欄位。請從已建立的比準地中選擇，避免人工輸入系統識別值。</span>
-          </div>
-          <button class="manual-fields__link" type="button" @click="emit('goLand')">
-            前往宗地與比準地
-            <ArrowRight :size="15" weight="bold" aria-hidden="true" />
-          </button>
-        </div>
-
-        <label v-else class="manual-field-card" :data-error="Boolean(props.errors[entry.key])">
+      <label v-for="entry in activeEntries" :key="entry.key" class="manual-field-card" :data-error="Boolean(props.errors[entry.key])">
           <span class="manual-field-card__heading">
             <span class="manual-field-card__label">
               <PencilSimple :size="14" weight="duotone" aria-hidden="true" />
@@ -133,14 +165,16 @@ function handleValueInput(key: string, event: Event): void {
             <WarningCircle :size="13" weight="fill" aria-hidden="true" />
             {{ props.errors[entry.key] }}
           </small>
-        </label>
-      </template>
+      </label>
+      <p v-if="!activeEntries.length" class="manual-fields__empty-form">
+        此表單目前沒有需要人工補充的欄位，可切換其他表單查看。
+      </p>
     </div>
 
     <div class="manual-fields__footer">
       <div class="manual-fields__footer-copy">
-        <strong>儲存後會重新檢核相關資料</strong>
-        <span>人工輸入會更新同欄位先前的人工值；受影響的計算與送審文件需要重新計算／檢核。</span>
+        <strong>儲存後會重新整理相關資料</strong>
+        <span>人工輸入會更新同欄位先前的人工值；沒有填寫的欄位會維持空白。</span>
       </div>
       <button
         v-if="props.editableCount"
@@ -298,6 +332,15 @@ function handleValueInput(key: string, event: Event): void {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+.manual-fields__empty-form {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 14px;
+  border: 1px dashed var(--app-line);
+  border-radius: 8px;
+  color: var(--app-muted);
+  font-size: 12px;
 }
 
 .manual-field-card {

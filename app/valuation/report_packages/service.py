@@ -39,7 +39,6 @@ from app.valuation.service import ValuationService
 
 
 COMPLETED_FORM_STATUSES = {
-    FormStatus.READY.value,
     FormStatus.CHECKED.value,
     FormStatus.FINAL.value,
 }
@@ -115,7 +114,7 @@ class ReportPackageService:
                 case_id=case_id,
                 form_code=form_code,
                 version_no=version_no,
-                form_status=FormStatus.DRAFT.value,
+                form_status=FormStatus.READY.value,
                 form_content={
                     "schema_version": REPORT_SCHEMA_VERSION,
                     "official_schema_version": OFFICIAL_SCHEMA_VERSION,

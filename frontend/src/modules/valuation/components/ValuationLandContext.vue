@@ -9,7 +9,8 @@ import {
   PhTarget as Target,
   PhX as X,
 } from '@phosphor-icons/vue'
-import type { BenchmarkLandModel, DocumentArtifactModel, ParcelResponseDto } from '../valuation.types'
+import { computed } from 'vue'
+import type { BenchmarkLandModel, DocumentArtifactModel, ParcelResponseDto, ValuationLocationDto } from '../valuation.types'
 import { newTaipeiDistrictName } from '../newTaipei'
 
 type ParcelDraft = {
@@ -34,6 +35,7 @@ type BenchmarkDraft = {
 
 const props = defineProps<{
   parcels: ParcelResponseDto[]
+  locations: ValuationLocationDto[]
   benchmarks: BenchmarkLandModel[]
   documents: DocumentArtifactModel[]
   parcelDraft: ParcelDraft
@@ -53,6 +55,12 @@ const emit = defineEmits<{
   saveBenchmark: []
   chooseBenchmark: [benchmarkLandId: string]
 }>()
+
+const activeLocations = computed(() => props.locations.filter((item) => item.is_active))
+const locationBackedParcels = computed(() => activeLocations.value)
+const selectedBenchmarkLocation = computed(() => (
+  activeLocations.value.find((item) => item.is_benchmark_location) ?? null
+))
 </script>
 
 <template>
@@ -75,8 +83,8 @@ const emit = defineEmits<{
         </div>
       </div>
       <div class="land-context__summary" aria-label="土地資料統計">
-        <span><MapPin :size="15" weight="fill" aria-hidden="true" />宗地 {{ parcels.length }}</span>
-        <span><Target :size="15" weight="fill" aria-hidden="true" />比準地 {{ benchmarks.length }}</span>
+        <span><MapPin :size="15" weight="fill" aria-hidden="true" />宗地 {{ parcels.length || locationBackedParcels.length }}</span>
+        <span><Target :size="15" weight="fill" aria-hidden="true" />比準地 {{ benchmarks.length || (selectedBenchmarkLocation ? 1 : 0) }}</span>
       </div>
     </header>
 
@@ -90,7 +98,7 @@ const emit = defineEmits<{
               <span>本案實際要記錄與估價的土地</span>
             </div>
           </div>
-          <span class="land-panel__count">{{ parcels.length }} 筆</span>
+          <span class="land-panel__count">{{ parcels.length || locationBackedParcels.length }} 筆</span>
         </div>
 
         <p class="land-panel__help">
@@ -115,10 +123,23 @@ const emit = defineEmits<{
             </button>
           </li>
         </ul>
-        <div v-else class="land-panel__empty">
+        <div v-else-if="!locationBackedParcels.length" class="land-panel__empty">
           <MapPin :size="20" weight="duotone" aria-hidden="true" />
           <span>前面步驟尚未帶入宗地資料；本步驟可直接保留空白並繼續。</span>
         </div>
+
+        <ul v-if="!parcels.length && locationBackedParcels.length" class="land-records">
+          <li v-for="location in locationBackedParcels" :key="location.location_id">
+            <div class="land-records__content">
+              <strong>{{ location.label }}</strong>
+              <span>{{ location.address || '來源文件與 AI 辨識結果已綁定；地籍欄位未提供時保留空白' }}</span>
+            </div>
+            <span v-if="location.is_benchmark_location" class="benchmark-current">
+              <CheckCircle :size="14" weight="fill" aria-hidden="true" />
+              前一步已選為比準地
+            </span>
+          </li>
+        </ul>
 
         <form
           v-if="false"
@@ -223,7 +244,7 @@ const emit = defineEmits<{
               <span>後續查估使用的比較基準</span>
             </div>
           </div>
-          <span class="land-panel__count">{{ benchmarks.length }} 筆</span>
+          <span class="land-panel__count">{{ benchmarks.length || (selectedBenchmarkLocation ? 1 : 0) }} 筆</span>
         </div>
 
         <p class="land-panel__help">
@@ -257,9 +278,14 @@ const emit = defineEmits<{
             </div>
           </li>
         </ul>
-        <div v-else class="land-panel__empty">
+        <div v-else-if="!selectedBenchmarkLocation" class="land-panel__empty">
           <Target :size="20" weight="duotone" aria-hidden="true" />
           <span>前面步驟尚未選定比準地；本步驟可直接保留空白並繼續。</span>
+        </div>
+
+        <div v-if="!benchmarks.length && selectedBenchmarkLocation" class="land-panel__empty land-panel__empty--selected">
+          <Target :size="20" weight="fill" aria-hidden="true" />
+          <span>「{{ selectedBenchmarkLocation.label }}」已由前一步選為比準地；後續表單會直接使用此選擇。</span>
         </div>
 
         <form v-if="false" class="land-form" @submit.prevent="emit('saveBenchmark')">

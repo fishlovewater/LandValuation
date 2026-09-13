@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     minio_bucket: str = "land-valuation"
     minio_secure: bool = False
     minio_presigned_expiry_seconds: int = 900
+    object_storage_provider: Literal["minio", "aws_s3"] = "minio"
+    aws_s3_bucket: str | None = None
+    aws_s3_region: str | None = None
+    aws_profile: str | None = None
     official_report_blank_template_object_key: str | None = None
     official_report_blank_template_manifest_object_key: str | None = None
 
@@ -100,6 +104,18 @@ class Settings(BaseSettings):
     textract_timeout_seconds: int = Field(default=120, ge=10, le=900)
     textract_poll_interval_seconds: float = Field(default=1.0, ge=0.1, le=10)
 
+    aws_location_region: str | None = None
+    aws_location_place_index_name: str | None = None
+    aws_location_language: str = "zh-TW"
+    map_provider: Literal["mapbox"] = "mapbox"
+    mapbox_access_token: SecretStr | None = None
+    mapbox_username: str | None = None
+    mapbox_style_id: str | None = None
+    mapbox_static_zoom: int = Field(default=16, ge=1, le=22)
+    mapbox_image_width: int = Field(default=1280, ge=256, le=1280)
+    mapbox_image_height: int = Field(default=800, ge=256, le=1280)
+    mapbox_timeout_seconds: int = Field(default=20, ge=5, le=120)
+
     jwt_secret_key: SecretStr = Field(default=SecretStr("change-me-before-use"))
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 30
@@ -122,7 +138,6 @@ class Settings(BaseSettings):
     bedrock_fallback_confidence_threshold: float = Field(default=0.85, ge=0, le=1)
     aws_access_key_id: SecretStr | None = None
     gemini_api_key: SecretStr | None = None
-    google_maps_api_key: SecretStr | None = None
 
     @field_validator("minio_bucket")
     @classmethod
@@ -270,6 +285,25 @@ class Settings(BaseSettings):
         if not value:
             raise ValueError("MINIO_SECRET_KEY or MINIO_ROOT_PASSWORD is required")
         return value.get_secret_value()
+
+    @property
+    def resolved_aws_s3_bucket(self) -> str:
+        """Use the configured application bucket, or the existing Textract bucket.
+
+        The fallback keeps the local AWS Demo configuration small while still
+        requiring an explicit bucket whenever AWS object storage is selected.
+        """
+
+        value = (self.aws_s3_bucket or self.textract_s3_bucket or "").strip()
+        if not value:
+            raise ValueError(
+                "AWS_S3_BUCKET or TEXTRACT_S3_BUCKET is required for AWS S3 storage"
+            )
+        return value
+
+    @property
+    def resolved_aws_s3_region(self) -> str | None:
+        return self.aws_s3_region or self.textract_region or self.bedrock_region
 
 
 @lru_cache

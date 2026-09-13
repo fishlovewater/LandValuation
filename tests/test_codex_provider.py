@@ -4,6 +4,7 @@ import os
 import subprocess
 from types import SimpleNamespace
 from uuid import uuid4
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -258,7 +259,6 @@ def test_codex_provider_uses_threaded_subprocess_on_windows_selector_loop(monkey
     monkeypatch.setenv("MINIO_ROOT_PASSWORD", "minio-secret")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws-secret")
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-secret")
-    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "maps-secret")
 
     def fake_run(command, **kwargs):
         calls.append((command, kwargs))
@@ -296,7 +296,6 @@ def test_codex_provider_uses_threaded_subprocess_on_windows_selector_loop(monkey
         "MINIO_ROOT_PASSWORD",
         "AWS_SECRET_ACCESS_KEY",
         "GEMINI_API_KEY",
-        "GOOGLE_MAPS_API_KEY",
     ):
         assert secret_name not in child_env
 
@@ -360,7 +359,9 @@ async def test_bedrock_provider_configures_bounded_socket_timeouts_and_retries(
 
     import boto3
 
-    monkeypatch.setattr(boto3, "client", fake_client)
+    fake_session = MagicMock()
+    fake_session.client.side_effect = fake_client
+    monkeypatch.setattr(boto3, "Session", lambda **_kwargs: fake_session)
     settings = Settings(
         app_env="test",
         bedrock_region="ap-northeast-1",

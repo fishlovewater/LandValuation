@@ -819,3 +819,14 @@ class CaseEventRecord(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     request_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True))
+
+class LandValueZoneRecord(Base):
+    __tablename__ = "land_value_zones"
+
+    zone_id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    price_zone_no: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    area_sqm: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    geometry_geojson: Mapped[dict | None] = mapped_column(JSONB)
+    city_code: Mapped[str | None] = mapped_column(String(10))
+    district_code: Mapped[str | None] = mapped_column(String(10))
+    is_active: Mapped[bool] = mapped_column(default=True)

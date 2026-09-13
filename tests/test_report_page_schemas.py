@@ -61,15 +61,15 @@ def test_s01_route_provider_candidate_requires_full_provenance() -> None:
         destination_latitude="25.1",
         destination_longitude="121.1",
         destination_place_id="qa-place",
-        route_provider="GOOGLE_MAPS",
-        route_method="DISTANCE_MATRIX_WALKING",
+        route_provider="MAPBOX",
+        route_method="MAPBOX_DIRECTIONS_WALKING",
         search_radius_m=2000,
         candidate_count=5,
         source_type=DraftSourceType.ROUTE_PROVIDER_CONFIRMED,
         source_notes="USER CONFIRMED ROUTE RESULT",
         confirmed_by_user=True,
     )
-    assert accepted.route_method == "DISTANCE_MATRIX_WALKING"
+    assert accepted.route_method == "MAPBOX_DIRECTIONS_WALKING"
 
 
 def test_s01_rejects_factor_not_in_supplied_template() -> None:

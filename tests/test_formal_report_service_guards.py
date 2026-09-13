@@ -194,14 +194,16 @@ def test_formal_validation_snapshot_preserves_blank_values_and_map_identity():
     assert snapshot["map_documents"]["map-section-sketch"]["document_id"] == str(document_id)
 
 
+def test_formal_rule_guard_allows_the_fixed_template_for_residential_land():
+    assert FormalReportService._validate_rule(
+        _case(land_use_type="RESIDENTIAL"),
+        _rule(land_use_types=["RESIDENTIAL"]),
+    ) == "RESIDENTIAL"
+
+
 @pytest.mark.parametrize(
     ("case", "rule", "expected_code"),
     [
-        (
-            _case(land_use_type="RESIDENTIAL"),
-            _rule(land_use_types=["RESIDENTIAL"]),
-            "FORMAL_REPORT_TEMPLATE_LAND_USE_UNSUPPORTED",
-        ),
         (
             _case(),
             _rule(district_scope={"mode": "INCLUDE", "district_codes": ["65000010"]}),

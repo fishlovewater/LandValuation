@@ -33,6 +33,27 @@ describe('valuation API transport', () => {
     )
   })
 
+  it('shows development diagnostics for an unexpected backend error', () => {
+    const error = {
+      isAxiosError: true,
+      response: {
+        status: 500,
+        data: {
+          error: {
+            code: 'INTERNAL_ERROR',
+            message: '系統發生未預期錯誤，請稍後再試。',
+            details: {
+              exception_type: 'KeyError',
+              exception_message: 'comparison-target-id',
+            },
+          },
+        },
+      },
+    }
+
+    expect(safeValuationErrorMessage(error)).toContain('KeyError: comparison-target-id')
+  })
+
   it('creates a case with only the backend CaseCreate contract fields', async () => {
     const payload = {
       case_no: 'NB-2026-0099',
