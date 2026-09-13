@@ -1,8 +1,11 @@
 """Distinguish automatic external-review transcription from human confirmation."""
 from alembic import op
 
-revision = "20260913_0027"
-down_revision = "20260912_0026"
+# Keep this migration on the single current head chain.  The fixed-rule
+# migration already owns revision 20260913_0027; reusing that id makes Alembic
+# reject the whole deployment with a duplicate-revision error.
+revision = "20260913_0030"
+down_revision = "20260913_0029"
 branch_labels = None
 depends_on = None
 
