@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import secrets
 from contextlib import closing
 from datetime import date
 from io import BytesIO
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -30,6 +32,7 @@ DEMO_DISTRICT_CODE = "65000010"
 DEMO_RULE_SET_CODE = "DEMO-REVIEW-RULES"
 DEMO_KNOWLEDGE_CODE = "DEMO-REVIEW-SOURCE"
 DEMO_KNOWLEDGE_TITLE = "Review Demo Validation Rules"
+DEMO_EVIDENCE_FILENAME = "查估書表範本.pdf"
 
 
 class DemoError(RuntimeError):
@@ -69,6 +72,30 @@ def build_demo_pdf(title: str) -> bytes:
     pdf.drawString(48, 740, f"Generated for {DEMO_CASE_NO}")
     pdf.save()
     return output.getvalue()
+
+
+def load_demo_evidence_pdf(filename: str = DEMO_EVIDENCE_FILENAME) -> bytes:
+    """Load the real appraisal form used as the Review Demo evidence."""
+
+    configured = os.getenv("DEMO_SOURCE_DIR")
+    candidates = []
+    if configured:
+        candidates.append(Path(configured) / filename)
+    candidates.extend(
+        (
+            Path("/app/demo-sources") / filename,
+            Path(__file__).resolve().parents[2] / "需要放入MINIO的東西" / filename,
+        )
+    )
+    for path in candidates:
+        if path.is_file():
+            content = path.read_bytes()
+            if content.startswith(b"%PDF-"):
+                return content
+            raise DemoError(f"DEMO_EVIDENCE_INVALID_PDF: {path}")
+    raise DemoError(
+        f"DEMO_EVIDENCE_NOT_FOUND: {filename}; set DEMO_SOURCE_DIR or mount the Demo source folder"
+    )
 
 
 def _upload_pdf(object_key: str, content: bytes) -> dict[str, Any]:
@@ -363,14 +390,15 @@ def seed_demo() -> dict[str, Any]:
     rule_version_id = uuid4()
     uploads: list[dict[str, Any]] = []
     documents = (
-        (original_document_id, "original", "review-demo-original-v1.pdf", original_group_id),
+        (original_document_id, "original", DEMO_EVIDENCE_FILENAME, original_group_id),
         (uuid4(), "land-register", "review-demo-land-register.pdf", uuid4()),
         (uuid4(), "cadastral-map", "review-demo-cadastral-map.pdf", uuid4()),
     )
     try:
         for document_id, document_type, filename, _group_id in documents:
             key = f"cases/{case_id}/demo/{document_type}/{document_id}/{filename}"
-            uploads.append(_upload_pdf(key, build_demo_pdf(f"{DEMO_CASE_NO} {document_type}")))
+            content = load_demo_evidence_pdf(filename) if document_type == "original" else build_demo_pdf(f"{DEMO_CASE_NO} {document_type}")
+            uploads.append(_upload_pdf(key, content))
         knowledge_key = f"knowledge/{knowledge_document_id}/demo/review-validation-rules.pdf"
         knowledge_upload = _upload_pdf(
             knowledge_key,

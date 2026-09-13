@@ -6,17 +6,15 @@ import {
   PhCheckCircle as CheckCircle,
   PhClock as Clock,
   PhEye as Eye,
-  PhFileText as FileText,
   PhPaperPlaneTilt as PaperPlaneTilt,
   PhSpinnerGap as SpinnerGap,
+  PhWarningCircle as WarningCircle,
 } from '@phosphor-icons/vue'
-import type { GeneratedReportDto } from '../review.types'
 
 const props = withDefaults(
   defineProps<{
     canDecide?: boolean
     canFinalize?: boolean
-    canExecute?: boolean
     canGenerateReport?: boolean
     canRequestCorrection?: boolean
     canSendCorrection?: boolean
@@ -28,7 +26,6 @@ const props = withDefaults(
     totalFindingCount?: number
     unresolvedFindingCount?: number
     latestRunId?: string | null
-    reportDocument?: GeneratedReportDto | null
     reportActionReason?: string
     finalizeActionReason?: string
     busy?: boolean
@@ -36,7 +33,6 @@ const props = withDefaults(
   {
     canDecide: false,
     canFinalize: false,
-    canExecute: false,
     canGenerateReport: false,
     canRequestCorrection: false,
     canSendCorrection: false,
@@ -48,7 +44,6 @@ const props = withDefaults(
     totalFindingCount: 0,
     unresolvedFindingCount: 0,
     latestRunId: null,
-    reportDocument: null,
     reportActionReason: '最新一次智慧審查完成後，即可查看與輸出審查報告。',
     finalizeActionReason: '最新檢核完成且所有阻擋項目處理後，才可完成審查。',
     busy: false,
@@ -60,7 +55,7 @@ const emit = defineEmits<{
   'correction-request': []
   'send-correction': []
   'recheck-correction': []
-  'generate-report': []
+  'open-findings': []
   'open-result': []
 }>()
 
@@ -73,7 +68,10 @@ const awaitingCorrectionTitle = computed(() => externalCase.value
   ? '修正通知已記錄為對外通知，等待外部廠商回傳新版文件。'
   : '已退回估價端，等待較新的正式版本重新送審。')
 const correctionActionIsPrimary = computed(() => ['DRAFT', 'RESUBMITTED'].includes(props.correctionStatus ?? ''))
-const reportIsPrimary = computed(() => Boolean(props.latestRunId && props.canGenerateReport))
+const findingActionIsPrimary = computed(() => props.unresolvedFindingCount > 0 && !finalState.value)
+const reportIsPrimary = computed(() => Boolean(
+  props.latestRunId && props.canGenerateReport && !findingActionIsPrimary.value,
+))
 const finalizeIsPrimary = computed(() => !finalState.value && !correctionActionIsPrimary.value && !reportIsPrimary.value)
 const resolvedFindingCount = computed(() => Math.max(0, props.totalFindingCount - props.unresolvedFindingCount))
 const findingProgress = computed(() => props.totalFindingCount > 0
@@ -85,7 +83,7 @@ const findingProgress = computed(() => props.totalFindingCount > 0
   <div class="review-action-bar" data-testid="review-action-bar">
     <div class="review-action-bar__status">
       <span>目前狀態</span>
-      <strong>{{ finalState ? '已完成審查' : reportIsPrimary ? '智慧審查已完成，可先查看報告' : '可接續處理' }}</strong>
+      <strong>{{ finalState ? '已完成審查' : findingActionIsPrimary ? '智慧審查已完成，請進行人工疑點判定' : reportIsPrimary ? '智慧審查已完成，可查看報告' : '可接續處理' }}</strong>
       <div v-if="totalFindingCount > 0" class="review-action-bar__progress-copy">
         <small>疑點已處理 {{ resolvedFindingCount }} / {{ totalFindingCount }}</small>
         <small v-if="unresolvedFindingCount > 0">尚有 {{ unresolvedFindingCount }} 個未處理</small>
@@ -104,6 +102,17 @@ const findingProgress = computed(() => props.totalFindingCount > 0
     </div>
     <div class="review-action-bar__actions">
       <button
+        v-if="unresolvedFindingCount > 0 && !finalState"
+        type="button"
+        class="is-primary"
+        data-testid="open-pending-findings"
+        :disabled="busy"
+        @click="emit('open-findings')"
+      >
+        <WarningCircle :size="16" weight="bold" aria-hidden="true" />
+        <span>處理待判定疑點（{{ unresolvedFindingCount }}）</span>
+      </button>
+      <button
         v-if="latestRunId"
         type="button"
         :class="{ 'is-primary': reportIsPrimary }"
@@ -114,17 +123,6 @@ const findingProgress = computed(() => props.totalFindingCount > 0
       >
         <Eye :size="16" weight="bold" aria-hidden="true" />
         <span>查看審查報告</span>
-      </button>
-      <button
-        v-if="latestRunId"
-        type="button"
-        data-testid="generate-review-report"
-        :disabled="!canGenerateReport || busy"
-        :title="reportActionReason"
-        @click="emit('generate-report')"
-      >
-        <FileText :size="16" weight="bold" aria-hidden="true" />
-        <span>快速產生 PDF</span>
       </button>
       <button
         v-if="!correctionStatus || correctionStatus === 'RECHECKED'"

@@ -37,6 +37,16 @@ def test_demo_pdf_is_a_real_pdf():
     assert len(content) > 500
 
 
+def test_demo_evidence_uses_a_real_appraisal_form():
+    from app.review.demo import DEMO_EVIDENCE_FILENAME, load_demo_evidence_pdf
+
+    content = load_demo_evidence_pdf()
+
+    assert DEMO_EVIDENCE_FILENAME == "查估書表範本.pdf"
+    assert content.startswith(b"%PDF-")
+    assert len(content) > 1_000_000
+
+
 @pytest.mark.parametrize("command", ["seed", "revise", "reset"])
 def test_demo_commands_are_exposed(command):
     from app.review.demo import build_parser

@@ -141,11 +141,19 @@ const FIELD_PATH_LABELS: Readonly<Record<string, string>> = {
   'COMPARISON.UNIT_PRICE': '比較單價',
 }
 
+// Keys are matched as whole path segments, longest-qualified first, so
+// `F03.expert_grade` resolves to 級距判定 instead of falling through to GRADE.
 const FIELD_PATH_SUFFIX_LABELS: Readonly<Record<string, string>> = {
   ADJUSTMENT_RATE: '調整率',
+  EXPERT_GRADE: '級距判定',
   GRADE: '比較等級',
   UNIT_PRICE: '比較單價',
   COMPARISON_PRICE: '比較法價格',
+  COMPARISON_WEIGHT: '比較法權重',
+  INCOME_WEIGHT: '收益法權重',
+  RECALCULATED_PRICE: '重算後價格',
+  FINAL_VALUATION: '最終查估價格',
+  LEGAL_BASIS: '法令依據',
   VALUATION_BASE_DATE: '估價基準日',
   BENCHMARK_LAND_ID: '比準地',
 }
@@ -239,7 +247,7 @@ export function findingTypeLabel(value: string | null | undefined): string {
   return label(value, FINDING_TYPE_LABELS, '其他檢核類型')
 }
 
-export function fieldPathLabel(value: string | null | undefined): string {
+function singleFieldPathLabel(value: string): string {
   const normalizedPath = normalized(value)
   const direct = FIELD_PATH_LABELS[normalizedPath]
   if (direct) return direct
@@ -247,6 +255,15 @@ export function fieldPathLabel(value: string | null | undefined): string {
     if (normalizedPath === suffix || normalizedPath.endsWith(`.${suffix}`)) return display
   }
   return '相關必要欄位'
+}
+
+export function fieldPathLabel(value: string | null | undefined): string {
+  // Multi-field rules (F03 權重) store a comma-separated path, which must not
+  // degrade the whole label to the generic fallback.
+  const segments = (value ?? '').split(',').map((segment) => segment.trim()).filter(Boolean)
+  if (!segments.length) return '相關必要欄位'
+  const labels = [...new Set(segments.map(singleFieldPathLabel))]
+  return labels.join('、')
 }
 
 export function missingItemStatusLabel(value: string | null | undefined): string {

@@ -20,7 +20,7 @@ services:
     container_name: land_valuation_persistent_demo_minio_init
 
   knowledge-init:
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
     container_name: land_valuation_persistent_demo_knowledge_init
     depends_on:
       minio-init:

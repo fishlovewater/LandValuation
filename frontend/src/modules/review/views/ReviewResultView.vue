@@ -7,6 +7,7 @@ import {
   PhFileDoc as FileDoc,
   PhFilePdf as FilePdf,
   PhFileXls as FileXls,
+  PhWarningCircle as WarningCircle,
 } from '@phosphor-icons/vue'
 import EmptyState from '../../../components/common/EmptyState.vue'
 import ErrorState from '../../../components/common/ErrorState.vue'
@@ -60,6 +61,9 @@ const skippedRules = computed(() => coverage.value?.skipped_rules ?? [])
 const reportReadyBeforeClosure = computed(() => Boolean(
   canUseReport.value && detail.value?.reviewStatusCode !== 'REVIEW_COMPLETED',
 ))
+const pendingFindings = computed(() => detail.value?.findings.filter((finding) =>
+  ['OPEN', 'REQUIRES_SUPPLEMENT', 'EXPERT_REVIEW'].includes(finding.statusCode),
+) ?? [])
 
 function textField(value: unknown, fallback = '—'): string {
   return typeof value === 'string' && value.trim() ? value : fallback
@@ -147,6 +151,19 @@ function backToWorkbench(): void {
   void router.push({ name: 'review-workbench', params: { reviewId: reviewId.value }, query: { runId: runId.value } })
 }
 
+function openPendingFindings(): void {
+  if (!reviewId.value || !pendingFindings.value.length) return
+  void router.push({
+    name: 'review-workbench',
+    params: { reviewId: reviewId.value },
+    query: {
+      runId: runId.value,
+      finding: pendingFindings.value[0].findingId,
+      panel: 'findings',
+    },
+  })
+}
+
 onMounted(load)
 </script>
 
@@ -213,9 +230,18 @@ onMounted(load)
         <p v-if="!canUseReport" class="review-result__disabled-reason" data-testid="review-report-disabled-reason">
           {{ reportActionReason }}
         </p>
-        <p v-else-if="reportReadyBeforeClosure" class="review-result__ready-note" data-testid="review-report-ready-note">
-          智慧審查已完成，報告現在即可查看與輸出。人工疑點判定、要求修正與案件結案屬後續處理，不會阻擋本次智慧審查報告。
-        </p>
+        <div v-else-if="reportReadyBeforeClosure" class="review-result__ready-note" data-testid="review-report-ready-note">
+          <p>智慧審查已完成，報告現在即可查看與輸出；但案件尚未完成。請逐筆進行人工疑點判定，再決定排除疑點、要求修正或完成審查。</p>
+          <button
+            v-if="pendingFindings.length"
+            type="button"
+            data-testid="result-open-pending-findings"
+            @click="openPendingFindings"
+          >
+            <WarningCircle :size="16" weight="bold" aria-hidden="true" />
+            處理待判定疑點（{{ pendingFindings.length }}）
+          </button>
+        </div>
         <div class="review-result__grid">
           <article class="review-result__card">
             <span>案件</span>
@@ -308,7 +334,10 @@ onMounted(load)
 .review-result__actions .review-result__download { border-color: var(--app-accent); color: #fff; background: var(--app-accent); }
 .review-result__actions .review-result__download:hover:not(:disabled) { color: #fff; background: var(--app-accent-deep); }
 .review-result__disabled-reason { margin: 14px 0 0; color: var(--app-muted); font-size: 12px; line-height: 1.6; }
-.review-result__ready-note { margin: 14px 0 0; padding: 10px 12px; border: 1px solid #c9ddcf; border-radius: 8px; color: #355c42; background: #f4faf6; font-size: 12px; line-height: 1.65; }
+.review-result__ready-note { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 14px 0 0; padding: 10px 12px; border: 1px solid #c9ddcf; border-radius: 8px; color: #355c42; background: #f4faf6; font-size: 12px; line-height: 1.65; }
+.review-result__ready-note p { margin: 0; }
+.review-result__ready-note button { display: inline-flex; min-height: 40px; flex: 0 0 auto; align-items: center; justify-content: center; gap: 7px; padding: 7px 11px; border: 1px solid var(--app-accent); border-radius: 8px; color: #fff; background: var(--app-accent); cursor: pointer; font: inherit; font-size: 12px; font-weight: 800; }
+.review-result__ready-note button:hover { background: var(--app-accent-deep); }
 .review-result__grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
 .review-result__card { display: grid; min-height: 104px; align-content: start; gap: 6px; padding: 14px; border: 1px solid var(--app-line); border-radius: 8px; background: #fbfcfe; }
 .review-result__card strong { color: var(--app-ink); font-size: 15px; overflow-wrap: anywhere; }
@@ -349,5 +378,6 @@ onMounted(load)
   .review-result__skipped-heading, .review-result__skipped li > div { flex-direction: column; }
   .review-result__report, .review-result__findings { padding: 14px; }
   .review-result__findings li > div { align-items: flex-start; flex-direction: column; }
+  .review-result__ready-note { align-items: stretch; flex-direction: column; }
 }
 </style>

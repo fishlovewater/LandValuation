@@ -9,6 +9,7 @@ const props = withDefaults(
   defineProps<{
     finding: ReviewFindingModel | null
     decision?: ReviewDecisionModel | null
+    documentName?: string | null
     canDecide?: boolean
     canTriage?: boolean
     readonlyReason?: string
@@ -16,6 +17,7 @@ const props = withDefaults(
   }>(),
   {
     decision: null,
+    documentName: null,
     canDecide: false,
     canTriage: false,
     readonlyReason: '目前案件狀態或疑點狀態不允許再次判定。',
@@ -68,6 +70,28 @@ function display(value: string | null): string {
   return value?.trim() ? value : '—'
 }
 
+// Reviewers need to know which document, version and page the compared value
+// came from before they can judge anything.
+const evidenceLocation = computed(() => {
+  const finding = props.finding
+  if (!finding) return '—'
+  const parts = [
+    props.documentName,
+    finding.documentVersion === null ? null : `第 ${finding.documentVersion} 版`,
+    finding.pageNumber === null ? null : `第 ${finding.pageNumber} 頁`,
+  ].filter((part): part is string => Boolean(part))
+  return parts.length ? parts.join(' · ') : '報告未標示出處'
+})
+
+// reported_value is the normalised value; reported_text is what the report
+// literally says. Keep both, because only the latter shows the wording.
+const reportedExcerpt = computed(() => {
+  const finding = props.finding
+  const excerpt = finding?.reportedText?.trim()
+  if (!excerpt) return ''
+  return excerpt === finding?.reportedValue?.trim() ? '' : excerpt
+})
+
 function save(): void {
   if (!props.finding || !props.canTriage || props.saving) return
   const trimmed = reason.value.trim()
@@ -108,6 +132,12 @@ function save(): void {
         <div class="finding-panel__fact">
           <span>對照欄位</span>
           <strong>{{ finding.fieldPathLabel }}</strong>
+          <small v-if="finding.fieldPath" data-testid="finding-field-path">{{ finding.fieldPath }}</small>
+        </div>
+        <div class="finding-panel__fact finding-panel__fact--wide">
+          <span>資料出處</span>
+          <strong data-testid="finding-evidence-location">{{ evidenceLocation }}</strong>
+          <small>{{ finding.findingTypeLabel }}｜此欄位的報告內容與系統值不一致</small>
         </div>
       </div>
       <section class="finding-panel__section" aria-labelledby="finding-values-title">
@@ -117,6 +147,9 @@ function save(): void {
             <span>報告值</span>
             <strong data-testid="report-value">{{ display(finding.reportedValue ?? finding.reportedText) }}</strong>
             <small>送審報告中的原始內容</small>
+            <p v-if="reportedExcerpt" class="finding-panel__excerpt" data-testid="report-excerpt">
+              報告原文：{{ reportedExcerpt }}
+            </p>
           </article>
           <article class="finding-panel__value-card finding-panel__value-card--system">
             <span>系統值</span>
@@ -297,6 +330,8 @@ function save(): void {
   overflow-wrap: anywhere;
 }
 
+.finding-panel__fact--wide { grid-column: 1 / -1; }
+.finding-panel__excerpt { margin: 2px 0 0; color: var(--app-ink-soft); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .finding-panel__value-card--system { border-color: #b9cee4; background: #f3f7fb; }
 .finding-panel__section { display: grid; gap: 10px; }
 .finding-panel__section h3 { margin: 0; font-size: 15px; }

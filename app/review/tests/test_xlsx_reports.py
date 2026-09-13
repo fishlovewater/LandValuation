@@ -72,7 +72,7 @@ def test_xlsx_has_required_sheets_and_no_macros(report_fixture):
     workbook = load_workbook(BytesIO(content), data_only=False)
     assert workbook.sheetnames == [
         "案件摘要",
-        "審查依據版本",
+        "審查文件",
         "疑點與修正要求",
         "新版重檢結果",
         "審查歷程",
@@ -80,19 +80,20 @@ def test_xlsx_has_required_sheets_and_no_macros(report_fixture):
     assert workbook.vba_archive is None
 
 
-def test_xlsx_contains_review_input_provenance(report_fixture):
+def test_xlsx_contains_review_documents_without_engineering_metadata(report_fixture):
     workbook = load_workbook(BytesIO(build_review_xlsx(report_fixture)))
     text = "\n".join(
         str(cell.value)
-        for row in workbook["審查依據版本"].iter_rows()
+        for row in workbook["審查文件"].iter_rows()
         for cell in row
         if cell.value is not None
     )
-    assert "外部案件" in text
-    assert "v2" in text
     assert "external-report-v2.pdf" in text
-    assert "a" * 64 in text
-    assert "b" * 64 in text
+    assert "原始估價報告" in text
+    assert "v2" in text
+    assert "SHA-256" not in text
+    assert "a" * 64 not in text
+    assert "b" * 64 not in text
 
 
 def test_xlsx_finding_rows_contain_evidence_not_formal_value(report_fixture):
@@ -118,7 +119,9 @@ def test_xlsx_reopens_and_contains_case_and_urgency(report_fixture):
     assert "內容風險等級" in summary_text
     assert "適用檢核規則總數" in summary_text
     assert "未執行不代表通過" in summary_text
-    assert "LAND_REGISTER_CROSSCHECK" in summary_text
+    assert "土地登記資料交叉檢核" in summary_text
+    assert "LAND_REGISTER_CROSSCHECK" not in summary_text
+    assert "LAND_REGISTER_AREA" not in summary_text
 
 
 def test_xlsx_recheck_sheet_lists_outcomes(report_fixture):
@@ -130,7 +133,7 @@ def test_xlsx_recheck_sheet_lists_outcomes(report_fixture):
         for cell in row
         if cell.value is not None
     ]
-    assert "RESOLVED" in values
+    assert "已解決" in values
 
 
 def test_xlsx_exposes_no_storage_internals(report_fixture):
@@ -146,3 +149,10 @@ def test_xlsx_exposes_no_storage_internals(report_fixture):
     assert "localhost" not in text
     assert "land-valuation" not in text
     assert "object_key" not in text
+    for hidden in [
+        "SHA-256", "內容指紋", "快照格式", "平台送審識別碼",
+        "RATE-001", "source_id", "document_id", "field_path",
+        "RATE_OUT_OF_RANGE", "PARTIALLY_ACCEPTED", "REVIEW_REQUIRED",
+        "a" * 64, "b" * 64,
+    ]:
+        assert hidden not in text

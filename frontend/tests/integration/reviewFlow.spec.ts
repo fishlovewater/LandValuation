@@ -321,23 +321,23 @@ describe('review demo flow', () => {
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
     await vi.waitFor(() => expect(wrapper.text()).toContain('NB-2026-OLD-INITIAL'))
 
-    await wrapper.get('[data-testid="review-sort"]').setValue('name:asc')
-    await vi.waitFor(() => expect(router.currentRoute.value.query.sortBy).toBe('name'))
+    await wrapper.get('[data-testid="review-sort"]').setValue('risk:desc')
+    await vi.waitFor(() => expect(router.currentRoute.value.query.sortBy).toBe('risk'))
     await vi.waitFor(() => expect(pendingQueueResponses).toHaveLength(1))
     expect(router.currentRoute.value.query).toMatchObject({
       status: 'REVIEW_REQUIRED',
       riskLevel: 'HIGH',
       statusGroup: 'in_progress',
-      sortBy: 'name',
-      sortDirection: 'asc',
+      sortBy: 'risk',
+      sortDirection: 'desc',
       pageSize: '20',
     })
     expect(pendingQueueResponses[0].config.params).toMatchObject({
       status: 'REVIEW_REQUIRED',
       risk_level: 'HIGH',
       status_group: 'in_progress',
-      sort_by: 'case_title',
-      sort_direction: 'asc',
+      sort_by: 'risk',
+      sort_direction: 'desc',
       limit: 20,
       offset: 0,
     })
@@ -537,7 +537,7 @@ describe('review demo flow', () => {
     wrapper.unmount()
   })
 
-  it('starts a received Review, opens the report immediately, then allows optional human finalization', async () => {
+  it('starts a received Review, stays in the workbench, and opens the first pending finding before report viewing', async () => {
     const requests: string[] = []
     const receivedDetail = {
       ...structuredClone(detailBase),
@@ -595,8 +595,8 @@ describe('review demo flow', () => {
             latest_validation_run_id: idsWithDetail.run,
           },
           runs: structuredClone(detailBase.runs),
-          findings: [],
-          risk_summary: null,
+          findings: structuredClone(detailBase.findings),
+          risk_summary: structuredClone(detailBase.risk_summary),
         }
         return response({
           outcome: 'COMPLETED',
@@ -629,6 +629,16 @@ describe('review demo flow', () => {
     await vi.waitFor(() => expect(wrapper.get('[data-testid="start-review"]').isVisible()).toBe(true))
 
     await wrapper.get('[data-testid="start-review"]').trigger('click')
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('review-workbench'))
+    await vi.waitFor(() => expect(wrapper.get('#review-finding-drawer').attributes('role')).toBe('dialog'))
+    expect(router.currentRoute.value.query).toMatchObject({
+      finding: idsWithDetail.finding,
+      panel: 'findings',
+    })
+    expect(wrapper.get('[data-testid="finding-panel"]').text()).toContain('調整率需要覆核')
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="open-review-result"]').attributes('disabled')).toBeUndefined())
+    expect(wrapper.find('[data-testid="generate-review-report"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="open-review-result"]').trigger('click')
     await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('review-result'))
     await vi.waitFor(() => expect(wrapper.get('[data-testid="review-report-ready-note"]').text()).toContain('報告現在即可查看與輸出'))
     expect(wrapper.get('[data-testid="review-report-coverage"]').text()).toContain('1 / 1 項已執行')
@@ -637,13 +647,6 @@ describe('review demo flow', () => {
       `post /review/workbench/cases/${idsWithDetail.review}/start`,
     ])
 
-    await wrapper.get('[data-testid="result-back-to-workbench"]').trigger('click')
-    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('review-workbench'))
-    expect(wrapper.get('[data-testid="finalize-review"]').attributes('disabled')).toBeUndefined()
-    await wrapper.get('[data-testid="finalize-review"]').trigger('click')
-    await wrapper.get('[data-confirm]').trigger('click')
-    await vi.waitFor(() => expect(requests).toContain(`post /review/cases/${idsWithDetail.review}/complete-review`))
-    await vi.waitFor(() => expect(wrapper.text()).toContain('已完成審查'))
     wrapper.unmount()
   })
 
@@ -1376,6 +1379,14 @@ describe('review demo flow', () => {
     }
     expect(wrapper.get('[data-testid="download-review-report"]').attributes('disabled')).toBeDefined()
     expect(wrapper.text()).not.toContain('REVIEW_REPORT_NOT_AVAILABLE')
+
+    await wrapper.get('[data-testid="result-open-pending-findings"]').trigger('click')
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('review-workbench'))
+    expect(router.currentRoute.value.query).toMatchObject({
+      finding: idsWithDetail.finding,
+      panel: 'findings',
+    })
+    await vi.waitFor(() => expect(wrapper.get('#review-finding-drawer').attributes('role')).toBe('dialog'))
     wrapper.unmount()
   })
 

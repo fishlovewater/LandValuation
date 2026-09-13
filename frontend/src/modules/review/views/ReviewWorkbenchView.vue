@@ -24,7 +24,6 @@ import { reviewApi, safeReviewErrorMessage } from '../review.api'
 import {
   correctionStatusLabel,
   fieldPathLabel,
-  latestGeneratedReport,
   latestRunId as latestRunIdForDetail,
   mapWorkbenchDetail,
   missingItemStatusLabel,
@@ -37,7 +36,6 @@ import {
 } from '../review.status'
 import type {
   FindingTriageDecision,
-  GeneratedReportDto,
   ReviewDetailModel,
   ReviewFindingModel,
 } from '../review.types'
@@ -54,7 +52,6 @@ const mutating = ref(false)
 const error = ref('')
 const actionError = ref('')
 const selectedFindingId = ref('')
-const generatedReport = ref<GeneratedReportDto | null>(null)
 const drawer = ref<DrawerName>(null)
 const confirmation = ref<ConfirmationName>(null)
 const correctionOpen = ref(false)
@@ -87,6 +84,13 @@ const selectedDocument = computed(() => {
   const documentId = selectedFinding.value?.documentId
   return detail.value ? selectEvidenceDocument(detail.value.documents, documentId) : null
 })
+// Only name the document the finding is actually bound to; the evidence viewer
+// may fall back to another file, which must not be presented as the source.
+const selectedFindingDocumentName = computed(() => {
+  const documentId = selectedFinding.value?.documentId
+  if (!documentId) return null
+  return detail.value?.documents.find((document) => document.documentId === documentId)?.filename ?? null
+})
 const selectedDecision = computed(() => {
   const findingId = selectedFinding.value?.findingId
   return detail.value?.decisions.find((decision) => decision.findingId === findingId) ?? null
@@ -102,9 +106,6 @@ const latestRun = computed(() => {
 })
 const unresolvedCount = computed(() => detail.value?.unresolvedFindingCount ?? 0)
 const hasUnsavedChanges = computed(() => findingDirty.value || externalIntakeDirty.value)
-const latestReport = computed(
-  () => generatedReport.value ?? detail.value?.reportDocument ?? (detail.value ? latestGeneratedReport(detail.value.generatedReports) : null),
-)
 const latestCorrection = computed(() => {
   const requests = detail.value?.correctionRequests ?? []
   return requests.reduce<typeof requests[number] | null>(
@@ -589,7 +590,7 @@ async function startReview(): Promise<void> {
       throw new Error('review start did not return a completed run')
     }
     await refreshAfterMutation()
-    openResult()
+    if (detail.value?.findings.some((finding) => finding.statusCode === 'OPEN')) openFindings()
   } catch (caught: unknown) {
     actionError.value = safeReviewErrorMessage(caught)
   } finally {
@@ -606,21 +607,6 @@ async function confirmAction(): Promise<void> {
   actionError.value = ''
   try {
     await reviewApi.completeReview(reviewId.value, { reason: '依審查工作台確認結果完成審查。' })
-    await refreshAfterMutation()
-  } catch (caught: unknown) {
-    actionError.value = safeReviewErrorMessage(caught)
-  } finally {
-    mutating.value = false
-  }
-}
-
-async function generateReport(): Promise<void> {
-  const runId = latestRunIdForDetail(detail.value)
-  if (!runId || !canGenerateReport.value || mutating.value) return
-  mutating.value = true
-  actionError.value = ''
-  try {
-    generatedReport.value = await reviewApi.generateReportPdf(runId)
     await refreshAfterMutation()
   } catch (caught: unknown) {
     actionError.value = safeReviewErrorMessage(caught)
@@ -657,6 +643,15 @@ function selectFinding(findingId: string): void {
 function openResult(): void {
   if (!reviewId.value) return
   void router.push({ name: 'review-result', params: { reviewId: reviewId.value }, query: { runId: latestRun.value?.validationRunId ?? '' } })
+}
+
+function openFindings(): void {
+  const pending = detail.value?.findings.find((finding) => finding.statusCode === 'OPEN')
+    ?? detail.value?.findings[0]
+  if (!pending) return
+  selectedFindingId.value = pending.findingId
+  void router.replace({ query: { ...route.query, finding: pending.findingId, panel: 'findings' } })
+  if (drawer.value !== 'right') openDrawer('right')
 }
 
 function backToQueue(): void {
@@ -733,15 +728,15 @@ watch(reviewId, () => {
   findingDirty.value = false
   externalIntakeDirty.value = false
   selectedFindingId.value = ''
-  generatedReport.value = null
   void loadDetail()
 })
 
-onMounted(() => {
+onMounted(async () => {
   window.addEventListener('beforeunload', handleBeforeUnload)
   const finding = stringQuery('finding')
   if (finding) selectedFindingId.value = finding
-  void loadDetail()
+  await loadDetail()
+  if (route.query.panel === 'findings' && detail.value?.findings.length) openFindings()
 })
 
 onBeforeUnmount(() => {
@@ -873,7 +868,6 @@ onBeforeRouteUpdate((to) => {
         <ReviewActionBar
           :can-decide="canDecide"
           :can-finalize="canFinalize"
-          :can-execute="canExecute"
           :can-generate-report="canGenerateReport"
           :can-request-correction="canRequestCorrection"
           :can-send-correction="canSendCorrection"
@@ -885,7 +879,6 @@ onBeforeRouteUpdate((to) => {
           :total-finding-count="detail.findings.length"
           :unresolved-finding-count="unresolvedCount"
           :latest-run-id="latestRun?.validationRunId"
-          :report-document="latestReport"
           :report-action-reason="reportActionReason"
           :finalize-action-reason="finalizeActionReason"
           :busy="mutating"
@@ -893,7 +886,7 @@ onBeforeRouteUpdate((to) => {
           @correction-request="askCorrection"
           @send-correction="sendExistingCorrection"
           @recheck-correction="recheckCorrection"
-          @generate-report="generateReport"
+          @open-findings="openFindings"
           @open-result="openResult"
         />
         <p v-if="error || actionError" class="review-workbench__error" role="alert">{{ error || actionError }}</p>
@@ -1138,6 +1131,7 @@ onBeforeRouteUpdate((to) => {
                 :key="`${selectedFindingId}:${draftResetKey}`"
                 :finding="selectedFinding"
                 :decision="selectedDecision"
+                :document-name="selectedFindingDocumentName"
                 :can-decide="canDecide"
                 :can-triage="canTriage"
                 :readonly-reason="triageReadonlyReason"
@@ -1165,6 +1159,7 @@ onBeforeRouteUpdate((to) => {
     <GlassModal
       :open="correctionOpen"
       id="review-correction-request"
+      class="review-workbench__modal"
       :title="isPlatformCase ? '要求估價端修正' : '建立外部修正通知'"
       initial-focus="#review-correction-message"
       @close="correctionOpen = false"
@@ -1198,6 +1193,7 @@ onBeforeRouteUpdate((to) => {
     <GlassModal
       :open="supplementOpen"
       id="review-supplement-request"
+      class="review-workbench__modal"
       :title="isPlatformCase ? '要求估價端補件' : '建立外部補件要求'"
       initial-focus="#review-supplement-due-at"
       @close="supplementOpen = false"
@@ -1305,7 +1301,13 @@ onBeforeRouteUpdate((to) => {
 .review-workbench__correction ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
 .review-workbench__correction li { display: grid; gap: 3px; padding: 9px 10px; border-radius: 8px; background: rgba(255,255,255,.72); color: var(--app-ink-soft); font-size: 11px; }
 .review-workbench__correction li strong { color: var(--app-ink); }
-.review-workbench__correction-form { display: grid; gap: 14px; min-width: min(620px, 72vw); }
+/* GlassModal panels default to width: min(420px, 100%), which leaves a 368px
+   content box.  The correction and supplement forms need roughly 620px, so the
+   panel itself has to be widened here.  Sizing the form with min-width instead
+   makes it overflow the panel, because .lg-modal__panel neither clips nor
+   scrolls its content. */
+:deep(.review-workbench__modal.lg-modal__panel) { width: min(680px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow: auto; overscroll-behavior: contain; }
+.review-workbench__correction-form { display: grid; width: 100%; min-width: 0; gap: 14px; }
 .review-workbench__correction-form > p { margin: 0; color: var(--app-muted); font-size: 12px; line-height: 1.7; }
 .review-workbench__correction-form label { display: grid; gap: 6px; color: var(--app-ink-soft); font-size: 12px; font-weight: 800; }
 .review-workbench__correction-form textarea,
@@ -1323,15 +1325,18 @@ onBeforeRouteUpdate((to) => {
 .review-workbench__right { display: none; }
 .review-workbench__left--open { position: fixed; z-index: 50; inset: 16px auto 16px 16px; display: grid; width: min(360px, calc(100vw - 32px)); max-height: none; gap: 16px; overflow: auto; padding: 18px; border: 1px solid var(--app-line); border-radius: var(--app-radius-md); background: #f7f8fb; box-shadow: 0 18px 50px rgba(33, 48, 74, .22); }
 .review-workbench__center { min-width: 0; width: 100%; }
-.review-workbench__right--open { position: fixed; z-index: 50; inset: 16px 16px 16px auto; display: grid; align-content: start; width: min(460px, calc(100vw - 32px)); max-height: none; gap: 10px; overflow: auto; padding: 18px; border: 1px solid var(--app-line); border-radius: var(--app-radius-md); background: #fff; box-shadow: 0 18px 50px rgba(33, 48, 74, .22); }
-.review-workbench__finding-frame { padding: 0; overflow: hidden; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #fff; }
-.review-workbench__finding-queue { display: grid; gap: 9px; margin-bottom: 10px; padding: 12px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #f8fafc; }
-.review-workbench__finding-queue-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.review-workbench__right--open { position: fixed; z-index: 50; inset: 16px 16px 16px auto; display: flex; flex-direction: column; width: min(460px, calc(100vw - 32px)); min-height: 0; max-height: none; gap: 10px; overflow: hidden; padding: 18px; border: 1px solid var(--app-line); border-radius: var(--app-radius-md); background: #fff; box-shadow: 0 18px 50px rgba(33, 48, 74, .22); }
+/* The finding detail is the drawer's scroll area. Without flex: 1 1 auto plus
+   min-height: 0 the frame stretches to the remaining space and clips the
+   審查結論 form, leaving the triage controls unreachable. */
+.review-workbench__finding-frame { flex: 1 1 auto; min-height: 0; padding: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #fff; }
+.review-workbench__finding-queue { display: grid; flex: 0 0 auto; gap: 9px; padding: 12px; border: 1px solid var(--app-line); border-radius: var(--app-radius-sm); background: #f8fafc; }
+.review-workbench__finding-queue-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding-right: 38px; }
 .review-workbench__finding-queue-heading > div { display: grid; gap: 2px; }
 .review-workbench__finding-queue-heading span { color: var(--app-accent-deep); font-size: 9px; font-weight: 900; letter-spacing: .12em; }
 .review-workbench__finding-queue-heading strong { color: var(--app-ink); font-size: 13px; }
 .review-workbench__finding-queue-heading small { color: var(--app-muted); font-size: 10px; }
-.review-workbench__finding-tabs { display: grid; gap: 6px; max-height: 188px; overflow: auto; }
+.review-workbench__finding-tabs { display: grid; gap: 6px; max-height: min(188px, 26vh); overflow: auto; overscroll-behavior: contain; }
 .review-workbench__finding-tabs button { display: grid; gap: 3px; width: 100%; padding: 8px 9px; border: 1px solid transparent; border-radius: 8px; color: var(--app-ink-soft); background: #fff; cursor: pointer; text-align: left; }
 .review-workbench__finding-tabs button:hover,
 .review-workbench__finding-tabs button.is-selected { border-color: rgba(200, 91, 67, .24); color: var(--app-accent-deep); background: var(--app-accent-soft); }

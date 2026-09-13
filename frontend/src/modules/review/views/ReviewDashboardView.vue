@@ -2,16 +2,21 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
+  PhCalendarBlank as CalendarBlank,
   PhCaretRight as CaretRight,
+  PhClockCountdown as ClockCountdown,
+  PhCalculator as Calculator,
+  PhEye as Eye,
+  PhFileText as FileText,
   PhFunnelSimple as FunnelSimple,
   PhMagnifyingGlass as MagnifyingGlass,
   PhPlus as Plus,
+  PhWarningCircle as WarningCircle,
   PhX as X,
 } from '@phosphor-icons/vue'
 import ErrorState from '../../../components/common/ErrorState.vue'
 import GlassModal from '../../../components/glass/GlassModal.vue'
 import LoadingSkeleton from '../../../components/common/LoadingSkeleton.vue'
-import PageHeader from '../../../components/common/PageHeader.vue'
 import { formatDateZhTw } from '../../../utils/formatters'
 import { NEW_TAIPEI_DISTRICTS, newTaipeiDistrictName } from '../../valuation/newTaipei'
 import { reviewApi, safeReviewErrorMessage } from '../review.api'
@@ -74,12 +79,15 @@ const sortValue = computed(() => `${sortBy.value}:${sortDirection.value}`)
 const districtFilterValue = computed(() => canonicalDistrictFilter(stringQuery('district', '')))
 
 const quickFilters = computed(() => [
-  { key: '', label: '全部', count: summaryTotal.value, testId: 'kpi-all' },
+  { key: '', label: '全部案件', count: summaryTotal.value, testId: 'kpi-all' },
   { key: 'pending', label: '待處理', count: summary.value?.statusCounts.pending ?? 0, testId: 'kpi-pending' },
   { key: 'in_progress', label: '審查中', count: summary.value?.statusCounts.in_progress ?? 0, testId: 'kpi-in-progress' },
   { key: 'needs_input', label: '待補正', count: summary.value?.statusCounts.needs_input ?? 0, testId: 'kpi-needs-input' },
   { key: 'completed', label: '已完成', count: summary.value?.statusCounts.completed ?? 0, testId: 'kpi-completed' },
 ])
+const workSummaryFilters = computed(() => quickFilters.value.filter((item) =>
+  ['pending', 'in_progress', 'needs_input'].includes(item.key),
+))
 
 const activeFilters = computed(() => {
   const items: Array<{ key: string; label: string }> = []
@@ -317,6 +325,30 @@ function riskTone(row: ReviewQueueItemModel): string {
   return 'is-neutral'
 }
 
+function reviewProgress(row: ReviewQueueItemModel): { value: number; label: string } {
+  const status = row.reviewStatusCode.toUpperCase()
+  if (['REVIEW_COMPLETED', 'COMPLETED', 'APPROVED'].includes(status)) return { value: 100, label: '審查完成' }
+  if (['RETURNED_FOR_REVISION', 'SUPPLEMENT_REQUIRED'].includes(status)) return { value: 80, label: '等待補正' }
+  if (['REVIEW_REQUIRED', 'EXPERT_REVIEW'].includes(status)) return { value: 70, label: '人工判定' }
+  if (status === 'ANALYZING') return { value: 55, label: '智慧分析' }
+  if (status === 'READY_FOR_REVIEW') return { value: 40, label: '待開始審查' }
+  if (status === 'PREPROCESSING') return { value: 25, label: '文件前處理' }
+  return { value: 15, label: status === 'PENDING_MATERIALS' ? '等待資料' : '案件收件' }
+}
+
+function reviewNextDetail(row: ReviewQueueItemModel): string {
+  if (row.missingItemCount > 0) return `尚有 ${row.missingItemCount} 項資料待補，完成後再接續審查。`
+  if (row.highCount > 0) return `有 ${row.highCount} 項高風險疑點，建議優先判定。`
+  if (['REVIEW_COMPLETED', 'COMPLETED', 'APPROVED'].includes(row.reviewStatusCode.toUpperCase())) {
+    return '案件審查已完成，可查看審查結果與輸出文件。'
+  }
+  return '接續目前審查進度，確認文件、疑點與判定結果。'
+}
+
+function reviewActionLabel(row: ReviewQueueItemModel): string {
+  return ['REVIEW_COMPLETED', 'COMPLETED', 'APPROVED'].includes(row.reviewStatusCode.toUpperCase()) ? '查看' : '審查'
+}
+
 watch(
   () => route.query.q,
   (value) => {
@@ -334,29 +366,49 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="review-dashboard" data-testid="review-dashboard">
-    <PageHeader
-      eyebrow="案件審查"
-      title="審查案件"
-      description="集中查看平台送審與外部案件，依目前階段、風險與期限接續審查工作。"
-    >
-      <template #actions>
-        <button
-          class="review-dashboard__create"
-          type="button"
-          data-testid="create-review-case"
-          @click="openCreateCase"
-        >
-          <Plus :size="17" weight="bold" aria-hidden="true" />
-          建立外部案件
-        </button>
-      </template>
-    </PageHeader>
+    <header class="review-dashboard__header">
+      <div class="review-dashboard__intro">
+        <p class="review-dashboard__eyebrow">案件審查</p>
+        <h1>審查案件</h1>
+        <p>從目前工作狀態找到下一個要處理的案件，集中確認文件、風險與審查期限。</p>
+      </div>
+      <button
+        class="review-dashboard__create"
+        type="button"
+        data-testid="create-review-case"
+        @click="openCreateCase"
+      >
+        <Plus :size="17" weight="bold" aria-hidden="true" />
+        建立外部案件
+      </button>
+    </header>
 
     <div v-if="loading && !summary" class="review-dashboard__loading">
       <LoadingSkeleton :rows="5" label="審查案件載入中" />
     </div>
     <ErrorState v-else-if="error && !summary" :message="error" @retry="loadData" />
     <template v-else>
+      <section class="review-dashboard__summary" aria-label="審查工作摘要">
+        <button
+          v-for="item in workSummaryFilters"
+          :key="item.key"
+          :data-testid="item.testId"
+          :class="{ 'is-active': stringQuery('statusGroup', '') === item.key && !stringQuery('status', '') }"
+          type="button"
+          @click="applyQuickFilter(item.key)"
+        >
+          <span class="review-dashboard__summary-icon" :data-tone="item.key">
+            <FileText v-if="item.key === 'pending'" :size="22" weight="duotone" aria-hidden="true" />
+            <ClockCountdown v-else-if="item.key === 'in_progress'" :size="22" weight="duotone" aria-hidden="true" />
+            <WarningCircle v-else :size="22" weight="duotone" aria-hidden="true" />
+          </span>
+          <span class="review-dashboard__summary-copy">
+            <small>{{ item.label }}</small>
+            <strong>{{ item.count }}</strong>
+          </span>
+        </button>
+      </section>
+
       <section class="review-dashboard__controls" aria-label="案件搜尋與篩選">
         <div class="review-dashboard__control-row">
           <form class="review-dashboard__search" role="search" @submit.prevent="submitSearch">
@@ -370,6 +422,19 @@ onBeforeUnmount(() => {
             >
             <button type="submit">搜尋</button>
           </form>
+
+          <label class="review-dashboard__scope">
+            <span>工作狀態</span>
+            <select
+              data-testid="review-status-group"
+              :value="stringQuery('statusGroup', '')"
+              @change="applyQuickFilter(($event.target as HTMLSelectElement).value)"
+            >
+              <option v-for="item in quickFilters" :key="item.key || 'all'" :value="item.key">
+                {{ item.label }}（{{ item.count }}）
+              </option>
+            </select>
+          </label>
 
           <button
             class="review-dashboard__filter-toggle"
@@ -390,25 +455,10 @@ onBeforeUnmount(() => {
             <select data-testid="review-sort" :value="sortValue" @change="changeSort(($event.target as HTMLSelectElement).value)">
               <option value="updatedAt:desc">最近收件</option>
               <option value="dueAt:asc">最早到期</option>
-              <option value="risk:desc">風險最高</option>
-              <option value="caseNo:asc">案件編號</option>
-              <option value="name:asc">案件名稱</option>
+              <option value="risk:desc">風險優先</option>
             </select>
           </label>
-        </div>
-
-        <div class="review-dashboard__quick-filters" aria-label="快速案件篩選">
-          <button
-            v-for="item in quickFilters"
-            :key="item.key || 'all'"
-            :data-testid="item.testId"
-            :class="{ 'is-active': stringQuery('statusGroup', '') === item.key && !stringQuery('status', '') }"
-            type="button"
-            @click="applyQuickFilter(item.key)"
-          >
-            <span>{{ item.label }}</span>
-            <strong>{{ item.count }}</strong>
-          </button>
+          <span class="review-dashboard__result-count">共 {{ total }} 件</span>
         </div>
 
         <div
@@ -509,7 +559,6 @@ onBeforeUnmount(() => {
         <div class="review-dashboard__queue-heading">
           <div>
             <h2 id="review-queue-title">案件列表</h2>
-            <span>共 {{ total }} 件</span>
           </div>
           <button type="button" data-testid="refresh-review-queue" @click="loadData">
             {{ loading ? '更新中…' : '重新整理' }}
@@ -535,29 +584,48 @@ onBeforeUnmount(() => {
           >
             <div class="review-dashboard__case-main">
               <div class="review-dashboard__case-title">
-                <strong>{{ row.caseNo }}</strong>
-                <span>{{ row.name }}</span>
+                <div>
+                  <strong>{{ row.name }}</strong>
+                  <span>{{ row.caseNo }}</span>
+                </div>
+                <span class="review-dashboard__status">{{ row.reviewStatusLabel }}</span>
               </div>
               <div class="review-dashboard__badges">
                 <span class="review-dashboard__source" :data-source="row.caseSourceCode">{{ row.caseSourceLabel }}</span>
-                <span class="review-dashboard__status">{{ row.reviewStatusLabel }}</span>
                 <span class="review-dashboard__risk" :class="riskTone(row)">{{ row.riskLevelLabel }}</span>
               </div>
+              <p class="review-dashboard__next">
+                <FileText :size="15" weight="duotone" aria-hidden="true" />
+                {{ reviewNextDetail(row) }}
+              </p>
               <div class="review-dashboard__case-meta">
                 <span>{{ row.district || '行政區未設定' }}</span>
                 <span>疑點 {{ totalFindingCount(row) }}</span>
                 <span v-if="row.missingItemCount">缺件 {{ row.missingItemCount }}</span>
                 <span v-if="row.assignedReviewerName">承辦：{{ row.assignedReviewerName }}</span>
               </div>
+              <div class="review-dashboard__progress" :data-tone="riskTone(row)">
+                <div>
+                  <span>案件進度</span>
+                  <strong>{{ reviewProgress(row).value }}% · {{ reviewProgress(row).label }}</strong>
+                </div>
+                <span class="review-dashboard__progress-track" role="progressbar" :aria-label="`${row.name}審查進度`" :aria-valuenow="reviewProgress(row).value" aria-valuemin="0" aria-valuemax="100">
+                  <span :style="{ width: `${reviewProgress(row).value}%` }"></span>
+                </span>
+              </div>
             </div>
 
             <div class="review-dashboard__case-side">
               <div class="review-dashboard__deadline">
-                <strong>{{ row.urgencyLabel }}</strong>
-                <span>{{ row.dueAt ? `期限 ${formatDateZhTw(row.dueAt)}` : '未設定期限' }}</span>
+                <strong><CalendarBlank :size="15" weight="duotone" aria-hidden="true" />{{ row.dueAt ? `${formatDateZhTw(row.dueAt)} 到期` : '未設定期限' }}</strong>
+                <span>{{ row.urgencyLabel }} · 收件 {{ formatDateZhTw(row.receivedAt) }}</span>
               </div>
-              <small>收件 {{ formatDateZhTw(row.receivedAt) }}</small>
             </div>
+            <button class="review-dashboard__case-action" type="button" @click.stop="openCase(row)">
+              <Calculator v-if="reviewActionLabel(row) === '審查'" :size="17" weight="duotone" aria-hidden="true" />
+              <Eye v-else :size="17" weight="duotone" aria-hidden="true" />
+              {{ reviewActionLabel(row) }}
+            </button>
             <CaretRight class="review-dashboard__case-caret" :size="20" weight="bold" aria-hidden="true" />
           </article>
         </div>
@@ -641,7 +709,49 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .review-dashboard {
-  padding: 0 28px 34px;
+  display: grid;
+  gap: 16px;
+  padding: 28px 30px 36px;
+}
+
+.review-dashboard__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #e1e7ee;
+}
+
+.review-dashboard__intro {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.review-dashboard__eyebrow {
+  margin: 0;
+  color: var(--app-primary-deep);
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: .08em;
+}
+
+.review-dashboard__intro h1 {
+  margin: 0;
+  color: var(--app-ink);
+  font-family: var(--app-font-display);
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -.035em;
+}
+
+.review-dashboard__intro > p:last-child {
+  max-width: 720px;
+  margin: 0;
+  color: #687b8f;
+  font-size: 12px;
+  line-height: 1.65;
 }
 
 .review-dashboard__create {
@@ -650,10 +760,10 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 7px;
   padding: 8px 14px;
-  border: 1px solid var(--app-accent);
-  border-radius: 8px;
+  border: 1px solid #2d659b;
+  border-radius: 9px;
   color: #fff;
-  background: var(--app-accent);
+  background: #2d659b;
   font-size: 12px;
   font-weight: 900;
 }
@@ -664,7 +774,51 @@ onBeforeUnmount(() => {
 }
 
 .review-dashboard__create:not(:disabled) { cursor: pointer; }
-.review-dashboard__create:not(:disabled):hover { background: var(--app-accent-deep); }
+.review-dashboard__create:not(:disabled):hover { border-color: #214f7d; background: #214f7d; }
+
+.review-dashboard__summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.review-dashboard__summary > button {
+  display: flex;
+  min-height: 92px;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid #dce4ed;
+  border-radius: 12px;
+  color: inherit;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+}
+
+.review-dashboard__summary > button:hover,
+.review-dashboard__summary > button.is-active {
+  border-color: #9db6ce;
+  background: #fbfdff;
+  box-shadow: 0 0 0 2px rgba(45, 101, 155, .06);
+}
+
+.review-dashboard__summary-icon {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  place-items: center;
+  border-radius: 12px;
+  color: #2e5984;
+  background: #edf4fb;
+}
+
+.review-dashboard__summary-icon[data-tone='in_progress'] { color: #9a5c17; background: #fff2de; }
+.review-dashboard__summary-icon[data-tone='needs_input'] { color: #9a4638; background: #fff0ed; }
+.review-dashboard__summary-copy { display: grid; gap: 3px; }
+.review-dashboard__summary-copy small { color: #6d7e90; font-size: 11px; font-weight: 800; }
+.review-dashboard__summary-copy strong { color: var(--app-ink); font-size: 26px; line-height: 1; }
 
 .review-external-create { display: grid; gap: 16px; }
 .review-external-create__notice { padding: 13px 14px; border: 1px solid #ead8b1; border-radius: 10px; color: #72531f; background: #fff8e8; }
@@ -693,13 +847,16 @@ onBeforeUnmount(() => {
 .review-dashboard__controls {
   display: grid;
   gap: 12px;
-  padding: 16px 0 18px;
-  border-bottom: 1px solid var(--app-line);
+  padding: 14px 16px;
+  border: 1px solid #dce4ed;
+  border-bottom-color: #e4e9ef;
+  border-radius: 11px 11px 0 0;
+  background: #fafbfd;
 }
 
 .review-dashboard__control-row {
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) auto auto;
+  grid-template-columns: minmax(280px, 1fr) minmax(150px, 180px) auto minmax(130px, 160px) auto;
   align-items: end;
   gap: 10px;
 }
@@ -710,15 +867,15 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   padding-left: 12px;
-  border: 1px solid var(--app-line);
+  border: 1px solid #d4dee8;
   border-radius: 9px;
   color: var(--app-muted);
   background: #fff;
 }
 
 .review-dashboard__search:focus-within {
-  border-color: var(--app-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--app-accent) 12%, transparent);
+  border-color: #2d659b;
+  box-shadow: 0 0 0 3px rgba(45, 101, 155, .1);
 }
 
 .review-dashboard__search input {
@@ -752,8 +909,8 @@ onBeforeUnmount(() => {
   margin-right: 4px;
   padding-inline: 12px;
   border-color: transparent;
-  color: var(--app-accent-deep);
-  background: var(--app-accent-soft);
+  color: #244d73;
+  background: #edf4fb;
 }
 
 .review-dashboard__filter-toggle {
@@ -764,9 +921,9 @@ onBeforeUnmount(() => {
 }
 
 .review-dashboard__filter-toggle.is-active {
-  border-color: color-mix(in srgb, var(--app-accent) 42%, var(--app-line));
-  color: var(--app-accent-deep);
-  background: var(--app-accent-soft);
+  border-color: #9db6ce;
+  color: #244d73;
+  background: #edf4fb;
 }
 
 .review-dashboard__filter-toggle > span {
@@ -776,15 +933,17 @@ onBeforeUnmount(() => {
   place-items: center;
   border-radius: 999px;
   color: #fff;
-  background: var(--app-accent);
+  background: #2d659b;
   font-size: 10px;
 }
 
+.review-dashboard__scope,
 .review-dashboard__sort {
   display: grid;
   gap: 5px;
 }
 
+.review-dashboard__scope > span,
 .review-dashboard__sort > span,
 .review-dashboard__advanced-filters label > span {
   color: var(--app-muted);
@@ -792,6 +951,7 @@ onBeforeUnmount(() => {
   font-weight: 800;
 }
 
+.review-dashboard__scope select,
 .review-dashboard__sort select,
 .review-dashboard__advanced-filters select,
 .review-dashboard__advanced-filters input {
@@ -805,40 +965,12 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-.review-dashboard__quick-filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.review-dashboard__quick-filters button {
-  display: inline-flex;
-  min-height: 34px;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 10px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  color: var(--app-ink-soft);
-  background: #f5f7fa;
-  cursor: pointer;
+.review-dashboard__result-count {
+  align-self: center;
+  color: #718094;
   font-size: 11px;
   font-weight: 800;
-}
-
-.review-dashboard__quick-filters button strong {
-  color: var(--app-muted);
-  font-size: 10px;
-}
-
-.review-dashboard__quick-filters button.is-active {
-  border-color: color-mix(in srgb, var(--app-accent) 28%, transparent);
-  color: var(--app-accent-deep);
-  background: var(--app-accent-soft);
-}
-
-.review-dashboard__quick-filters button.is-active strong {
-  color: var(--app-accent-deep);
+  white-space: nowrap;
 }
 
 .review-dashboard__advanced-filters {
@@ -911,7 +1043,12 @@ onBeforeUnmount(() => {
 }
 
 .review-dashboard__queue {
-  padding-top: 18px;
+  overflow: hidden;
+  margin-top: -16px;
+  border: 1px solid #dce4ed;
+  border-top: 0;
+  border-radius: 0 0 11px 11px;
+  background: #fff;
 }
 
 .review-dashboard__queue-heading {
@@ -919,7 +1056,10 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  margin-bottom: 8px;
+  min-height: 52px;
+  margin: 0;
+  padding: 8px 16px;
+  border-bottom: 1px solid #e4e9ef;
 }
 
 .review-dashboard__queue-heading > div {
@@ -932,7 +1072,7 @@ onBeforeUnmount(() => {
   margin: 0;
   color: var(--app-ink);
   font-family: var(--app-font-display);
-  font-size: 20px;
+  font-size: 15px;
   font-weight: 650;
 }
 
@@ -948,18 +1088,18 @@ onBeforeUnmount(() => {
 }
 
 .review-dashboard__list {
-  border-top: 1px solid var(--app-line);
+  display: grid;
 }
 
 .review-dashboard__case {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(170px, auto) 28px;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, auto) auto 18px;
   align-items: center;
   gap: 20px;
-  min-height: 116px;
-  padding: 17px 12px;
-  border-bottom: 1px solid var(--app-line);
+  min-height: 108px;
+  padding: 12px 20px;
+  border-bottom: 1px solid #e9edf2;
   background: #fff;
   cursor: pointer;
   transition: background 120ms ease, transform 120ms ease;
@@ -978,28 +1118,34 @@ onBeforeUnmount(() => {
 .review-dashboard__case-main {
   display: grid;
   min-width: 0;
-  gap: 8px;
+  gap: 5px;
 }
 
 .review-dashboard__case-title {
   display: flex;
   min-width: 0;
-  align-items: baseline;
-  gap: 10px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 9px 12px;
+}
+
+.review-dashboard__case-title > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
 }
 
 .review-dashboard__case-title strong {
-  flex: 0 0 auto;
   color: var(--app-ink);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 900;
 }
 
-.review-dashboard__case-title span {
+.review-dashboard__case-title > div > span {
   overflow: hidden;
-  color: var(--app-ink-soft);
-  font-size: 14px;
-  font-weight: 700;
+  color: #73849a;
+  font-size: 10px;
+  font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1013,7 +1159,7 @@ onBeforeUnmount(() => {
 }
 
 .review-dashboard__badges > span {
-  padding: 4px 7px;
+  padding: 3px 7px;
   border-radius: 999px;
   font-size: 9px;
   font-weight: 900;
@@ -1030,8 +1176,16 @@ onBeforeUnmount(() => {
 }
 
 .review-dashboard__status {
+  padding: 5px 8px;
+  border-radius: 999px;
   color: var(--app-ink-soft);
   background: #f1f3f6;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.review-dashboard__next {
+  display: none;
 }
 
 .review-dashboard__risk.is-high {
@@ -1066,9 +1220,31 @@ onBeforeUnmount(() => {
   color: #bdc4cc;
 }
 
+.review-dashboard__progress {
+  display: grid;
+  gap: 3px;
+}
+
+.review-dashboard__progress > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #65778a;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.review-dashboard__progress > div strong { color: #294d70; }
+.review-dashboard__progress-track { display: block; height: 6px; overflow: hidden; border-radius: 999px; background: #e8edf3; }
+.review-dashboard__progress-track > span { display: block; height: 100%; border-radius: inherit; background: #8ba1b7; }
+.review-dashboard__progress[data-tone='is-high'] .review-dashboard__progress-track > span { background: #c66b5f; }
+.review-dashboard__progress[data-tone='is-medium'] .review-dashboard__progress-track > span { background: #c79645; }
+.review-dashboard__progress[data-tone='is-low'] .review-dashboard__progress-track > span { background: #67927a; }
+
 .review-dashboard__case-side {
   display: grid;
-  gap: 7px;
+  gap: 4px;
   justify-items: end;
   text-align: right;
 }
@@ -1079,6 +1255,9 @@ onBeforeUnmount(() => {
 }
 
 .review-dashboard__deadline strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--app-ink-soft);
   font-size: 11px;
 }
@@ -1092,6 +1271,24 @@ onBeforeUnmount(() => {
 .review-dashboard__case-caret {
   color: #b6bec8;
 }
+
+.review-dashboard__case-action {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 14px;
+  border: 1px solid #2e5984;
+  border-radius: 9px;
+  color: #fff;
+  background: #2e5984;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.review-dashboard__case-action:hover { border-color: #214f7d; background: #214f7d; }
 
 .review-dashboard__empty {
   display: grid;
@@ -1131,12 +1328,28 @@ onBeforeUnmount(() => {
   .review-dashboard__advanced-filters {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .review-dashboard__case {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+
+  .review-dashboard__case-side {
+    grid-column: 1;
+    justify-items: start;
+    text-align: left;
+  }
+
+  .review-dashboard__case-action { grid-column: 2; grid-row: 1 / span 2; }
+  .review-dashboard__case-caret { grid-column: 3; grid-row: 1 / span 2; }
 }
 
 @media (max-width: 780px) {
   .review-dashboard {
     padding-inline: 18px;
   }
+
+  .review-dashboard__summary { grid-template-columns: 1fr; }
+  .review-dashboard__summary > button { min-height: 74px; }
 
   .review-dashboard__control-row {
     grid-template-columns: 1fr auto;
@@ -1151,7 +1364,7 @@ onBeforeUnmount(() => {
   }
 
   .review-dashboard__case {
-    grid-template-columns: minmax(0, 1fr) 24px;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 12px;
   }
 
@@ -1162,9 +1375,13 @@ onBeforeUnmount(() => {
     text-align: left;
   }
 
-  .review-dashboard__case-caret {
+  .review-dashboard__case-action {
     grid-column: 2;
     grid-row: 1;
+  }
+
+  .review-dashboard__case-caret {
+    display: none;
   }
 }
 
@@ -1172,6 +1389,20 @@ onBeforeUnmount(() => {
   .review-dashboard {
     padding-inline: 14px;
   }
+
+  .review-dashboard__header {
+    flex-direction: column;
+  }
+
+  .review-dashboard__create { width: 100%; justify-content: center; }
+
+  .review-dashboard__control-row { grid-template-columns: 1fr; }
+  .review-dashboard__search,
+  .review-dashboard__scope,
+  .review-dashboard__filter-toggle,
+  .review-dashboard__sort,
+  .review-dashboard__result-count { grid-column: 1; }
+  .review-dashboard__filter-toggle { justify-content: center; }
 
   .review-dashboard__advanced-filters {
     grid-template-columns: 1fr;
@@ -1185,6 +1416,17 @@ onBeforeUnmount(() => {
 
   .review-dashboard__case-title span {
     white-space: normal;
+  }
+
+  .review-dashboard__case {
+    grid-template-columns: 1fr;
+    padding: 16px;
+  }
+
+  .review-dashboard__case-action {
+    grid-column: 1;
+    grid-row: auto;
+    width: 100%;
   }
 }
 </style>

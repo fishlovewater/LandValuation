@@ -5,39 +5,33 @@ field/value rows, never raw JSON. Bucket names, object keys, and storage URLs
 are never embedded.
 """
 
-from datetime import datetime
 from io import BytesIO
 from typing import Any
 
 from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Pt
 
-from app.review.reports import ReviewReport
-from app.review.xlsx_reports import (
-    LEGACY_DECISIONS,
+from app.review.report_presentation import (
+    CORRECTION_STATUS_LABELS,
+    DOCUMENT_TYPE_LABELS,
+    EVENT_LABELS,
+    FINDING_TYPE_LABELS,
     OUTCOME_LABELS,
+    REVIEW_STATUS_LABELS,
+    RISK_LABELS,
+    SEVERITY_LABELS,
+    SOURCE_LABELS,
     TRIAGE_LABELS,
     URGENCY_LABELS,
-    _is_internal,
-    _local,
+    decision_label,
+    district_label,
+    label,
+    local_time,
+    readable_entries,
+    skipped_rule_text,
 )
-
-
-def _readable_lines(entries: Any) -> list[str]:
-    lines: list[str] = []
-    if not entries:
-        return lines
-    for entry in entries:
-        if isinstance(entry, dict):
-            parts = [
-                f"{key}：{value}"
-                for key, value in entry.items()
-                if value is not None and not _is_internal(key)
-            ]
-            if parts:
-                lines.append("；".join(parts))
-        else:
-            lines.append(str(entry))
-    return lines
+from app.review.reports import ReviewReport
 
 
 def _key_value_table(document: Document, rows: list[tuple[str, Any]]) -> None:
@@ -54,7 +48,12 @@ def _key_value_table(document: Document, rows: list[tuple[str, Any]]) -> None:
 
 def build_review_docx(report: ReviewReport) -> bytes:
     document = Document()
-    document.add_heading("土地估價審查風險報告", level=0)
+    document.core_properties.title = "土地估價審查報告"
+    title = document.add_heading("土地估價審查報告", level=0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    for style_name in ["Normal", "Title", "Heading 1", "Heading 2"]:
+        document.styles[style_name].font.name = "Microsoft JhengHei"
+    document.styles["Normal"].font.size = Pt(10.5)
 
     document.add_heading("案件基本資料", level=1)
     _key_value_table(
@@ -62,11 +61,10 @@ def build_review_docx(report: ReviewReport) -> bytes:
         [
             ("案件編號", report.case.case_no),
             ("案件名稱", report.case.case_title),
-            ("行政區代碼", report.case.district_code),
+            ("行政區", district_label(report.case.district_code)),
             ("價格基準日", report.case.valuation_base_date),
-            ("審查狀態", report.review_status),
-            ("檢核批次", report.run.run_no),
-            ("檢核完成時間", _local(report.run.completed_at)),
+            ("審查狀態", label(REVIEW_STATUS_LABELS, report.review_status)),
+            ("審查完成時間", local_time(report.run.completed_at)),
         ],
     )
 
@@ -86,39 +84,28 @@ def build_review_docx(report: ReviewReport) -> bytes:
         if coverage.skipped_rules:
             document.add_paragraph("未執行不代表通過；以下項目因資料不足未進行自動檢核。")
             for item in coverage.skipped_rules:
-                fields = "、".join(item.missing_field_codes) or "外部佐證資料"
-                document.add_paragraph(
-                    f"{item.rule_name}（{item.rule_code}）：{item.reason}；缺少：{fields}",
-                    style="List Bullet",
-                )
+                document.add_paragraph(skipped_rule_text(item), style="List Bullet")
 
     provenance = report.input_provenance
-    document.add_heading("審查輸入版本", level=1)
+    document.add_heading("審查文件", level=1)
     if provenance is None:
         document.add_paragraph("此報告未提供審查輸入版本資訊。")
     else:
-        source_label = {
-            "PLATFORM": "平台送審",
-            "EXTERNAL": "外部案件",
-            "LEGACY": "舊版相容資料",
-        }.get(provenance.source, provenance.source)
+        source_label = label(SOURCE_LABELS, provenance.source)
         _key_value_table(
             document,
             [
                 ("資料來源", source_label),
                 ("輸入版本", f"v{provenance.version_no}" if provenance.version_no is not None else ""),
-                ("凍結時間", _local(provenance.frozen_at)),
-                ("內容指紋", provenance.fingerprint or ""),
-                ("快照格式", provenance.schema_version or ""),
+                ("資料確認時間", local_time(provenance.frozen_at)),
             ],
         )
         if provenance.documents:
             document.add_paragraph("本次檢核使用文件", style="Intense Quote")
             for item in provenance.documents:
-                filename = item.original_filename or str(item.document_id)
+                filename = item.original_filename or "未命名文件"
                 document.add_paragraph(
-                    f"{filename}／{item.document_type}／v{item.version_no}／"
-                    f"SHA-256：{item.checksum_sha256}",
+                    f"{filename}／{label(DOCUMENT_TYPE_LABELS, item.document_type)}／v{item.version_no}",
                     style="List Bullet",
                 )
 
@@ -131,7 +118,7 @@ def build_review_docx(report: ReviewReport) -> bytes:
     _key_value_table(
         document,
         [
-            ("內容風險等級", report.risk_summary.overall_risk_level),
+            ("內容風險等級", label(RISK_LABELS, report.risk_summary.overall_risk_level)),
             ("高風險疑點數", report.risk_summary.high_count),
             ("中風險疑點數", report.risk_summary.medium_count),
             ("低風險疑點數", report.risk_summary.low_count),
@@ -143,7 +130,7 @@ def build_review_docx(report: ReviewReport) -> bytes:
                 else "未設定",
             ),
             ("剩餘天數", urgency.remaining_days if urgency else ""),
-            ("修正期限", _local(urgency.due_at) if urgency else ""),
+            ("修正期限", local_time(urgency.due_at) if urgency else ""),
         ],
     )
 
@@ -151,19 +138,12 @@ def build_review_docx(report: ReviewReport) -> bytes:
     if not report.findings:
         document.add_paragraph("本次檢核未發現疑點。")
     for finding in report.findings:
-        document.add_heading(
-            f"{finding.finding_code}（{finding.severity}）", level=2
-        )
-        status = finding.status
-        status_label = (
-            f"{status}（舊流程歷史決策）"
-            if status in LEGACY_DECISIONS
-            else TRIAGE_LABELS.get(status, status)
-        )
+        document.add_heading(f"{finding.title}（{label(SEVERITY_LABELS, finding.severity)}風險）", level=2)
+        status_label = TRIAGE_LABELS.get(finding.status, decision_label(finding.status))
         _key_value_table(
             document,
             [
-                ("疑點類型", finding.finding_type),
+                ("疑點類型", label(FINDING_TYPE_LABELS, finding.finding_type)),
                 ("人工判定", status_label),
                 ("疑點說明", f"{finding.title}：{finding.description}"),
                 ("原報告內容", finding.reported_text or ""),
@@ -171,21 +151,18 @@ def build_review_docx(report: ReviewReport) -> bytes:
             ],
         )
         document.add_paragraph("法規依據", style="Intense Quote")
-        for line in _readable_lines(finding.legal_basis) or ["（無）"]:
+        for line in readable_entries(finding.legal_basis) or ["（無）"]:
             document.add_paragraph(line, style="List Bullet")
         document.add_paragraph("查核證據", style="Intense Quote")
-        for line in _readable_lines(finding.source_evidence) or ["（無）"]:
+        for line in readable_entries(finding.source_evidence) or ["（無）"]:
             document.add_paragraph(line, style="List Bullet")
         if finding.ai_assessment.reasoning_summary:
             document.add_paragraph("AI 輔助說明", style="Intense Quote")
             document.add_paragraph(finding.ai_assessment.reasoning_summary)
         for decision in finding.decisions:
-            label = decision.decision
-            if label in LEGACY_DECISIONS:
-                label = f"{label}（舊流程歷史決策）"
             document.add_paragraph(
-                f"人工紀錄：{label}／{decision.reason}"
-                f"（{_local(decision.decided_at)}）"
+                f"人工紀錄：{decision_label(decision.decision)}／{decision.reason}"
+                f"（{local_time(decision.decided_at)}）"
             )
 
     document.add_heading("修正要求", level=1)
@@ -193,22 +170,22 @@ def build_review_docx(report: ReviewReport) -> bytes:
         document.add_paragraph("本批次未發出修正通知。")
     for request in report.correction_requests:
         document.add_heading(
-            f"第 {request.request_no} 次修正通知（{request.status}）", level=2
+            f"第 {request.request_no} 次修正通知（{label(CORRECTION_STATUS_LABELS, request.status)}）", level=2
         )
         _key_value_table(
             document,
             [
                 ("通知內容", request.message),
-                ("修正期限", _local(request.due_at)),
-                ("送出時間", _local(request.sent_at)),
+                ("修正期限", local_time(request.due_at)),
+                ("送出時間", local_time(request.sent_at)),
                 ("原版本", request.base_document_version),
                 ("回件版本", request.response_document_version or ""),
-                ("回件時間", _local(request.resubmitted_at)),
+                ("回件時間", local_time(request.resubmitted_at)),
             ],
         )
         for item in request.items:
             document.add_paragraph(
-                f"{item.finding_code}：{item.issue_summary}", style="List Number"
+                item.issue_summary, style="List Number"
             )
             document.add_paragraph(
                 f"要求修正內容：{item.requested_correction}", style="List Bullet"
@@ -223,30 +200,27 @@ def build_review_docx(report: ReviewReport) -> bytes:
     if not rechecked_items:
         document.add_paragraph("尚無新版重檢結果。")
     for request, item in rechecked_items:
-        outcome = OUTCOME_LABELS.get(item.recheck_outcome, item.recheck_outcome)
+        outcome = label(OUTCOME_LABELS, item.recheck_outcome)
         document.add_paragraph(
-            f"第 {request.request_no} 次／{item.finding_code}：{outcome}"
-            f"（{_local(request.rechecked_at)}）",
+            f"第 {request.request_no} 次：{item.issue_summary}－{outcome}"
+            f"（{local_time(request.rechecked_at)}）",
             style="List Bullet",
         )
 
     document.add_heading("審查結論", level=1)
-    document.add_paragraph(f"審查狀態：{report.review_status}")
+    document.add_paragraph(f"審查狀態：{label(REVIEW_STATUS_LABELS, report.review_status)}")
     if report.review_status != "REVIEW_COMPLETED":
         document.add_paragraph("智慧審查已完成；本報告仍可由審查人員進一步人工確認與補充決策。")
     if not report.case_decisions and not report.history:
         document.add_paragraph("本批次尚無案件層級審查紀錄。")
     for event in report.history:
         document.add_paragraph(
-            f"{event.event_type}（{_local(event.occurred_at)}）：{event.reason or ''}",
+            f"{label(EVENT_LABELS, event.event_type)}（{local_time(event.occurred_at)}）：{event.reason or ''}",
             style="List Bullet",
         )
     for decision in report.case_decisions:
-        label = decision.decision
-        if label in LEGACY_DECISIONS:
-            label = f"{label}（舊流程歷史決策）"
         document.add_paragraph(
-            f"{label}（{_local(decision.decided_at)}）：{decision.reason or ''}",
+            f"{decision_label(decision.decision)}（{local_time(decision.decided_at)}）：{decision.reason or ''}",
             style="List Bullet",
         )
 
