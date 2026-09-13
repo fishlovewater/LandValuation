@@ -50,8 +50,8 @@ async def test_find_nearest_facility_returns_unconfirmed_candidate() -> None:
     assert result["facility_name"] == "Place 2"
     assert result["walking_distance_m"] == 200
     assert result["walking_duration_seconds"] == 120
-    assert result["provider"] == "GOOGLE_MAPS"
-    assert result["route_method"] == "DISTANCE_MATRIX_WALKING"
+    assert result["provider"] == "MAPBOX"
+    assert result["route_method"] == "MAPBOX_DIRECTIONS_WALKING"
     assert result["destination_place_id"] == "id2"
     assert result["route_reference"] is None
     assert result["confirmed_by_user"] is False

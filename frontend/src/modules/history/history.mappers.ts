@@ -45,6 +45,7 @@ const DOCUMENT_TYPE_LABELS: Readonly<Record<string, string>> = {
   ORIGINAL: '原始查估文件',
   'LAND-REGISTER': '土地登記謄本',
   'CADASTRAL-MAP': '地籍圖',
+  'AI-MAP-EVIDENCE': 'AI 地圖證據',
   PHOTOS: '現場照片',
   ATTACHMENTS: '附件',
   'COMPLETE-VALUATION-REPORT': '完整送審 PDF',

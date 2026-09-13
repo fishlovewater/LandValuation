@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isAxiosError } from 'axios'
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ErrorState from '../../../components/common/ErrorState.vue'
@@ -19,14 +20,13 @@ import {
 } from '../valuation.labels'
 import {
   mapBenchmarkLandResponse,
-  mapCalculationResponse,
   mapCaseResponse,
   mapDocumentResponse,
   mapF03DraftResponse,
   mapF03Update,
+  mapFormalValidationResponse,
   mapFormResponse,
-  mapReportResponse,
-  mapValidationResponse,
+  mapTemplateExportResponse,
   selectAuthoritativeF02,
   sourceForCalculatedValue,
 } from '../valuation.mappers'
@@ -40,6 +40,7 @@ import {
   type DocumentArtifactModel,
   type ExtractedFieldResponseDto,
   type F03EditableValues,
+  type F03DraftModel,
   type ParcelImportPreviewDto,
   type ParcelImportRowDto,
   type ParcelCreateDto,
@@ -94,9 +95,15 @@ const extractionBusyDocumentId = ref<string | null>(null)
 const confirmingCandidates = ref(false)
 const candidateDecision = reactive<Record<string, 'CONFIRM' | 'REJECT' | ''>>({})
 const candidateValue = reactive<Record<string, string>>({})
+// Keep values typed in the current browser session separate from values the
+// server has accepted.  The manual-entry list must not disappear while a user
+// is still typing a value.
 const manualFieldValue = reactive<Record<string, string>>({})
+const persistedManualFieldValue = reactive<Record<string, string>>({})
 const manualFieldsSaving = ref(false)
+const f03Initializing = ref(false)
 const documentActionId = ref<string | null>(null)
+const downloadingTemplateDocumentId = ref<string | null>(null)
 const documentCategoryDraft = reactive<Record<string, DocumentCategory>>({})
 type FieldAnalysisFormCode = 'S01' | 'F01' | 'F02' | 'F02-RF' | 'F03' | 'F04'
 const activeManualForm = ref<FieldAnalysisFormCode>('F03')
@@ -138,6 +145,11 @@ const locationDocuments = computed(() => activeLocationId.value
 const locationParcels = computed(() => activeLocationId.value
   ? parcels.value.filter((item) => item.location_id === activeLocationId.value)
   : parcels.value)
+const activeLocationCount = computed(() => locations.value.filter((item) => item.is_active).length)
+const displayedParcelCount = computed(() => locationParcels.value.length || activeLocationCount.value)
+const displayedBenchmarkCount = computed(() => flow.benchmarks.length || (
+  locations.value.some((item) => item.is_active && item.is_benchmark_location) ? 1 : 0
+))
 
 const FORM_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   S01: '地價區段勘查表',
@@ -259,6 +271,10 @@ const revisionDraftReady = computed(() => Boolean(
     && latestReportForms.value.every((form) => form.status === 'DRAFT'),
 ))
 const canEditF03 = computed(() => f03Form.value?.status === 'DRAFT')
+const caseEditable = computed(() => Boolean(
+  flow.case
+    && ['DRAFT', 'PROCESSING', 'CORRECTION', 'REVISION_REQUIRED'].includes(flow.case.status),
+))
 const canEditLandContext = computed(() => auth.permissions.includes('case.update'))
 type CorrectionItem = NonNullable<ValuationReviewHandoffDto['correction']>['items'][number]
 type HandoffMissingItem = ValuationReviewHandoffDto['missing_items'][number]
@@ -281,8 +297,13 @@ const canReadAutomatedWorkflow = computed(() => [
   'document.upload',
   'document.download',
 ].every((permission) => auth.permissions.includes(permission)))
-const canProceedToSubmit = computed(() => Boolean(flow.validation?.canGenerateReport && flow.report))
-const f03Guidance = computed(() => workflowGuidance.value?.form_guidance.find((item) => item.form_code === 'F03') ?? null)
+// The multi-location Excel workflow is completed by formal three-page
+// calculation/validation plus its generated Excel files.  It intentionally
+// does not depend on the legacy single F03 PDF workflow.
+const canProceedToSubmit = computed(() => Boolean(
+  flow.formalValidation?.canGenerateFormalReport
+  && flow.templateExports.length,
+))
 const workflowMissingItems = computed(() => workflowGuidance.value?.missing_items ?? [])
 const allCandidates = computed(() => {
   const merged = new Map<string, ExtractedFieldResponseDto>()
@@ -294,7 +315,12 @@ const allCandidates = computed(() => {
   }
   const candidates = [...merged.values()]
   if (!activeLocationId.value) return candidates
-  return candidates.filter((candidate) => candidate.location_id === activeLocationId.value)
+  const locationScopedForms = new Set(['S01', 'F01', 'F04'])
+  return candidates.filter((candidate) => (
+    !locationScopedForms.has(candidate.form_code)
+    || candidate.location_id === activeLocationId.value
+    || candidate.location_id === null
+  ))
 })
 const pendingCandidates = computed(() => allCandidates.value.filter(
   (candidate) => candidate.field_status === 'NEEDS_CONFIRMATION',
@@ -335,23 +361,136 @@ function f03DraftHasField(fieldName: string): boolean {
   if (fieldName === 'valuation_base_date') return Boolean(draft.valuationBaseDate)
   return false
 }
-const unresolvedF03RequiredFields = computed(() =>
-  (f03Guidance.value?.missing_required_fields ?? []).filter((field) => !f03DraftHasField(field)),
-)
+function manualValuePresent(value: unknown): boolean {
+  return Boolean(displayCandidateValue(value).trim())
+}
+
+// These values are owned by the preceding workflow steps or by the formal
+// rules engine.  Keep this list in sync with the backend catalogue guard:
+// calculated/output/relationship fields must never become manual inputs,
+// even when a legacy API response still contains them.
+const SYSTEM_MANAGED_MANUAL_FIELDS = new Set([
+  'F01.accumulated_depreciation_raw',
+  'F01.building_cost_total_raw',
+  'F01.calculation_building_area',
+  'F01.capital_interest_rate_raw',
+  'F01.cost_components_raw',
+  'F01.elapsed_years_raw',
+  'F01.land_price_raw',
+  'F01.normal_land_total_price',
+  'F01.normal_land_unit_price',
+  'F01.normal_land_unit_price_raw',
+  'F01.normal_total_price_raw',
+  'F02.absolute_adjustment_total',
+  'F02.adjusted_unit_price_display',
+  'F02.adjusted_unit_price_raw',
+  'F02.benchmark_land_no',
+  'F02.benchmark_comparison_price',
+  'F02.benchmark_comparison_price_raw',
+  'F02.date_adjustment_rate',
+  'F02.individual_factor_rate',
+  'F02.individual_factor_total',
+  'F02.normal_land_unit_price',
+  'F02.regional_factor_rate',
+  'F02.regional_adjustment_rate',
+  'F02.time_adjustment_rate',
+  'F02.trial_price',
+  'F02.trial_price_raw',
+  'F02-RF.comparison_analysis_id',
+  'F02-RF.comparison_targets',
+  'F02-RF.rule_version_id',
+  'F03.benchmark_land_price',
+  'F03.comparison_price',
+  'F03.comparison_price_raw',
+  'F03.weight_total',
+  'F03.weighted_value_raw',
+  'F04.parcel_market_price',
+  'F04.rule_version_id',
+  'F04.total_adjustment_rate_raw',
+  'F04.trial_price_raw',
+  'S01.average_internal_road_width_m',
+  'F02.parcel_id',
+  'F02-RF.benchmark_land_id',
+  'F03.benchmark_land_id',
+  'F04.benchmark_valuation_id',
+])
+
+function isSystemManagedManualField(formCode: string, fieldName: string): boolean {
+  return SYSTEM_MANAGED_MANUAL_FIELDS.has(`${formCode}.${fieldName}`)
+}
+
 const allManualFieldEntries = computed(() => {
   const keys = new Set<string>()
-  for (const guidance of workflowGuidance.value?.form_guidance ?? []) {
-    for (const field of guidance.missing_required_fields) {
-      if (guidance.form_code === 'F03' && f03DraftHasField(field)) continue
-      keys.add(`${guidance.form_code}.${field}`)
+  const aiKnownKeys = new Set<string>()
+  const rejectedKeys = new Set<string>()
+
+  // A non-empty AI result is already represented by the candidate review
+  // workspace.  It must not be duplicated in the manual section while it is
+  // pending or after it is confirmed/applied.  A rejected result is different:
+  // it deliberately returns to the manual section for optional correction.
+  for (const candidate of allCandidates.value) {
+    if (isSystemManagedManualField(candidate.form_code, candidate.field_name)) continue
+    const key = `${candidate.form_code}.${candidate.field_name}`
+    if (candidate.field_status === 'REJECTED') {
+      rejectedKeys.add(key)
+      continue
+    }
+    if (manualValuePresent(candidate.confirmed_value ?? candidate.extracted_value)) {
+      aiKnownKeys.add(key)
+    } else {
+      keys.add(key)
     }
   }
-  for (const [formCode, fields] of Object.entries(workflowGuidance.value?.manual_field_values ?? {})) {
-    for (const field of Object.keys(fields)) keys.add(`${formCode}.${field}`)
+
+  // Formal fields reported as missing remain available for manual entry, but
+  // a confirmed AI value or an already persisted value takes them out of the
+  // manual queue.
+  for (const guidance of workflowGuidance.value?.form_guidance ?? []) {
+    for (const field of guidance.missing_required_fields) {
+      if (isSystemManagedManualField(guidance.form_code, field)) continue
+      if (guidance.form_code === 'F03' && f03DraftHasField(field)) continue
+      const key = `${guidance.form_code}.${field}`
+      if (!aiKnownKeys.has(key)) keys.add(key)
+    }
   }
-  // Show the approved manual fields for every form, rather than exposing only
-  // whichever form happens to have a current validation error.
-  for (const key of Object.keys(MANUAL_FIELD_METADATA)) keys.add(key)
+
+  for (const [formCode, fields] of Object.entries(workflowGuidance.value?.manual_field_values ?? {})) {
+    for (const field of Object.keys(fields)) {
+      if (isSystemManagedManualField(formCode, field)) continue
+      const key = `${formCode}.${field}`
+      if (!aiKnownKeys.has(key) && !manualValuePresent(persistedManualFieldValue[key])) keys.add(key)
+    }
+  }
+
+  // The catalogue contains every supported field, including fields for which
+  // AI returned no candidate at all.  Those fields must still be available as
+  // optional manual inputs, especially for location-specific parcel data.
+  for (const [formCode, fields] of Object.entries(workflowGuidance.value?.manual_field_catalog ?? {})) {
+    for (const field of fields) {
+      if (isSystemManagedManualField(formCode, field)) continue
+      const key = `${formCode}.${field}`
+      if (!aiKnownKeys.has(key) && !manualValuePresent(persistedManualFieldValue[key])) keys.add(key)
+    }
+  }
+
+  // Keep the approved manual fields available only while they are actually
+  // blank.  This prevents AI-completed fields from reappearing here merely
+  // because they exist in the formal field metadata.
+  for (const key of Object.keys(MANUAL_FIELD_METADATA)) {
+    const split = key.indexOf('.')
+    const formCode = key.slice(0, split)
+    const fieldName = key.slice(split + 1)
+    if (isSystemManagedManualField(formCode, fieldName)) continue
+    if (formCode === 'F03' && f03DraftHasField(fieldName)) continue
+    if (!aiKnownKeys.has(key) && !manualValuePresent(persistedManualFieldValue[key])) keys.add(key)
+  }
+
+  for (const key of rejectedKeys) {
+    const split = key.indexOf('.')
+    if (split > 0 && !isSystemManagedManualField(key.slice(0, split), key.slice(split + 1))) {
+      keys.add(key)
+    }
+  }
   return [...keys].sort().map((key) => {
     const split = key.indexOf('.')
     return { key, formCode: key.slice(0, split), fieldName: key.slice(split + 1) }
@@ -382,6 +521,7 @@ const unresolvedNonF03RequiredFields = computed(() => (
   ) ?? []
 ))
 const dataIssueCounts = computed(() => ({
+  overview: 0,
   manual: unresolvedNonF03RequiredFields.value.length,
   land: (!locationParcels.value.length ? 1 : 0) + (!flow.benchmarks.length ? 1 : 0),
   f03: unresolvedF03RequiredFields.value.length,
@@ -391,8 +531,8 @@ const dataBlockingIssueCount = computed(() =>
 )
 const preCalculationIssueCount = computed(() => dataBlockingIssueCount.value + pendingCandidates.value.length)
 const canRunValuation = computed(() => Boolean(
-  canEditF03.value
-    && flow.f03
+  caseEditable.value
+    && canEditF03.value
     && preCalculationIssueCount.value === 0,
 ))
 const workspaceStage = computed<ValuationWorkspaceStage>(() => {
@@ -405,7 +545,7 @@ const workspaceIssueCounts = computed(() => ({
   documents: activeSourceDocuments.value.length ? 0 : 1,
   'ai-review': pendingCandidates.value.length,
   data: dataBlockingIssueCount.value,
-  calculation: flow.validation?.failedCount ?? 0,
+  calculation: flow.formalValidation?.failedCount ?? flow.validation?.failedCount ?? 0,
   report: canProceedToSubmit.value ? 0 : 1,
 }))
 const caseProgressPercent = computed(() => {
@@ -538,6 +678,15 @@ const MANUAL_FIELD_METADATA: Readonly<Record<string, ManualFieldMetadata>> = {
 
   'F03.valuation_base_date': { label: '估價基準日', guidance: '填寫本案估價基準日。格式：YYYY-MM-DD。', inputType: 'date' },
   'F03.benchmark_land_id': { label: '比準地', guidance: '請在「宗地與比準地」建立或選擇比準地，無須手動輸入系統 ID。' },
+  'F03.comparison_price': { label: '比較價格', guidance: '填寫比較法調查估價表所得到的比準地價格。' },
+  'F03.comparison_weight': { label: '比較價格權重', guidance: '填寫比較法權重；比較法與收益法權重合計須為 100%。' },
+  'F03.income_price': { label: '收益價格', guidance: '採收益法時填寫收益法調查估價表所得價格；未採用可留白。' },
+  'F03.income_weight': { label: '收益價格權重', guidance: '填寫收益法權重；未採用收益法時填 0。' },
+  'F03.market_period_start': { label: '市場期間起日', guidance: '填寫比較或市場資料的起始日期。格式：YYYY-MM-DD。', inputType: 'date' },
+  'F03.market_period_end': { label: '市場期間迄日', guidance: '填寫比較或市場資料的截止日期。格式：YYYY-MM-DD。', inputType: 'date' },
+  'F03.market_condition': { label: '市場條件', guidance: '填寫市場正常、上漲、下跌或其他影響估價的情況。' },
+  'F03.selection_scope_reason': { label: '選擇範圍理由', guidance: '說明選取比較標的與比準地的範圍及理由。' },
+  'F03.decision_reason': { label: '決定理由', guidance: '說明採用方法、權重與估價結論的理由。' },
 
   'F04.benchmark_valuation_id': { label: '比準地估價結果', guidance: '完成 F03 比準地估價後由系統帶入，無須手動輸入 ID。' },
   'F04.valuation_base_date': { label: '估價基準日', guidance: '填寫本案估價基準日。格式：YYYY-MM-DD。', inputType: 'date' },
@@ -547,6 +696,14 @@ const MANUAL_FIELD_METADATA: Readonly<Record<string, ManualFieldMetadata>> = {
 function manualFieldMetadata(formCode: string, fieldName: string): ManualFieldMetadata {
   const explicit = MANUAL_FIELD_METADATA[`${formCode}.${fieldName}`]
   if (explicit) return explicit
+  const workflowMetadata = workflowGuidance.value?.manual_field_metadata?.[formCode]?.[fieldName]
+  if (workflowMetadata) {
+    return {
+      label: workflowMetadata.label,
+      guidance: workflowMetadata.guidance,
+      inputType: fieldName.includes('date') ? 'date' : 'text',
+    }
+  }
   const label = valuationFieldLabel(fieldName)
   return {
     label,
@@ -568,6 +725,23 @@ function emptyDraft(): F03EditableValues {
     marketCondition: null,
     selectionScopeReason: null,
     decisionReason: null,
+  }
+}
+
+function blankF03Model(form: ValuationFormModel): F03DraftModel {
+  return {
+    benchmarkValuationId: '',
+    caseId: form.caseId,
+    formInstanceId: form.formInstanceId,
+    editable: emptyDraft(),
+    benchmarkLandPrice: null,
+    versionNo: form.versionNo,
+    valuationStatus: 'DRAFT',
+    source: {
+      kind: 'automatic',
+      label: '來源：空白 F03 草稿',
+    },
+    updatedAt: form.preparedDate ?? '',
   }
 }
 
@@ -626,14 +800,14 @@ function candidateProviderLabel(provider: string): string {
 }
 
 function initializeManualFieldInputs(response: AutomatedWorkflowResponseDto): void {
-  // Shared forms (F02/F02-RF/F03) must always read the case-scoped value first.
-  // Older data may still contain the pre-fix location-scoped F02 overrides;
-  // deliberately ignore those so they cannot shadow the authoritative value.
+  clearReactiveRecord(persistedManualFieldValue)
   for (const [formCode, fields] of Object.entries(response.manual_field_values ?? {})) {
     for (const [fieldName, value] of Object.entries(fields)) {
       const key = `${formCode}.${fieldName}`
+      const displayValue = displayCandidateValue(value)
+      if (!(key in persistedManualFieldValue)) persistedManualFieldValue[key] = displayValue
       if (!LOCATION_SCOPED_MANUAL_FORM_CODES.has(formCode) || !(key in manualFieldValue)) {
-        manualFieldValue[key] = displayCandidateValue(value)
+        manualFieldValue[key] = displayValue
       }
     }
   }
@@ -643,7 +817,10 @@ function initializeManualFieldInputs(response: AutomatedWorkflowResponseDto): vo
   for (const [formCode, fields] of Object.entries(scopedValues)) {
     if (!LOCATION_SCOPED_MANUAL_FORM_CODES.has(formCode)) continue
     for (const [fieldName, value] of Object.entries(fields)) {
-      manualFieldValue[`${formCode}.${fieldName}`] = displayCandidateValue(value)
+      const key = `${formCode}.${fieldName}`
+      const displayValue = displayCandidateValue(value)
+      persistedManualFieldValue[key] = displayValue
+      manualFieldValue[key] = displayValue
     }
   }
 }
@@ -687,6 +864,7 @@ function documentCategoryLabel(category: string): string {
     'map-section-sketch': '地段示意圖',
     'map-zoning': '使用分區圖',
     'map-land-value-section': '地價區段圖',
+    'ai-map-evidence': 'AI 地圖證據',
     'generated-report': '系統產生報告',
     'complete-valuation-report': '完整送審 PDF',
   } as Record<string, string>)[category] ?? '其他文件'
@@ -984,33 +1162,36 @@ async function persistWorkspaceStage(stage: ValuationWorkspaceStage): Promise<vo
 }
 
 async function confirmCaseInfoAndStart(): Promise<void> {
-  if (!flow.case || confirmingCaseInfo.value || !canPersistWorkspace.value) return
+  if (!flow.case || confirmingCaseInfo.value) return
   confirmingCaseInfo.value = true
   error.value = ''
   notice.value = ''
   try {
-    const updated = await valuationApi.updateCaseWorkspace(caseId.value, {
-      confirm_basic_info: true,
-      last_workspace_stage: 'documents',
-    })
-    flow.case = mapCaseResponse(updated)
-    lastPersistedWorkspaceStage.value = 'documents'
+    if (canPersistWorkspace.value) {
+      const updated = await valuationApi.updateCaseWorkspace(caseId.value, {
+        confirm_basic_info: true,
+        last_workspace_stage: 'documents',
+      })
+      flow.case = mapCaseResponse(updated)
+      lastPersistedWorkspaceStage.value = 'documents'
+    }
     activeWizardStep.value = 2
     activeIntakeStage.value = 'documents'
+    syncWorkspaceUrl('documents')
     notice.value = '案件基本資料已確認，可以開始上傳與辨識來源文件。'
   } catch (caught: unknown) {
     error.value = safeValuationErrorMessage(caught)
+    // Keep navigation usable for legacy or read-only cases when confirmation
+    // cannot be persisted. Missing values may remain blank in later steps.
+    activeWizardStep.value = 2
+    activeIntakeStage.value = 'documents'
+    syncWorkspaceUrl('documents')
   } finally {
     confirmingCaseInfo.value = false
   }
 }
 
 function navigateWorkspaceStage(stage: ValuationWorkspaceStage): void {
-  if (stage !== 'case' && !flow.case?.basicInfoConfirmedAt) {
-    notice.value = '請先確認案件基本資料，再開始估價流程。'
-    activeWizardStep.value = 1
-    return
-  }
   const applied = applyWorkspaceStage(stage)
   if (applied === 'documents') {
     void focusElementById('valuation-document-workspace')
@@ -1107,6 +1288,18 @@ function isCurrentCase(token: number, requestedCaseId: string): boolean {
   return token === activeCaseToken && requestedCaseId === caseId.value
 }
 
+async function loadOptional<T>(loader: () => Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await loader()
+  } catch (caught: unknown) {
+    // Older API containers may not expose optional resources yet.  A missing
+    // resource means "empty" here; the case itself is still valid and must
+    // remain navigable.  Preserve all non-404 failures for real diagnostics.
+    if (isAxiosError(caught) && caught.response?.status === 404) return fallback
+    throw caught
+  }
+}
+
 function copyDraft(): void {
   if (!flow.f03) return
   Object.assign(draft, flow.f03.editable)
@@ -1118,6 +1311,46 @@ async function loadF03(form: ValuationFormModel, token: number, requestedCaseId:
   if (!isCurrentCase(token, requestedCaseId)) return
   flow.f03 = mapF03DraftResponse(dto, form.sourceDocumentId, form.formInstanceId)
   copyDraft()
+}
+
+async function ensureF03Draft(
+  token = activeCaseToken,
+  requestedCaseId = caseId.value,
+): Promise<ValuationFormModel | null> {
+  if (f03Form.value || f03Initializing.value || !flow.case) {
+    return f03Form.value
+  }
+  if (!isCurrentCase(token, requestedCaseId)) return null
+
+  f03Initializing.value = true
+  try {
+    const created = await valuationApi.createForm(requestedCaseId, {
+      form_code: 'F03',
+      prepared_date: flow.case.valuationBaseDate || null,
+      source_document_id: null,
+    })
+    if (!isCurrentCase(token, requestedCaseId)) return null
+
+    const form = mapFormResponse(created)
+    flow.forms = [...flow.forms, form]
+    try {
+      await loadF03(form, token, requestedCaseId)
+    } catch {
+      if (isCurrentCase(token, requestedCaseId)) {
+        flow.f03 = blankF03Model(form)
+        copyDraft()
+      }
+      // The form instance is still usable as a blank placeholder when an
+      // older backend does not expose its F03 draft endpoint yet.
+    }
+    return form
+  } catch {
+    // Missing F03 must not block navigation. The calculation view will keep
+    // the section empty until the server permits creating the draft.
+    return null
+  } finally {
+    if (isCurrentCase(token, requestedCaseId)) f03Initializing.value = false
+  }
 }
 
 async function loadWorkflowGuidance(token = activeCaseToken, requestedCaseId = caseId.value): Promise<void> {
@@ -1491,6 +1724,7 @@ async function loadData(): Promise<void> {
   extractionCandidates.value = []
   extractionBusyDocumentId.value = null
   confirmingCandidates.value = false
+  f03Initializing.value = false
   confirmingCaseInfo.value = false
   workspacePersistenceReady.value = false
   lastPersistedWorkspaceStage.value = null
@@ -1509,6 +1743,7 @@ async function loadData(): Promise<void> {
   clearReactiveRecord(candidateDecision)
   clearReactiveRecord(candidateValue)
   clearReactiveRecord(manualFieldValue)
+  clearReactiveRecord(persistedManualFieldValue)
   clearReactiveRecord(documentCategoryDraft)
   resetParcelDraft()
   resetBenchmarkDraft()
@@ -1523,17 +1758,29 @@ async function loadData(): Promise<void> {
   try {
     const [caseDto, parcelDtos, formDtos, benchmarkDtos, documentDtos, reportProgressDto, locationDtos] = await Promise.all([
       valuationApi.getCase(requestedCaseId),
-      valuationApi.listParcels(requestedCaseId),
-      valuationApi.listForms(requestedCaseId),
-      valuationApi.listBenchmarkLands(requestedCaseId),
-      valuationApi.listDocuments(requestedCaseId),
-      valuationApi.getReportProgress(requestedCaseId),
+      loadOptional(() => valuationApi.listParcels(requestedCaseId), []),
+      loadOptional(() => valuationApi.listForms(requestedCaseId), []),
+      loadOptional(() => valuationApi.listBenchmarkLands(requestedCaseId), []),
+      loadOptional(() => valuationApi.listDocuments(requestedCaseId), []),
+      loadOptional(
+        () => valuationApi.getReportProgress(requestedCaseId),
+        {
+          report_id: null,
+          report_type: 'REPORT_COMPARISON_COMMERCIAL',
+          version_no: null,
+          completion_rate: '0',
+          sections: [],
+          blocking_errors: [],
+        },
+      ),
+      // Locations are an optional extension used by the multi-location flow.
+      // Keep the broad fallback for older API containers that do not expose it.
       valuationApi.listLocations(requestedCaseId).catch(() => [] as ValuationLocationDto[]),
     ])
     if (!isCurrentCase(token, requestedCaseId)) return
 
     const forms = formDtos.map(mapFormResponse)
-    const form = forms
+    let form = forms
       .filter((item) => item.formCode === 'F03')
       .reduce<ValuationFormModel | null>(
         (latest, item) => (!latest || item.versionNo > latest.versionNo ? item : latest),
@@ -1562,11 +1809,16 @@ async function loadData(): Promise<void> {
     flow.completeReport = authoritative.completeReport
     flow.reportPackageId = authoritative.reportPackageId
     reportProgress.value = reportProgressDto
+    if (!form) {
+      form = await ensureF03Draft(token, requestedCaseId)
+    }
     if (form) {
       try {
         await loadF03(form, token, requestedCaseId)
       } catch {
         if (isCurrentCase(token, requestedCaseId)) {
+          flow.f03 = blankF03Model(form)
+          copyDraft()
           notice.value = '比準地地價估計表已建立，但正式估價草稿尚未初始化；可先上傳來源文件並補齊宗地／比準地資料。'
         }
       }
@@ -1581,10 +1833,7 @@ async function loadData(): Promise<void> {
       const storedStage = flow.case.lastWorkspaceStage
       let effectiveStage: ValuationWorkspaceStage = 'case'
       const routeStage = canonicalRouteStage()
-      if (!flow.case.basicInfoConfirmedAt) {
-        applyWorkspaceStage('case')
-        if (routeStage && routeStage !== 'case') syncWorkspaceUrl('case')
-      } else if (hasExplicitWorkflowTarget()) {
+      if (hasExplicitWorkflowTarget()) {
         focusRequestedRouteTarget()
         effectiveStage = workspaceStage.value
       } else if (routeStage && routeStage !== 'report') {
@@ -1594,7 +1843,7 @@ async function loadData(): Promise<void> {
       }
       lastPersistedWorkspaceStage.value = storedStage
       workspacePersistenceReady.value = true
-      if (flow.case.basicInfoConfirmedAt && effectiveStage !== 'case' && effectiveStage !== storedStage) {
+      if (effectiveStage !== 'case' && effectiveStage !== storedStage) {
         void persistWorkspaceStage(effectiveStage)
       }
       if (effectiveStage === 'report' && canProceedToSubmit.value) goToSubmit()
@@ -1618,7 +1867,7 @@ async function addLocation(): Promise<void> {
     locations.value = [...locations.value, created]
     newLocationLabel.value = ''
     await changeActiveLocation(created.location_id)
-    notice.value = `${created.label} 已建立；後續文件、辨識結果與宗地資料會歸屬這個資料位置。`
+    notice.value = `${created.label} 已建立；後續文件、AI 辨識與宗地資料會歸屬這個宗地。`
   } catch (caught: unknown) {
     error.value = safeValuationErrorMessage(caught)
   }
@@ -1634,12 +1883,38 @@ async function chooseBenchmarkLocation(): Promise<void> {
       ...item,
       is_benchmark_location: item.location_id === updated.location_id,
     }))
-    notice.value = `${updated.label} 已設為比準地來源位置。`
+    notice.value = `${updated.label} 已設為比準地來源宗地。`
   } catch (caught: unknown) {
     error.value = safeValuationErrorMessage(caught)
   }
 }
 
+async function removeActiveLocation(): Promise<void> {
+  if (!flow.case || !activeLocationId.value) return
+  const location = activeLocation.value
+  if (!location || location.is_benchmark_location) {
+    error.value = '目前宗地是比準地，請先指定其他宗地為比準地後再刪除。'
+    return
+  }
+  if (locations.value.filter((item) => item.is_active).length <= 1) {
+    error.value = '案件至少需要保留一個宗地。'
+    return
+  }
+  if (!window.confirm(`確定要刪除「宗地 ${location.display_order}｜${location.label}」嗎？`)) return
+
+  error.value = ''
+  notice.value = ''
+  try {
+    await valuationApi.archiveLocation(flow.case.caseId, location.location_id)
+    const remaining = locations.value.filter((item) => item.location_id !== location.location_id && item.is_active)
+    locations.value = remaining
+    const nextLocation = remaining[0]
+    if (nextLocation) await changeActiveLocation(nextLocation.location_id)
+    notice.value = `${location.label} 已刪除。`
+  } catch (caught: unknown) {
+    error.value = safeValuationErrorMessage(caught)
+  }
+}
 async function changeActiveLocation(locationId: string): Promise<void> {
   activeLocationId.value = locationId
   clearPreviewUrl()
@@ -1652,6 +1927,7 @@ async function changeActiveLocation(locationId: string): Promise<void> {
   resetParcelDraft()
   resetBenchmarkDraft()
   clearReactiveRecord(manualFieldValue)
+  clearReactiveRecord(persistedManualFieldValue)
   await loadWorkflowGuidance()
 }
 
@@ -1925,18 +2201,47 @@ async function saveManualFields(): Promise<void> {
     ;(values[entry.formCode] ??= {})[entry.fieldName] = value
   }
   if (!Object.keys(values).length) {
-    notice.value = '請至少填寫一個欄位；空白欄位不會儲存。'
+    notice.value = '本次沒有填寫資料；空白欄位會保留空白，不會阻擋後續流程。'
     return
+  }
+
+  // F02/F02-RF/F03 are shared report data.  S01/F01/F04 values belong to the
+  // currently selected location.  Split the requests so a missing AI value
+  // on the benchmark can be saved to the shared form without accidentally
+  // storing it under a parcel-specific override.
+  const sharedValues: Record<string, Record<string, unknown>> = {}
+  const locationValues: Record<string, Record<string, unknown>> = {}
+  const sharedForms = new Set(['F02', 'F02-RF', 'F03'])
+  for (const [formCode, fields] of Object.entries(values)) {
+    const target = sharedForms.has(formCode) ? sharedValues : locationValues
+    target[formCode] = fields
+  }
+  const requests: Array<{ location_id?: string; values: Record<string, Record<string, unknown>> }> = []
+  if (Object.keys(sharedValues).length) requests.push({ values: sharedValues })
+  if (Object.keys(locationValues).length) {
+    requests.push({
+      ...(activeLocationId.value ? { location_id: activeLocationId.value } : {}),
+      values: locationValues,
+    })
   }
 
   manualFieldsSaving.value = true
   error.value = ''
   notice.value = ''
   try {
-    const response = await valuationApi.saveWorkflowManualFields(requestedCaseId, {
-      ...(activeLocationId.value ? { location_id: activeLocationId.value } : {}),
-      values,
-    })
+    let response: AutomatedWorkflowResponseDto | null = null
+    let savedCount = 0
+    const failures: Record<string, string> = {}
+    for (const request of requests) {
+      response = await valuationApi.saveWorkflowManualFields(requestedCaseId, request)
+      savedCount += response.manual_fields_saved?.length ?? 0
+      Object.assign(failures, response.manual_field_errors ?? {})
+    }
+    if (!response) return
+    response = {
+      ...response,
+      manual_field_errors: failures,
+    }
     if (!isCurrentCase(token, requestedCaseId)) return
     workflowGuidance.value = response
     extractionCandidates.value = response.candidates
@@ -1951,10 +2256,10 @@ async function saveManualFields(): Promise<void> {
         // response visible even if F03 is not initialized yet.
       }
     }
-    const failures = Object.entries(response.manual_field_errors ?? {})
-    notice.value = failures.length
-      ? `已儲存可套用欄位；另有 ${failures.length} 項無法寫入正式表單，請依下方錯誤修正。`
-      : `已儲存 ${response.manual_fields_saved?.length ?? 0} 個欄位，並重新檢查相關資料。`
+    const failureEntries = Object.entries(failures)
+    notice.value = failureEntries.length
+      ? `已儲存可套用欄位；另有 ${failureEntries.length} 項無法寫入正式表單，請依下方錯誤修正。`
+      : `已儲存 ${savedCount} 個人工補充欄位，並重新產生確認資料。`
   } catch (caught: unknown) {
     if (isCurrentCase(token, requestedCaseId)) error.value = safeValuationErrorMessage(caught)
   } finally {
@@ -2041,6 +2346,29 @@ async function downloadConfirmationExport(): Promise<void> {
     URL.revokeObjectURL(url)
   } catch (caught: unknown) {
     error.value = safeValuationErrorMessage(caught)
+  }
+}
+
+async function downloadTemplateExport(documentId: string, filename: string): Promise<void> {
+  const requestedCaseId = caseId.value
+  if (!requestedCaseId || downloadingTemplateDocumentId.value) return
+
+  downloadingTemplateDocumentId.value = documentId
+  error.value = ''
+  try {
+    const blob = await valuationApi.downloadDocument(requestedCaseId, documentId)
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+  } catch (caught: unknown) {
+    error.value = safeValuationErrorMessage(caught)
+  } finally {
+    downloadingTemplateDocumentId.value = null
   }
 }
 
@@ -2190,7 +2518,16 @@ async function saveConfirmedFields(
   error.value = ''
   notice.value = ''
   try {
-    const updated = await valuationApi.updateF03(requestedCaseId, form.formInstanceId, mapF03Update(draft))
+    const payload = mapF03Update(draft)
+    // A user may have opened the optional F03 area without entering a value.
+    // Do not send an empty PATCH body: the backend correctly rejects it, and
+    // there is nothing to persist in that case.
+    if (!Object.keys(payload).length) {
+      copyDraft()
+      notice.value = '沒有需要儲存的比準地地價估計表欄位。'
+      return true
+    }
+    const updated = await valuationApi.updateF03(requestedCaseId, form.formInstanceId, payload)
     if (!isCurrentCase(token, requestedCaseId)) return false
     flow.f03 = mapF03DraftResponse(updated, form.sourceDocumentId, form.formInstanceId)
     copyDraft()
@@ -2213,8 +2550,13 @@ function handleSave(): void {
 async function runValuation(): Promise<void> {
   const requestedCaseId = caseId.value
   const token = activeCaseToken
-  const form = f03Form.value
-  if (!form || !flow.f03 || !isCurrentCase(token, requestedCaseId)) return
+  if (!isCurrentCase(token, requestedCaseId)) return
+
+  if (!caseEditable.value) {
+    error.value = ''
+    notice.value = '此案件已送審並鎖定，不能再修改或重複執行正式計算；如需重算，請先由審查系統退回修正。'
+    return
+  }
 
   if (!canRunValuation.value) {
     notice.value = `計算前還有 ${preCalculationIssueCount.value} 項資料待處理。請先完成必要資料，再執行公式與資料一致性檢核。`
@@ -2226,64 +2568,53 @@ async function runValuation(): Promise<void> {
   running.value = true
   error.value = ''
   notice.value = ''
-  if (form.status === 'DRAFT') flow.calculation = null
+  flow.calculation = null
   flow.validation = null
   flow.report = null
+  flow.formalValidation = null
+  flow.templateExports = []
   try {
-    if (dirty.value && !(await saveConfirmedFields(token, requestedCaseId))) return
-    if (!isCurrentCase(token, requestedCaseId)) return
-
-    let currentForm = f03Form.value
-    if (!currentForm || !flow.f03) return
-
-    if (currentForm.status !== 'DRAFT') {
-      notice.value = '目前比準地地價估計表已不是草稿狀態，請重新載入案件後再執行。'
-      return
+    // dfe69c63's multi-location flow treats the selected benchmark location as
+    // the formal calculation source.  Do not call the legacy F03 endpoint:
+    // older multi-location cases may intentionally have no F03 draft record.
+    let reportId = reportProgress.value?.report_id ?? flow.reportPackageId
+    if (!reportId) {
+      const created = await valuationApi.createReportPackage(requestedCaseId, {
+        report_type: 'REPORT_COMPARISON_COMMERCIAL',
+        prepared_date: flow.case?.valuationBaseDate ?? null,
+      })
+      reportId = created.report_id
+      if (!isCurrentCase(token, requestedCaseId)) return
+      flow.reportPackageId = reportId
+      const [formDtos, progress] = await Promise.all([
+        valuationApi.listForms(requestedCaseId),
+        valuationApi.getReportProgress(requestedCaseId),
+      ])
+      if (!isCurrentCase(token, requestedCaseId)) return
+      flow.forms = formDtos.map(mapFormResponse)
+      reportProgress.value = progress
     }
 
-    const calculation = await valuationApi.calculate(requestedCaseId, {
-      form_instance_id: currentForm.formInstanceId,
+    await valuationApi.calculateFormalReport(requestedCaseId, reportId, {
+      confirm_calculation: true,
     })
     if (!isCurrentCase(token, requestedCaseId)) return
-    flow.calculation = mapCalculationResponse(calculation)
-    flow.f03 = {
-      ...flow.f03,
-      benchmarkLandPrice: flow.calculation.result,
-      source: sourceForCalculatedValue(),
-    }
 
-    const validation = await valuationApi.validate(requestedCaseId, {
-      form_instance_id: currentForm.formInstanceId,
-    })
+    const validation = await valuationApi.formalValidate(requestedCaseId, reportId)
     if (!isCurrentCase(token, requestedCaseId)) return
-    flow.validation = mapValidationResponse(validation)
+    flow.formalValidation = mapFormalValidationResponse(validation)
 
-    if (!flow.validation.canGenerateReport) {
+    if (!flow.formalValidation.canGenerateFormalReport) {
       await loadWorkflowGuidance(token, requestedCaseId)
-      notice.value = '檢核發現仍有待修正項目，請修正後重新執行。'
+      notice.value = '正式檢核發現阻擋項目，請查看檢核結果後重新執行。'
       return
     }
 
-    const submitted = await valuationApi.submitForm(requestedCaseId, currentForm.formInstanceId)
+    const templateExports = await valuationApi.generateTemplateExports(requestedCaseId, reportId)
     if (!isCurrentCase(token, requestedCaseId)) return
-    const submittedForm = mapFormResponse(submitted)
-    flow.forms = flow.forms.map((item) =>
-      item.formInstanceId === submittedForm.formInstanceId ? submittedForm : item,
-    )
-    if (submittedForm.status !== 'READY') {
-      notice.value = '比準地地價估計表尚未完成可產生單表輸出的條件，請確認檢核結果。'
-      return
-    }
-    currentForm = f03Form.value
-    if (!currentForm || !isCurrentCase(token, requestedCaseId)) return
-
-    const report = await valuationApi.generateReport(requestedCaseId, {
-      form_instance_id: currentForm.formInstanceId,
-    })
-    if (!isCurrentCase(token, requestedCaseId)) return
-    flow.report = mapReportResponse(report)
+    flow.templateExports = templateExports.map(mapTemplateExportResponse)
     await loadWorkflowGuidance(token, requestedCaseId)
-    notice.value = '已完成計算、檢核、比準地地價估計表確認與單表輸出。'
+    notice.value = `已完成正式計算與檢核，並產生 ${flow.templateExports.length} 份 Excel 範本。`
   } catch (caught: unknown) {
     if (!isCurrentCase(token, requestedCaseId)) return
     error.value = safeValuationErrorMessage(caught)
@@ -2321,11 +2652,6 @@ watch([() => route.name, () => props.stage], () => {
   if (workspaceUrlSyncInFlight) return
   const routeStage = canonicalRouteStage()
   if (!routeStage || routeStage === 'report') return
-  if (!flow.case.basicInfoConfirmedAt && routeStage !== 'case') {
-    applyWorkspaceStage('case')
-    syncWorkspaceUrl('case')
-    return
-  }
   if (routeStage === workspaceStage.value) return
   applyWorkspaceStage(routeStage)
 })
@@ -2372,7 +2698,7 @@ onBeforeUnmount(clearPreviewUrl)
         :stage-label="workspaceStepLabel"
         :document-count="activeSourceDocuments.length"
         :pending-candidate-count="workflowGuidance?.pending_candidate_count"
-        :missing-field-count="f03Guidance ? unresolvedF03RequiredFields.length : null"
+        :missing-field-count="null"
         :validation-error-count="flow.validation?.failedCount"
         :issue-count="workflowIssues.length"
         :issue-title="currentWorkflowIssue?.title"
@@ -2404,45 +2730,44 @@ onBeforeUnmount(clearPreviewUrl)
 
       <section
         v-if="activeWizardStep === 2 || activeWizardStep === 3"
-        class="location-strip"
-        aria-label="目前資料位置"
+        class="location-context"
+        aria-label="目前估價宗地"
       >
-        <div class="location-strip__current">
-          <span class="location-strip__label">資料位置</span>
-          <label class="location-strip__select">
-            <span class="sr-only">目前資料位置</span>
-            <select :value="activeLocationId ?? ''" data-testid="valuation-location-select" @change="handleLocationChange">
-              <option v-for="location in locations" :key="location.location_id" :value="location.location_id">
-                {{ location.label }}{{ location.is_benchmark_location ? '（比準地來源位置）' : '' }}
-              </option>
-            </select>
-          </label>
-          <small v-if="activeLocation?.is_benchmark_location">比準地來源</small>
+        <div class="location-context__copy">
+          <strong>目前估價宗地</strong>
+          <span>來源文件、AI 辨識、人工補充與宗地資料會依宗地分開保存。</span>
         </div>
-
-        <div v-if="canEditLandContext" class="location-strip__actions">
+        <label class="location-context__select">
+          <span>切換宗地</span>
+          <select :value="activeLocationId ?? ''" data-testid="valuation-location-select" @change="handleLocationChange">
+            <option v-for="location in locations" :key="location.location_id" :value="location.location_id">
+              宗地 {{ location.display_order }}｜{{ location.label }}{{ location.is_benchmark_location ? '（比準地）' : '' }}
+            </option>
+          </select>
+        </label>
+        <div v-if="canEditLandContext" class="location-context__actions">
           <input
             v-model="newLocationLabel"
             type="text"
-            placeholder="新增資料位置名稱"
-            aria-label="新增資料位置名稱"
+            placeholder="新增宗地名稱"
+            aria-label="新增估價宗地名稱"
             @keyup.enter="addLocation"
           >
+          <button type="button" :disabled="!newLocationLabel.trim()" @click="addLocation">新增宗地</button>
           <button
-            class="location-strip__primary-action"
-            type="button"
-            :disabled="!newLocationLabel.trim()"
-            @click="addLocation"
-          >
-            新增
-          </button>
-          <button
-            v-if="activeLocationId && !activeLocation?.is_benchmark_location"
             class="location-strip__secondary-action"
             type="button"
+            :disabled="!activeLocationId || activeLocation?.is_benchmark_location"
             @click="chooseBenchmarkLocation"
           >
-            設為比準地來源
+            {{ activeLocation?.is_benchmark_location ? '目前為比準地' : '設為比準地' }}
+          </button>
+          <button
+            type="button"
+            :disabled="!activeLocationId || activeLocation?.is_benchmark_location || locations.filter((item) => item.is_active).length <= 1"
+            @click="removeActiveLocation"
+          >
+            刪除宗地
           </button>
         </div>
       </section>
@@ -2553,8 +2878,8 @@ onBeforeUnmount(clearPreviewUrl)
         :active-section="activeDataSection"
         :issue-counts="dataIssueCounts"
         :blocking-issue-count="dataBlockingIssueCount"
-        :parcel-count="locationParcels.length"
-        :benchmark-count="flow.benchmarks.length"
+        :parcel-count="displayedParcelCount"
+        :benchmark-count="displayedBenchmarkCount"
         :has-f03="Boolean(flow.f03)"
         @select="jumpToDataSection"
       />
@@ -2562,7 +2887,7 @@ onBeforeUnmount(clearPreviewUrl)
       <ValuationManualFieldsSection
         v-if="activeWizardStep === 3 && activeDataSection === 'manual' && workflowGuidance"
         :active-form="activeManualForm"
-        :entries="manualFieldEntries"
+        :entries="allManualFieldEntries"
         :editable-count="manualEditableEntries.length"
         :missing-required-keys="manualMissingRequiredKeys"
         :values="manualFieldValue"
@@ -2579,6 +2904,7 @@ onBeforeUnmount(clearPreviewUrl)
       <ValuationLandContext
         v-if="activeWizardStep === 3 && activeDataSection === 'land'"
         :parcels="locationParcels"
+        :locations="locations"
         :benchmarks="flow.benchmarks"
         :documents="locationDocuments"
         :parcel-draft="parcelDraft"
@@ -2613,6 +2939,9 @@ onBeforeUnmount(clearPreviewUrl)
       <ValuationValidationSection
         v-if="activeWizardStep === 4"
         :validation="flow.validation"
+        :formal-validation="flow.formalValidation"
+        :template-exports="flow.templateExports"
+        :downloading-template-document-id="downloadingTemplateDocumentId"
         :calculation="flow.calculation"
         :report="flow.report"
         :has-f03="Boolean(flow.f03)"
@@ -2620,6 +2949,7 @@ onBeforeUnmount(clearPreviewUrl)
         :dirty="dirty"
         :running="running"
         :saving="saving"
+        :case-editable="caseEditable"
         :can-run-valuation="canRunValuation"
         :can-proceed-to-submit="canProceedToSubmit"
         :finding-location-label="findingLocationLabel"
@@ -2627,6 +2957,7 @@ onBeforeUnmount(clearPreviewUrl)
         @run="runValuation"
         @fix-finding="goToFinding"
         @go-submit="goToSubmit"
+        @download-template="downloadTemplateExport"
       />
 
       <p v-if="notice" class="inline-notice" role="status">{{ notice }}</p>

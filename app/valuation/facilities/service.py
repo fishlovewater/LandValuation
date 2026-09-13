@@ -4,7 +4,7 @@ from typing import Any
 
 from app.core.exceptions import AppError
 
-from .google_maps_client import GoogleMapsClient
+from .mapbox_client import MapboxClient
 from .schemas import NearestFacilityRequest
 
 
@@ -12,8 +12,8 @@ class FacilityService:
     SEARCH_RADIUS_M = 2000
     MAX_CANDIDATES = 5
 
-    def __init__(self, client: GoogleMapsClient | None = None) -> None:
-        self.client = client or GoogleMapsClient()
+    def __init__(self, client: MapboxClient | None = None) -> None:
+        self.client = client or MapboxClient()
         self._owns_client = client is None
 
     async def close(self) -> None:
@@ -31,7 +31,7 @@ class FacilityService:
         if not self.client.configured:
             raise AppError(
                 "MAP_PROVIDER_NOT_CONFIGURED",
-                "尚未設定 GOOGLE_MAPS_API_KEY，無法執行外部步行距離查詢",
+                "尚未設定 MAPBOX_ACCESS_TOKEN，無法執行外部步行距離查詢",
                 503,
             )
 
@@ -89,8 +89,8 @@ class FacilityService:
             "destination_latitude": Decimal(str(best_candidate["lat"])),
             "destination_longitude": Decimal(str(best_candidate["lng"])),
             "destination_place_id": best_candidate.get("place_id"),
-            "provider": "GOOGLE_MAPS",
-            "route_method": "DISTANCE_MATRIX_WALKING",
+            "provider": "MAPBOX",
+            "route_method": "MAPBOX_DIRECTIONS_WALKING",
             "route_reference": None,
             "search_radius_m": self.SEARCH_RADIUS_M,
             "candidate_count": len(candidates),

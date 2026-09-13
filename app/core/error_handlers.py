@@ -5,6 +5,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from app.core.config import get_settings
 from app.core.exceptions import AppError
 
 logger = logging.getLogger(__name__)
@@ -18,6 +19,16 @@ def _payload(request: Request, code: str, message: str, details=None) -> dict:
             "details": details,
             "request_id": getattr(request.state, "request_id", None),
         }
+    }
+
+
+def _development_diagnostics(exc: Exception) -> dict | None:
+    """Return safe local diagnostics without exposing internals in production."""
+    if get_settings().app_env.lower() not in {"development", "test"}:
+        return None
+    return {
+        "exception_type": type(exc).__name__,
+        "exception_message": str(exc) or repr(exc),
     }
 
 
@@ -61,5 +72,10 @@ def register_error_handlers(app: FastAPI) -> None:
         logger.exception("Unhandled application error", exc_info=exc)
         return JSONResponse(
             status_code=500,
-            content=_payload(request, "INTERNAL_ERROR", "系統發生未預期錯誤，請稍後再試。"),
+            content=_payload(
+                request,
+                "INTERNAL_ERROR",
+                "系統發生未預期錯誤，請稍後再試。",
+                _development_diagnostics(exc),
+            ),
         )

@@ -315,6 +315,11 @@ export interface AutomatedWorkflowResponseDto {
   manual_field_errors: Record<string, string>
   manual_field_values: Record<string, Record<string, unknown>>
   manual_field_values_by_location: Record<string, Record<string, Record<string, unknown>>>
+  manual_field_catalog?: Record<string, string[]>
+  manual_field_metadata?: Record<string, Record<string, {
+    label: string
+    guidance: string
+  }>>
 }
 
 export interface ManualFieldValuesRequestDto {

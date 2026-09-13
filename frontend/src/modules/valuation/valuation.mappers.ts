@@ -374,20 +374,40 @@ export function mapSubmitForReviewResult(dto: SubmitForReviewResultDto): Submiss
 }
 
 export function mapF03Update(values: F03EditableValues): F03DraftUpdateDto {
-  return {
-    benchmark_land_id: values.benchmarkLandId,
-    comparison_analysis_id: values.comparisonAnalysisId,
-    valuation_base_date: values.valuationBaseDate,
-    comparison_price: values.comparisonPrice,
-    comparison_weight: values.comparisonWeight,
-    income_price: values.incomePrice,
-    income_weight: values.incomeWeight,
-    market_period_start: values.marketPeriodStart,
-    market_period_end: values.marketPeriodEnd,
-    market_condition: values.marketCondition,
-    selection_scope_reason: values.selectionScopeReason,
-    decision_reason: values.decisionReason,
+  // Native date and number inputs use an empty string when they are cleared.
+  // F03 accepts omitted optional fields, but FastAPI correctly rejects an empty
+  // string for UUID, date, and Decimal values.  Send only actual input values;
+  // blank optional fields remain blank rather than turning into an invalid API
+  // request (or an accidental null update of a required F03 field).
+  const optionalValue = (value: string | null): string | undefined => {
+    const normalized = value?.trim()
+    return normalized || undefined
   }
+
+  const payload: F03DraftUpdateDto = {}
+  const fieldMap: Record<keyof F03EditableValues, keyof F03DraftUpdateDto> = {
+    benchmarkLandId: 'benchmark_land_id',
+    comparisonAnalysisId: 'comparison_analysis_id',
+    valuationBaseDate: 'valuation_base_date',
+    comparisonPrice: 'comparison_price',
+    comparisonWeight: 'comparison_weight',
+    incomePrice: 'income_price',
+    incomeWeight: 'income_weight',
+    marketPeriodStart: 'market_period_start',
+    marketPeriodEnd: 'market_period_end',
+    marketCondition: 'market_condition',
+    selectionScopeReason: 'selection_scope_reason',
+    decisionReason: 'decision_reason',
+  }
+
+  for (const [sourceField, targetField] of Object.entries(fieldMap) as Array<
+    [keyof F03EditableValues, keyof F03DraftUpdateDto]
+  >) {
+    const value = optionalValue(values[sourceField])
+    if (value !== undefined) payload[targetField] = value
+  }
+
+  return payload
 }
 
 export function sourceForCalculatedValue(): SourceMarker {

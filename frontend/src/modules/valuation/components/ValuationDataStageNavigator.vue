@@ -73,6 +73,8 @@ const emit = defineEmits<{
           <small>{{ props.issueCounts.manual ? `${props.issueCounts.manual} 項必要資料待補` : '可檢視與補充' }}</small>
         </span>
       </button>
+        </span>
+      </button>
       <button
         type="button"
         :class="{ 'is-active': props.activeSection === 'f03' }"

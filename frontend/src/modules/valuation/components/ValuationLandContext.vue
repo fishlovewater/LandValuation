@@ -10,7 +10,8 @@ import {
   PhTarget as Target,
   PhX as X,
 } from '@phosphor-icons/vue'
-import type { BenchmarkLandModel, DocumentArtifactModel, ParcelResponseDto } from '../valuation.types'
+import { computed } from 'vue'
+import type { BenchmarkLandModel, DocumentArtifactModel, ParcelResponseDto, ValuationLocationDto } from '../valuation.types'
 import { newTaipeiDistrictName } from '../newTaipei'
 
 type ParcelDraft = {
@@ -35,6 +36,7 @@ type BenchmarkDraft = {
 
 const props = defineProps<{
   parcels: ParcelResponseDto[]
+  locations: ValuationLocationDto[]
   benchmarks: BenchmarkLandModel[]
   documents: DocumentArtifactModel[]
   parcelDraft: ParcelDraft
@@ -54,6 +56,12 @@ const emit = defineEmits<{
   saveBenchmark: []
   chooseBenchmark: [benchmarkLandId: string]
 }>()
+
+const activeLocations = computed(() => props.locations.filter((item) => item.is_active))
+const locationBackedParcels = computed(() => activeLocations.value)
+const selectedBenchmarkLocation = computed(() => (
+  activeLocations.value.find((item) => item.is_benchmark_location) ?? null
+))
 
 const showParcelEditor = ref(props.parcels.length === 0)
 const showBenchmarkEditor = ref(props.parcels.length > 0 && props.benchmarks.length === 0)
@@ -135,12 +143,12 @@ function nextLandActionLabel(): string {
         <div>
           <p>土地資料</p>
           <h2 id="land-context-title">宗地與比準地</h2>
-          <span>先確認本案宗地，再建立並指定後續查估採用的比準地。</span>
+          <span>本區只顯示前面步驟已帶入的宗地與比準地資料；沒有資料時可保留空白。</span>
         </div>
       </div>
       <div class="land-context__summary" aria-label="土地資料統計">
-        <span><MapPin :size="15" weight="fill" aria-hidden="true" />宗地 {{ parcels.length }}</span>
-        <span><Target :size="15" weight="fill" aria-hidden="true" />比準地 {{ benchmarks.length }}</span>
+        <span><MapPin :size="15" weight="fill" aria-hidden="true" />宗地 {{ parcels.length || locationBackedParcels.length }}</span>
+        <span><Target :size="15" weight="fill" aria-hidden="true" />比準地 {{ benchmarks.length || (selectedBenchmarkLocation ? 1 : 0) }}</span>
       </div>
     </header>
 
@@ -193,7 +201,7 @@ function nextLandActionLabel(): string {
             </div>
           </div>
           <div class="land-panel__heading-actions">
-            <span class="land-panel__count">{{ parcels.length }} 筆</span>
+            <span class="land-panel__count">{{ parcels.length || locationBackedParcels.length }} 筆</span>
             <button
               v-if="parcels.length && canEditLandContext && !showParcelEditor"
               type="button"
@@ -208,7 +216,7 @@ function nextLandActionLabel(): string {
         </div>
 
         <p class="land-panel__help">
-          確認段名、地號、面積與使用分區。既有資料有誤時可直接修改，不需要重複新增。
+          宗地資料沿用前面步驟的辨識或匯入結果；本步驟不需重複填寫，缺少的欄位可留白。
         </p>
 
         <ul v-if="parcels.length" class="land-records">
@@ -229,10 +237,23 @@ function nextLandActionLabel(): string {
             </button>
           </li>
         </ul>
-        <div v-else class="land-panel__empty">
+        <div v-else-if="!locationBackedParcels.length" class="land-panel__empty">
           <MapPin :size="20" weight="duotone" aria-hidden="true" />
-          <span>尚未建立宗地。先建立第一筆宗地，才能繼續設定比準地。</span>
+          <span>前面步驟尚未帶入宗地資料；本步驟可直接保留空白並繼續。</span>
         </div>
+
+        <ul v-if="!parcels.length && locationBackedParcels.length" class="land-records">
+          <li v-for="location in locationBackedParcels" :key="location.location_id">
+            <div class="land-records__content">
+              <strong>{{ location.label }}</strong>
+              <span>{{ location.address || '來源文件與 AI 辨識結果已綁定；地籍欄位未提供時保留空白' }}</span>
+            </div>
+            <span v-if="location.is_benchmark_location" class="benchmark-current">
+              <CheckCircle :size="14" weight="fill" aria-hidden="true" />
+              前一步已選為比準地
+            </span>
+          </li>
+        </ul>
 
         <form
           v-if="showParcelEditor"
@@ -338,7 +359,7 @@ function nextLandActionLabel(): string {
             </div>
           </div>
           <div class="land-panel__heading-actions">
-            <span class="land-panel__count">{{ benchmarks.length }} 筆</span>
+            <span class="land-panel__count">{{ benchmarks.length || (selectedBenchmarkLocation ? 1 : 0) }} 筆</span>
             <button
               v-if="parcels.length && benchmarks.length && canEditLandContext && !showBenchmarkEditor"
               type="button"
@@ -353,7 +374,7 @@ function nextLandActionLabel(): string {
         </div>
 
         <p class="land-panel__help">
-          更換比準地時請新增一筆，再明確指定給比準地地價估計表；既有紀錄保留，不直接覆寫。
+          比準地沿用前面步驟已選定的宗地；本步驟不需重新建立或指定，缺少時可保留空白。
         </p>
 
         <ul v-if="benchmarks.length" class="land-records land-records--benchmark">
@@ -383,9 +404,14 @@ function nextLandActionLabel(): string {
             </div>
           </li>
         </ul>
-        <div v-else class="land-panel__empty">
+        <div v-else-if="!selectedBenchmarkLocation" class="land-panel__empty">
           <Target :size="20" weight="duotone" aria-hidden="true" />
-          <span>{{ parcels.length ? '尚未建立比準地；請從已確認宗地建立比較基準。' : '請先完成宗地資料，再建立比準地。' }}</span>
+          <span>前面步驟尚未選定比準地；本步驟可直接保留空白並繼續。</span>
+        </div>
+
+        <div v-if="!benchmarks.length && selectedBenchmarkLocation" class="land-panel__empty land-panel__empty--selected">
+          <Target :size="20" weight="fill" aria-hidden="true" />
+          <span>「{{ selectedBenchmarkLocation.label }}」已由前一步選為比準地；後續表單會直接使用此選擇。</span>
         </div>
 
         <form v-if="showBenchmarkEditor && parcels.length" id="benchmark-editor" class="land-form" @submit.prevent="emit('saveBenchmark')">

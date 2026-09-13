@@ -15,6 +15,7 @@ class DocumentCategory(StrEnum):
     MAP_SECTION_SKETCH = "map-section-sketch"
     MAP_ZONING = "map-zoning"
     MAP_LAND_VALUE_SECTION = "map-land-value-section"
+    AI_MAP_EVIDENCE = "ai-map-evidence"
     COMPLETE_VALUATION_REPORT = "complete-valuation-report"
 
 

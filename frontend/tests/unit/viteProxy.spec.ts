@@ -7,14 +7,14 @@ import { loadConfigFromFile } from 'vite'
 const frontendRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
 describe('local API proxy', () => {
-  it('proxies /api to the persistent Demo API without changing the path', async () => {
+  it('proxies /api to the local FastAPI service without changing the path', async () => {
     const loaded = await loadConfigFromFile(
       { command: 'serve', mode: 'development' },
       resolve(frontendRoot, 'vite.config.ts'),
     )
 
     expect(loaded?.config.server?.proxy?.['/api']).toEqual({
-      target: 'http://127.0.0.1:18000',
+      target: 'http://127.0.0.1:8000',
       changeOrigin: false,
     })
   })

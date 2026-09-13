@@ -169,3 +169,10 @@ class AutomatedWorkflowResponse(BaseModel):
     manual_field_errors: dict[str, str] = Field(default_factory=dict)
     manual_field_values: dict[str, dict[str, Any]] = Field(default_factory=dict)
     manual_field_values_by_location: dict[str, dict[str, dict[str, Any]]] = Field(default_factory=dict)
+    # Canonical fields that may be filled manually when no AI candidate was
+    # produced at all.  This is additive so older clients can ignore it.
+    manual_field_catalog: dict[str, list[str]] = Field(default_factory=dict)
+    # Human-readable names and evidence guidance for every catalogue field.
+    # Keeping this separate preserves the original list-of-field-names API
+    # contract while preventing the UI from falling back to generic labels.
+    manual_field_metadata: dict[str, dict[str, dict[str, str]]] = Field(default_factory=dict)

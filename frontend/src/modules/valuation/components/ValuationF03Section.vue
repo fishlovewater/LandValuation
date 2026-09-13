@@ -177,14 +177,11 @@ function reasonDataReady(): boolean {
             </div>
           </div>
           <div class="field-grid">
-            <label>
-              <span>比準地 *</span>
-              <select id="f03-benchmark-land" v-model="props.draft.benchmarkLandId" data-value-kind="human-confirmed" @input="emit('dirty')">
-                <option :value="null">請選擇比準地</option>
-                <option v-for="land in benchmarks" :key="land.benchmarkLandId" :value="land.benchmarkLandId">{{ land.benchmarkLandNo }}｜{{ land.priceZoneNo }}</option>
-              </select>
-              <small>可選 {{ benchmarks.length }} 筆已建立比準地。</small>
-            </label>
+            <div class="field-readonly field-grid__wide">
+              <span>比準地</span>
+              <strong>沿用前面步驟已選定的比準宗地</strong>
+              <small>本頁不需重新選擇；前面沒有資料時保留空白即可。</small>
+            </div>
             <label>
               <span>估價基準日 *</span>
               <input id="f03-valuation-base-date" v-model="props.draft.valuationBaseDate" type="date" @input="emit('dirty')">
@@ -331,6 +328,19 @@ function reasonDataReady(): boolean {
 .value-kind[data-value-kind="human-confirmed"] { border-color: #d8e4ef; color: #315d84; background: #f1f6fb; }
 .value-kind[data-source-kind="calculated"],
 .value-kind[data-value-kind="calculated"] { border-color: #d7e4ef; color: #2e5984; background: #edf4fb; }
+
+.field-readonly {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--app-line);
+  border-radius: 8px;
+  color: var(--app-ink-soft);
+  background: #f7f9fc;
+}
+.field-readonly span { font-size: 11px; font-weight: 800; }
+.field-readonly strong { color: var(--app-ink); font-size: 12px; }
+.field-readonly small { color: var(--app-muted); font-size: 10px; line-height: 1.45; }
 
 .official-value {
   gap: 12px;

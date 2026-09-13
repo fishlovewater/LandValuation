@@ -127,6 +127,44 @@ class DocumentRepository:
         await self.session.refresh(record)
         return record
 
+    async def overwrite_generated_document(
+        self,
+        record: DocumentRecord,
+        *,
+        location_id: UUID | None,
+        document_type: str,
+        original_filename: str,
+        mime_type: str,
+        bucket_name: str,
+        object_key: str,
+        checksum_sha256: str,
+        file_size_bytes: int,
+        storage_etag: str,
+        uploaded_by_user_id: UUID | None,
+    ) -> DocumentRecord:
+        """Replace a regenerable output without creating a competing version.
+
+        Working Excel templates are derived artifacts, not user source files.
+        Keeping one stable record per template scope makes a retry an overwrite
+        and prevents a stale or parallel request from violating the document
+        group/version uniqueness constraint.
+        """
+
+        record.location_id = location_id
+        record.document_type = document_type
+        record.original_filename = original_filename
+        record.mime_type = mime_type
+        record.bucket_name = bucket_name
+        record.object_key = object_key
+        record.checksum_sha256 = checksum_sha256
+        record.file_size_bytes = file_size_bytes
+        record.storage_etag = storage_etag
+        record.uploaded_by_user_id = uploaded_by_user_id
+        record.is_active = True
+        await self.session.flush()
+        await self.session.refresh(record)
+        return record
+
     async def reclassify(
         self, record: DocumentRecord, category: str
     ) -> DocumentRecord:

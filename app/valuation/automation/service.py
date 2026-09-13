@@ -37,6 +37,11 @@ from app.valuation.documents.repository import DocumentRepository
 from app.valuation.documents.service import safe_filename
 from app.valuation.documents.service import DocumentService
 from app.valuation.extraction.field_analysis import FieldAnalysisService
+from app.valuation.extraction.field_catalog import (
+    FIELD_ANALYSIS_CATALOGS,
+    field_input_guidance,
+    field_label_zh,
+)
 from app.valuation.extraction.repository import ExtractionRepository
 from app.valuation.extraction.schemas import (
     CandidateConfirmation,
@@ -130,6 +135,108 @@ F04_AUTO_APPLY_FIELDS = frozenset(
         *F04_CANDIDATE_TO_DRAFT_FIELD,
     }
 )
+
+_MANUAL_FIELD_CATALOG_EXCLUDED = frozenset(
+    {
+        # Relationship, audit and output fields are owned by the workflow.
+        "benchmark_land_id",
+        "benchmark_land_no",
+        "benchmark_valuation_id",
+        "comparison_analysis_id",
+        "comparison_targets",
+        "parcel_id",
+        "rule_version_id",
+        "subject_role",
+        "comparison_result_version_id",
+        "income_result_version_id",
+        "rounding_increment",
+        "rounding_rule_version",
+        "source_and_rule_versions",
+        "source_document_versions",
+        "page_parcel_serials",
+        "pagination",
+
+        # Deterministic calculation outputs.  Keep these out of both the
+        # optional catalogue and the manual-field persistence path, even when
+        # a legacy catalogue describes one as an input or reference value.
+        "absolute_adjustment_total",
+        "accumulated_depreciation_raw",
+        "adjusted_unit_price_display",
+        "adjusted_unit_price_raw",
+        "average_internal_road_width_m",
+        "benchmark_comparison_price",
+        "benchmark_comparison_price_raw",
+        "benchmark_land_price",
+        "building_cost_total_raw",
+        "calculation_building_area",
+        "capital_interest_rate_raw",
+        "comparison_price",
+        "comparison_price_raw",
+        "cost_components_raw",
+        "date_adjustment_rate",
+        "elapsed_years_raw",
+        "individual_factor_rate",
+        "individual_factor_total",
+        "land_price_raw",
+        "normal_land_total_price",
+        "normal_land_unit_price",
+        "normal_land_unit_price_raw",
+        "normal_total_price_raw",
+        "parcel_market_price",
+        "regional_factor_rate",
+        "regional_adjustment_rate",
+        "time_adjustment_rate",
+        "total_adjustment_rate_raw",
+        "trial_price",
+        "trial_price_raw",
+        "weight_total",
+        "weighted_value_raw",
+    }
+)
+
+
+def is_manual_field_allowed(form_code: str, field_name: str) -> bool:
+    """Return whether a workbench value may be supplied by a user.
+
+    The workbench is intentionally permissive about older/alias field names,
+    because those values are retained in ``manual_overrides`` for audit.  It
+    must never, however, accept a field that the formal workflow calculates or
+    generates itself.
+    """
+
+    if field_name in _MANUAL_FIELD_CATALOG_EXCLUDED:
+        return False
+    guidance = FIELD_ANALYSIS_CATALOGS.get(form_code, {}).get(field_name, "")
+    generated_markers = ("後端計算", "後端格式化", "系統產生", "流程產生", "系統記錄")
+    return not any(marker in guidance for marker in generated_markers)
+
+
+def manual_field_catalog() -> dict[str, list[str]]:
+    """Return optional evidence fields that remain fillable without AI output."""
+
+    return {
+        form_code: sorted(
+            field_name
+            for field_name, guidance in fields.items()
+            if is_manual_field_allowed(form_code, field_name)
+        )
+        for form_code, fields in FIELD_ANALYSIS_CATALOGS.items()
+    }
+
+
+def manual_field_metadata() -> dict[str, dict[str, dict[str, str]]]:
+    """Provide Chinese labels for the optional manual-field catalogue."""
+
+    return {
+        form_code: {
+            field_name: {
+                "label": field_label_zh(form_code, field_name),
+                "guidance": field_input_guidance(form_code, field_name),
+            }
+            for field_name in field_names
+        }
+        for form_code, field_names in manual_field_catalog().items()
+    }
 
 AUTO_EXTRACT_MIME_TYPES = frozenset(
     {
@@ -261,13 +368,68 @@ class AutomatedWorkflowService:
                 elif manifest.create_commercial_report:
                     warnings.append("COMMERCIAL_TEMPLATE_SKIPPED_FOR_OTHER_LAND_USE")
             else:
-                # Reusing an existing case only appends evidence files; never
-                # overwrite the established case, parcel, or benchmark data.
+                # Reusing an existing case must not overwrite established
+                # metadata, but an earlier case shell may have been created
+                # before the intake manifest was persisted.  In that case the
+                # old implementation silently discarded manifest.parcels and
+                # left the case with documents but no parcel records.
                 case = await self.valuation.get_case(existing_case, user)
+                existing_parcels = await self.valuation.list_parcels(case.case_id, user)
+                active_locations = list(
+                    (
+                        await self.session.scalars(
+                            select(ValuationLocationRecord)
+                            .where(
+                                ValuationLocationRecord.case_id == case.case_id,
+                                ValuationLocationRecord.is_active.is_(True),
+                            )
+                            .order_by(ValuationLocationRecord.display_order)
+                        )
+                    ).all()
+                )
                 parcels = []
                 benchmark_lands = []
                 warnings.append("EXISTING_CASE_DOCUMENTS_APPENDED")
-                if manifest.parcels or manifest.benchmark_lands:
+                if not existing_parcels and manifest.parcels:
+                    # A location is the authoritative unit in the new
+                    # multi-location flow.  If the manifest omitted the
+                    # optional location_id, bind rows by display order only
+                    # when the cardinality is unambiguous.
+                    can_bind_by_order = len(active_locations) == len(manifest.parcels)
+                    restored_payloads = [
+                        payload.model_copy(
+                            update={
+                                "location_id": (
+                                    payload.location_id
+                                    or (
+                                        active_locations[index].location_id
+                                        if can_bind_by_order
+                                        else None
+                                    )
+                                )
+                            }
+                        )
+                        for index, payload in enumerate(manifest.parcels)
+                    ]
+                    parcels = [
+                        await self.valuation.create_parcel(
+                            case.case_id, payload, user
+                        )
+                        for payload in restored_payloads
+                    ]
+                    if manifest.benchmark_lands:
+                        benchmark_lands = [
+                            await self.f03.create_benchmark_land(
+                                case.case_id,
+                                payload.as_create(
+                                    parcels[payload.parcel_index].parcel_id
+                                ),
+                                user,
+                            )
+                            for payload in manifest.benchmark_lands
+                        ]
+                    warnings.append("EXISTING_CASE_METADATA_RESTORED")
+                elif manifest.parcels or manifest.benchmark_lands:
                     warnings.append("EXISTING_CASE_METADATA_IGNORED")
 
                 forms = await self.valuation.list_forms(case.case_id, user)
@@ -278,6 +440,16 @@ class AutomatedWorkflowService:
                         FormCreate(
                             form_code=FormCode.F03,
                             prepared_date=manifest.prepared_date,
+                        ),
+                        user,
+                    )
+                if benchmark_lands:
+                    await self.f03.update_draft(
+                        case.case_id,
+                        f03_form.form_instance_id,
+                        F03DraftUpdate(
+                            benchmark_land_id=benchmark_lands[0].benchmark_land_id,
+                            valuation_base_date=case.valuation_base_date,
                         ),
                         user,
                     )
@@ -498,14 +670,20 @@ class AutomatedWorkflowService:
                 .limit(1)
             )
             if has_factor_candidate is not None:
-                # Confirming OCR/Codex evidence is intentionally independent
-                # from formal factor calculation. Applying F02-RF values
-                # requires a reviewed rule version to translate raw evidence
-                # into formal levels, but that later prerequisite must not
-                # roll back an otherwise valid review decision.
-                warnings.append(
-                    "F02_RF_CONFIRMED_CANDIDATES_AWAIT_RULE_VERSION"
-                )
+                # The extraction workbench is the human-confirmation point.
+                # Once confirmed, immediately copy F02-RF values into the
+                # formal page so the calculation step consumes the same data.
+                # A missing rule version is reported as a warning and does not
+                # undo the user's confirmation; the next calculation can try
+                # the same confirmed candidates again after the rule is ready.
+                try:
+                    await ReportPageService(self.session).apply_extracted_candidates(
+                        case_id,
+                        report_root.form_instance_id,
+                        user,
+                    )
+                except AppError as exc:
+                    warnings.append(f"F02_RF_APPLY_SKIPPED_{exc.code}")
         await self._save_confirmation_export(case_id, user)
         response = await self._response(
             case_id,
@@ -553,7 +731,12 @@ class AutomatedWorkflowService:
         requested_codes = {
             form_code
             for form_code, fields in (payload.values or {}).items()
-            if any(value is not None and str(value).strip() for value in (fields or {}).values())
+            if any(
+                value is not None
+                and str(value).strip()
+                and is_manual_field_allowed(form_code, field_name)
+                for field_name, value in (fields or {}).items()
+            )
         }
         for code in (FormCode.F01.value, FormCode.F04.value):
             if code not in requested_codes or code in forms_by_code:
@@ -659,6 +842,22 @@ class AutomatedWorkflowService:
             }
             if not non_empty:
                 continue
+            blocked = [
+                name for name in non_empty
+                if not is_manual_field_allowed(form_code, name)
+            ]
+            for name in blocked:
+                errors[f"{form_code}.{name}"] = (
+                    "此欄位由正式規則或系統流程產生，不能人工填寫；"
+                    "請先完成前置資料後重新計算。"
+                )
+            non_empty = {
+                name: value
+                for name, value in non_empty.items()
+                if name not in blocked
+            }
+            if not non_empty:
+                continue
             accepted = {
                 name: value
                 for name, value in non_empty.items()
@@ -735,6 +934,7 @@ class AutomatedWorkflowService:
                 name: value
                 for name, value in (payload.values or {}).get("F02", {}).items()
                 if name in F02DraftUpdate.model_fields
+                and is_manual_field_allowed("F02", name)
                 and value is not None
                 and str(value).strip() != ""
             },
@@ -742,6 +942,7 @@ class AutomatedWorkflowService:
                 name: value
                 for name, value in (payload.values or {}).get("F02-RF", {}).items()
                 if name in F02RFDraftUpdate.model_fields
+                and is_manual_field_allowed("F02-RF", name)
                 and value is not None
                 and str(value).strip() != ""
             },
@@ -780,6 +981,7 @@ class AutomatedWorkflowService:
         s01_values = {
             name: value
             for name, value in (payload.values or {}).get("S01", {}).items()
+            if is_manual_field_allowed("S01", name)
             if value is not None and str(value).strip() != ""
         }
         if s01_values and report_root is not None and payload.location_id is None:
@@ -1819,10 +2021,10 @@ class AutomatedWorkflowService:
         ) is not None
         missing_items = self._workflow_missing_items(
             pending=pending,
+            # Parcel and benchmark data are sourced from the earlier intake
+            # step when available.  Missing values remain blank for the
+            # second review system and must not block moving forward.
             has_parcels=bool(parcels),
-            # The multi-location workflow selects its benchmark in step two.
-            # A legacy BenchmarkLandRecord is only needed for formal F03 work,
-            # not for normal case progress or document review.
             has_benchmarks=bool(benchmarks) or has_selected_benchmark_location,
             has_report=report_id is not None,
             land_use_type=case.land_use_type,
@@ -1873,6 +2075,8 @@ class AutomatedWorkflowService:
             ),
             manual_field_values=manual_field_values,
             manual_field_values_by_location=manual_field_values_by_location,
+            manual_field_catalog=manual_field_catalog(),
+            manual_field_metadata=manual_field_metadata(),
         )
     @staticmethod
     def _manual_values_by_scope(forms: list[object]) -> tuple[
@@ -1908,10 +2112,9 @@ class AutomatedWorkflowService:
         missing: list[str] = []
         if pending:
             missing.append("AI_CANDIDATES_REQUIRE_CONFIRMATION")
-        if not has_parcels:
-            missing.append("PARCELS_REQUIRED")
-        if not has_benchmarks:
-            missing.append("BENCHMARK_LAND_REQUIRED")
+        # Do not turn missing parcel/benchmark records into workflow blockers.
+        # The prepare page is allowed to continue with blank cells, while
+        # previously captured values are still carried into the exports.
         normalized_land_use = str(land_use_type or "").strip().upper()
         if not has_report and normalized_land_use in {"COMMERCIAL", "商業用地"}:
             missing.append("COMMERCIAL_REPORT_REQUIRED")

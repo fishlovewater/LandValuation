@@ -152,6 +152,18 @@ class StubProvider:
         return self.result
 
 
+class FailingProvider:
+    provider_name = "TEXTRACT"
+
+    def __init__(self, error: AppError) -> None:
+        self.error = error
+        self.calls = 0
+
+    async def extract(self, content: bytes) -> ExtractionResult:
+        self.calls += 1
+        raise self.error
+
+
 class FakeS3Client:
     def __init__(self) -> None:
         self.uploads = []
@@ -347,12 +359,62 @@ async def test_auto_provider_uses_local_ocr_without_textract_settings() -> None:
     assert local_ocr.calls == 1
 
 
+@pytest.mark.asyncio
+async def test_auto_provider_falls_back_when_textract_is_unavailable() -> None:
+    local = StubProvider(
+        ExtractionResult(
+            text="本機 PDF 文字",
+            page_count=1,
+            candidates=(),
+            provider="LOCAL_PDF",
+        )
+    )
+    textract = FailingProvider(
+        AppError("TEXTRACT_UNAVAILABLE", "Textract 暫時無法使用", 503)
+    )
+
+    result = await AutoPdfExtractionProvider(
+        local_provider=local,
+        textract_provider=textract,
+    ).extract(b"pdf")
+
+    assert result.provider == "LOCAL_PDF"
+    assert result.text == "本機 PDF 文字"
+    assert textract.calls == 1
+    assert local.calls == 1
+
+
 def test_auto_factory_without_aws_settings_still_supports_local_pdf() -> None:
     settings = Settings(
         _env_file=None,
         document_extraction_provider="auto",
         textract_region=None,
         textract_s3_bucket=None,
+    )
+
+    provider = build_document_extraction_provider(settings)
+
+    assert isinstance(provider, AutoPdfExtractionProvider)
+    assert provider.textract_provider is None
+    assert isinstance(provider.local_ocr_provider, LocalOcrPdfExtractionProvider)
+
+
+def test_auto_factory_keeps_local_fallback_when_aws_profile_is_unavailable(
+    monkeypatch,
+) -> None:
+    def unavailable_textract(_settings):
+        raise AppError("TEXTRACT_UNAVAILABLE", "AWS profile unavailable", 503)
+
+    monkeypatch.setattr(
+        "app.valuation.extraction.provider.TextractPdfExtractionProvider",
+        unavailable_textract,
+    )
+    settings = Settings(
+        _env_file=None,
+        document_extraction_provider="auto",
+        textract_region="us-east-1",
+        textract_s3_bucket="temporary-textract-bucket",
+        aws_profile="land-valuation",
     )
 
     provider = build_document_extraction_provider(settings)

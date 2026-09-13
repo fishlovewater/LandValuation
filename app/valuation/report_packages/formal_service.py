@@ -48,6 +48,11 @@ from app.valuation.report_packages.formal_calculation import (
     sum_absolute_adjustments,
     sum_adjustments,
 )
+from app.valuation.report_packages.multi_location_regional import (
+    RULE_SOURCE as MULTI_LOCATION_REGIONAL_RULE_SOURCE,
+    RULE_VERSION as MULTI_LOCATION_REGIONAL_RULE_VERSION,
+    calculate_multi_location_regional_adjustments,
+)
 from app.valuation.report_packages.formal_schemas import (
     FormalCalculationResponse,
     FormalReportResponse,
@@ -57,7 +62,6 @@ from app.valuation.report_packages.formal_schemas import (
     FormalWorkflowStatusResponse,
     TemplateExportResponse,
 )
-from app.valuation.report_packages.formal_xlsx_builder import build_formal_report_xlsx
 from app.valuation.report_packages.template_exports import (
     EXCEL_MIME,
     TEMPLATE_EXPORTS,
@@ -160,6 +164,39 @@ class FormalReportService:
         )
         self.documents = documents or DocumentRepository(session)
 
+    async def _use_selected_location_benchmark(
+        self,
+        case_id: UUID,
+        regional: F02RFDraftData,
+        comparison: F02DraftData,
+    ) -> bool:
+        """Use the benchmark selected in the multi-location intake flow.
+
+        Multi-location cases choose their benchmark location before the report
+        pages are opened.  They do not need a legacy BenchmarkLandRecord or a
+        separately-created comparison analysis just to pass the formal
+        calculation gate.  Treat the location selection as authoritative and
+        keep the report pages available for the second review system to fill.
+        """
+        selected_location_id = await self.session.scalar(
+            select(ValuationLocationRecord.location_id).where(
+                ValuationLocationRecord.case_id == case_id,
+                ValuationLocationRecord.is_active.is_(True),
+                ValuationLocationRecord.is_benchmark_location.is_(True),
+            )
+        )
+        if selected_location_id is None or not comparison.comparison_workflow_enabled:
+            return False
+
+        comparison.comparison_workflow_enabled = False
+        comparison.benchmark_land_id = None
+        comparison.comparison_analysis_id = None
+        comparison.comparison_targets = []
+        comparison.benchmark_comparison_price = None
+        regional.benchmark_land_id = None
+        regional.comparison_analysis_id = None
+        return True
+
     async def calculate(
         self,
         case_id: UUID,
@@ -167,8 +204,27 @@ class FormalReportService:
         user: User,
     ) -> FormalCalculationResponse:
         case, records = await self.pages._editable_records(case_id, report_id, user)
+        # The extraction screen stores a human decision as CONFIRMED.  Make
+        # the calculation command the final integration point as well, so a
+        # user who confirmed candidates through the review API (instead of the
+        # automated workbench) does not have to copy the same values again.
+        has_confirmed_regional = await self.session.scalar(
+            select(ExtractedFieldRecord.extracted_field_id).where(
+                ExtractedFieldRecord.case_id == case_id,
+                ExtractedFieldRecord.form_code == "F02-RF",
+                ExtractedFieldRecord.field_status == "CONFIRMED",
+                ExtractedFieldRecord.confirmed_value.is_not(None),
+            ).limit(1)
+        )
+        if has_confirmed_regional is not None:
+            await self.pages.apply_extracted_candidates(case_id, report_id, user)
+            # The page service saved the same form instance in this session;
+            # reread the form content so this calculation uses the applied
+            # values rather than the object loaded before the sync.
+            _, records = await self.pages._editable_records(case_id, report_id, user)
         regional = self.pages._read_data(records["F02-RF"], F02RFDraftData)
         comparison = self.pages._read_data(records["F02"], F02DraftData)
+        await self._use_selected_location_benchmark(case_id, regional, comparison)
         if not comparison.comparison_workflow_enabled:
             return await self._calculate_without_comparison(
                 case_id=case_id,
@@ -210,6 +266,18 @@ class FormalReportService:
                 "F02 比較標的不存在或不屬於指定比較分析",
                 422,
             )
+        missing_normal_prices = [
+            str(target_id)
+            for target_id in selected_ids
+            if db_target_by_id[target_id].normal_unit_price_snapshot is None
+        ]
+        if missing_normal_prices:
+            raise AppError(
+                "COMPARISON_NORMAL_PRICE_MISSING",
+                "比較標的缺少土地正常單價，無法進行正式試算；請補齊買賣實例資料後重算",
+                422,
+                {"comparison_target_ids": sorted(missing_normal_prices)},
+            )
 
         rule, level_lookup = await self._formal_rule_and_levels(
             case,
@@ -243,6 +311,11 @@ class FormalReportService:
                 item.comparison_target_id: item for item in row.targets
             }
             for target_id, target_draft in row_target_by_id.items():
+                # F02-RF can retain factor values for all comparison targets,
+                # while F02 may intentionally select only a subset (1-3) for
+                # this calculation.  Ignore stale/unselected target ids.
+                if target_id not in target_regional:
+                    continue
                 comparable_level = (
                     self._resolve_level(
                         level_lookup, row.factor_code, target_draft.confirmed_level
@@ -322,7 +395,12 @@ class FormalReportService:
                 selected.weight = Decimal("1")
 
 
-            regional_adjustments = target_regional[selected.comparison_target_id]
+            # A regional row may be absent when all of its observations were
+            # intentionally skipped.  Treat that target as having no regional
+            # adjustment instead of leaking a KeyError as INTERNAL_ERROR.
+            regional_adjustments = target_regional.get(
+                selected.comparison_target_id, []
+            )
             regional_rate = sum_adjustments(regional_adjustments)
             individual_rate = sum_adjustments(individual_adjustments)
             result = calculate_target_price(
@@ -455,6 +533,12 @@ class FormalReportService:
                 422,
             )
         self._validate_rule(case, rule)
+        locations = (
+            [] if self.session is None else await self._template_location_data(case_id)
+        )
+        regional_adjustments = calculate_multi_location_regional_adjustments(
+            locations
+        )
         now = datetime.now(UTC)
         input_snapshot = self._input_snapshot(case, regional, comparison, {})
         fingerprint = self._fingerprint(input_snapshot)
@@ -464,12 +548,19 @@ class FormalReportService:
             "rule_version_id": str(rule.rule_version_id),
             "rule_version_no": rule.version_no,
             "comparison_workflow_enabled": False,
+            "multi_location_regional_rule_version": MULTI_LOCATION_REGIONAL_RULE_VERSION,
+            "multi_location_regional_rule_source": MULTI_LOCATION_REGIONAL_RULE_SOURCE,
+            "multi_location_regional_adjustments": regional_adjustments,
             "input_fingerprint": fingerprint,
             "inputs": input_snapshot,
             "targets": [],
             "benchmark_comparison_price": None,
         }
         regional.calculation_status = "CALCULATED"
+        regional.regional_adjustment_rates = {
+            location_id: Decimal(item["regional_adjustment_rate"])
+            for location_id, item in regional_adjustments.items()
+        }
         regional.calculation_snapshot = calculation_snapshot
         regional.calculated_at = now
         regional.calculated_by_user_id = user.user_id
@@ -533,6 +624,19 @@ class FormalReportService:
             )
 
         def warning(code: str, message: str, field: str | None = None) -> None:
+            if code in {
+                "S01_REQUIRED_FIELDS",
+                "S01_OBSERVATIONS_REQUIRED",
+                "S01_UNCONFIRMED_OBSERVATION",
+                "APPRAISER_NAME_MISSING",
+                "FORMAL_MAP_MISSING",
+                "FORMAL_MAP_MIME_INVALID",
+                "FORMAL_MAP_OBJECT_MISSING",
+            }:
+                # Competition exports allow blank S01 fields, an omitted
+                # appraiser, and absent optional maps.  Do not include those
+                # placeholders in the formal validation findings.
+                return
             findings.append(
                 FormalValidationFinding(
                     code=code, severity="WARNING", message=message, field_code=field
@@ -734,7 +838,12 @@ class FormalReportService:
                         request_id,
                     )
 
-        case, records = await self.pages._read_records(case_id, report_id, user)
+        # Serialise formal report generation per case so a retry cannot create
+        # competing document versions.
+        await self.pages.valuation._owned_editable_case(case_id, user)
+        case, records = await self.pages._read_records(
+            case_id, report_id, user, for_update=True
+        )
         validation = await self.repository.latest_report_validation(case_id, report_id)
         if validation is None or validation.failed_count > 0:
             raise AppError(
@@ -1465,7 +1574,12 @@ class FormalReportService:
     ) -> list[TemplateExportResponse]:
         if self.storage is None:
             raise RuntimeError("Template export requires storage")
-        case, records = await self.pages._read_records(case_id, report_id, user)
+        # A retry waits for the previous export transaction, then replaces the
+        # same derived Excel records with the latest calculation output.
+        await self.pages.valuation._owned_editable_case(case_id, user)
+        case, records = await self.pages._read_records(
+            case_id, report_id, user, for_update=True
+        )
         pages = {
             code: self.pages._read_data(records[code], model).model_dump(mode="json")
             for code, model in (
@@ -1511,6 +1625,30 @@ class FormalReportService:
                 str(case.land_use_type or "").strip().upper(),
             ),
         }
+        locations = await self._template_location_data(case_id)
+        regional_snapshot = pages["F02-RF"].get("calculation_snapshot") or {}
+        calculated_locations = regional_snapshot.get(
+            "multi_location_regional_adjustments", {}
+        )
+        if isinstance(calculated_locations, dict):
+            for location in locations:
+                calculated = calculated_locations.get(str(location["location_id"]))
+                if not isinstance(calculated, dict):
+                    continue
+                values = location.setdefault("values", {})
+                if isinstance(values, dict):
+                    raw_rates = calculated.get("factor_adjustment_rates", {})
+                    values["regional_factor_adjustment_rates"] = {
+                        str(code): Decimal(str(rate))
+                        for code, rate in raw_rates.items()
+                    } if isinstance(raw_rates, dict) else {}
+                    values["regional_factor_levels"] = calculated.get(
+                        "factor_levels", {}
+                    )
+                    total_rate = calculated.get("regional_adjustment_rate")
+                    values["regional_adjustment_rate"] = (
+                        None if total_rate is None else Decimal(str(total_rate))
+                    )
         jobs: list[tuple[object, dict[str, object] | None]] = []
         s01_definition = next(item for item in TEMPLATE_EXPORTS if item.code == "S01")
         if locations:
@@ -1552,17 +1690,26 @@ class FormalReportService:
                 NAMESPACE_URL,
                 f"land-valuation:{case_id}:report:{report_id}:template:{definition.code}:{scope_key}",
             )
-            version_no = await repository.next_version(case_id, group_id)
-            document_id = uuid4()
             suffix = "combined" if location is None else f"location-{location['display_order']}"
             output_filename = definition.output_filename
             output_title = definition.title
             filename = safe_filename(
                 f"{case.case_no}_{definition.code}_{suffix}_{output_filename}"
             )
-            object_key = build_generated_report_object_key(
-                case_id, group_id, document_id, version_no, filename
-            )
+            existing_document = await repository.latest_in_group(case_id, group_id)
+            if existing_document is None:
+                version_no = 1
+                document_id = uuid4()
+                object_key = build_generated_report_object_key(
+                    case_id, group_id, document_id, version_no, filename
+                )
+            else:
+                # These Excel files are regenerated from the current report
+                # pages.  Use the latest record and object key so the newest
+                # run replaces the old artifact instead of appending a version.
+                version_no = existing_document.version_no
+                document_id = existing_document.document_id
+                object_key = existing_document.object_key
             uploaded = await self.storage.upload(
                 object_key,
                 BytesIO(content),
@@ -1571,11 +1718,29 @@ class FormalReportService:
             )
             try:
                 await repository.deactivate_group(case_id, group_id)
-                document = await repository.create(
-                    DocumentRecord(
-                        document_id=document_id,
-                        document_group_id=group_id,
-                        case_id=case_id,
+                if existing_document is None:
+                    document = await repository.create(
+                        DocumentRecord(
+                            document_id=document_id,
+                            document_group_id=group_id,
+                            case_id=case_id,
+                            location_id=location_id,
+                            document_type="generated-template-xlsx",
+                            original_filename=filename,
+                            mime_type=EXCEL_MIME,
+                            bucket_name=str(uploaded["bucket_name"]),
+                            object_key=str(uploaded["object_key"]),
+                            checksum_sha256=sha256(content).hexdigest(),
+                            file_size_bytes=len(content),
+                            storage_etag=str(uploaded["etag"]),
+                            version_no=version_no,
+                            uploaded_by_user_id=user.user_id,
+                            is_active=True,
+                        )
+                    )
+                else:
+                    document = await repository.overwrite_generated_document(
+                        existing_document,
                         location_id=location_id,
                         document_type="generated-template-xlsx",
                         original_filename=filename,
@@ -1585,13 +1750,11 @@ class FormalReportService:
                         checksum_sha256=sha256(content).hexdigest(),
                         file_size_bytes=len(content),
                         storage_etag=str(uploaded["etag"]),
-                        version_no=version_no,
                         uploaded_by_user_id=user.user_id,
-                        is_active=True,
                     )
-                )
             except Exception:
-                await self.storage.delete(object_key)
+                if existing_document is None:
+                    await self.storage.delete(object_key)
                 raise
             title = output_title if location is None else f"{output_title}（{location_label}）"
             results.append(
@@ -1666,34 +1829,6 @@ class FormalReportService:
                 )
             )
         return results
-    async def export_xlsx(
-        self, case_id: UUID, report_id: UUID, user: User
-    ) -> tuple[bytes, str]:
-        """Export finalized structured report data as a readable workbook."""
-        case, records = await self.pages._read_records(case_id, report_id, user)
-        f02 = records["F02"]
-        if f02.form_status != FormStatus.FINAL.value or f02.output_document_id is None:
-            raise AppError(
-                "FORMAL_REPORT_REQUIRED",
-                "??????????????? PDF???????? Excel",
-                409,
-            )
-        document = await self.documents.get(case_id, f02.output_document_id)
-        if (
-            document is None
-            or not document.is_active
-            or document.document_type != "complete-valuation-report"
-        ):
-            raise AppError(
-                "FORMAL_REPORT_REQUIRED",
-                "??????????? PDF??????????? Excel",
-                409,
-            )
-        data = await self.pages.draft_pdf_data(case_id, report_id, user)
-        xlsx_bytes = await run_in_threadpool(build_formal_report_xlsx, data)
-        filename = safe_filename(f"valuation_data_{case.case_no}_v{f02.version_no}.xlsx")
-        return xlsx_bytes, filename
-
     async def status(
         self, case_id: UUID, report_id: UUID, user: User
     ) -> FormalWorkflowStatusResponse:
@@ -1822,12 +1957,10 @@ class FormalReportService:
             str(case.land_use_type or "").strip(),
             str(case.land_use_type or "").strip().upper(),
         )
-        if land_use != "COMMERCIAL":
-            raise AppError(
-                "FORMAL_REPORT_TEMPLATE_LAND_USE_UNSUPPORTED",
-                "目前正式六頁版型為商業用地查估書；其他用途須使用對應正式版型，不得誤套",
-                409,
-            )
+        # The competition workflow has one approved formal template and one
+        # fixed New Taipei rule for every supported land-use type.  Keep the
+        # case land-use value for factor-level lookup, but do not reject the
+        # report merely because it is not commercial land.
         if land_use not in set(rule.land_use_types or []):
             raise AppError(
                 "FORMAL_RULE_LAND_USE_NOT_APPLICABLE",

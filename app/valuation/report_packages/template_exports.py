@@ -355,13 +355,17 @@ def _build_f02_rf(wb, case: dict, f02rf: dict, f02: dict, locations: list[dict] 
             target = location_targets[index] if index < len(location_targets) else None
             fallback = fallback_targets[index] if index < len(fallback_targets) else {}
             target_data = _factor_target(factor, fallback, index + 1)
+            location_values = _values(target)
+            calculated_levels = location_values.get("regional_factor_levels") or {}
+            calculated_rates = location_values.get("regional_factor_adjustment_rates") or {}
             target_level = _factor_value(
                 target,
                 code,
-                target_data.get("confirmed_level") or target_data.get("reported_level"),
+                calculated_levels.get(code) or target_data.get("confirmed_level") or target_data.get("reported_level"),
             )
             _set(ws, f"{target_cols[index]}{row}", target_level, rows, code, f"比較標的 {index + 1}")
-            rate = _number(target_data.get("calculated_adjustment_rate"))
+            rate_val = calculated_rates.get(code, target_data.get("calculated_adjustment_rate"))
+            rate = _number(rate_val)
             _set(ws, f"{rate_cols[index]}{row}", rate, rows, f"{code}.adjustment_rate", "正式計算結果")
     _set(ws, "C40", f02rf.get("other_influences"), rows, "other")
     _set(ws, "C44", f02rf.get("notes"), rows, "case_note")

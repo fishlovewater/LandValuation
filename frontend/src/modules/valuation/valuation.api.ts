@@ -540,6 +540,16 @@ export function safeValuationErrorMessage(error: unknown): string {
       : typeof body?.detail === 'string'
         ? body.detail.trim()
         : ''
+    const details = body?.error?.details
+    if (code === 'INTERNAL_ERROR' && details && typeof details === 'object') {
+      const diagnostic = [
+        (details as { exception_type?: unknown }).exception_type,
+        (details as { exception_message?: unknown }).exception_message,
+      ]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .join(': ')
+      if (diagnostic) return `［${code}］${serverMessage}（${diagnostic}）`
+    }
     if (status === 413 && code === 'PREVIEW_TOO_LARGE') {
       return '文件檔案過大，請下載原始文件查看完整內容。'
     }

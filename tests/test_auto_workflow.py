@@ -16,6 +16,8 @@ from app.valuation.automation.service import (
     LOCATION_SCOPED_MANUAL_FORM_CODES,
     AutomatedWorkflowService,
     classify_document,
+    manual_field_catalog,
+    manual_field_metadata,
 )
 import app.valuation.automation.service as automation_service
 from app.valuation.documents.schemas import DocumentCategory
@@ -203,11 +205,22 @@ def test_missing_items_are_based_on_actual_requirements_not_report_presence() ->
     )
     assert missing == [
         "AI_CANDIDATES_REQUIRE_CONFIRMATION",
-        "PARCELS_REQUIRED",
-        "BENCHMARK_LAND_REQUIRED",
         "COMMERCIAL_REPORT_REQUIRED",
         "FORMAL_RULE_VERSION_MISSING",
     ]
+
+
+def test_manual_catalogue_exposes_only_non_calculated_fields_with_chinese_metadata() -> None:
+    catalog = manual_field_catalog()
+    metadata = manual_field_metadata()
+
+    assert "decision_reason" in catalog["F03"]
+    assert metadata["F03"]["decision_reason"]["label"] == "決定理由"
+    assert "人工輸入" in metadata["F03"]["decision_reason"]["guidance"]
+    assert "comparison_price" not in catalog["F03"]
+    assert "benchmark_land_price" not in catalog["F03"]
+    assert "trial_price" not in catalog["F02"]
+    assert "average_internal_road_width_m" not in catalog["S01"]
 
 @pytest.mark.parametrize(
     ("field_name", "raw_value", "expected"),

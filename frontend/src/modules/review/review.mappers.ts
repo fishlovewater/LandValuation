@@ -99,6 +99,7 @@ const DOCUMENT_TYPE_LABELS: Readonly<Record<string, string>> = {
   'MAP-SECTION-SKETCH': '地段圖',
   'MAP-ZONING': '使用分區圖',
   'MAP-LAND-VALUE-SECTION': '公告土地現值圖',
+  'AI-MAP-EVIDENCE': 'AI 地圖證據',
   'COMPLETE-VALUATION-REPORT': '完整送審 PDF',
   'REVIEW-REPORT': '審查報告',
   'CORRECTION-REQUEST': '修正通知',

@@ -34,7 +34,7 @@ ValuationEditor = Annotated[User, Depends(require_permissions("valuation.update"
     description=(
         "使用者可依主辦單位資料或自行查詢地圖，輸入設施名稱與"
         "最短步行距離。後端驗證、儲存到 S01 form_instances，並依"
-        "F02-RF 已選擇的正式規則級距轉換；不會呼叫 Google Maps。"
+        "F02-RF 已選擇的正式規則級距轉換；不會呼叫外部地圖服務。"
     ),
 )
 async def confirm_manual_walking_distance(

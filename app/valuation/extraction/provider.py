@@ -772,14 +772,20 @@ class TextractPdfExtractionProvider(DocumentExtractionProvider):
             connect_timeout=5,
             retries={"max_attempts": 2, "mode": "standard"},
         )
-        self.s3 = s3_client or boto3.client(
-            "s3",
+        # Keep Textract on the same explicitly configured AWS profile as the
+        # application's object-storage client.  Calling ``boto3.client``
+        # directly silently falls back to the default profile and causes the
+        # extraction worker to lose credentials when AWS_PROFILE is named.
+        session = boto3.Session(
+            profile_name=settings.aws_profile or None,
             region_name=settings.textract_region,
+        )
+        self.s3 = s3_client or session.client(
+            "s3",
             config=client_config,
         )
-        self.textract = textract_client or boto3.client(
+        self.textract = textract_client or session.client(
             "textract",
-            region_name=settings.textract_region,
             config=client_config,
         )
 
@@ -1056,17 +1062,25 @@ class AutoPdfExtractionProvider(DocumentExtractionProvider):
         # it preserves forms, tables, page coordinates, and confidence.
         # Local PDF/OCR remains a deterministic fallback for outages or blank
         # Textract results.
+        textract_result: ExtractionResult | None = None
         if self.textract_provider is not None:
-            textract_result = await self.textract_provider.extract(content)
-            if textract_result.text.strip():
-                return textract_result
+            try:
+                textract_result = await self.textract_provider.extract(content)
+                if textract_result.text.strip():
+                    return textract_result
+            except AppError:
+                # ``auto`` must remain usable when the optional AWS path is
+                # unavailable (expired credentials, S3 permissions, service
+                # outage, etc.).  Explicit ``textract`` mode still surfaces
+                # these errors because it does not use this wrapper.
+                pass
 
         local_result = await self.local_provider.extract(content)
         if local_result.text.strip():
             return local_result
         if self.local_ocr_provider is not None:
             return await self.local_ocr_provider.extract(content)
-        if self.textract_provider is not None:
+        if textract_result is not None:
             return textract_result
         return local_result
 
@@ -1084,7 +1098,18 @@ def build_document_extraction_provider(
 
     textract_provider: DocumentExtractionProvider | None = None
     if settings.textract_region and settings.textract_s3_bucket:
-        textract_provider = TextractPdfExtractionProvider(settings)
+        try:
+            textract_provider = TextractPdfExtractionProvider(settings)
+        except Exception as exc:
+            if settings.document_extraction_provider == "textract":
+                raise AppError(
+                    "TEXTRACT_UNAVAILABLE",
+                    "Textract 無法建立 AWS 連線，請確認 AWS profile 與憑證",
+                    503,
+                ) from exc
+            # In auto mode, a missing/expired AWS profile must not prevent
+            # the deterministic local PDF/OCR fallback from being built.
+            textract_provider = None
     elif settings.document_extraction_provider == "textract":
         raise AppError(
             "TEXTRACT_NOT_CONFIGURED",

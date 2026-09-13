@@ -42,3 +42,8 @@ frontend/playwright-report/
 
 # Local generated document previews
 docs/previews/
+
+# Local generated/recovery artifacts
+outputs/
+tmp/
+patch.py

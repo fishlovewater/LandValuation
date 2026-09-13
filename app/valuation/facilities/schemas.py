@@ -70,8 +70,8 @@ class NearestFacilityResponse(BaseModel):
     destination_latitude: Decimal
     destination_longitude: Decimal
     destination_place_id: str | None = None
-    provider: Literal["GOOGLE_MAPS"]
-    route_method: Literal["DISTANCE_MATRIX_WALKING"]
+    provider: Literal["MAPBOX"]
+    route_method: Literal["MAPBOX_DIRECTIONS_WALKING"]
     route_reference: str | None = None
     search_radius_m: int
     candidate_count: int

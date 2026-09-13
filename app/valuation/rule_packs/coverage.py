@@ -44,6 +44,19 @@ NEW_TAIPEI_CITYWIDE_SCOPE: dict[str, object] = {
     "district_codes": [],
 }
 
+# The application currently uses one fixed, versioned calculation rule for the
+# New Taipei demo/formal workflow.  Keep the rule's applicability in one place
+# so the seed data and database repair migration cannot accidentally publish a
+# rule that only works for one date or one land-use type.
+FIXED_RULE_EFFECTIVE_FROM = date(2020, 1, 1)
+FIXED_RULE_LAND_USE_TYPES = (
+    "RESIDENTIAL",
+    "COMMERCIAL",
+    "INDUSTRIAL",
+    "AGRICULTURAL",
+    "OTHER",
+)
+
 
 class RuleCoverageLike(Protocol):
     jurisdiction_code: str | None

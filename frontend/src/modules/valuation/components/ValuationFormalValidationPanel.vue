@@ -20,6 +20,8 @@ const props = defineProps<{
   submitting: boolean
   reportPackageReady: boolean
   authoritativeF02Status: string | null
+  excelHandoffReady: boolean
+  templateExportCount: number
 }>()
 
 const emit = defineEmits<{
@@ -146,7 +148,7 @@ function isAcknowledged(code: string): boolean {
                 :checked="isAcknowledged(finding.code)"
                 @change="emit('acknowledge', finding.code, ($event.target as HTMLInputElement).checked)"
               />
-              <span>我已確認此警示，允許產生正式 PDF</span>
+              <span>我已確認此警示，允許送出正式 Excel</span>
             </label>
           </div>
         </li>
@@ -158,7 +160,7 @@ function isAcknowledged(code: string): boolean {
         class="formal-validation-panel__blocker"
       >
         <WarningCircle :size="15" weight="fill" aria-hidden="true" />
-        <span>請逐項確認所有警示後，才能產生正式 PDF；系統不會代為確認。</span>
+        <span>請逐項確認所有警示後，才能送出正式 Excel；系統不會代為確認。</span>
       </p>
     </div>
     <div v-else class="formal-validation-panel__empty">
@@ -182,7 +184,7 @@ function isAcknowledged(code: string): boolean {
         <span>{{ props.formalValidating ? '送審文件檢核中…' : '執行送審文件檢核' }}</span>
       </button>
       <button
-        v-if="props.validation"
+        v-if="props.validation && !props.excelHandoffReady"
         class="is-primary"
         type="button"
         data-testid="generate-formal-pdf"
@@ -192,6 +194,11 @@ function isAcknowledged(code: string): boolean {
         <FilePdf v-if="!props.formalPdfGenerating" :size="16" weight="bold" aria-hidden="true" />
         <span>{{ props.formalPdfGenerating ? '正式 PDF 產生中…' : '產生正式送審 PDF' }}</span>
       </button>
+      <p v-if="props.validation?.canGenerateFormalReport" class="formal-validation-panel__excel-status">
+        {{ props.excelHandoffReady
+          ? `已準備 ${props.templateExportCount} 份正式 Excel，可直接送審。`
+          : '正式 Excel 尚未產生；請回到「計算與檢核」重新執行。' }}
+      </p>
     </div>
   </section>
 </template>
@@ -243,6 +250,7 @@ function isAcknowledged(code: string): boolean {
 .formal-validation-panel__actions button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 7px; padding: 10px 18px; border: 1px solid var(--app-line); border-radius: 9px; color: var(--app-ink-soft); background: var(--app-paper-strong); cursor: pointer; font-size: 13px; font-weight: 800; }
 .formal-validation-panel__actions button.is-primary { border-color: var(--app-accent); color: #fff; background: var(--app-accent); }
 .formal-validation-panel__actions button:disabled { cursor: not-allowed; opacity: .55; }
+.formal-validation-panel__excel-status { margin: 0; align-self: center; color: var(--app-green); font-size: 12px; font-weight: 800; }
 
 @media (max-width: 760px) {
   .formal-validation-panel { padding: 16px; }

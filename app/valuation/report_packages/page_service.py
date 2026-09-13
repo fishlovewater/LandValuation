@@ -18,6 +18,7 @@ from app.valuation.models import (
     DocumentRecord,
     ExtractedFieldRecord,
     FormInstanceRecord,
+    ValuationLocationRecord,
 )
 from app.valuation.report_packages.page_schemas import (
     F02DraftData,
@@ -27,6 +28,7 @@ from app.valuation.report_packages.page_schemas import (
     F02RFDraftUpdate,
     F02RFPageResponse,
     F02RFFactorDraft,
+    F02RFTargetLevelDraft,
     ReportBenchmarkContext,
     ReportPageCode,
     ReportPageContext,
@@ -36,7 +38,10 @@ from app.valuation.report_packages.page_schemas import (
     S01DraftUpdate,
     S01PageResponse,
 )
-from app.valuation.report_packages.factor_catalog import DISTANCE_FACTOR_CODES
+from app.valuation.report_packages.factor_catalog import (
+    DISTANCE_FACTOR_CODES,
+    TEMPLATE_FACTOR_CODES,
+)
 from app.valuation.report_packages.repository import ReportPackageRepository
 from app.valuation.report_packages.requirements import get_report_definition
 from app.valuation.report_packages.schemas import ReportDraftReadinessResponse
@@ -157,13 +162,20 @@ class ReportPageService:
             case, record, current, user
         )
 
-        # Query all CONFIRMED F02-RF candidates for this case
+        # Query all CONFIRMED F02-RF candidates for this case.  Confirmation
+        # happens in the extraction workbench, but must not require a second
+        # manual copy into the formal regional-factor page.
         stmt = (
             select(ExtractedFieldRecord)
             .where(
                 ExtractedFieldRecord.case_id == case_id,
                 ExtractedFieldRecord.form_code == "F02-RF",
                 ExtractedFieldRecord.field_status == "CONFIRMED",
+                ExtractedFieldRecord.confirmed_value.is_not(None),
+            )
+            .order_by(
+                ExtractedFieldRecord.updated_at.desc(),
+                ExtractedFieldRecord.created_at.desc(),
             )
         )
         candidates = list((await self.repository.session.scalars(stmt)).all())
@@ -194,8 +206,7 @@ class ReportPageService:
         for definition, level in level_rows:
             levels_by_factor.setdefault(definition.factor_code, []).append(level)
 
-        resolved: dict[str, str] = {}
-        unresolved: list[str] = []
+        resolved: dict[UUID, str] = {}
         for candidate in candidates:
             supplied = str(candidate.confirmed_value or "").strip()
             level = self._resolve_rule_level(
@@ -203,42 +214,121 @@ class ReportPageService:
                 levels_by_factor.get(candidate.field_name, []),
             )
             if level is None:
-                unresolved.append(candidate.field_name)
-            else:
-                resolved[candidate.field_name] = level
-        if unresolved:
-            raise AppError(
-                "F02_RF_LEVEL_UNRESOLVED",
-                "部分已確認因素無法依正式規則轉換為級距",
-                422,
-                {"fields": sorted(unresolved)},
-            )
+                continue
+            resolved[candidate.extracted_field_id] = level
+        # A confirmed observation is still useful evidence even when the
+        # published rule has no unambiguous range for its wording.  Skip only
+        # that factor instead of rejecting the whole multi-location run; the
+        # formal calculator treats an absent factor as no adjustment and keeps
+        # the original confirmed candidate available for later correction.
+        candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.extracted_field_id in resolved
+        ]
 
-        # Merge candidates into current factor rows
+        # Location-scoped extraction records are written to the matching
+        # formal factor column.  A candidate without a location keeps the
+        # legacy meaning of a benchmark value.  This is also what makes an
+        # already selected benchmark reusable without asking the user to
+        # select it again on F02-RF.
+        active_locations = list(
+            (
+                await self.repository.session.scalars(
+                    select(ValuationLocationRecord)
+                    .where(
+                        ValuationLocationRecord.case_id == case_id,
+                        ValuationLocationRecord.is_active.is_(True),
+                    )
+                    .order_by(ValuationLocationRecord.display_order)
+                )
+            ).all()
+        )
+        location_by_id = {item.location_id: item for item in active_locations}
+        comparable_locations = [
+            item for item in active_locations if not item.is_benchmark_location
+        ][:3]
+        comparable_order = {
+            item.location_id: index
+            for index, item in enumerate(comparable_locations, start=1)
+        }
+        f02_data = self._read_data(records["F02"], F02DraftData)
+        comparison_target_by_order = {
+            item.display_order: item.comparison_target_id
+            for item in f02_data.comparison_targets
+        }
+
+        # Merge candidates into current factor rows.
         factor_map = {row.factor_code: row for row in current.factor_rows}
         for candidate in candidates:
             code = candidate.field_name
-            level = resolved[code]
-            if code in factor_map:
-                factor_map[code].benchmark_reported_level = level
-                factor_map[code].benchmark_confirmed_level = level
-                factor_map[code].source_notes = f"AI 自動擷取自文件: {candidate.source_text}"
-                factor_map[code].confirmed_by_user = True
-            else:
-                factor_map[code] = F02RFFactorDraft(
-                    factor_code=code,
-                    benchmark_reported_level=level,
-                    benchmark_confirmed_level=level,
-                    source_notes=f"AI 自動擷取自文件: {candidate.source_text}",
-                    confirmed_by_user=True,
-                    targets=[]
+            level = resolved[candidate.extracted_field_id]
+            candidate_location = location_by_id.get(candidate.location_id)
+            is_comparable = (
+                candidate_location is not None
+                and not candidate_location.is_benchmark_location
+                and candidate.location_id in comparable_order
+            )
+            if is_comparable:
+                # ``location_id`` identifies the uploaded valuation parcel;
+                # F02-RF targets use the separate comparison-analysis target
+                # ID.  Convert through display order instead of persisting the
+                # unrelated location UUID into a formal target row.
+                target_id = comparison_target_by_order.get(
+                    comparable_order[candidate.location_id]
                 )
+                if target_id is None:
+                    continue
+            if code in factor_map:
+                factor = factor_map[code]
+            else:
+                factor = F02RFFactorDraft(
+                    factor_code=code,
+                    targets=[],
+                )
+                factor_map[code] = factor
+
+            note = f"AI 自動擷取自文件: {candidate.source_text or '已確認候選值'}"
+            if is_comparable:
+                target = next(
+                    (
+                        item
+                        for item in factor.targets
+                        if item.comparison_target_id == target_id
+                    ),
+                    None,
+                )
+                if target is None:
+                    target = F02RFTargetLevelDraft(
+                        comparison_target_id=target_id,
+                        display_order=comparable_order[target_id],
+                    )
+                    factor.targets.append(target)
+                target.reported_level = level
+                target.confirmed_level = level
+                target.source_notes = note
+                target.confirmed_by_user = True
+            else:
+                factor.benchmark_reported_level = level
+                factor.benchmark_confirmed_level = level
+                factor.source_notes = note
+                factor.confirmed_by_user = True
+
+        # Keep the formal regional page structurally complete even when one or
+        # more observations were skipped because their wording did not map to
+        # a published range.  The calculation engine represents those empty
+        # factor rows as zero adjustment; it can therefore continue while the
+        # original candidate remains available for later correction.
+        for factor_code in TEMPLATE_FACTOR_CODES:
+            factor_map.setdefault(
+                factor_code,
+                F02RFFactorDraft(factor_code=factor_code, targets=[]),
+            )
 
         current.factor_rows = list(factor_map.values())
         self._invalidate_f02_rf_calculation(current)
         await self._validate_f02_rf(case, current)
 
-        f02_data = self._read_data(records["F02"], F02DraftData)
         self._validate_cross_page_ids(current, f02_data)
         await self._save_data(record, current, user)
 
@@ -559,7 +649,7 @@ class ReportPageService:
         records = await self.packages._load_components(case_id, root)
         by_code = {record.form_code: record for record in records}
         if any(
-            record.form_status != FormStatus.DRAFT.value
+            record.form_status in {FormStatus.FINAL.value, FormStatus.VOID.value}
             for record in by_code.values()
         ):
             raise AppError(
@@ -567,6 +657,14 @@ class ReportPageService:
                 "前三頁只能在套件全部為 DRAFT 時修改",
                 409,
             )
+        # Existing DRAFT pages are promoted to official working pages on
+        # first use. READY and CHECKED pages remain editable/re-runnable;
+        # only FINAL or VOID pages are terminal.
+        for record in by_code.values():
+            if record.form_status == FormStatus.DRAFT.value:
+                record.form_status = FormStatus.READY.value
+                record.updated_by_user_id = user.user_id
+                await self.repository.save_form(record)
         return case, by_code
 
     async def _context(self, case: CaseRecord) -> ReportPageContext:

@@ -63,9 +63,12 @@ class BedrockKnowledgeProvider:
             ) from exc
 
         def invoke() -> dict:
-            client = boto3.client(
-                "bedrock-runtime",
+            session = boto3.Session(
+                profile_name=self.settings.aws_profile or None,
                 region_name=self.settings.bedrock_region,
+            )
+            client = session.client(
+                "bedrock-runtime",
                 config=Config(
                     connect_timeout=5,
                     read_timeout=self.settings.bedrock_timeout_seconds,

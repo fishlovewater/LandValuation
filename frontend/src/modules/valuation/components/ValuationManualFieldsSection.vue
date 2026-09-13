@@ -1,10 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import {
-  PhArrowRight as ArrowRight,
   PhCheckCircle as CheckCircle,
   PhClipboardText as ClipboardText,
-  PhDatabase as Database,
   PhFloppyDisk as FloppyDisk,
   PhInfo as Info,
   PhPencilSimple as PencilSimple,
@@ -57,7 +55,7 @@ function handleValueInput(key: string, event: Event): void {
 
 <template>
   <section
-    v-if="props.entries.length"
+    v-if="displayEntries.length"
     class="manual-fields"
     data-testid="manual-field-workspace"
     aria-labelledby="manual-fields-title"
@@ -260,6 +258,7 @@ function handleValueInput(key: string, event: Event): void {
         <strong>{{ missingEntries.length ? `完成目前 ${missingEntries.length} 項必要資料後儲存` : '有修改時再儲存' }}</strong>
         <span>儲存後系統會重新判斷還缺哪些資料，不需要自行比對所有表單欄位。</span>
       </div>
+      </div>
       <button
         v-if="props.editableCount"
         class="manual-fields__save"
@@ -436,6 +435,15 @@ function handleValueInput(key: string, event: Event): void {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+.manual-fields__empty-form {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 14px;
+  border: 1px dashed var(--app-line);
+  border-radius: 8px;
+  color: var(--app-muted);
+  font-size: 12px;
 }
 
 .manual-field-card {

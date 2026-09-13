@@ -484,10 +484,10 @@ describe('valuation demo flow', () => {
     expect(wrapper.find('[data-testid="valuation-issue-drawer"]').exists()).toBe(false)
 
     await wrapper.get('[data-testid="valuation-step-3"]').trigger('click')
-    expect(wrapper.get('[data-testid="valuation-workflow-guide"]').text()).toContain('案件基本資料')
-    expect(wrapper.text()).toContain('請先確認案件基本資料')
+    expect(wrapper.get('[data-workspace-stage="data"]').attributes('aria-current')).toBe('step')
     expect(workspaceBodies).toHaveLength(0)
 
+    await wrapper.get('[data-testid="valuation-step-1"]').trigger('click')
     await wrapper.get('[data-testid="wizard-next"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.get('[data-workspace-stage="documents"]').attributes('aria-current')).toBe('step'))
     expect(workspaceBodies).toEqual([{
@@ -588,36 +588,26 @@ describe('valuation demo flow', () => {
     await router.push(`/app/valuation/cases/${ids.case}/documents`)
     const wrapper = mount(AppLayout, { global: { plugins: [router] } })
 
-    await vi.waitFor(() => expect(router.currentRoute.value.path).toBe(`/app/valuation/cases/${ids.case}`))
-    expect(wrapper.get('[data-testid="valuation-workflow-guide"]').text()).toContain('案件基本資料')
-    expect(wrapper.get('[data-testid="wizard-next"]').text()).toContain('確認並開始估價')
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="valuation-workflow-guide"]').text()).toContain('文件與辨識'))
+    expect(router.currentRoute.value.path).toBe(`/app/valuation/cases/${ids.case}/documents`)
+    expect(wrapper.get('[data-workspace-stage="documents"]').attributes('aria-current')).toBe('step')
     expect(workspaceRequests).toHaveLength(0)
     wrapper.unmount()
   })
 
-  it('follows the real F03 state machine and submits the authoritative F02 report', async () => {
+  it.skip('keeps the retired legacy F03 calculation flow for historical reference', async () => {
     const requests: Array<{ method?: string; url?: string; params?: unknown; data?: unknown }> = []
-    const patchBodies: Array<Record<string, any>> = []
-    let submitCount = 0
-    let validationCount = 0
-    let reportCount = 0
-    const formalPdfBodies: Array<Record<string, any>> = []
     http.defaults.adapter = vi.fn(async (config) => {
       requests.push({ method: config.method, url: config.url, params: config.params, data: config.data })
 
       if (config.method === 'get' && config.url === '/valuation/cases') return response([caseDto], config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}`) return response(caseDto, config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms`) {
-        const f03 = requests.some(
-          (request) => request.method === 'post' && request.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/submit`,
-        )
-          ? submittedF03FormDto
-          : formDto
         return response([
           { ...authoritativeFormDto, form_instance_id: '61616161-6161-4616-8161-616161616161', form_code: 'S01' },
           { ...authoritativeFormDto, form_instance_id: '62626262-6262-4626-8262-626262626262', form_code: 'F02-RF' },
           authoritativeFormDto,
-          f03,
+          formDto,
         ], config)
       }
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/f03`) return response(f03Dto, config)
@@ -625,27 +615,9 @@ describe('valuation demo flow', () => {
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([benchmarkDto], config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response(documentsDto, config)
       if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) return response(reportProgressDto, config)
-      if (config.method === 'patch' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/f03`) {
-        patchBodies.push(requestBody(config.data))
-        return response(f03Dto, config)
-      }
-      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/calculations`) {
-        expect(requestBody(config.data)).toEqual({ form_instance_id: ids.f03 })
-        return response(calculationDto, config, 201)
-      }
-      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/submit`) {
-        expect(config.data).toBeUndefined()
-        return response(submittedF03FormDto, config)
-      }
-      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/validations`) {
-        expect(requestBody(config.data)).toEqual({ form_instance_id: ids.f03 })
-        const validation = validationCount++ === 0 ? blockedValidationDto : validationDto
-        return response(validation, config, 201)
-      }
-      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports`) {
-        expect(requestBody(config.data)).toEqual({ form_instance_id: ids.f03 })
-        reportCount += 1
-        return response(reportDto, config, 201)
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-calculation`) {
+        expect(requestBody(config.data)).toEqual({ confirm_calculation: true })
+        return response({ case_id: ids.case, report_id: ids.reportPackage }, config, 201)
       }
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-validation`) return response(formalValidationDto, config, 201)
       if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/template-exports`) {
@@ -810,6 +782,61 @@ describe('valuation demo flow', () => {
     expect(wrapper.find('[data-testid="submit-for-review"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="submit-next-action"]').exists()).toBe(false)
     expect(requests.some((request) => request.data?.toString().includes('internal-bucket'))).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('calculates, validates, and exports Excel through the formal multi-location workflow', async () => {
+    const operations: string[] = []
+    http.defaults.adapter = vi.fn(async (config) => {
+      const operation = `${config.method} ${config.url}`
+      operations.push(operation)
+
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}`) return response(caseDto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms`) {
+        return response([authoritativeFormDto, formDto], config)
+      }
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/forms/${ids.f03}/f03`) return response(f03Dto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/parcels`) return response([parcelDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/benchmark-lands`) return response([benchmarkDto], config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/documents`) return response(documentsDto, config)
+      if (config.method === 'get' && config.url === `/valuation/cases/${ids.case}/report-progress`) return response(reportProgressDto, config)
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-calculation`) {
+        expect(requestBody(config.data)).toEqual({ confirm_calculation: true })
+        return response({ case_id: ids.case, report_id: ids.reportPackage }, config, 201)
+      }
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-validation`) {
+        return response(formalValidationDto, config, 201)
+      }
+      if (config.method === 'post' && config.url === `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/template-exports`) {
+        return response([{
+          form_code: 'F03',
+          title: 'F03',
+          document_id: '71717171-7171-4717-8171-717171717171',
+          filename: 'F03.xlsx',
+          mime_type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          version_no: 1,
+          file_size_bytes: 1024,
+          download_path: `/valuation/cases/${ids.case}/reports/${ids.reportPackage}/template-exports/F03/download`,
+        }], config, 201)
+      }
+      throw new Error(`Unexpected request ${operation}`)
+    }) as unknown as typeof originalAdapter
+
+    const router = createAppRouter(createMemoryHistory())
+    await router.push(`/app/valuation/cases/${ids.case}/calculation`)
+    const wrapper = mount(AppLayout, { global: { plugins: [router] } })
+
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="run-valuation"]').exists()).toBe(true))
+    await wrapper.get('[data-testid="run-valuation"]').trigger('click')
+    await vi.waitFor(() => expect(operations).toContain(`post /valuation/cases/${ids.case}/reports/${ids.reportPackage}/template-exports`))
+
+    expect(operations).toEqual(expect.arrayContaining([
+      `post /valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-calculation`,
+      `post /valuation/cases/${ids.case}/reports/${ids.reportPackage}/formal-validation`,
+      `post /valuation/cases/${ids.case}/reports/${ids.reportPackage}/template-exports`,
+    ]))
+    expect(operations).not.toContain(`post /valuation/cases/${ids.case}/calculations`)
+    expect(wrapper.get('[data-testid="wizard-next"]').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
 
@@ -1761,8 +1788,13 @@ describe('valuation demo flow', () => {
     await vi.waitFor(() => expect(wrapper.find('[data-testid="data-section-manual"]').exists()).toBe(true))
     await wrapper.get('[data-testid="data-section-manual"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.find('[data-testid="manual-field-workspace"]').exists()).toBe(true))
+    // The comparison price is produced by the formal F02 calculation and is
+    // intentionally not offered as a manual fallback.
+    expect(wrapper.find('[data-testid="manual-field-F03-comparison_price"]').exists()).toBe(false)
 
     await wrapper.get('[data-testid="manual-field-F03-decision_reason"]').setValue('人工核對附件後採用此值')
+    expect(savedReason).toBe('')
+    expect(wrapper.find('[data-testid="manual-field-F03-decision_reason"]').exists()).toBe(true)
     await wrapper.get('[data-testid="save-manual-fields"]').trigger('click')
     await vi.waitFor(() => {
       expect(savedReason).toBe('人工核對附件後採用此值')
@@ -1855,7 +1887,7 @@ describe('valuation demo flow', () => {
     Object.defineProperty(window, 'confirm', { configurable: true, value: originalConfirm })
   })
 
-  it('creates and edits parcels and creates a benchmark land through the existing backend contracts', async () => {
+  it('keeps the land context read-only and allows blank parcel data', async () => {
     const newParcelId = '25252525-2525-4252-8252-252525252525'
     const newBenchmarkId = '26262626-2626-4262-8262-262626262626'
     let parcelState: typeof parcelDto | null = null
@@ -1951,47 +1983,11 @@ describe('valuation demo flow', () => {
     await wrapper.get('[data-testid="data-section-land"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.find('[data-testid="valuation-land-context"]').exists()).toBe(true))
 
-    expect((wrapper.get('[data-testid="parcel-district-code"]').element as HTMLInputElement).value).toBe('中和區')
-    await wrapper.get('[data-testid="parcel-section-name"]').setValue('Test Section')
-    await wrapper.get('[data-testid="parcel-land-no"]').setValue('100-1')
-    await wrapper.get('[data-testid="parcel-area-sqm"]').setValue('300.50')
-    await wrapper.get('[data-testid="save-parcel"]').trigger('submit')
-    await vi.waitFor(() => expect(wrapper.find(`[data-testid="edit-parcel-${newParcelId}"]`).exists()).toBe(true))
-
-    await wrapper.get(`[data-testid="edit-parcel-${newParcelId}"]`).trigger('click')
-    await wrapper.get('[data-testid="parcel-area-sqm"]').setValue('301.25')
-    await wrapper.get('[data-testid="save-parcel"]').trigger('submit')
-    await vi.waitFor(() => expect(wrapper.get('[data-testid="valuation-land-context"]').text()).toContain('301.25'))
-
-    await wrapper.get('[data-testid="benchmark-no"]').setValue('BENCH-NEW')
-    await wrapper.get('[data-testid="benchmark-zone"]').setValue('ZONE-NEW')
-    await wrapper.get('[data-testid="save-benchmark"]').trigger('submit')
-    await vi.waitFor(() => expect(wrapper.get('[data-testid="valuation-land-context"]').text()).toContain('BENCH-NEW'))
-
-    expect(writes[0]).toEqual(expect.objectContaining({
-      method: 'post',
-      url: `/valuation/cases/${ids.case}/parcels`,
-      body: expect.objectContaining({
-        district_code: '65000030',
-        section_name: 'Test Section',
-        land_no: '100-1',
-        area_sqm: '300.50',
-      }),
-    }))
-    expect(writes[1]).toEqual(expect.objectContaining({
-      method: 'patch',
-      url: `/valuation/cases/${ids.case}/parcels/${newParcelId}`,
-      body: expect.objectContaining({ area_sqm: '301.25' }),
-    }))
-    expect(writes[2]).toEqual(expect.objectContaining({
-      method: 'post',
-      url: `/valuation/cases/${ids.case}/benchmark-lands`,
-      body: expect.objectContaining({
-        parcel_id: newParcelId,
-        benchmark_land_no: 'BENCH-NEW',
-        price_zone_no: 'ZONE-NEW',
-      }),
-    }))
+    expect(wrapper.find('[data-testid="parcel-editor"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="benchmark-parcel"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="save-parcel"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="save-benchmark"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="valuation-land-context"]').text()).toContain('可直接保留空白並繼續')
     wrapper.unmount()
   })
 

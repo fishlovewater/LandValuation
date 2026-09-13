@@ -3,7 +3,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
+from app.core.config import F03_DEMO_RULE_SET_CODES, get_settings
 from app.valuation.models import (
     BenchmarkLandRecord,
     BenchmarkValuationRecord,
@@ -163,14 +163,28 @@ class OperationsRepository:
         )
 
     async def get_rule_version(self) -> RuleVersionRecord | None:
-        rule_set_code = get_settings().resolved_f03_validation_rule_set_code
-        return await self.session.scalar(
-            select(RuleVersionRecord).where(
-                RuleVersionRecord.rule_set_code == rule_set_code,
-                RuleVersionRecord.version_no == 1,
-                RuleVersionRecord.status == "PUBLISHED",
+        settings = get_settings()
+        rule_set_codes = [settings.resolved_f03_validation_rule_set_code]
+        # Local Demo databases historically contain the fixed Demo rule under
+        # DEMO-F03-FORMAL-VALIDATION while the default development setting is
+        # F03_MVP_VALIDATION.  Use the explicitly configured code first, then
+        # the approved Demo code so validation can consume the same fixed rule
+        # that formal calculation selected.  Production never uses this path.
+        if settings.app_env.lower() in {"development", "test"}:
+            rule_set_codes.extend(
+                code for code in F03_DEMO_RULE_SET_CODES if code not in rule_set_codes
             )
-        )
+        for rule_set_code in rule_set_codes:
+            rule = await self.session.scalar(
+                select(RuleVersionRecord).where(
+                    RuleVersionRecord.rule_set_code == rule_set_code,
+                    RuleVersionRecord.version_no == 1,
+                    RuleVersionRecord.status == "PUBLISHED",
+                )
+            )
+            if rule is not None:
+                return rule
+        return None
 
     async def list_validation_rules(
         self, rule_version_id: UUID

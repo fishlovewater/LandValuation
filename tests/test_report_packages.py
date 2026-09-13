@@ -214,7 +214,7 @@ async def test_progress_is_derived_from_forms_and_active_map_documents() -> None
     assert draft.completion_rate == "0.00"
 
     for component in created.components:
-        repository.forms[component.form_instance_id].form_status = "READY"
+        repository.forms[component.form_instance_id].form_status = "CHECKED"
     repository.document_types.update(
         {
             "map-section-sketch",

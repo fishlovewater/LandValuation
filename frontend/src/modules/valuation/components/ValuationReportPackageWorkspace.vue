@@ -25,6 +25,7 @@ interface ReportPageConfirmations {
 const props = defineProps<{
   caseId: string
   reportId: string
+  caseEditable: boolean
   authoritativeF02: ValuationFormModel | null
   editors: Partial<Record<ReportPageCode, ReportPageResponseDto>>
   activePageCode: ReportPageCode
@@ -238,7 +239,7 @@ function goToNextPage(): void {
           v-show="!props.pageSaved && (props.pagesConfirmed || !nextPageCode)"
           type="button"
           data-testid="save-report-pages"
-          :disabled="!props.pagesConfirmed || props.pageSaving || props.pageCalculating || props.pageValidating"
+          :disabled="!props.caseEditable || !props.pagesConfirmed || props.pageSaving || props.pageCalculating || props.pageValidating"
           @click="emit('savePages')"
         >
           <CheckCircle v-if="!props.pageSaving" :size="16" weight="bold" aria-hidden="true" />
@@ -248,7 +249,7 @@ function goToNextPage(): void {
           v-show="props.pageSaved && !props.pageCalculated"
           type="button"
           data-testid="run-formal-calculation"
-          :disabled="!props.pageSaved || props.pageCalculating || props.pageValidating"
+          :disabled="!props.caseEditable || !props.pageSaved || props.pageCalculating || props.pageValidating"
           @click="emit('calculate')"
         >
           <Calculator v-if="!props.pageCalculating" :size="16" weight="bold" aria-hidden="true" />
@@ -259,7 +260,7 @@ function goToNextPage(): void {
           class="is-primary"
           type="button"
           data-testid="run-report-formal-validation"
-          :disabled="!props.pageCalculated || props.pageValidating"
+          :disabled="!props.caseEditable || !props.pageCalculated || props.pageValidating"
           @click="emit('validate')"
         >
           <ShieldCheck v-if="!props.pageValidating" :size="16" weight="bold" aria-hidden="true" />
