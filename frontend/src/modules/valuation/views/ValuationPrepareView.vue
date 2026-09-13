@@ -520,6 +520,16 @@ const unresolvedNonF03RequiredFields = computed(() => (
         .map((fieldName) => `${guidance.form_code}.${fieldName}`),
   ) ?? []
 ))
+const unresolvedF03RequiredFields = computed(() => (
+  workflowGuidance.value?.form_guidance.flatMap((guidance) =>
+    guidance.form_code === 'F03'
+      ? guidance.missing_required_fields
+        .filter((fieldName) => !f03DraftHasField(fieldName))
+        .filter((fieldName) => !isSystemManagedWorkflowField(guidance.form_code, fieldName))
+        .map((fieldName) => `${guidance.form_code}.${fieldName}`)
+      : [],
+  ) ?? []
+))
 const dataIssueCounts = computed(() => ({
   overview: 0,
   manual: unresolvedNonF03RequiredFields.value.length,

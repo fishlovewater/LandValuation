@@ -55,7 +55,7 @@ function handleValueInput(key: string, event: Event): void {
 
 <template>
   <section
-    v-if="displayEntries.length"
+    v-if="missingEntries.length"
     class="manual-fields"
     data-testid="manual-field-workspace"
     aria-labelledby="manual-fields-title"
@@ -257,7 +257,6 @@ function handleValueInput(key: string, event: Event): void {
       <div class="manual-fields__footer-copy">
         <strong>{{ missingEntries.length ? `完成目前 ${missingEntries.length} 項必要資料後儲存` : '有修改時再儲存' }}</strong>
         <span>儲存後系統會重新判斷還缺哪些資料，不需要自行比對所有表單欄位。</span>
-      </div>
       </div>
       <button
         v-if="props.editableCount"

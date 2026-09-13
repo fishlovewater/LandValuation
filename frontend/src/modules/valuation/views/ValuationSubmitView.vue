@@ -1061,11 +1061,22 @@ async function submitForReview(): Promise<void> {
       submitTemplateDocumentIds.value = templateDocumentIds
       submitPrimaryTemplateDocumentId.value = primaryTemplateDocumentId
     }
+    const sourceReportDocumentId = primaryTemplateDocumentId
+      ?? (submittingExcel && mainExcel ? mainExcel.documentId : formalReport?.documentId)
+    if (!sourceReportDocumentId) {
+      error.value = '正式檢核報告尚未產生，暫時無法送審。請先完成正式檢核。'
+      return
+    }
+    const sourceValidationRunId = flow.formalValidation?.validationRunId ?? formalReport?.validationRunId
+    if (!sourceValidationRunId) {
+      error.value = '正式檢核紀錄尚未產生，暫時無法送審。請先完成正式檢核。'
+      return
+    }
     const result = await valuationApi.submitForReview(requestedCaseId, {
       request_id: requestId,
       expected_case_version: authoritativeF02.versionNo,
-      source_validation_run_id: flow.formalValidation?.validationRunId ?? formalReport?.validationRunId,
-      source_report_document_id: primaryTemplateDocumentId ?? (submittingExcel && mainExcel ? mainExcel.documentId : formalReport?.documentId),
+      source_validation_run_id: sourceValidationRunId,
+      source_report_document_id: sourceReportDocumentId,
       source_template_document_ids: templateDocumentIds.length
         ? [...templateDocumentIds]
         : flow.templateExports.map((item) => item.documentId),
